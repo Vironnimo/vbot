@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -130,7 +132,7 @@ def make_adapter(
     trigger_run: AsyncMock | None = None,
     retry_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
-    runtime: object | None = None,
+    credential_resolver: Callable[[str], str] | None = None,
     attachment_store: AttachmentStore | None = None,
     command_dispatcher: object | None = None,
     set_process_token: bool = True,
@@ -153,7 +155,7 @@ def make_adapter(
         make_config(dm_scope=dm_scope, allowed_chat_ids=allowed_chat_ids),
         cast(Any, trigger_service),
         cast(Any, chat_sessions),
-        runtime=runtime if runtime is not None else SimpleNamespace(),
+        credential_resolver or (lambda key: os.environ.get(key, "")),
         attachment_store=attachment_store,
         command_dispatcher=cast(Any, resolved_command_dispatcher),
     )
@@ -245,23 +247,22 @@ def test_constructor_requires_token_env_var(
             make_config(allowed_chat_ids=[12345]),
             trigger_service=cast(Any, SimpleNamespace(trigger_run=AsyncMock())),
             chat_sessions=cast(Any, ChatSessionManager(tmp_path)),
-            runtime=SimpleNamespace(),
+            credential_resolver=lambda key: os.environ.get(key, ""),
             command_dispatcher=cast(Any, make_command_dispatcher()),
         )
 
 
-def test_constructor_resolves_token_from_runtime_environment_contract(
+def test_constructor_resolves_token_through_injected_credential_resolver(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", raising=False)
-    runtime = SimpleNamespace(resolve_environment_credential=lambda _key: "runtime-token")
 
     adapter = TelegramChannelAdapter(
         make_config(allowed_chat_ids=[12345]),
         trigger_service=cast(Any, SimpleNamespace(trigger_run=AsyncMock())),
         chat_sessions=cast(Any, ChatSessionManager(tmp_path)),
-        runtime=runtime,
+        credential_resolver=lambda _key: "runtime-token",
         command_dispatcher=cast(Any, make_command_dispatcher()),
     )
 

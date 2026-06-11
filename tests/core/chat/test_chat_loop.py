@@ -7,6 +7,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -111,6 +112,7 @@ class StubProviderConfig:
 class StubPrompts:
     def __init__(self) -> None:
         self.agent_for_tools: StubAgent | None = None
+        self.app_dir = Path("app")
 
     def build_system_prompt(self, agent: StubAgent) -> str:
         return f"System for {agent.id}"
@@ -137,9 +139,29 @@ class StubSkills:
     def __init__(self, skills: list[StubSkill]) -> None:
         self._skills = {skill.name: skill for skill in skills}
 
+    def list_all(self) -> list[StubSkill]:
+        return sorted(self._skills.values(), key=lambda skill: skill.name)
+
+    def is_allowed(self, name: str, allowed_skills: list[str] | None) -> bool:
+        if name not in self._skills:
+            return False
+        if allowed_skills is None or "*" in allowed_skills:
+            return True
+        return name in allowed_skills
+
+    def availability_for(
+        self,
+        name: str,
+        allowed_skills: list[str] | None = None,
+    ) -> Any:
+        del allowed_skills
+        if name in self._skills:
+            return SimpleNamespace(state="available", missing=())
+        return SimpleNamespace(state="invalid", missing=(f"skill '{name}' is not loadable",))
+
     def filter_allowed(self, allowed_skills: list[str]) -> list[StubSkill]:
         if "*" in allowed_skills:
-            return sorted(self._skills.values(), key=lambda skill: skill.name)
+            return self.list_all()
         return [self._skills[name] for name in allowed_skills if name in self._skills]
 
 
@@ -262,6 +284,14 @@ class MidStreamCancelledStubAdapter(StubAdapter):
         raise asyncio.CancelledError
 
 
+class StubProcessManager:
+    def __init__(self) -> None:
+        self.cancelled_scopes: list[str] = []
+
+    def cancel_scope(self, run_id: str) -> None:
+        self.cancelled_scopes.append(run_id)
+
+
 class StubRuntime:
     def __init__(
         self,
@@ -281,12 +311,22 @@ class StubRuntime:
         self.system_prompts = StubPrompts()
         self.tools = tools or ToolRegistry()
         self.chat_runs = ChatRunManager()
+        self.chat_run_manager = self.chat_runs
+        self.process_manager = StubProcessManager()
+        self.extensions: Any = None
         self.providers = StubProviders(provider_ids or {agent.model.split("/", 1)[0]})
         self.provider_credentials = StubProviderCredentials(
             {f"{agent.model.split('/', 1)[0]}:api-key"}
         )
         self.skills: Any = StubSkills([])
-        self.storage = storage
+        self.storage = (
+            storage
+            if storage is not None
+            else StubStorage(
+                {"auto": False, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None},
+                data_dir=data_dir,
+            )
+        )
         self.models = models
         self.adapter = adapter
         self.adapters_by_connection = dict(adapters_by_connection or {})
@@ -332,8 +372,9 @@ class StubModels:
 
 
 class StubStorage:
-    def __init__(self, compaction_settings: JsonObject) -> None:
+    def __init__(self, compaction_settings: JsonObject, *, data_dir: Path | None = None) -> None:
         self._compaction_settings = dict(compaction_settings)
+        self.data_dir = data_dir or Path("data")
 
     def load_compaction_settings(self) -> JsonObject:
         return dict(self._compaction_settings)
@@ -400,7 +441,7 @@ class StubCompactionService:
 async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "reasoning": None, "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -444,7 +485,7 @@ async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.system_prompts = EmptySystemPrompts()
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -460,7 +501,7 @@ async def test_note_before_user_turn_is_embedded_as_synthetic_user_message(
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.add_note("Background job completed")
 
@@ -482,7 +523,7 @@ async def test_speech_transcription_origin_adds_system_reminder_before_user_turn
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     await ChatLoop(runtime).send(
@@ -508,7 +549,7 @@ async def test_internal_start_run_embeds_content_without_visible_user_message(
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Continuing parent work", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
     content = "Sub-agent batch completed.\n\nResults:\n- worker/sub-session: Done"
 
@@ -543,7 +584,7 @@ async def test_multiple_consecutive_notes_are_embedded_as_one_synthetic_user_mes
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.add_note("First background event")
     session.add_note("Second background event")
@@ -568,7 +609,7 @@ async def test_notes_and_visible_errors_are_embedded_as_system_reminders(
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.note("Background event"))
     session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
@@ -608,7 +649,7 @@ async def test_note_added_between_tool_iterations_is_sent_on_next_request(
 
     tools = ToolRegistry()
     tools.register("record_note", "Record note.", {"type": "object"}, record_note)
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
 
@@ -651,7 +692,7 @@ async def test_note_added_during_tool_dispatch_is_persisted_after_tool_results(
 
     tools = ToolRegistry()
     tools.register("record_note", "Record note.", {"type": "object"}, record_note)
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
 
@@ -687,7 +728,7 @@ async def test_note_added_during_tool_dispatch_is_persisted_after_tool_results(
 async def test_request_messages_without_notes_keep_existing_shape(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -750,7 +791,7 @@ def test_compaction_build_request_messages_without_checkpoint_keeps_existing_pat
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
@@ -766,7 +807,7 @@ def test_compaction_build_request_messages_with_checkpoint_uses_summary_and_tail
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     session = runtime.chat_sessions.create("coder", session_id="session-one")
 
     session.append(ChatMessage.user("Old question"))
@@ -811,7 +852,7 @@ async def test_compaction_maybe_auto_compact_skips_when_auto_disabled(tmp_path: 
         compacted_token_count=1,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -860,7 +901,7 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
         compacted_token_count=1,
     )
     compaction_service = StubCompactionService(should_auto=False, checkpoint=checkpoint)
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -903,7 +944,7 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([])
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -962,7 +1003,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_model_malfo
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([])
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -1011,7 +1052,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_adapter_loo
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([])
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -1068,7 +1109,7 @@ async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
         should_auto=True,
         compact_error=RuntimeError("compaction broke"),
     )
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -1113,7 +1154,7 @@ async def test_compact_session_reports_unavailable_without_compaction_service(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     reply = await ChatLoop(runtime).compact_session("coder", "session-one")
@@ -1130,7 +1171,7 @@ async def test_compact_session_refuses_while_run_is_active(tmp_path: Path) -> No
         compacted_token_count=1,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=StubAdapter([]),
@@ -1170,7 +1211,7 @@ async def test_compact_session_refuses_while_run_is_active(tmp_path: Path) -> No
 async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = ClosingStubAdapter([])
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -1213,7 +1254,7 @@ async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: 
         should_auto=True,
         compact_error=RuntimeError("compaction broke"),
     )
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=StubAdapter([]),
@@ -1246,7 +1287,7 @@ async def test_slash_skill_trigger_activates_before_provider_request(tmp_path: P
         allowed_skills=["debugging"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
 
     await ChatLoop(runtime).send("coder", "/debugging fix this", session_id="session-one")
@@ -1276,7 +1317,7 @@ async def test_skill_context_persists_across_later_sends_without_visible_user_me
             {"content": "Second", "tool_calls": None},
         ]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
 
     await ChatLoop(runtime).send("coder", "/debugging fix this", session_id="session-one")
@@ -1313,7 +1354,7 @@ async def test_inline_skill_trigger_preserves_original_message(tmp_path: Path) -
         allowed_skills=["debugging"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
 
     await ChatLoop(runtime).send(
@@ -1344,7 +1385,7 @@ async def test_skill_trigger_does_not_activate_when_allowed_skills_empty(
         allowed_skills=[],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
 
     await ChatLoop(runtime).send("coder", message, session_id="session-one")
@@ -1382,7 +1423,7 @@ metadata:
         allowed_skills=["openai-helper"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = SkillRegistry.load(skills_dir, environment={})
 
     await ChatLoop(runtime).send("coder", "/openai-helper help", session_id="session-one")
@@ -1404,7 +1445,7 @@ async def test_unknown_skill_trigger_adds_system_reminder(tmp_path: Path) -> Non
         allowed_skills=[],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "/missing do it", session_id="session-one")
 
@@ -1424,7 +1465,7 @@ async def test_unknown_skill_trigger_reminder_appears_once_in_first_request(
         allowed_skills=[],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "/missing do it", session_id="session-one")
 
@@ -1438,7 +1479,7 @@ async def test_unknown_skill_trigger_reminder_appears_once_in_first_request(
 async def test_send_closes_adapter_when_aclose_exists(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = ClosingStubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -1449,7 +1490,7 @@ async def test_send_closes_adapter_when_aclose_exists(tmp_path: Path) -> None:
 async def test_send_closes_adapter_after_provider_error(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = ClosingStubAdapter([ProviderError("provider failed", retryable=False)])  # type: ignore[list-item]
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderError, match="provider failed"):
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -1461,7 +1502,7 @@ async def test_send_closes_adapter_after_provider_error(tmp_path: Path) -> None:
 async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([ProviderRateLimitError("too many requests")])  # type: ignore[list-item]
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderRateLimitError, match="too many requests"):
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -1492,7 +1533,7 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
     fallback_adapter = StubAdapter([{"content": "Recovered", "tool_calls": None}])
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=primary_adapter,
@@ -1533,7 +1574,7 @@ async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=primary_adapter,
@@ -1569,7 +1610,7 @@ async def test_next_turn_reuses_primary_model(tmp_path: Path) -> None:
         ]
     )
     fallback_adapter = StubAdapter([{"content": "Fallback turn 1", "tool_calls": None}])
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=primary_adapter,
@@ -1606,7 +1647,7 @@ async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> 
     )
     primary_adapter = StubAdapter([ProviderAuthError("invalid credential")])  # type: ignore[list-item]
     fallback_adapter = StubAdapter([{"content": "Should not be used", "tool_calls": None}])
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=primary_adapter,
@@ -1632,7 +1673,7 @@ async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> 
 async def test_fallback_not_triggered_when_fallback_model_empty(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderRateLimitError, match="primary rate limited"):
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -1669,7 +1710,7 @@ async def test_fallback_stays_active_for_rest_of_run(tmp_path: Path) -> None:
         {"type": "object"},
         lambda _context, arguments: tool_success({"value": arguments["value"]}),
     )
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=primary_adapter,
@@ -1717,7 +1758,7 @@ async def test_fallback_request_strips_primary_provider_reasoning_meta(tmp_path:
         {"type": "object"},
         lambda _context, arguments: tool_success({"value": arguments["value"]}),
     )
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=primary_adapter,
@@ -1762,7 +1803,7 @@ async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
     fallback_adapter = StubAdapter([ProviderRateLimitError("fallback rate limited")])  # type: ignore[list-item]
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=primary_adapter,
@@ -1812,7 +1853,7 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
         display=ToolDisplay(summary_fields=("city",)),
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     assistant = await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
 
@@ -1923,7 +1964,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
         {"type": "object"},
         lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
     )
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -1979,7 +2020,7 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime, streaming=True).send(
         "coder",
@@ -2048,7 +2089,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
         lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
         display=ToolDisplay(summary_fields=("city",)),
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     assistant = await ChatLoop(runtime, streaming=True).send(
         "coder",
@@ -2124,7 +2165,7 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(StreamingDeltaError, match="malformed or incomplete arguments"):
         await ChatLoop(runtime, streaming=True).send("coder", "Build it", session_id="session-one")
@@ -2154,7 +2195,7 @@ async def test_streaming_mode_requires_finish_delta(tmp_path: Path) -> None:
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(NetworkError, match="finish delta"):
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
@@ -2181,7 +2222,7 @@ async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path:
         [{"content": "Fallback answer", "tool_calls": None}],
         stream_responses=[ProviderStreamingUnsupportedError("streaming is not supported")],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime, streaming=True).send(
         "coder",
@@ -2208,7 +2249,7 @@ async def test_streaming_mode_does_not_fallback_on_generic_provider_error(tmp_pa
         [{"content": "Should not use", "tool_calls": None}],
         stream_responses=[ProviderError("provider failed", retryable=False)],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderError, match="provider failed"):
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
@@ -2235,7 +2276,7 @@ async def test_streaming_mode_does_not_fallback_after_visible_delta(tmp_path: Pa
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderError, match="not supported"):
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
@@ -2262,7 +2303,7 @@ async def test_streaming_mode_chunk_timeout_fails_run(
     monkeypatch.setattr("core.chat.chat.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StalledStreamingStubAdapter([])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(Exception, match="stalled"):
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
@@ -2287,7 +2328,7 @@ async def test_streaming_mode_cancellation_closes_adapter_and_ignores_late_delta
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = BlockingStreamingStubAdapter()
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     run = await ChatLoop(runtime, streaming=True).start_run("coder", "Hi", session_id="session-one")
@@ -2316,7 +2357,7 @@ async def test_streaming_cancellation_with_reasoning_persists_partial_thinking_n
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = MidStreamCancelledStubAdapter([])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(RunCancelledError):
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
@@ -2340,7 +2381,7 @@ async def test_streaming_network_error_with_reasoning_persists_partial_thinking_
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(NetworkError, match="offline"):
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
@@ -2365,7 +2406,7 @@ async def test_streaming_network_error_without_reasoning_does_not_add_partial_no
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(NetworkError, match="offline"):
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
@@ -2380,7 +2421,7 @@ async def test_fresh_follow_up_omits_old_reasoning_and_reasoning_meta_from_reque
 ) -> None:
     agent = StubAgent(id="coder", model="anthropic/claude-sonnet-4", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Fresh answer", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Previous question"))
     session.append(
@@ -2417,7 +2458,7 @@ async def test_fresh_follow_up_skips_reasoning_only_assistant_history_message(
 ) -> None:
     agent = StubAgent(id="coder", model="anthropic/claude-sonnet-4", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Fresh answer", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Previous question"))
     session.append(
@@ -2446,7 +2487,7 @@ async def test_fresh_follow_up_skips_reasoning_only_assistant_history_message(
 async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(Exception, match="session does not exist"):
         await ChatLoop(runtime).start_run("coder", "Hi", session_id="missing-session")
@@ -2460,7 +2501,7 @@ async def test_retry_run_reuses_last_user_turn_without_appending_new_user_messag
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Retried", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
@@ -2480,7 +2521,7 @@ async def test_retry_run_raises_chat_session_error_when_no_user_message_exists(
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "unused", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
 
@@ -2494,7 +2535,7 @@ async def test_retry_run_raises_chat_session_error_when_no_user_message_exists(
 async def test_retry_run_rejects_second_run_for_same_session(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = BlockingStubAdapter()
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     first_run = await ChatLoop(runtime).start_run("coder", "Hi", session_id="session-one")
@@ -2515,7 +2556,7 @@ async def test_retry_run_embeds_previous_visible_error_as_system_reminder(
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Retried", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
@@ -2536,7 +2577,7 @@ async def test_retry_run_embeds_previous_visible_error_as_system_reminder(
 async def test_start_run_rejects_second_run_for_same_session(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = BlockingStubAdapter()
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     first_run = await ChatLoop(runtime).start_run("coder", "Hi", session_id="session-one")
@@ -2556,7 +2597,7 @@ async def test_start_run_allows_parallel_different_sessions(tmp_path: Path) -> N
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     first_adapter = BlockingStubAdapter()
     second_adapter = StubAdapter([{"content": "Second", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
     adapters = [first_adapter, second_adapter]
     runtime.get_adapter = lambda provider_id, connection_id: adapters.pop(0)  # type: ignore[method-assign]
     runtime.chat_sessions.create("coder", session_id="session-one")
@@ -2579,7 +2620,7 @@ async def test_start_run_allows_parallel_different_sessions(tmp_path: Path) -> N
 async def test_cancelled_run_ignores_late_assistant_output(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = BlockingStubAdapter()
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     run = await ChatLoop(runtime).start_run("coder", "Hi", session_id="session-one")
@@ -2617,7 +2658,7 @@ async def test_disallowed_tool_call_is_blocked_and_persisted_before_error(tmp_pa
         {"type": "object"},
         lambda _context, _arguments: tool_success({}),
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
 
@@ -2663,7 +2704,7 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
     tools = ToolRegistry()
     register_glob_tool(tools)
     register_grep_tool(tools)
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     assistant = await ChatLoop(runtime).send("coder", "Search files", session_id="session-one")
 
@@ -2717,7 +2758,7 @@ async def test_registered_search_tools_respect_agent_allowlist(tmp_path: Path) -
     tools = ToolRegistry()
     register_glob_tool(tools)
     register_grep_tool(tools)
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     await ChatLoop(runtime).send("coder", "Search files", session_id="session-one")
 
@@ -2765,7 +2806,7 @@ async def test_same_turn_tool_calls_run_concurrently_and_persist_in_call_order(
 
     tools = ToolRegistry()
     tools.register("slow", "Slow tool.", {"type": "object"}, slow_handler)
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     assistant = await ChatLoop(runtime).send("coder", "Run tools", session_id="session-one")
 
@@ -2822,7 +2863,7 @@ async def test_same_tool_sibling_calls_run_in_parallel(tmp_path: Path) -> None:
 
     tools = ToolRegistry()
     tools.register("same", "Same tool.", {"type": "object"}, same_handler)
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     await ChatLoop(runtime).send("coder", "Run tools", session_id="session-one")
 
@@ -2847,7 +2888,7 @@ async def test_tool_handler_exception_continues_with_failure_envelope(tmp_path: 
 
     tools = ToolRegistry()
     tools.register("explode", "Explode.", {"type": "object"}, failing_handler)
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     assistant = await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
 
@@ -2886,7 +2927,7 @@ async def test_tool_non_envelope_result_is_failure_envelope(tmp_path: Path) -> N
             {"content": "Recovered", "tool_calls": None},
         ]
     )
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -2933,7 +2974,7 @@ async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None
         {"type": "object"},
         lambda _context, _arguments: tool_success({}),
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     with pytest.raises(ChatError, match="maximum tool iterations"):
         await ChatLoop(runtime, max_tool_iterations=0).send(
@@ -2987,7 +3028,7 @@ async def test_tool_iteration_limit_is_scoped_to_current_run(tmp_path: Path) -> 
         {"type": "object"},
         lambda _context, _arguments: tool_success({"ok": True}),
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
     chat_loop = ChatLoop(runtime, max_tool_iterations=2)
 
     first = await chat_loop.send("coder", "Weather batch one", session_id="session-one")
@@ -3018,7 +3059,7 @@ async def test_tool_iteration_limit_is_scoped_to_current_run(tmp_path: Path) -> 
 async def test_provider_errors_propagate_after_user_message_is_persisted(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/unknown-new-model", allowed_tools=["*"])
     adapter = StubAdapter([ProviderError("provider failed", retryable=False)])  # type: ignore[list-item]
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderError, match="provider failed"):
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -3033,7 +3074,9 @@ async def test_provider_errors_propagate_after_user_message_is_persisted(tmp_pat
 async def test_empty_agent_model_raises_chat_error_before_persisting(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="", allowed_tools=["*"])
     adapter = StubAdapter([])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, provider_ids={"openai"})
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=agent, adapter=adapter, provider_ids={"openai"}
+    )
 
     with pytest.raises(ChatError, match="no model set"):
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -3049,7 +3092,7 @@ async def test_chat_loop_uses_connection_from_model_suffix(tmp_path: Path) -> No
         allowed_tools=["*"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -3065,7 +3108,7 @@ async def test_chat_loop_provider_comes_from_model_with_connection_suffix(tmp_pa
         allowed_tools=["*"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,
@@ -3087,7 +3130,7 @@ async def test_chat_loop_model_without_suffix_falls_back_to_first_usable(tmp_pat
         allowed_tools=["*"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.provider_credentials = StubProviderCredentials({"openai:api-key"})
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -3106,7 +3149,7 @@ async def test_chat_loop_model_without_suffix_prefers_first_usable_in_provider_o
         allowed_tools=["*"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.provider_credentials = StubProviderCredentials(
         {"openai:subscription", "openai:api-key"}
     )
@@ -3178,7 +3221,9 @@ class TestParseBareModel:
 async def test_missing_provider_raises_chat_error_before_adapter_request(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="missing/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, provider_ids={"openai"})
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=agent, adapter=adapter, provider_ids={"openai"}
+    )
 
     with pytest.raises(ChatError, match="provider not found: missing"):
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -3193,7 +3238,7 @@ async def test_dangling_model_suffix_raises_chat_error_before_adapter_request(
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2::", allowed_tools=["*"])
     adapter = StubAdapter([])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ChatError, match="connection suffix must not be empty"):
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -3217,7 +3262,7 @@ async def test_non_streaming_response_with_usage_produces_assistant_with_usage(
             }
         ]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -3248,7 +3293,7 @@ async def test_streaming_response_with_usage_delta_produces_assistant_with_usage
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
@@ -3274,7 +3319,7 @@ async def test_response_without_usage_applies_estimation(
     """When the provider doesn't supply usage, the chat loop estimates tokens."""
     agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello world", "reasoning": None, "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -3321,7 +3366,7 @@ async def test_estimation_computes_from_request_message_contents(
     """Estimation derives token counts from structured request and response messages."""
     agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello world", "reasoning": None, "tool_calls": None}])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -3353,7 +3398,7 @@ async def test_provider_usage_preserved_without_estimated_flag(
             }
         ]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -3380,7 +3425,7 @@ async def test_streaming_without_usage_applies_estimation(
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
@@ -3421,7 +3466,7 @@ async def test_estimation_with_tool_calls_in_history(
         {"type": "object"},
         lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     assistant = await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import AgentNotFoundError, InvalidAgentIdError
 from core.chat import (
@@ -12,7 +12,6 @@ from core.chat import (
 )
 from core.runs import (
     ActiveRunError,
-    ChatRunManager,
     Run,
     RunCancelledError,
     RunExecutor,
@@ -34,6 +33,10 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+
+if TYPE_CHECKING:
+    from core.chat import ChatLoop
+    from core.runtime.interfaces import RuntimeServices
 
 DEFAULT_MAX_SUBAGENT_DEPTH = 4
 DEFAULT_MAX_SUBAGENTS_PER_TURN = 8
@@ -69,7 +72,7 @@ class SubAgentCoordinator:
 
     def __init__(
         self,
-        runtime: Any,
+        runtime: RuntimeServices,
         trigger_service: Any,
         *,
         batch_tracker: SubAgentBatchTracker | None = None,
@@ -105,7 +108,7 @@ async def _handle_subagent(
     context: ToolContext,
     arguments: JsonObject,
     *,
-    runtime: Any,
+    runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
     content = arguments.get("content")
@@ -182,14 +185,8 @@ async def _handle_subagent(
                     f"session already has an active run: {session.id}",
                 )
 
-            _, executor = _make_subagent_executor(
-                runtime,
-                target_agent_id,
-                session.id,
-                content,
-                context,
-            )
-            item = await _chat_run_manager(runtime).enqueue(
+            _, executor = _make_subagent_executor(runtime, content, context)
+            item = await runtime.chat_run_manager.enqueue(
                 agent_id=target_agent_id,
                 session_id=session.id,
                 executor=executor,
@@ -242,7 +239,7 @@ async def _handle_subagent(
                 try:
                     sub_run = await item.future
                 except asyncio.CancelledError:
-                    _chat_run_manager(runtime).remove_queued(
+                    runtime.chat_run_manager.remove_queued(
                         target_agent_id, session.id, item.item_id
                     )
                     raise
@@ -310,7 +307,7 @@ async def _handle_subagent_result(
     context: ToolContext,
     arguments: JsonObject,
     *,
-    runtime: Any,
+    runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
     session_id = arguments.get("session_id")
@@ -336,7 +333,7 @@ async def _handle_subagent_result(
     result: JsonObject
     if resolved_run_id:
         try:
-            run = _chat_run_manager(runtime).get(resolved_run_id)
+            run = runtime.chat_run_manager.get(resolved_run_id)
         except RunNotFoundError:
             result = await _poll_result_from_session(
                 runtime, agent_id, session_id, run_id=resolved_run_id
@@ -356,20 +353,14 @@ async def _handle_subagent_result(
 
 
 async def _start_subagent_run(
-    runtime: Any,
+    runtime: RuntimeServices,
     agent_id: str,
     session_id: str,
     content: str,
     context: ToolContext,
 ) -> Run:
-    _, executor = _make_subagent_executor(
-        runtime,
-        agent_id,
-        session_id,
-        content,
-        context,
-    )
-    return await _chat_run_manager(runtime).start(
+    _, executor = _make_subagent_executor(runtime, content, context)
+    return await runtime.chat_run_manager.start(
         agent_id=agent_id,
         session_id=session_id,
         executor=executor,
@@ -377,34 +368,17 @@ async def _start_subagent_run(
 
 
 def _make_subagent_executor(
-    runtime: Any,
-    agent_id: str,
-    session_id: str,
+    runtime: RuntimeServices,
     content: str,
     context: ToolContext,
-) -> tuple[Any, RunExecutor]:
-    from core.chat import ChatLoop
-
-    # Child Runs must match normal live Runs: without the live loop's
-    # attachment resolver, persisted media blocks reach the adapter
-    # unresolved; without its compaction service, child runs never
-    # auto-compact. Only the nesting depth needs a private loop instance.
-    parent_loop = _runtime_streaming_chat_loop(runtime)
-    sub_loop = ChatLoop(
-        runtime,
-        streaming=True,
-        attachment_resolver=getattr(parent_loop, "_attachment_resolver", None),
-        compaction_service=getattr(parent_loop, "_compaction_service", None),
+) -> tuple[ChatLoop, RunExecutor]:
+    # Child Runs must match normal live Runs: the parent streaming loop
+    # carries its attachment resolver and compaction service into the
+    # child; only the nesting depth differs.
+    sub_loop = runtime.streaming_chat_loop.child_loop(
+        nesting_depth=context.nesting_depth + 1,
     )
-    sub_loop._nesting_depth = context.nesting_depth + 1  # noqa: SLF001 - planned depth handoff.
-    return sub_loop, lambda run: sub_loop._execute_run(run, content)  # noqa: SLF001
-
-
-def _runtime_streaming_chat_loop(runtime: Any) -> Any | None:
-    try:
-        return getattr(runtime, "streaming_chat_loop", None)
-    except RuntimeError:
-        return None
+    return sub_loop, sub_loop.run_executor(content)
 
 
 def _track_subagent_completion(
@@ -476,7 +450,7 @@ def _cancelled_result_dict(run: Run) -> JsonObject:
 
 
 def _result_from_session(
-    runtime: Any, agent_id: str, session_id: str, run_id: str | None
+    runtime: RuntimeServices, agent_id: str, session_id: str, run_id: str | None
 ) -> JsonObject:
     try:
         session = runtime.chat_sessions.get(agent_id, session_id)
@@ -515,7 +489,7 @@ def _result_from_session(
 
 
 async def _poll_result_from_session(
-    runtime: Any,
+    runtime: RuntimeServices,
     agent_id: str,
     session_id: str,
     run_id: str | None,
@@ -597,10 +571,8 @@ def _last_assistant_with_content(messages: list[ChatMessage]) -> ChatMessage | N
     return None
 
 
-def _load_subagent_settings(runtime: Any) -> dict[str, int]:
-    storage = getattr(runtime, "storage", None)
-    load_settings = getattr(storage, "load_subagent_settings", None)
-    settings = load_settings() if callable(load_settings) else {}
+def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:
+    settings = runtime.storage.load_subagent_settings()
     return {
         "max_subagent_depth": _positive_int(
             settings.get("max_subagent_depth"), DEFAULT_MAX_SUBAGENT_DEPTH
@@ -620,34 +592,22 @@ def _positive_int(value: Any, default: int) -> int:
     return default
 
 
-def _validate_target_agent(runtime: Any, target_agent_id: str) -> JsonObject | None:
-    agent_store = getattr(runtime, "agents", None)
-    if agent_store is None:
-        return None
-    get_agent = getattr(agent_store, "get", None)
-    if not callable(get_agent):
-        return None
-
+def _validate_target_agent(runtime: RuntimeServices, target_agent_id: str) -> JsonObject | None:
     try:
-        get_agent(target_agent_id)
+        runtime.agents.get(target_agent_id)
     except (AgentNotFoundError, InvalidAgentIdError) as error:
         return tool_failure("agent_not_found", str(error))
     return None
 
 
 def _mark_subagent_session(
-    runtime: Any,
+    runtime: RuntimeServices,
     sub_agent_id: str,
     sub_session_id: str,
     context: ToolContext,
 ) -> None:
-    session_manager = getattr(runtime, "chat_sessions", None)
-    get_metadata = getattr(session_manager, "get_metadata", None)
-    set_metadata = getattr(session_manager, "set_metadata", None)
-    if not callable(get_metadata) or not callable(set_metadata):
-        return
-
-    metadata = dict(get_metadata(sub_agent_id, sub_session_id))
+    session_manager = runtime.chat_sessions
+    metadata = dict(session_manager.get_metadata(sub_agent_id, sub_session_id))
     metadata[SUBAGENT_SESSION_METADATA_FLAG] = True
     metadata[SUBAGENT_PARENT_METADATA_KEY] = {
         "agent_id": context.agent_id,
@@ -656,7 +616,7 @@ def _mark_subagent_session(
         "tool_call_id": context.tool_call_id,
         "tool_call_index": context.tool_call_index,
     }
-    set_metadata(sub_agent_id, sub_session_id, metadata)
+    session_manager.set_metadata(sub_agent_id, sub_session_id, metadata)
 
 
 async def _emit_subagent_session_started(
@@ -698,7 +658,7 @@ def _started_run_from_queue_item(item: Any) -> Run | None:
 
 
 def _attach_parent_cancellation(
-    runtime: Any,
+    runtime: RuntimeServices,
     parent_run_id: str,
     *,
     sub_run: Run | None = None,
@@ -709,7 +669,7 @@ def _attach_parent_cancellation(
     parent_key: ParentKey | None = None,
 ) -> None:
     try:
-        parent_run = _chat_run_manager(runtime).get(parent_run_id)
+        parent_run = runtime.chat_run_manager.get(parent_run_id)
     except RunNotFoundError:
         return
     parent_run.add_cancel_callback(
@@ -727,7 +687,7 @@ def _attach_parent_cancellation(
 
 
 def _cancel_subagent_child(
-    runtime: Any,
+    runtime: RuntimeServices,
     *,
     sub_run: Run | None,
     queued_item: Any | None,
@@ -745,7 +705,7 @@ def _cancel_subagent_child(
     if queued_item is None or queued_agent_id is None or queued_session_id is None:
         return
     if not queued_item.future.done():
-        _chat_run_manager(runtime).remove_queued(
+        runtime.chat_run_manager.remove_queued(
             queued_agent_id,
             queued_session_id,
             queued_item.item_id,
@@ -760,13 +720,6 @@ def _cancel_subagent_child(
     if batch_tracker is not None and parent_key is not None:
         batch_tracker.discard_parent(parent_key)
     started_run.request_cancel(reason=parent_reason)
-
-
-def _chat_run_manager(runtime: Any) -> ChatRunManager:
-    manager = getattr(runtime, "chat_run_manager", None)
-    if manager is not None:
-        return cast(ChatRunManager, manager)
-    return cast(ChatRunManager, runtime.chat_runs)
 
 
 def _parent_key(context: ToolContext) -> ParentKey:

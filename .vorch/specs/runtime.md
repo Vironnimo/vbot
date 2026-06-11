@@ -9,6 +9,7 @@ Bootstrap entry point. Wires services and manages start/stop lifecycle.
 - `ConfigProtocol` — `get(key: str, default: Any = None) -> Any` (the one injected dependency).
 - `LoggerProtocol` — `debug/info/warning/error(msg, *args)`; types the public `logger` attribute.
 - Registry/store protocols: `ProviderRegistryProtocol`, `ModelRegistryProtocol`, `ProviderCredentialResolverProtocol`, `StorageManagerProtocol`, `AgentStoreProtocol`, `ToolRegistryProtocol`, `SkillRegistryProtocol`, `ChatSessionManagerProtocol`.
+- `RuntimeServices` — the service surface of a *started* runtime as consumed by core modules that genuinely need the whole runtime handle (chat loop, tool dispatch, sub-agent coordination). Read-only properties `agents`, `providers`, `models`, `provider_credentials`, `storage`, `chat_sessions`, `chat_run_manager`, `tools`, `skills`, `extensions` (`ExtensionRegistry | None`), `system_prompts`, `process_manager`, `streaming_chat_loop`, plus `get_adapter(provider_id, connection_id)`. A missing attribute is a wiring bug, not a silently disabled feature — consumers access services directly, never via `getattr` probes. The heavy service types are imported under `TYPE_CHECKING` only, and consumers must likewise import `RuntimeServices` under `TYPE_CHECKING` (a runtime import of `core.runtime` loads `Runtime` and everything behind it — import cycle).
 
 ## Runtime class
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -231,7 +231,20 @@ class FakeChatLoop:
         self._attachment_resolver = attachment_resolver
         self._compaction_service = compaction_service
         self._nesting_depth = 0
-        self.seen_streaming.append(streaming)
+
+    def child_loop(self, *, nesting_depth: int) -> FakeChatLoop:
+        child = FakeChatLoop(
+            self._runtime,
+            streaming=self._streaming,
+            attachment_resolver=self._attachment_resolver,
+            compaction_service=self._compaction_service,
+        )
+        child._nesting_depth = nesting_depth
+        self.seen_streaming.append(child._streaming)
+        return child
+
+    def run_executor(self, content: str) -> Any:
+        return lambda run: self._execute_run(run, content)
 
     async def _execute_run(self, run: Run, content: str) -> ChatMessage:
         self.seen_depths.append(self._nesting_depth)
@@ -246,6 +259,7 @@ def make_runtime(
         chat_sessions=ChatSessionManager(tmp_path),
         chat_run_manager=manager,
         storage=FakeStorage(settings),
+        streaming_chat_loop=FakeChatLoop(None, streaming=True),
     )
 
 
@@ -967,12 +981,10 @@ async def test_subagent_tool_rejects_parent_session_reuse(tmp_path: Path) -> Non
 
 async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Arrange
     FakeChatLoop.seen_depths = []
     FakeChatLoop.seen_streaming = []
-    monkeypatch.setattr(chat_api, "ChatLoop", FakeChatLoop)
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -1003,17 +1015,17 @@ async def test_make_subagent_executor_inherits_live_run_loop_wiring() -> None:
     # Arrange
     resolver = object()
     compaction_service = object()
-    parent_loop = SimpleNamespace(
-        _attachment_resolver=resolver,
-        _compaction_service=compaction_service,
+    parent_loop = chat_api.ChatLoop(
+        cast(Any, SimpleNamespace()),
+        streaming=True,
+        attachment_resolver=cast(Any, resolver),
+        compaction_service=cast(Any, compaction_service),
     )
     runtime = SimpleNamespace(streaming_chat_loop=parent_loop)
 
     # Act
     sub_loop, _executor = subagent_module._make_subagent_executor(
-        runtime,
-        "worker",
-        "worker-session",
+        cast(Any, runtime),
         "do work",
         make_context(nesting_depth=2),
     )
@@ -1023,24 +1035,6 @@ async def test_make_subagent_executor_inherits_live_run_loop_wiring() -> None:
     assert sub_loop._compaction_service is compaction_service
     assert sub_loop._streaming is True
     assert sub_loop._nesting_depth == 3
-
-
-async def test_make_subagent_executor_tolerates_runtime_without_streaming_loop() -> None:
-    # Arrange
-    runtime = SimpleNamespace()
-
-    # Act
-    sub_loop, _executor = subagent_module._make_subagent_executor(
-        runtime,
-        "worker",
-        "worker-session",
-        "do work",
-        make_context(),
-    )
-
-    # Assert
-    assert sub_loop._attachment_resolver is None
-    assert sub_loop._compaction_service is None
 
 
 async def test_subagent_completion_tracker_logs_unexpected_failures(
