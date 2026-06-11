@@ -327,3 +327,13 @@ agent.json field rules — two validators for one format, found during the deep-
 Consolidating means deciding which side owns the schema (settings as central authority vs. the agent domain)
 and rewiring AgentStore create/update paths plus their tests. Deferred: behavior-relevant refactor beyond
 the audit's settings-consolidation scope.
+
+## 2026-06-11 — RESOLVED: server/app.py pokes ChatLoop privates
+
+Resolves the entry "server/app.py pokes ChatLoop privates for compaction wiring" (2026-06-11).
+`Runtime.start()` now constructs both canonical ChatLoops with one shared
+`CompactionService(SummarizationStrategy())` via constructor injection. The server-side private
+pokes are gone, `app.state.compaction_service` is gone (nothing consumed it), and the
+`_runtime_*` probe helpers in `server/app.py` plus the `_state_*` probe fallbacks in
+`server/rpc/runtime_access.py` were replaced by direct reads of runtime/app-state services.
+`Runtime.config` is now a public property for the server's pre-start bind resolution.

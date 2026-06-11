@@ -28,6 +28,7 @@ The chat loop decides when compaction is safe to run. The compaction domain deci
 
 ## Cross-Domain Contracts
 
+- `core/runtime/` wires compaction: `Runtime.start()` constructs both canonical ChatLoops with one shared `CompactionService(SummarizationStrategy())` via constructor injection. No other layer creates or injects the service.
 - `core/chat/` owns the **auto-compaction** entry point. The chat loop (`_maybe_auto_compact` in `core/chat/chat.py`) runs it only after a final assistant response with no pending tool calls or after a complete tool-result cycle, and resolves its own summary adapter/model.
 - `core/automation/` owns the **manual `/compact`** entry point as a thin bridge. The pure-text command is recognized by `core/chat/commands.py`; accessors dispatch it (server RPC `_handle_compact_command`, the Telegram channel) to `TriggerService.compact_session`, which delegates to `ChatLoop.compact_session(...)`. Manual and auto compaction share the chat loop's single summary-adapter resolution (`ChatLoop._resolve_summary_adapter`). `server/` is RPC dispatch only — no compaction logic lives there.
 - `core/sessions/` owns persistence. Compaction appends checkpoint messages to the Session; it never mutates existing records.
