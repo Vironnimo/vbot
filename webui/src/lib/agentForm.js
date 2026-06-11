@@ -174,7 +174,8 @@ function normalizeTemperature(value) {
     return null;
   }
 
-  const numberValue = Number(value);
+  // Tolerate a comma decimal separator typed in comma-decimal locales.
+  const numberValue = Number(asText(value).trim().replace(',', '.'));
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 

@@ -86,6 +86,19 @@ describe('agent form helpers', () => {
     expect(result.payload).not.toHaveProperty('workspace');
   });
 
+  it('accepts a comma decimal separator in temperature', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      temperature: '0,25',
+      allowed_tools: ['*'],
+      allowed_skills: ['*'],
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.temperature).toBe(0.25);
+  });
+
   it('removes memory from allowed tool payloads', () => {
     const result = normalizeAgentForm({
       id: 'coder',

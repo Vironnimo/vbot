@@ -733,8 +733,8 @@
           <input
             class:agents-view__invalid={formErrors.temperature}
             class="s-input"
-            type="number"
-            step="0.01"
+            type="text"
+            inputmode="decimal"
             bind:value={formValues.temperature}
           />
           {#if formErrors.temperature}
