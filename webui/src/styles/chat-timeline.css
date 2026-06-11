@@ -318,15 +318,6 @@
   }
 }
 
-.msg.error {
-  border-left: 3px solid var(--red);
-  padding-left: 12px;
-}
-
-.msg.error .msg-author {
-  color: var(--red);
-}
-
 .msg-body-blocks {
   display: flex;
   flex-direction: column;
