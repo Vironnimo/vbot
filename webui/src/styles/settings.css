@@ -200,8 +200,13 @@
   line-height: 1.5;
 }
 
+/* Read-only value: structural border + flat background so it cannot be
+   mistaken for an editable input. */
 .s-value-box {
   overflow: hidden;
+  border-color: var(--border);
+  color: var(--text-med);
+  background: transparent;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
