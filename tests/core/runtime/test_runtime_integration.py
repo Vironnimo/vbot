@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from core.embeddings import EmbeddingService
+from core.model_tasks import EmbeddingService
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter

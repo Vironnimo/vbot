@@ -8,12 +8,12 @@ from typing import Any, cast
 
 import pytest
 
-from core.model_tasks import TaskModelError
-from core.speech import (
+from core.model_tasks import (
     LocalSpeechExecutor,
     SpeechConfigurationError,
     SpeechService,
     SpeechSynthesisResult,
+    TaskModelError,
 )
 
 

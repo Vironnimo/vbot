@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.speech import SpeechError
+from core.model_tasks import SpeechError
 from core.tools.tools import (
     JsonObject,
     ToolContext,

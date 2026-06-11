@@ -4,7 +4,7 @@ Provider-neutral speech-to-text and text-to-speech execution for configured task
 
 ## Overview
 
-`core/speech/` executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and routes to either a provider-backed speech HTTP client or an optional local speech executor hook. The server enforces `settings.json` `speech_upload_max_size_bytes` before calling `SpeechService.transcribe`; the default limit is 20 MiB (`20_971_520` bytes).
+`core/model_tasks/` (`speech*.py`) executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and routes to either a provider-backed speech HTTP client or an optional local speech executor hook. The server enforces `settings.json` `speech_upload_max_size_bytes` before calling `SpeechService.transcribe`; the default limit is 20 MiB (`20_971_520` bytes).
 
 This domain owns speech wire payloads and runtime artifacts; it does not own task-target discovery, settings validation, chat message persistence, or generic attachments. The first implementation supports OpenAI-compatible audio endpoints and OpenRouter's audio endpoints. Mistral option schemas may be exposed through the generic task-model layer, but Mistral speech execution currently fails through provider execution error handling until a provider runtime contract exists.
 
@@ -36,7 +36,7 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 
 ## Provider Wire Behavior
 
-Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy — see `providers.md`); `core/speech/providers.py` owns only the speech payload shapes and response parsing.
+Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy — see `providers.md`); `core/model_tasks/speech_providers.py` owns only the speech payload shapes and response parsing.
 
 OpenRouter STT sends Base64 JSON to `/audio/transcriptions`:
 

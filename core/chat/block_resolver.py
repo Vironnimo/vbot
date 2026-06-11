@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 from core.attachments import AttachmentStore
 from core.chat.errors import ChatError
-from core.speech import SpeechError
+from core.model_tasks import SpeechError
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
