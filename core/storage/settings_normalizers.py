@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, cast
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
@@ -473,4 +473,6 @@ def _normalize_json_value(value: Any, path: str) -> Any:
 def _is_absolute_or_home_relative_path(path: str) -> bool:
     if path == "~" or path.startswith(("~/", "~\\")):
         return True
-    return Path(path).is_absolute()
+    # Accept both POSIX and Windows absolute forms on any host so the same
+    # settings.json validates identically across platforms.
+    return PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()

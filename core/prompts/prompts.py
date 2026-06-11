@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Protocol
 
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE, MemoryPromptMode, MemoryService
@@ -585,8 +585,16 @@ class SystemPromptManager:
 
 
 def _validate_workspace_include(filename: str) -> None:
-    path = Path(filename)
-    if path.name != filename or path.is_absolute():
+    # Check both POSIX and Windows path semantics so separators and drive
+    # prefixes of either platform are rejected on any host.
+    posix_path = PurePosixPath(filename)
+    windows_path = PureWindowsPath(filename)
+    if (
+        posix_path.name != filename
+        or posix_path.is_absolute()
+        or windows_path.name != filename
+        or windows_path.is_absolute()
+    ):
         raise PromptError(f"Unsafe workspace include: {filename}")
 
 
