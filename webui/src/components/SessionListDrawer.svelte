@@ -11,6 +11,7 @@
   let {
     agentId = '',
     currentSessionId = '',
+    agentCurrentSessionId = '',
     onSessionSelected = () => {},
   } = $props();
 
@@ -174,6 +175,11 @@
               <p class="session-row__name">
                 {session.display_name || sessionDisplayName(session)}
               </p>
+              {#if session.id === asText(agentCurrentSessionId)}
+                <span class="session-row__badge session-row__badge--current">
+                  {t('sessions.current', 'Current')}
+                </span>
+              {/if}
               {#if session.platform}
                 <span class="session-row__badge">
                   {#if session.platform === 'telegram'}
@@ -342,6 +348,12 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     line-height: 1;
+  }
+
+  .session-row__badge--current {
+    border-color: rgba(74, 222, 128, 0.28);
+    background: rgba(74, 222, 128, 0.1);
+    color: var(--green);
   }
 
   .session-row__badge--subagent {
