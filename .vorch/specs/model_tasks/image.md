@@ -36,7 +36,7 @@ OpenAI native image generation sends `POST /v1/images/generations` with `model`,
 
 ## Artifacts
 
-Image artifacts are stored as one blob and one JSON sidecar per image:
+Image artifacts are stored through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`) as one blob and one JSON sidecar per image:
 
 ```text
 <data_dir>/images/
@@ -59,4 +59,4 @@ Artifact ids are `uuid4().hex`. The filename extension is inferred from the resu
 - New provider execution belongs in `ProviderImageClient` and should keep returning normalized `ImageGenerationResult`; do not route image generation through chat adapters or attachment storage.
 - Debug trace capture is not wired through `ProviderImageClient`; the shared `ProviderTaskClient.post_and_parse` constructs a plain `httpx.AsyncClient` rather than `core.providers._http_shared.build_async_client()` (deliberate).
 - `ImageError` derives from the shared `TaskError` base in `core/utils/errors.py`; the HTTP mappings above are unchanged by that.
-- `generate_artifacts()` writes blob then sidecar without a rollback transaction. Treat partially written artifacts as possible if the process dies mid-write; `get_artifact()` already fails closed when metadata or blob is missing/unreadable.
+- `generate_artifacts()` (via the shared `TaskArtifactStore`) writes blob then sidecar without a rollback transaction. Treat partially written artifacts as possible if the process dies mid-write; `get_artifact()` already fails closed when metadata or blob is missing/unreadable.
