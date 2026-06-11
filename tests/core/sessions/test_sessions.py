@@ -158,6 +158,64 @@ class TestChatSession:
         assert [loaded_message.to_dict() for loaded_message in messages] == [message.to_dict()]
         assert session.path.read_bytes() == valid_content
 
+    def test_bookend_timestamps_returns_first_and_last_message_timestamps(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        first_message = ChatMessage.user(
+            "first", timestamp=datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
+        )
+        middle_message = ChatMessage.user(
+            "middle", timestamp=datetime(2026, 5, 3, 15, 0, tzinfo=UTC)
+        )
+        last_message = ChatMessage.user("last", timestamp=datetime(2026, 5, 3, 15, 45, tzinfo=UTC))
+        for message in (first_message, middle_message, last_message):
+            session.append(message)
+
+        assert session.bookend_timestamps() == (first_message.timestamp, last_message.timestamp)
+
+    def test_bookend_timestamps_returns_same_timestamp_for_single_message(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        message = ChatMessage.user("only", timestamp=FIXED_TIMESTAMP)
+        session.append(message)
+
+        assert session.bookend_timestamps() == (message.timestamp, message.timestamp)
+
+    def test_bookend_timestamps_returns_none_for_empty_file(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+
+        assert session.bookend_timestamps() is None
+
+    def test_bookend_timestamps_returns_none_for_partial_trailing_line(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.append(ChatMessage.user("valid", timestamp=FIXED_TIMESTAMP))
+        session.path.write_bytes(session.path.read_bytes() + b'{"id":"partial"')
+
+        assert session.bookend_timestamps() is None
+
+    def test_bookend_timestamps_reads_last_line_larger_than_tail_chunk(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        first_message = ChatMessage.user(
+            "first", timestamp=datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
+        )
+        large_message = ChatMessage.user(
+            "x" * 20000, timestamp=datetime(2026, 5, 3, 15, 45, tzinfo=UTC)
+        )
+        session.append(first_message)
+        session.append(large_message)
+
+        assert session.bookend_timestamps() == (first_message.timestamp, large_message.timestamp)
+
+    def test_skill_context_messages_uses_preloaded_messages_without_file_read(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.activate_skill_context("demo", {"content": "Skill body", "resources": []})
+        loaded_messages = session.load()
+
+        fresh_handle = ChatSession(session.path)
+        session.path.unlink()
+
+        assert fresh_handle.skill_context_messages(loaded_messages) == [
+            {"role": "user", "content": "Skill body"}
+        ]
+
     def test_load_rejects_invalid_json_line(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         session.path.write_text("{not-json}\n", encoding="utf-8")
@@ -377,6 +435,23 @@ class TestChatSessionManager:
                 "created_at": fallback_timestamp.isoformat(),
                 "last_active_at": fallback_timestamp.isoformat(),
             },
+        ]
+
+    def test_list_with_metadata_recovers_timestamps_from_partial_trailing_line(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        session = manager.create("coder", session_id="session-a")
+        message_timestamp = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
+        session.append(ChatMessage.user("hello", timestamp=message_timestamp))
+        session.path.write_bytes(session.path.read_bytes() + b'{"id":"partial"')
+
+        sessions = manager.list_with_metadata("coder")
+
+        assert sessions == [
+            {
+                "id": "session-a",
+                "created_at": message_timestamp.isoformat(),
+                "last_active_at": message_timestamp.isoformat(),
+            }
         ]
 
     def test_list_ignores_unsafe_session_filenames(self, tmp_path):
