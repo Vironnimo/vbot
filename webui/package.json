@@ -22,6 +22,7 @@
     "vitest": "^4.0.0"
   },
   "dependencies": {
+    "cronstrue": "^3.14.0",
     "markdown-it": "^14.1.1"
   }
 }
