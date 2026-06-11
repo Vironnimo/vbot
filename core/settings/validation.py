@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal, cast
 
 from core.memory import MEMORY_PROMPT_MODES
@@ -899,7 +899,9 @@ def _child_path(parent_path: str, key: str) -> str:
 def _is_absolute_or_home_relative_path(path: str) -> bool:
     if path == "~" or path.startswith(("~/", "~\\")):
         return True
-    return Path(path).is_absolute()
+    # Accept both POSIX and Windows absolute forms on any host so the same
+    # settings.json validates identically across platforms.
+    return PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
 
 
 def _error(diagnostics: list[JsonDiagnostic], path: str, message: str) -> None:

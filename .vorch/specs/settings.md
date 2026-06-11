@@ -37,7 +37,7 @@ Raw-only settings are not public `settings.update` sections. `extension_director
 ## Supported Update Sections
 
 - `appearance` — `{ language: string }`; language must be non-empty. Storage validates the supported language set.
-- `skills` — `{ directories: string[] }`; storage validates and normalizes absolute or home-relative paths.
+- `skills` — `{ directories: string[] }`; storage validates and normalizes absolute or home-relative paths. Both POSIX and Windows absolute forms are accepted on any host, so a settings.json validates identically across platforms.
 - `defaults` — `{ agent: { model?, fallback_model?, temperature?, thinking_effort? } }`; `null` removes an individual Agent default. `temperature` is bounded `0.0`–`2.0`. `thinking_effort: ""` is a valid explicit provider-default value.
 - `subagents` — requires `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` as positive integers.
 - `compaction` — requires `{ auto, threshold, tail_tokens, summary_model }`; `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | null`.
