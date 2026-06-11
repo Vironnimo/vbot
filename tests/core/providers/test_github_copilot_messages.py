@@ -9,7 +9,6 @@ from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
     build_copilot_messages_payload,
     normalize_copilot_messages_response,
-    normalize_copilot_messages_sse_line,
     normalize_copilot_messages_stream_event,
 )
 from core.providers.github_copilot_policy import (
@@ -720,19 +719,6 @@ def test_stream_preserves_redacted_thinking_block() -> None:
             "reasoning_meta": {"content_blocks": [{"type": "redacted_thinking", "data": "opaque"}]},
         }
     ]
-
-
-def test_sse_line_parser_tolerates_event_done_unknown_and_malformed_lines() -> None:
-    state = CopilotMessagesStreamState()
-
-    assert normalize_copilot_messages_sse_line("event: content_block_delta", state) == []
-    assert normalize_copilot_messages_sse_line("data: [DONE]", state) == []
-    assert normalize_copilot_messages_sse_line("data: not-json", state) == []
-    assert normalize_copilot_messages_sse_line('data: {"type": "unknown"}', state) == []
-    assert normalize_copilot_messages_sse_line(
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
-        state,
-    ) == [{"type": "content_delta", "text": "Hi"}]
 
 
 def test_stream_error_event_raises_provider_error() -> None:

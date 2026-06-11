@@ -533,12 +533,6 @@ class VectorStore:
             for row in rows
         }
 
-    def has_header(self) -> bool:
-        """Return whether the on-disk index already has a header row."""
-
-        with closing(self._connect()) as connection:
-            return self._read_header(connection) is not None
-
     def read_header(self) -> VectorHeader | None:
         """Public read of the stored header — used by tests to assert pinning."""
 

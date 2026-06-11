@@ -834,15 +834,6 @@ def _openai_cached_prompt_tokens(usage: dict[str, Any]) -> int | None:
     return cached_tokens if isinstance(cached_tokens, int) else None
 
 
-def _provider_default_max_tokens(defaults: Mapping[str, Any] | None) -> int:
-    if defaults is None:
-        return DEFAULT_MAX_OUTPUT_TOKENS
-    max_tokens = defaults.get("max_tokens")
-    if max_tokens is None:
-        return DEFAULT_MAX_OUTPUT_TOKENS
-    return int(max_tokens)
-
-
 def _read_optional_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     value = data.get(key)
     if isinstance(value, dict):

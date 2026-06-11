@@ -44,12 +44,7 @@ from cli.tool_management import tool_list
 from server.main import DEFAULT_HOST
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
-CHANNEL_COMMANDS = ("add", "list", "remove", "update", "enable", "disable", "status")
-AGENT_COMMANDS = ("list", "show", "create", "update", "delete")
 TOOL_COMMANDS = ("list",)
-PROMPT_COMMANDS = ("list", "update", "reset", "preview")
-LOG_COMMANDS = ("list", "read")
-PROVIDER_COMMANDS = ("list", "status", "set-key")
 MODEL_COMMANDS = ("list", "refresh")
 SKILL_COMMANDS = ("list",)
 CONFIG_COMMANDS = ("get", "set")
@@ -98,11 +93,6 @@ PROMPT_HELP = {
 LOG_HELP = {
     "list": "List available daily log files",
     "read": "Read parsed entries from one daily log file",
-}
-PROVIDER_HELP = {
-    "list": "List provider connections and usability",
-    "status": "Show one provider or connection status",
-    "set-key": "Set an API-key provider credential",
 }
 MODEL_HELP = {
     "list": "List available models",
