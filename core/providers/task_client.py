@@ -7,9 +7,9 @@ shared plumbing — target resolution from a runtime handle, auth
 headers, the POST/classify/parse request cycle, and retry semantics —
 while each domain keeps its own payload shaping and response parsing.
 
-Task-specific execution stays in the domain modules
-(:mod:`core.speech.providers`, :mod:`core.image.providers`,
-:mod:`core.embeddings.providers`); only the wire plumbing lives here.
+Task-specific execution lives in the per-task wire clients in
+:mod:`core.model_tasks` (``speech_providers``, ``image_providers``,
+``embeddings_providers``); only the wire plumbing lives here.
 """
 
 from __future__ import annotations

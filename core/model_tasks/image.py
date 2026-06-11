@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
+from core.model_tasks.artifacts import StoredArtifact, TaskArtifactStore
 from core.model_tasks.constants import TASK_IMAGE_GENERATION
 from core.model_tasks.image_providers import ProviderImageClient
 from core.model_tasks.image_types import ImageArtifact, ImageGenerationResult, JsonObject
-from core.model_tasks.model_tasks import TaskModelError, parse_task_model_target_id
+from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import TaskError
 from core.utils.logging import get_logger
 
 JsonObject = JsonObject
 _LOGGER = get_logger("image")
-_ARTIFACT_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
 
 class ImageError(TaskError):
@@ -46,9 +43,13 @@ class ImageService:
         runtime: TaskClientRuntime,
         data_dir: str | Path,
     ) -> None:
-        self._model_tasks = model_tasks
         self._runtime = runtime
-        self._artifact_dir = Path(data_dir) / "images"
+        self._resolver = TaskBindingResolver(
+            model_tasks, configuration_error=ImageConfigurationError
+        )
+        self._artifacts = TaskArtifactStore(
+            Path(data_dir) / "images", kind="image", error=ImageConfigurationError
+        )
 
     async def generate(self, prompt: str) -> ImageGenerationResult:
         """Generate images from a text prompt using the configured binding."""
@@ -57,9 +58,7 @@ class ImageService:
         if not normalized_prompt:
             raise ImageConfigurationError("Prompt must not be empty")
 
-        binding = self._binding_for(TASK_IMAGE_GENERATION)
-        options = self._model_tasks.options_with_defaults(binding)
-        target_ref = self._parse_target(binding.target)
+        _binding, options, target_ref = self._resolver.resolve(TASK_IMAGE_GENERATION)
 
         if target_ref.kind == "local":
             raise ImageUnsupportedTargetError(
@@ -79,82 +78,35 @@ class ImageService:
         """Generate images and persist them as runtime artifacts."""
 
         result = await self.generate(prompt)
-        artifacts: list[ImageArtifact] = []
-
-        self._artifact_dir.mkdir(parents=True, exist_ok=True)
-
-        for idx, image_bytes in enumerate(result.images):
-            artifact_id = uuid4().hex
-            extension = _extension_for_media_type(result.media_type)
-            filename = f"{artifact_id}.{extension}"
-            file_path = self._artifact_dir / filename
-            metadata_path = self._artifact_dir / f"{artifact_id}.json"
-
-            file_path.write_bytes(image_bytes)
-            metadata = {
-                "id": artifact_id,
-                "filename": filename,
-                "media_type": result.media_type,
-                "size_bytes": len(image_bytes),
-                "index": idx,
-            }
-            metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
-
-            artifacts.append(
-                ImageArtifact(
-                    id=artifact_id,
-                    filename=filename,
+        extension = _extension_for_media_type(result.media_type)
+        return tuple(
+            _image_artifact(
+                self._artifacts.write(
+                    image_bytes,
+                    extension=extension,
                     media_type=result.media_type,
-                    size_bytes=len(image_bytes),
-                    file_path=file_path,
-                    index=idx,
+                    extra_metadata={"index": idx},
                 )
             )
-
-        return tuple(artifacts)
+            for idx, image_bytes in enumerate(result.images)
+        )
 
     def get_artifact(self, artifact_id: str) -> ImageArtifact:
         """Return a persisted image artifact by id."""
 
-        if not isinstance(artifact_id, str) or _ARTIFACT_ID_PATTERN.fullmatch(artifact_id) is None:
-            raise ImageConfigurationError("Invalid image artifact id")
-        metadata_path = self._artifact_dir / f"{artifact_id}.json"
-        if not metadata_path.is_file():
-            raise ImageConfigurationError("Image artifact not found")
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ImageConfigurationError("Image artifact metadata is unreadable") from exc
+        return _image_artifact(self._artifacts.read(artifact_id))
 
-        filename = metadata.get("filename")
-        media_type = metadata.get("media_type")
-        size_bytes = metadata.get("size_bytes")
-        index = metadata.get("index", 0)
-        if not isinstance(filename, str) or not isinstance(media_type, str):
-            raise ImageConfigurationError("Image artifact metadata is invalid")
-        file_path = self._artifact_dir / filename
-        if not file_path.is_file():
-            raise ImageConfigurationError("Image artifact file not found")
-        return ImageArtifact(
-            id=artifact_id,
-            filename=filename,
-            media_type=media_type,
-            size_bytes=size_bytes if isinstance(size_bytes, int) else file_path.stat().st_size,
-            file_path=file_path,
-            index=index if isinstance(index, int) else 0,
-        )
 
-    def _binding_for(self, task_type: str) -> Any:
-        try:
-            return self._model_tasks.binding_for(task_type)
-        except TaskModelError as exc:
-            raise ImageConfigurationError(str(exc)) from exc
-
-    def _parse_target(self, target: str) -> Any:
-        try:
-            return parse_task_model_target_id(target)
-        except TaskModelError as exc:
-            raise ImageConfigurationError(str(exc)) from exc
+def _image_artifact(stored: StoredArtifact) -> ImageArtifact:
+    index = stored.metadata.get("index", 0)
+    return ImageArtifact(
+        id=stored.id,
+        filename=stored.filename,
+        media_type=stored.media_type,
+        size_bytes=stored.size_bytes,
+        file_path=stored.file_path,
+        index=index if isinstance(index, int) else 0,
+    )
 
 
 def _extension_for_media_type(media_type: str) -> str:

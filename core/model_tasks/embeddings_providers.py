@@ -9,9 +9,10 @@ against OpenRouter's :code:`/api/v1/embeddings` endpoint — the same
 shape the standard OpenAI platform endpoint returns — so the client
 is reusable for any provider that mirrors that contract.
 
-Mirrors :mod:`core.image.providers` and :mod:`core.speech.providers`:
-all three share the request plumbing (target resolution, auth headers,
-POST/classify/parse cycle, retry policy) through
+Mirrors :mod:`core.model_tasks.image_providers` and
+:mod:`core.model_tasks.speech_providers`: all three share the request
+plumbing (target resolution, auth headers, POST/classify/parse cycle,
+retry policy) through
 :class:`core.providers.task_client.ProviderTaskClient`; this module
 owns only the embeddings payload shape and response parsing.
 """
