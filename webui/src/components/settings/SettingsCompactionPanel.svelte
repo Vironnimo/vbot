@@ -232,10 +232,8 @@
   <div class="s-row-control s-row-control--number">
     <input
       class="s-input"
-      type="number"
-      min="0.05"
-      max="1"
-      step="0.05"
+      type="text"
+      inputmode="decimal"
       value={compactionSettings.threshold}
       aria-label={t('settings.compaction.threshold', 'Threshold')}
       oninput={(event) =>

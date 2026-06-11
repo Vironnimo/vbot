@@ -23,6 +23,7 @@ import {
   getSkillDirectories,
   getWebSearchSettings,
   normalizeAgentDefaultsSettings,
+  normalizeCompactionSettings,
   normalizeSubAgentSettings,
   providerStatusClass,
   providerStatusLabel,
@@ -819,3 +820,23 @@ function translate(key, fallback, values) {
       : match;
   });
 }
+
+describe('comma decimal separators', () => {
+  it('parses a comma temperature in agent defaults payloads', () => {
+    expect(
+      buildAgentDefaultsPayload({
+        model: '',
+        fallback_model: '',
+        temperature: '0,7',
+        thinking_effort: '',
+      }).defaults.agent.temperature,
+    ).toBe(0.7);
+  });
+
+  it('parses a comma threshold in compaction settings', () => {
+    expect(
+      normalizeCompactionSettings({ compaction: { threshold: '0,35' } })
+        .threshold,
+    ).toBe(0.35);
+  });
+});
