@@ -12,7 +12,7 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.chat import ChatLoop, ChatSessionManager
+from core.chat import ChatLoop, ChatSessionManager, CommandDispatcher
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.query import ModelQuery
 from core.runs import ChatRunManager
@@ -306,6 +306,9 @@ class IntegrationRuntime:
         self.process_manager = IntegrationProcessManager()
         self.started = False
         self.stopped = False
+        self.chat_loop = ChatLoop(cast(Any, self))
+        self.streaming_chat_loop = ChatLoop(cast(Any, self), streaming=True)
+        self.command_dispatcher = CommandDispatcher(self.chat_run_manager)
 
     @property
     def chat_run_manager(self) -> ChatRunManager:
@@ -744,6 +747,8 @@ def _make_state(runtime: Any) -> Any:
             "runtime": runtime,
             "chat_runs": chat_runs,
             "chat_loop": ChatLoop(runtime),
+            "streaming_chat_loop": ChatLoop(runtime, streaming=True),
+            "command_dispatcher": CommandDispatcher(chat_runs),
             "event_bus": None,
         },
     )()

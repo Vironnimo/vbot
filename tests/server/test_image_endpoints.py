@@ -40,6 +40,10 @@ class _ImageRuntime:
     def __init__(self, data_dir: Path, *, payload: bytes = b"", fail: bool = False) -> None:
         self.storage = type("Storage", (), {"data_dir": data_dir})()
         self.chat_runs = ChatRunManager()
+        self.chat_run_manager = self.chat_runs
+        self.chat_loop = object()
+        self.streaming_chat_loop = object()
+        self.command_dispatcher = object()
         self.image = _FailingImage() if fail else _Image(data_dir, payload)
 
     def start(self) -> None:
