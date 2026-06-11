@@ -17,20 +17,18 @@ from core.attachments.attachments import (
     AttachmentTooLargeError,
     AttachmentTypeNotAllowedError,
 )
-from core.image import (
+from core.model_tasks import (
     ImageConfigurationError,
     ImageError,
     ImageExecutionError,
     ImageUnsupportedTargetError,
-)
-from core.runs import ChatRunManager, RunNotFoundError, RunStatus
-from core.settings import SettingsValidationError, load_validated_settings_json
-from core.speech import (
     SpeechConfigurationError,
     SpeechError,
     SpeechExecutionError,
     SpeechUnsupportedTargetError,
 )
+from core.runs import ChatRunManager, RunNotFoundError, RunStatus
+from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.delegates import RPC_ERROR_INVALID_REQUEST, bridge_run_to_event_bus, dispatch_rpc

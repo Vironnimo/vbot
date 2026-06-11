@@ -7,7 +7,7 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.image import ImageArtifact, ImageConfigurationError
+from core.model_tasks import ImageArtifact, ImageConfigurationError
 from core.runs import ChatRunManager
 from server.app import create_app
 

@@ -4,7 +4,7 @@ Provider-neutral image generation execution and artifact storage for the configu
 
 ## Overview
 
-`core/image/` owns text-prompt image generation after Settings has selected one concrete task-model target. It resolves the `image_generation` binding through `TaskModelService`, merges stored options over backend defaults, rejects local targets, and routes provider targets to `ProviderImageClient`. It does not own model discovery, model catalogs, settings validation, UI controls, or the `image_generation` tool schema; those live in `core/models/`, `core/model_tasks/`, `core/settings/`, `webui/`, and `core/tools/image.py`.
+`core/model_tasks/` (`image*.py`) owns text-prompt image generation after Settings has selected one concrete task-model target. It resolves the `image_generation` binding through `TaskModelService`, merges stored options over backend defaults, rejects local targets, and routes provider targets to `ProviderImageClient`. It does not own model discovery, model catalogs, settings validation, UI controls, or the `image_generation` tool schema; those live in `core/models/`, `core/model_tasks/`, `core/settings/`, `webui/`, and `core/tools/image.py`.
 
 ## Interfaces
 
@@ -54,7 +54,7 @@ Artifact ids are `uuid4().hex`. The filename extension is inferred from the resu
 
 - Provider targets must use the task-model id shape `provider/model-id::connection-id`; nested model ids such as `openrouter/openai/gpt-image::api-key` are valid. Local targets parse successfully in `core/model_tasks/` but image execution rejects them with `ImageUnsupportedTargetError`.
 - A configured non-OpenRouter provider target reaches `ProviderImageClient.generate()`, raises `ProviderError(retryable=False)`, and is surfaced by `ImageService.generate()` as `ImageExecutionError`, not `ImageUnsupportedTargetError`.
-- `image_generation` targets are discovered from model capabilities where `output_modalities` includes `image`; do not hard-code image models in `core/image/`.
+- `image_generation` targets are discovered from model capabilities where `output_modalities` includes `image`; do not hard-code image models in `core/model_tasks/` (`image*.py`).
 - Provider/image options belong in `core/model_tasks/options.py`; the agent-facing `image_generation` tool intentionally accepts only `prompt`.
 - New provider execution belongs in `ProviderImageClient` and should keep returning normalized `ImageGenerationResult`; do not route image generation through chat adapters or attachment storage.
 - Debug trace capture is not wired through `ProviderImageClient`; the shared `ProviderTaskClient.post_and_parse` constructs a plain `httpx.AsyncClient` rather than `core.providers._http_shared.build_async_client()` (deliberate).
