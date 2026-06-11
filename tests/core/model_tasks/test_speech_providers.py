@@ -8,8 +8,8 @@ import httpx
 import pytest
 import respx
 
+from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
-from core.speech.providers import ProviderSpeechClient, audio_format_from
 
 
 def test_audio_format_from_prefers_browser_mime_type() -> None:

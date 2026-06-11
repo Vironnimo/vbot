@@ -19,7 +19,7 @@ import pytest
 
 import server.delegates as delegates
 from core.automation import TriggerService
-from core.chat import ChatLoop, ChatMessage, ChatSessionManager, ToolCall
+from core.chat import ChatLoop, ChatMessage, ChatSessionManager, CommandDispatcher, ToolCall
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
@@ -801,6 +801,8 @@ class StubStorage:
 
 
 class StubPrompts:
+    app_dir = Path("app")
+
     def build_system_prompt(self, agent: StubAgent, scope: object = None) -> str:
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
@@ -915,6 +917,11 @@ class StubAdapter:
         return cast(list[JsonObject], self._stream_deltas)
 
 
+class StubProcessManager:
+    def cancel_scope(self, run_id: str) -> None:
+        del run_id
+
+
 class RecordingCompactionService:
     def __init__(self) -> None:
         self.calls = 0
@@ -944,8 +951,24 @@ class StubRuntime:
         self.providers = StubProviders()
         self.adapter = adapter
         self.chat_runs: ChatRunManager | None = None
+        self.extensions: Any = None
+        self.process_manager = StubProcessManager()
         self.trigger_service: Any = None
         self.recall_reload_count = 0
+        self.chat_loop = ChatLoop(cast(Any, self))
+        self.streaming_chat_loop = ChatLoop(cast(Any, self), streaming=True)
+        self.command_dispatcher = CommandDispatcher(
+            self.chat_run_manager,
+            agents=cast(Any, self.agents),
+            sessions=self.chat_sessions,
+            models=cast(Any, self._models),
+        )
+
+    @property
+    def chat_run_manager(self) -> ChatRunManager:
+        if self.chat_runs is None:
+            self.chat_runs = ChatRunManager()
+        return self.chat_runs
 
     def start(self) -> None:
         return None
@@ -1021,16 +1044,30 @@ class StubRuntime:
         return None
 
 
-def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
-    runtime = StubRuntime(tmp_path, adapter)
+def make_state(
+    tmp_path: Path,
+    adapter: StubAdapter,
+    *,
+    compaction_service: Any | None = None,
+) -> SimpleNamespace:
+    runtime: Any = StubRuntime(tmp_path, adapter)
     chat_runs = ChatRunManager()
     runtime.chat_runs = chat_runs
-    chat_loop = ChatLoop(runtime)
+    chat_loop = ChatLoop(runtime, compaction_service=compaction_service)
+    streaming_chat_loop = ChatLoop(runtime, streaming=True, compaction_service=compaction_service)
+    runtime.streaming_chat_loop = streaming_chat_loop
     runtime.trigger_service = TriggerService(chat_loop, chat_runs, cast(Any, runtime))
     return SimpleNamespace(
         runtime=runtime,
         chat_runs=chat_runs,
         chat_loop=chat_loop,
+        streaming_chat_loop=streaming_chat_loop,
+        command_dispatcher=CommandDispatcher(
+            chat_runs,
+            agents=cast(Any, runtime.agents),
+            sessions=runtime.chat_sessions,
+            models=cast(Any, runtime.models),
+        ),
         event_bus=ServerEventBus(),
         agent_delete_lock=asyncio.Lock(),
         server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
@@ -3848,10 +3885,8 @@ async def test_chat_methods_reject_compact_command_while_session_run_is_active(
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     adapter = StubAdapter()
-    state = make_state(tmp_path, adapter)
     compaction_service = RecordingCompactionService()
-    state.compaction_service = compaction_service
-    state.chat_loop._compaction_service = compaction_service
+    state = make_state(tmp_path, adapter, compaction_service=compaction_service)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
 
     started = asyncio.Event()
@@ -3939,9 +3974,8 @@ async def test_chat_methods_handle_compact_command_model_errors_as_command_reply
     method: str,
 ) -> None:
     adapter = StubAdapter()
-    state = make_state(tmp_path, adapter)
     compaction_service = RecordingCompactionService()
-    state.chat_loop._compaction_service = compaction_service
+    state = make_state(tmp_path, adapter, compaction_service=compaction_service)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     state.runtime.agents.update("coder", model="")
 
@@ -4512,7 +4546,7 @@ async def test_chat_stream_uses_streaming_chat_loop(
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_prefers_runtime_streaming_chat_loop_when_available(
+async def test_chat_stream_uses_state_streaming_chat_loop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4540,7 +4574,7 @@ async def test_chat_stream_prefers_runtime_streaming_chat_loop_when_available(
             return run
 
     runtime_streaming_loop = RuntimeStreamingLoop()
-    state.runtime.streaming_chat_loop = runtime_streaming_loop
+    state.streaming_chat_loop = runtime_streaming_loop
     monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
 
     response = await dispatch_rpc(
@@ -4624,7 +4658,7 @@ async def test_agent_delete_publishes_agent_deleted_event(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_agent_crud_events_not_published_without_event_bus(tmp_path: Path) -> None:
-    runtime = StubRuntime(tmp_path, StubAdapter())
+    runtime: Any = StubRuntime(tmp_path, StubAdapter())
     chat_runs = ChatRunManager()
     runtime.chat_runs = chat_runs
     state = SimpleNamespace(

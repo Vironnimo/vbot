@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.image import ImageError
+from core.model_tasks import ImageError
 from core.tools.tools import (
     JsonObject,
     ToolContext,
