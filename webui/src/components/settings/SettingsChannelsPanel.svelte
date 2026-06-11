@@ -295,17 +295,6 @@
 </script>
 
 <div class="s-row s-row--stacked s-row--channels-header">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.channels.title', 'Channels')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.channels.subtitle',
-        'Manage channel routing and runtime status.',
-      )}
-    </div>
-  </div>
   <div class="s-row-control">
     <div class="s-row-actions s-row-actions--channel-header">
       <button
