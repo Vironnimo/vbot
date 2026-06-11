@@ -786,7 +786,6 @@
     min-height: 0;
     flex: 1;
     flex-direction: column;
-    gap: 6px;
     overflow: auto;
     padding-right: 4px;
   }
@@ -794,16 +793,13 @@
   .logs-entry {
     display: grid;
     grid-template-columns:
-      minmax(154px, auto) minmax(66px, auto) minmax(180px, 0.7fr)
+      minmax(154px, auto) minmax(60px, auto) minmax(180px, 0.7fr)
       minmax(0, 1fr);
     align-items: center;
     gap: 10px;
     min-width: 0;
-    padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-left-width: 3px;
-    border-radius: var(--r-sm);
-    background: var(--surface);
+    padding: 3px 10px;
+    border-left: 3px solid var(--border-2);
   }
 
   .logs-entry--info {
@@ -812,9 +808,7 @@
 
   .logs-entry--warn {
     border-left-color: var(--amber);
-    border-color: rgba(245, 158, 11, 0.28);
     background: rgba(245, 158, 11, 0.08);
-    box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.08);
   }
 
   .logs-entry--error {
@@ -844,28 +838,23 @@
 
   .logs-entry__level {
     justify-self: start;
-    padding: 2px 8px;
-    border-radius: 12px;
-    color: var(--text-hi);
-    background: var(--surface-3);
+    color: var(--text-med);
+    font-family: var(--font-mono);
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.06em;
   }
 
   .logs-entry--warn .logs-entry__level {
     color: var(--amber);
-    background: rgba(245, 158, 11, 0.18);
   }
 
   .logs-entry--error .logs-entry__level {
     color: var(--red);
-    background: rgba(252, 129, 129, 0.12);
   }
 
   .logs-entry--info .logs-entry__level {
     color: var(--accent);
-    background: rgba(232, 135, 10, 0.12);
   }
 
   .logs-entry__message {
@@ -918,6 +907,7 @@
     .logs-entry {
       grid-template-columns: minmax(0, 1fr);
       gap: 6px;
+      padding: 6px 10px;
     }
 
     .logs-entry__message,
