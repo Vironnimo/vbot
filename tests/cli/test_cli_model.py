@@ -51,7 +51,7 @@ def test_parse_args_supports_model_refresh_no_provider() -> None:
 
 
 def test_parse_args_supports_model_refresh_with_provider() -> None:
-    args = cli_main.parse_args(["model", "refresh", "--provider", "openai"])
+    args = cli_main.parse_args(["model", "refresh", "openai"])
 
     assert args.area == "model"
     assert args.command == "refresh"

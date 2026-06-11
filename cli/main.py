@@ -26,11 +26,34 @@ from cli.channel_management import (
     channel_update,
 )
 from cli.config_management import coerce_config_value, config_get, config_set, config_show
+from cli.cron_management import (
+    cron_create,
+    cron_delete,
+    cron_disable,
+    cron_enable,
+    cron_list,
+    cron_update,
+)
+from cli.debug_management import (
+    debug_model_probe,
+    debug_status,
+    debug_trace_clear,
+    debug_trace_list,
+    debug_trace_show,
+)
 from cli.doctor_management import doctor_config, doctor_settings
 from cli.log_management import log_list, log_read
 from cli.model_management import model_list, model_refresh
+from cli.parser import parse_args
 from cli.prompt_management import prompt_list, prompt_preview, prompt_reset, prompt_update
-from cli.provider_management import provider_list, provider_set_key, provider_status
+from cli.provider_management import (
+    provider_connect,
+    provider_connect_status,
+    provider_disconnect,
+    provider_list,
+    provider_set_key,
+    provider_status,
+)
 from cli.server_management import (
     CommandResult,
     ServerInstance,
@@ -39,83 +62,17 @@ from cli.server_management import (
     start_server,
     stop_server,
 )
+from cli.session_management import session_create, session_link_channel, session_list
 from cli.skill_management import skill_list
-from cli.tool_management import tool_list
-from server.main import DEFAULT_HOST
-
-SERVER_COMMANDS = ("start", "stop", "restart", "status")
-TOOL_COMMANDS = ("list",)
-MODEL_COMMANDS = ("list", "refresh")
-SKILL_COMMANDS = ("list",)
-CONFIG_COMMANDS = ("get", "set")
-DOCTOR_COMMANDS = ("settings", "config")
-AREA_HELP = {
-    "server": "Start, stop, restart, and inspect the local server",
-    "agent": "Inspect and manage agent configs",
-    "channel": "Inspect and manage channel configs",
-    "tool": "Inspect public tool catalog",
-    "prompt": "Inspect and manage prompt fragments",
-    "log": "Inspect parsed server logs",
-    "provider": "Inspect and configure provider connections",
-    "model": "Inspect and refresh model catalogs",
-    "skill": "Inspect skill availability and diagnostics",
-    "config": "Inspect and update raw settings",
-    "doctor": "Run local configuration health checks",
-}
-SERVER_HELP = {
-    "start": "Start the local vBot server",
-    "stop": "Stop the local vBot server",
-    "restart": "Restart the local vBot server",
-    "status": "Show local server status",
-}
-AGENT_HELP = {
-    "list": "List configured agents",
-    "show": "Show one agent config",
-    "create": "Create an agent config",
-    "update": "Update an agent config",
-    "delete": "Delete an agent config",
-}
-CHANNEL_HELP = {
-    "add": "Create a channel config",
-    "list": "List channel configs",
-    "remove": "Delete a channel config",
-    "update": "Update a channel config",
-    "enable": "Enable a channel listener",
-    "disable": "Disable a channel listener",
-    "status": "Show one channel listener status",
-}
-PROMPT_HELP = {
-    "list": "List editable prompt fragments",
-    "update": "Replace one prompt fragment",
-    "reset": "Reset one prompt fragment to bundled default",
-    "preview": "Render one agent's complete system prompt",
-}
-LOG_HELP = {
-    "list": "List available daily log files",
-    "read": "Read parsed entries from one daily log file",
-}
-MODEL_HELP = {
-    "list": "List available models",
-    "refresh": "Refresh model catalogs",
-}
-CONFIG_HELP = {
-    "get": "Show one raw settings key",
-    "set": "Set one raw settings key",
-}
-DOCTOR_HELP = {
-    "settings": "Validate the target data-dir settings.json",
-    "config": "Validate all user-editable JSON config files in the target data-dir",
-}
-TOOL_HELP = {"list": "List public registered tools"}
-SKILL_HELP = {"list": "List skills and diagnostics"}
-THINKING_EFFORTS = ("", "none", "minimal", "low", "medium", "high", "xhigh", "max")
-CHANNEL_PLATFORMS = ("telegram",)
-CHANNEL_DM_SCOPES = (
-    "per_conversation",
-    "main",
-    "per_peer",
-    "per_account_channel_peer",
+from cli.task_model_management import (
+    task_model_clear,
+    task_model_list,
+    task_model_options,
+    task_model_set,
+    task_model_targets,
 )
+from cli.tool_management import tool_list
+
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
 
@@ -132,371 +89,6 @@ class ServerCommandContext:
     start: Callable[[ServerInstance], CommandResult]
     stop: Callable[[ServerInstance], CommandResult]
     status: Callable[[ServerInstance], CommandResult]
-
-
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse vBot CLI arguments without prompting for input."""
-
-    parser = argparse.ArgumentParser(description="Manage vBot from the command line")
-    subparsers = parser.add_subparsers(dest="area", required=True)
-
-    server_parser = subparsers.add_parser(
-        "server",
-        help=AREA_HELP["server"],
-        description=AREA_HELP["server"],
-    )
-    server_subparsers = server_parser.add_subparsers(dest="command", required=True)
-    for command in SERVER_COMMANDS:
-        command_parser = server_subparsers.add_parser(
-            command,
-            help=SERVER_HELP[command],
-            description=SERVER_HELP[command],
-        )
-        _add_target_arguments(command_parser)
-
-    agent_parser = subparsers.add_parser(
-        "agent",
-        help=AREA_HELP["agent"],
-        description=AREA_HELP["agent"],
-    )
-    agent_subparsers = agent_parser.add_subparsers(dest="command", required=True)
-
-    agent_list_parser = agent_subparsers.add_parser(
-        "list",
-        help=AGENT_HELP["list"],
-        description=AGENT_HELP["list"],
-    )
-    _add_target_arguments(agent_list_parser)
-
-    agent_show_parser = agent_subparsers.add_parser(
-        "show",
-        help=AGENT_HELP["show"],
-        description=AGENT_HELP["show"],
-    )
-    _add_target_arguments(agent_show_parser)
-    agent_show_parser.add_argument("--id", required=True)
-
-    agent_create_parser = agent_subparsers.add_parser(
-        "create",
-        help=AGENT_HELP["create"],
-        description=AGENT_HELP["create"],
-    )
-    _add_target_arguments(agent_create_parser)
-    agent_create_parser.add_argument("--id", required=True)
-    agent_create_parser.add_argument("--name", required=True)
-    _add_agent_change_arguments(agent_create_parser, include_name=False, include_session=False)
-
-    agent_update_parser = agent_subparsers.add_parser(
-        "update",
-        help=AGENT_HELP["update"],
-        description=AGENT_HELP["update"],
-    )
-    _add_target_arguments(agent_update_parser)
-    agent_update_parser.add_argument("--id", required=True)
-    _add_agent_change_arguments(agent_update_parser, include_name=True, include_session=True)
-
-    agent_delete_parser = agent_subparsers.add_parser(
-        "delete",
-        help=AGENT_HELP["delete"],
-        description=AGENT_HELP["delete"],
-    )
-    _add_target_arguments(agent_delete_parser)
-    agent_delete_parser.add_argument("--id", required=True)
-
-    channel_parser = subparsers.add_parser(
-        "channel",
-        help=AREA_HELP["channel"],
-        description=AREA_HELP["channel"],
-    )
-    channel_subparsers = channel_parser.add_subparsers(dest="command", required=True)
-
-    add_parser = channel_subparsers.add_parser(
-        "add",
-        help=CHANNEL_HELP["add"],
-        description=CHANNEL_HELP["add"],
-    )
-    _add_target_arguments(add_parser)
-    add_parser.add_argument("--id", required=True)
-    add_parser.add_argument("--platform", required=True, choices=CHANNEL_PLATFORMS)
-    add_parser.add_argument("--agent", required=True)
-    add_parser.add_argument("--token-env", required=True)
-    add_parser.add_argument("--dm-scope", default="per_conversation", choices=CHANNEL_DM_SCOPES)
-    add_parser.add_argument("--allow", type=int, nargs="*", default=[])
-
-    list_parser = channel_subparsers.add_parser(
-        "list",
-        help=CHANNEL_HELP["list"],
-        description=CHANNEL_HELP["list"],
-    )
-    _add_target_arguments(list_parser)
-
-    remove_parser = channel_subparsers.add_parser(
-        "remove",
-        help=CHANNEL_HELP["remove"],
-        description=CHANNEL_HELP["remove"],
-    )
-    _add_target_arguments(remove_parser)
-    remove_parser.add_argument("--id", required=True)
-
-    update_parser = channel_subparsers.add_parser(
-        "update",
-        help=CHANNEL_HELP["update"],
-        description=CHANNEL_HELP["update"],
-    )
-    _add_target_arguments(update_parser)
-    update_parser.add_argument("--id", required=True)
-    update_parser.add_argument("--platform", choices=CHANNEL_PLATFORMS)
-    update_parser.add_argument("--agent")
-    update_parser.add_argument("--token-env")
-    update_parser.add_argument("--dm-scope", choices=CHANNEL_DM_SCOPES)
-    update_parser.add_argument("--allow", type=int, nargs="*")
-    update_parser.add_argument("--enabled", choices=("true", "false"))
-
-    enable_parser = channel_subparsers.add_parser(
-        "enable",
-        help=CHANNEL_HELP["enable"],
-        description=CHANNEL_HELP["enable"],
-    )
-    _add_target_arguments(enable_parser)
-    enable_parser.add_argument("--id", required=True)
-
-    disable_parser = channel_subparsers.add_parser(
-        "disable",
-        help=CHANNEL_HELP["disable"],
-        description=CHANNEL_HELP["disable"],
-    )
-    _add_target_arguments(disable_parser)
-    disable_parser.add_argument("--id", required=True)
-
-    status_parser = channel_subparsers.add_parser(
-        "status",
-        help=CHANNEL_HELP["status"],
-        description=CHANNEL_HELP["status"],
-    )
-    _add_target_arguments(status_parser)
-    status_parser.add_argument("--id", required=True)
-
-    tool_parser = subparsers.add_parser(
-        "tool",
-        help=AREA_HELP["tool"],
-        description=AREA_HELP["tool"],
-    )
-    tool_subparsers = tool_parser.add_subparsers(dest="command", required=True)
-    for command in TOOL_COMMANDS:
-        command_parser = tool_subparsers.add_parser(
-            command,
-            help=TOOL_HELP[command],
-            description=TOOL_HELP[command],
-        )
-        _add_target_arguments(command_parser)
-
-    prompt_parser = subparsers.add_parser(
-        "prompt",
-        help=AREA_HELP["prompt"],
-        description=AREA_HELP["prompt"],
-    )
-    prompt_subparsers = prompt_parser.add_subparsers(dest="command", required=True)
-    prompt_list_parser = prompt_subparsers.add_parser(
-        "list",
-        help=PROMPT_HELP["list"],
-        description=PROMPT_HELP["list"],
-    )
-    _add_target_arguments(prompt_list_parser)
-    prompt_update_parser = prompt_subparsers.add_parser(
-        "update",
-        help=PROMPT_HELP["update"],
-        description=PROMPT_HELP["update"],
-    )
-    _add_target_arguments(prompt_update_parser)
-    prompt_update_parser.add_argument("--name", required=True)
-    content_group = prompt_update_parser.add_mutually_exclusive_group(required=True)
-    content_group.add_argument("--content")
-    content_group.add_argument("--file", dest="content_file")
-    prompt_reset_parser = prompt_subparsers.add_parser(
-        "reset",
-        help=PROMPT_HELP["reset"],
-        description=PROMPT_HELP["reset"],
-    )
-    _add_target_arguments(prompt_reset_parser)
-    prompt_reset_parser.add_argument("--name", required=True)
-    prompt_preview_parser = prompt_subparsers.add_parser(
-        "preview",
-        help=PROMPT_HELP["preview"],
-        description=PROMPT_HELP["preview"],
-    )
-    _add_target_arguments(prompt_preview_parser)
-    prompt_preview_parser.add_argument("--agent", required=True)
-
-    log_parser = subparsers.add_parser(
-        "log",
-        help=AREA_HELP["log"],
-        description=AREA_HELP["log"],
-    )
-    log_subparsers = log_parser.add_subparsers(dest="command", required=True)
-    log_list_parser = log_subparsers.add_parser(
-        "list",
-        help=LOG_HELP["list"],
-        description=LOG_HELP["list"],
-    )
-    _add_target_arguments(log_list_parser)
-    log_read_parser = log_subparsers.add_parser(
-        "read",
-        help=LOG_HELP["read"],
-        description=LOG_HELP["read"],
-    )
-    _add_target_arguments(log_read_parser)
-    log_read_parser.add_argument("--file", required=True)
-
-    provider_parser = subparsers.add_parser(
-        "provider",
-        help=AREA_HELP["provider"],
-        description="Inspect and configure vBot provider connections",
-    )
-    provider_subparsers = provider_parser.add_subparsers(dest="command", required=True)
-    provider_list_parser = provider_subparsers.add_parser(
-        "list",
-        help="List provider connections and usability",
-        description="List all configured provider connections and whether credentials are usable.",
-    )
-    _add_target_arguments(provider_list_parser)
-    provider_status_parser = provider_subparsers.add_parser(
-        "status",
-        help="Show one provider or connection status",
-        description=(
-            "Show connection usability for one provider, optionally narrowed to one connection."
-        ),
-    )
-    _add_target_arguments(provider_status_parser)
-    provider_status_parser.add_argument("--provider", required=True, help="Provider id to inspect")
-    provider_status_parser.add_argument(
-        "--connection",
-        help="Optional compositional connection id, for example openai:api-key",
-    )
-    provider_set_key_parser = provider_subparsers.add_parser(
-        "set-key",
-        help="Set an API-key provider credential",
-        description="Write an API key to the target data-dir .env through the server RPC contract.",
-    )
-    _add_target_arguments(provider_set_key_parser)
-    provider_set_key_parser.add_argument(
-        "--provider", required=True, help="Provider id to configure"
-    )
-    provider_set_key_parser.add_argument(
-        "--connection",
-        help="Optional compositional connection id, for example openai:api-key",
-    )
-    provider_set_key_parser.add_argument("--value", required=True, help="API key value to persist")
-    provider_set_key_parser.add_argument(
-        "--refresh-models",
-        action="store_true",
-        help="Refresh this provider's model catalog after setting the key",
-    )
-
-    model_parser = subparsers.add_parser(
-        "model",
-        help=AREA_HELP["model"],
-        description=AREA_HELP["model"],
-    )
-    model_subparsers = model_parser.add_subparsers(dest="command", required=True)
-    model_list_parser = model_subparsers.add_parser(
-        MODEL_COMMANDS[0],
-        help=MODEL_HELP["list"],
-        description=MODEL_HELP["list"],
-    )
-    _add_target_arguments(model_list_parser)
-    model_refresh_parser = model_subparsers.add_parser(
-        MODEL_COMMANDS[1],
-        help=MODEL_HELP["refresh"],
-        description=MODEL_HELP["refresh"],
-    )
-    _add_target_arguments(model_refresh_parser)
-    model_refresh_parser.add_argument("--provider")
-
-    skill_parser = subparsers.add_parser(
-        "skill",
-        help=AREA_HELP["skill"],
-        description=AREA_HELP["skill"],
-    )
-    skill_subparsers = skill_parser.add_subparsers(dest="command", required=True)
-    for command in SKILL_COMMANDS:
-        command_parser = skill_subparsers.add_parser(
-            command,
-            help=SKILL_HELP[command],
-            description=SKILL_HELP[command],
-        )
-        _add_target_arguments(command_parser)
-
-    config_parser = subparsers.add_parser(
-        "config",
-        help=AREA_HELP["config"],
-        description=AREA_HELP["config"],
-    )
-    config_subparsers = config_parser.add_subparsers(dest="command")
-    _add_target_arguments(config_parser)
-
-    config_get_parser = config_subparsers.add_parser(
-        CONFIG_COMMANDS[0],
-        help=CONFIG_HELP["get"],
-        description=CONFIG_HELP["get"],
-    )
-    _add_target_arguments(config_get_parser)
-    config_get_parser.add_argument("key")
-
-    config_set_parser = config_subparsers.add_parser(
-        CONFIG_COMMANDS[1],
-        help=CONFIG_HELP["set"],
-        description=CONFIG_HELP["set"],
-    )
-    _add_target_arguments(config_set_parser)
-    config_set_parser.add_argument("key")
-    config_set_parser.add_argument("value")
-
-    doctor_parser = subparsers.add_parser(
-        "doctor",
-        help=AREA_HELP["doctor"],
-        description=AREA_HELP["doctor"],
-    )
-    doctor_subparsers = doctor_parser.add_subparsers(dest="command", required=True)
-    for command in DOCTOR_COMMANDS:
-        doctor_command_parser = doctor_subparsers.add_parser(
-            command,
-            help=DOCTOR_HELP[command],
-            description=DOCTOR_HELP[command],
-        )
-        doctor_command_parser.add_argument(
-            "--data-dir",
-            help=(
-                "Target vBot data directory; defaults to VBOT_DATA_DIR, worktree marker, or ~/.vbot"
-            ),
-        )
-
-    return parser.parse_args(argv)
-
-
-def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--host", default=DEFAULT_HOST)
-    parser.add_argument("--port", type=int)
-    parser.add_argument("--data-dir")
-
-
-def _add_agent_change_arguments(
-    parser: argparse.ArgumentParser,
-    *,
-    include_name: bool,
-    include_session: bool,
-) -> None:
-    if include_name:
-        parser.add_argument("--name")
-    parser.add_argument("--model")
-    parser.add_argument("--fallback-model")
-    parser.add_argument("--temperature", type=float)
-    parser.add_argument("--clear-temperature", action="store_true")
-    parser.add_argument("--thinking-effort", choices=THINKING_EFFORTS)
-    parser.add_argument("--clear-thinking-effort", action="store_true")
-    parser.add_argument("--allowed-tools", nargs="*")
-    parser.add_argument("--allowed-skills", nargs="*")
-    if include_session:
-        parser.add_argument("--current-session-id")
 
 
 def run(
@@ -563,8 +155,17 @@ def run(
         print_command_result(context.command, result)
         return exit_code_for(context.command, result)
 
+    if args.area == "doctor":
+        result = dispatch_doctor_command(
+            args,
+            doctor_settings_fn=doctor_settings_fn,
+            doctor_config_fn=doctor_config_fn,
+        )
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
     if args.area == "agent":
-        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
         result = dispatch_agent_command(
             args,
             instance,
@@ -577,8 +178,12 @@ def run(
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
+    if args.area == "session":
+        result = dispatch_session_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
     if args.area == "channel":
-        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
         result = dispatch_channel_command(
             args,
             instance,
@@ -594,13 +199,11 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "tool":
-        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
         result = dispatch_tool_command(args, instance, list_tools_fn=list_tools_fn)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "prompt":
-        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
         result = dispatch_prompt_command(
             args,
             instance,
@@ -613,7 +216,6 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "log":
-        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
         result = dispatch_log_command(
             args,
             instance,
@@ -624,7 +226,6 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "provider":
-        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
         result = dispatch_provider_command(
             args,
             instance,
@@ -636,7 +237,6 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "model":
-        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
         result = dispatch_model_command(
             args,
             instance,
@@ -646,14 +246,22 @@ def run(
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
+    if args.area == "task-model":
+        result = dispatch_task_model_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
     if args.area == "skill":
-        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
         result = dispatch_skill_command(args, instance, list_skills_fn=list_skills_fn)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
+    if args.area == "cron":
+        result = dispatch_cron_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
     if args.area == "config":
-        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
         result = dispatch_config_command(
             args,
             instance,
@@ -664,12 +272,8 @@ def run(
         print_config_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
-    if args.area == "doctor":
-        result = dispatch_doctor_command(
-            args,
-            doctor_settings_fn=doctor_settings_fn,
-            doctor_config_fn=doctor_config_fn,
-        )
+    if args.area == "debug":
+        result = dispatch_debug_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -703,7 +307,7 @@ def dispatch_agent_command(
 
 def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     changes: dict[str, Any] = {}
-    if getattr(args, "name", None) is not None and args.command == "update":
+    if args.command == "update" and getattr(args, "name", None) is not None:
         changes["name"] = args.name
     if args.model is not None:
         changes["model"] = args.model
@@ -717,6 +321,10 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["thinking_effort"] = None
     elif args.thinking_effort is not None:
         changes["thinking_effort"] = args.thinking_effort
+    if args.memory_prompt_mode is not None:
+        changes["memory_prompt_mode"] = args.memory_prompt_mode
+    if args.custom_system_prompt is not None:
+        changes["custom_system_prompt_enabled"] = args.custom_system_prompt == "true"
     if args.allowed_tools is not None:
         changes["allowed_tools"] = list(args.allowed_tools)
     if args.allowed_skills is not None:
@@ -724,6 +332,29 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if getattr(args, "current_session_id", None) is not None:
         changes["current_session_id"] = args.current_session_id
     return changes
+
+
+def dispatch_session_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_sessions_fn: Callable[[ServerInstance, str], CommandResult] = session_list,
+    create_session_fn: Callable[
+        [ServerInstance, str, str | None, bool], CommandResult
+    ] = session_create,
+    link_session_fn: Callable[
+        [ServerInstance, str, str, str, str], CommandResult
+    ] = session_link_channel,
+) -> CommandResult:
+    """Dispatch one parsed session command against the server RPC client."""
+
+    if args.command == "list":
+        return list_sessions_fn(instance, args.agent)
+    if args.command == "create":
+        return create_session_fn(instance, args.agent, args.id, args.make_current)
+    if args.command == "link-channel":
+        return link_session_fn(instance, args.agent, args.session, args.channel, args.conversation)
+    raise ValueError(f"Unsupported session command: {args.command}")
 
 
 def dispatch_tool_command(
@@ -858,6 +489,13 @@ def dispatch_provider_command(
     list_providers: Callable[[ServerInstance], CommandResult],
     provider_status_fn: Callable[[ServerInstance, str, str | None], CommandResult],
     set_provider_key: Callable[[ServerInstance, str, str, str | None, bool], CommandResult],
+    connect_provider_fn: Callable[[ServerInstance, str, str], CommandResult] = provider_connect,
+    disconnect_provider_fn: Callable[
+        [ServerInstance, str, str], CommandResult
+    ] = provider_disconnect,
+    connect_status_fn: Callable[
+        [ServerInstance, str, str], CommandResult
+    ] = provider_connect_status,
 ) -> CommandResult:
     """Dispatch one parsed provider command against the server RPC client."""
 
@@ -873,6 +511,12 @@ def dispatch_provider_command(
             args.connection,
             args.refresh_models,
         )
+    if args.command == "connect":
+        return connect_provider_fn(instance, args.provider, args.connection)
+    if args.command == "disconnect":
+        return disconnect_provider_fn(instance, args.provider, args.connection)
+    if args.command == "connect-status":
+        return connect_status_fn(instance, args.provider, args.connection)
     raise ValueError(f"Unsupported provider command: {args.command}")
 
 
@@ -892,6 +536,33 @@ def dispatch_model_command(
     raise ValueError(f"Unsupported model command: {args.command}")
 
 
+def dispatch_task_model_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_bindings_fn: Callable[[ServerInstance], CommandResult] = task_model_list,
+    list_targets_fn: Callable[[ServerInstance, str], CommandResult] = task_model_targets,
+    show_options_fn: Callable[[ServerInstance, str, str], CommandResult] = task_model_options,
+    set_binding_fn: Callable[
+        [ServerInstance, str, str, str | None], CommandResult
+    ] = task_model_set,
+    clear_binding_fn: Callable[[ServerInstance, str], CommandResult] = task_model_clear,
+) -> CommandResult:
+    """Dispatch one parsed task-model command against the server RPC client."""
+
+    if args.command == "list":
+        return list_bindings_fn(instance)
+    if args.command == "targets":
+        return list_targets_fn(instance, args.task_type)
+    if args.command == "options":
+        return show_options_fn(instance, args.task_type, args.target)
+    if args.command == "set":
+        return set_binding_fn(instance, args.task_type, args.target, args.options_json)
+    if args.command == "clear":
+        return clear_binding_fn(instance, args.task_type)
+    raise ValueError(f"Unsupported task-model command: {args.command}")
+
+
 def dispatch_skill_command(
     args: argparse.Namespace,
     instance: ServerInstance,
@@ -903,6 +574,95 @@ def dispatch_skill_command(
     if args.command == "list":
         return list_skills_fn(instance)
     raise ValueError(f"Unsupported skill command: {args.command}")
+
+
+def dispatch_cron_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    create_cron_fn: Callable[[ServerInstance, dict[str, Any]], CommandResult] = cron_create,
+    list_cron_fn: Callable[[ServerInstance], CommandResult] = cron_list,
+    update_cron_fn: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = cron_update,
+    delete_cron_fn: Callable[[ServerInstance, str], CommandResult] = cron_delete,
+    enable_cron_fn: Callable[[ServerInstance, str], CommandResult] = cron_enable,
+    disable_cron_fn: Callable[[ServerInstance, str], CommandResult] = cron_disable,
+) -> CommandResult:
+    """Dispatch one parsed cron command against the server RPC client."""
+
+    if args.command == "list":
+        return list_cron_fn(instance)
+    if args.command == "create":
+        return create_cron_fn(instance, _cron_create_fields_from_args(args))
+    if args.command == "update":
+        return update_cron_fn(instance, args.id, _cron_changes_from_args(args))
+    if args.command == "delete":
+        return delete_cron_fn(instance, args.id)
+    if args.command == "enable":
+        return enable_cron_fn(instance, args.id)
+    if args.command == "disable":
+        return disable_cron_fn(instance, args.id)
+    raise ValueError(f"Unsupported cron command: {args.command}")
+
+
+def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    fields: dict[str, Any] = {"agent_id": args.agent, "prompt": args.prompt}
+    if args.cron is not None:
+        fields["schedule_type"] = "cron"
+        fields["cron_expression"] = args.cron
+    else:
+        fields["schedule_type"] = "once"
+        fields["run_at"] = args.at
+    if args.timezone is not None:
+        fields["timezone"] = args.timezone
+    if args.session is not None:
+        fields["session_id"] = args.session
+    return fields
+
+
+def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    changes: dict[str, Any] = {}
+    if args.agent is not None:
+        changes["agent_id"] = args.agent
+    if args.prompt is not None:
+        changes["prompt"] = args.prompt
+    if args.cron is not None:
+        changes["schedule_type"] = "cron"
+        changes["cron_expression"] = args.cron
+    elif args.at is not None:
+        changes["schedule_type"] = "once"
+        changes["run_at"] = args.at
+    if args.timezone is not None:
+        changes["timezone"] = args.timezone
+    if args.session is not None:
+        changes["session_id"] = args.session
+    if args.status is not None:
+        changes["status"] = args.status
+    return changes
+
+
+def dispatch_debug_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    debug_status_fn: Callable[[ServerInstance], CommandResult] = debug_status,
+    trace_list_fn: Callable[[ServerInstance], CommandResult] = debug_trace_list,
+    trace_show_fn: Callable[[ServerInstance, str], CommandResult] = debug_trace_show,
+    trace_clear_fn: Callable[[ServerInstance], CommandResult] = debug_trace_clear,
+    model_probe_fn: Callable[[ServerInstance, str, str], CommandResult] = debug_model_probe,
+) -> CommandResult:
+    """Dispatch one parsed debug command against the server RPC client."""
+
+    if args.command == "status":
+        return debug_status_fn(instance)
+    if args.command == "traces":
+        return trace_list_fn(instance)
+    if args.command == "trace":
+        return trace_show_fn(instance, args.trace_id)
+    if args.command == "clear":
+        return trace_clear_fn(instance)
+    if args.command == "probe":
+        return model_probe_fn(instance, args.provider, args.connection)
+    raise ValueError(f"Unsupported debug command: {args.command}")
 
 
 def dispatch_config_command(

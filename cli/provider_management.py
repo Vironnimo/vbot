@@ -98,6 +98,73 @@ def provider_set_key(
     )
 
 
+def provider_connect(
+    instance: ServerInstance,
+    provider_id: str,
+    connection_id: str,
+) -> CommandResult:
+    """Start the OAuth device flow via `provider.connect` RPC."""
+
+    params = {"provider_id": provider_id, "connection_id": connection_id}
+    payload = _rpc_call(instance, "provider.connect", params)
+    if not payload.ok:
+        return payload.to_command_result()
+
+    user_code = _string_or_default(payload.data.get("user_code"), "?")
+    verification_uri = _string_or_default(payload.data.get("verification_uri"), "?")
+    expires_in = payload.data.get("expires_in")
+    expires_text = str(expires_in) if isinstance(expires_in, int) else "?"
+    return CommandResult(
+        ok=True,
+        message="\n".join(
+            [
+                f"device flow started for {connection_id}",
+                f"user_code: {user_code}",
+                f"verification_uri: {verification_uri}",
+                f"expires_in_seconds: {expires_text}",
+                "enter the user code at the verification URI in a browser; then check "
+                f"progress with: provider connect-status {provider_id} "
+                f"--connection {connection_id}",
+            ]
+        ),
+        instance=instance,
+    )
+
+
+def provider_disconnect(
+    instance: ServerInstance,
+    provider_id: str,
+    connection_id: str,
+) -> CommandResult:
+    """Remove a stored OAuth token via `provider.disconnect` RPC."""
+
+    params = {"provider_id": provider_id, "connection_id": connection_id}
+    payload = _rpc_call(instance, "provider.disconnect", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(ok=True, message=f"disconnected {connection_id}", instance=instance)
+
+
+def provider_connect_status(
+    instance: ServerInstance,
+    provider_id: str,
+    connection_id: str,
+) -> CommandResult:
+    """Show OAuth connection state via `provider.connection_status` RPC."""
+
+    params = {"provider_id": provider_id, "connection_id": connection_id}
+    payload = _rpc_call(instance, "provider.connection_status", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    connected = "yes" if payload.data.get("connected") else "no"
+    flow_active = "yes" if payload.data.get("flow_active") else "no"
+    return CommandResult(
+        ok=True,
+        message=f"{connection_id}: connected={connected} flow_active={flow_active}",
+        instance=instance,
+    )
+
+
 def _format_connection_rows(connections: Sequence[object]) -> str:
     if not connections:
         return "no connections configured"
