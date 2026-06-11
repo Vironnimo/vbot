@@ -102,6 +102,12 @@ Uninstall is intentionally data-dir preserving:
 .\scripts\uninstall.ps1 [-RemoveAutostart]
 ```
 
+Linux (e.g. Raspberry Pi) has an equivalent installer with the same conservative behavior. Autostart uses a systemd **user** unit (`~/.config/systemd/user/vbot.service`, `KillMode=process` so agent-triggered `vbot server restart` survives unit deactivation) plus `loginctl enable-linger`. On PEP 668 systems (Debian/Raspberry Pi OS) it must run inside a venv and fails early with instructions otherwise. `--skip-webui-build` uses an existing `webui/dist` instead of requiring Node — for low-memory hosts (Pi 3 class), build the WebUI on another machine and copy `webui/dist` over; on a Pi 5 building on-device is fine:
+```bash
+scripts/install.sh [--enable-autostart] [--start-server] [--skip-webui-build]
+scripts/uninstall.sh [--remove-autostart]
+```
+
 Manual development setup:
 ```bash
 pip install -e ".[dev]"
@@ -170,4 +176,5 @@ Use this section only for important strategic decisions, unusual global constrai
 - **Two-channel transport architecture:** SSE is the per-Run streaming channel; WebSocket is persistent app-wide server-push for lifecycle summaries. Clients send commands through `POST /api/rpc`, not through WebSocket.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages. Visible chat turns can also carry `input_origin: "speech_transcription"` through RPC; the chat loop then adds a hidden system-reminder note immediately before the unchanged visible user message so the model knows the text may contain STT errors.
 - **Built-in commands and skill triggers are separate layers.** Recognized pure-text slash commands are handled before a Run starts. `/skill-name` and `$skill-name` are skill activation hints that preserve the original user message; `$` autocomplete is skill-only. One built-in command (`/handoff`) takes an optional argument and starts model runs: `/handoff [agent-id]` triggers an internal note-driven Run to write a handoff, creates a new session, injects the handoff as a user message, and auto-runs the receiving agent.
+- **Deployment target is Linux, development happens on Windows.** The server is meant to run headless on a Raspberry Pi (64-bit OS); desktop/CLI accessors stay on Windows. Keep core/server/cli code platform-neutral: no Windows-only assumptions without a POSIX branch, path validation accepts/rejects both path flavors on any host, and process management branches on `os.name`/`sys.platform`.
 - **Busy-session queueing is owned by `ChatRunManager`.** Browser sends, `TriggerService`, and subagent routing all enqueue into the same in-memory FIFO per `(agent_id, session_id)`. WebUI queue state is only a server-backed projection and must not become a second source of truth.
