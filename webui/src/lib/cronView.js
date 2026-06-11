@@ -1,5 +1,24 @@
+import cronstrue from 'cronstrue';
+
 export const CRON_SCHEDULE_TYPE_CRON = 'cron';
 export const CRON_SCHEDULE_TYPE_ONCE = 'once';
+
+// Human-readable plain-text description of a cron expression, e.g.
+// "0 9 * * 1-5" → "At 09:00, Monday through Friday". Returns '' for empty or
+// unparseable expressions so callers can hide the preview instead of showing
+// a parser error.
+export function describeCronExpression(expression) {
+  const normalized = asText(expression).trim();
+  if (!normalized) {
+    return '';
+  }
+
+  try {
+    return cronstrue.toString(normalized, { use24HourTimeFormat: true });
+  } catch {
+    return '';
+  }
+}
 
 export const CRON_STATUS_ACTIVE = 'active';
 export const CRON_STATUS_PAUSED = 'paused';

@@ -21,6 +21,7 @@
     CRON_SCHEDULE_TYPE_CRON,
     CRON_SCHEDULE_TYPE_ONCE,
     CRON_STATUS_ACTIVE,
+    describeCronExpression,
     visibleCronJobs,
   } from '$lib/cronView.js';
   import { t } from '$lib/i18n.js';
@@ -30,6 +31,9 @@
 
   let viewState = $state(createCronViewState());
   let formValues = $state(createCronFormValues());
+  let cronExpressionPreview = $derived(
+    describeCronExpression(formValues.cron_expression),
+  );
   let formMode = $state(FORM_MODE_CREATE);
   let isModalOpen = $state(false);
   let formErrorMessage = $state('');
@@ -448,7 +452,10 @@
             <tr>
               <td class="cron-view__mono">{agentLabel(job.agent_id)}</td>
               <td class="cron-view__prompt" title={job.prompt}>{job.prompt}</td>
-              <td class="cron-view__mono">
+              <td
+                class="cron-view__mono"
+                title={describeCronExpression(job.cron_expression)}
+              >
                 {displayValue(job.schedule_description)}
               </td>
               <td class="cron-view__mono">{timezoneLabel(job)}</td>
@@ -625,6 +632,11 @@
                       event.currentTarget.value,
                     )}
                 />
+                {#if cronExpressionPreview}
+                  <span class="cron-view__expression-preview">
+                    {cronExpressionPreview}
+                  </span>
+                {/if}
               </label>
             {:else}
               <label class="modal-field">
@@ -713,6 +725,13 @@
 </section>
 
 <style>
+  .cron-view__expression-preview {
+    margin-top: 4px;
+    color: var(--text-med);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
   .cron-view {
     display: flex;
     min-width: 0;
