@@ -91,7 +91,7 @@ def test_main_runs_vitest_with_verbose_reporter(monkeypatch, capsys):
     monkeypatch.setattr(
         module.sys,
         "argv",
-        ["quality-frontend.py", "webui/src/components/__tests__/Foo.test.js"],
+        ["quality-frontend.py", "webui/src/components/__tests__/AgentsView.test.js"],
     )
 
     def fake_run(cmd, capture_output, text, cwd, encoding, errors):
@@ -108,8 +108,14 @@ def test_main_runs_vitest_with_verbose_reporter(monkeypatch, capsys):
 
     capsys.readouterr()
     vitest_command = next(cmd for cmd in commands if cmd[1] == "vitest")
-    assert vitest_command[:4] == ["npx", "vitest", "run", "--reporter=verbose"]
-    assert vitest_command[-1] == "src/components/__tests__/Foo.test.js"
+    assert vitest_command[:5] == [
+        "npx",
+        "vitest",
+        "run",
+        "--reporter=verbose",
+        "--passWithNoTests",
+    ]
+    assert vitest_command[-1] == "src/components/__tests__/AgentsView.test.js"
 
 
 def test_main_filters_vitest_failure_output(monkeypatch, capsys):
@@ -131,7 +137,7 @@ def test_main_filters_vitest_failure_output(monkeypatch, capsys):
 
     monkeypatch.setattr(module.shutil, "which", lambda name: name)
     monkeypatch.setattr(
-        module.sys, "argv", ["quality-frontend.py", "webui/src/components/Foo.svelte"]
+        module.sys, "argv", ["quality-frontend.py", "webui/src/components/AgentsView.svelte"]
     )
 
     def fake_run(cmd, capture_output, text, cwd, encoding, errors):
@@ -150,3 +156,55 @@ def test_main_filters_vitest_failure_output(monkeypatch, capsys):
         "FAIL src/components/__tests__/SettingsView.test.js > "
         "SettingsView > keeps dirty state on error" in captured.out
     )
+
+
+def test_parse_vitest_counts_handles_skipped_segment():
+    module = _load_quality_frontend_module()
+    output = " Test Files  2 passed (2)\n      Tests  1 skipped | 4 passed (5)\n"
+
+    assert module.parse_vitest_counts(output) == (4, 5)
+
+
+def test_main_rejects_unknown_input_path(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(
+        module.sys, "argv", ["quality-frontend.py", "webui/src/components/Missing.svelte"]
+    )
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("no tool may run for unknown input paths")
+
+    monkeypatch.setattr(module.subprocess, "run", fail_run)
+
+    assert module.main() == 2
+
+    captured = capsys.readouterr()
+    assert "ERROR: path not found under webui/: src/components/Missing.svelte" in captured.out
+
+
+def test_main_fails_when_fix_step_crashes(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(
+        module.sys, "argv", ["quality-frontend.py", "webui/src/components/AgentsView.svelte"]
+    )
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        if cmd[1] == "prettier":
+            return module.subprocess.CompletedProcess(
+                cmd, 2, stdout="", stderr="prettier internal error"
+            )
+        if cmd[1] == "vitest":
+            return module.subprocess.CompletedProcess(
+                cmd, 0, stdout="Tests  1 passed (1)\n", stderr=""
+            )
+        return module.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 1
+
+    captured = capsys.readouterr()
+    assert "prettier internal error" in captured.out
+    assert "All gates passed" not in captured.out
