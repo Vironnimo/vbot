@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from core.image.providers import ProviderImageClient
-from core.image.types import ImageArtifact, ImageGenerationResult, JsonObject
-from core.model_tasks import TASK_IMAGE_GENERATION, TaskModelError
+from core.model_tasks.constants import TASK_IMAGE_GENERATION
+from core.model_tasks.image_providers import ProviderImageClient
+from core.model_tasks.image_types import ImageArtifact, ImageGenerationResult, JsonObject
+from core.model_tasks.model_tasks import TaskModelError, parse_task_model_target_id
 from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import TaskError
 from core.utils.logging import get_logger
@@ -151,8 +152,6 @@ class ImageService:
 
     def _parse_target(self, target: str) -> Any:
         try:
-            from core.model_tasks import parse_task_model_target_id
-
             return parse_task_model_target_id(target)
         except TaskModelError as exc:
             raise ImageConfigurationError(str(exc)) from exc

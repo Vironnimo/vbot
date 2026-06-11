@@ -8,13 +8,13 @@ from unittest.mock import patch
 
 import pytest
 
-from core.embeddings import (
+from core.model_tasks import (
     EmbeddingConfigurationError,
     EmbeddingExecutionError,
     EmbeddingService,
     EmbeddingUnsupportedTargetError,
+    TaskModelError,
 )
-from core.model_tasks import TaskModelError
 
 # ---------------------------------------------------------------------------
 # Configuration: no binding / malformed binding / unsupported target
@@ -115,7 +115,7 @@ async def test_embed_returns_vectors_in_input_order_and_resolves_model_id() -> N
     )
 
     with patch(
-        "core.embeddings.embeddings.ProviderEmbeddingClient.from_runtime",
+        "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
         return_value=_FakeProviderClient(vectors=vectors),
     ) as factory:
         result = await service.embed(["alpha", "beta"])
@@ -153,7 +153,7 @@ async def test_embed_merges_schema_defaults_with_stored_options() -> None:
 
     fake_client = _FakeProviderClient(vectors=[[0.1, 0.2]])
     with patch(
-        "core.embeddings.embeddings.ProviderEmbeddingClient.from_runtime",
+        "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
         return_value=fake_client,
     ):
         await service.embed(["alpha"])
@@ -181,7 +181,7 @@ async def test_embed_forwards_input_batch_verbatim() -> None:
     )
 
     with patch(
-        "core.embeddings.embeddings.ProviderEmbeddingClient.from_runtime",
+        "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
         return_value=fake_client,
     ):
         await service.embed(["x", "y", "z"])
@@ -210,7 +210,7 @@ async def test_embed_maps_provider_auth_error_to_execution_error() -> None:
 
     with (
         patch(
-            "core.embeddings.embeddings.ProviderEmbeddingClient.from_runtime",
+            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
             return_value=fake_client,
         ),
         pytest.raises(EmbeddingExecutionError, match="Unauthorized"),
@@ -232,7 +232,7 @@ async def test_embed_maps_unexpected_exception_to_execution_error() -> None:
 
     with (
         patch(
-            "core.embeddings.embeddings.ProviderEmbeddingClient.from_runtime",
+            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
             return_value=fake_client,
         ),
         pytest.raises(EmbeddingExecutionError, match="kaboom"),
@@ -255,7 +255,7 @@ async def test_embed_raises_execution_error_when_no_vectors_returned() -> None:
 
     with (
         patch(
-            "core.embeddings.embeddings.ProviderEmbeddingClient.from_runtime",
+            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
             return_value=fake_client,
         ),
         pytest.raises(EmbeddingExecutionError, match="no vectors"),

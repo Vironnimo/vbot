@@ -18,11 +18,9 @@ from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService, SummarizationStrategy
 from core.debug import DebugTraceStore, ProviderDebugRecorder
-from core.embeddings import EmbeddingService
 from core.extensions import ExtensionRegistry
-from core.image import ImageService
 from core.memory import MemoryService
-from core.model_tasks import TaskModelService
+from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.models import Model, ModelRegistry
 from core.prompts import SkillPromptRegistry, SystemPromptManager
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -52,7 +50,6 @@ from core.runtime.interfaces import (
 )
 from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry
-from core.speech import SpeechService
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (

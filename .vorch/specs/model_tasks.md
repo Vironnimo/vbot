@@ -1,12 +1,17 @@
-# Task Model Bindings
+# Task Models
 
-Central bindings from specialized task types to concrete provider or local targets. This domain chooses what model or engine should perform a task; task execution stays in task-specific domains such as `core/speech/` and `core/image/`.
+The single deep task module: bindings from specialized task types to concrete provider or local targets, plus the task execution services that run them.
 
 ## Overview
 
-`core/model_tasks/` owns normalized task-model settings, task target ID parsing, credential-gated target discovery, local target descriptors, and backend-owned option schemas for the Settings UI. It is the shared binding layer behind specialized models such as speech-to-text, text-to-speech, image generation, text embedding, and future video generation. It does not call provider media APIs, create artifacts, upload files, or decide provider wire payloads; execution services resolve a binding here and then route through their own domain.
+`core/model_tasks/` owns both layers of specialized task models:
 
-Runtime wires `TaskModelService` after providers, models, credentials, and storage are available. Provider-backed target visibility delegates to `ModelRegistry.query()` (the shared capability/task filter in `core/models/query.py`) plus usable provider credentials. Local targets bypass provider catalogs and credentials, but must be registered explicitly with `LocalTaskTargetRegistry`.
+1. **Bindings & discovery** (`model_tasks.py`, the main file; plus `constants.py`, `local_targets.py`, `options.py`) — normalized task-model settings, task target ID parsing, credential-gated target discovery, local target descriptors, and backend-owned option schemas for the Settings UI.
+2. **Execution** — the per-task services and their provider wire clients: speech (`speech.py`, `speech_types.py`, `speech_local.py`, `speech_providers.py`), image (`image.py`, `image_types.py`, `image_providers.py`), and embeddings (`embeddings.py`, `embeddings_providers.py`). Bindings and execution change together whenever a task type is added, which is why they live in one module.
+
+Execution details live in child specs: `.vorch/specs/model_tasks/speech.md`, `.vorch/specs/model_tasks/image.md`, `.vorch/specs/model_tasks/embeddings.md`. The shared wire-plumbing base class stays in `core/providers/task_client.py` (`ProviderTaskClient` — see `providers.md`); the per-task wire clients here subclass it.
+
+Runtime wires `TaskModelService` after providers, models, credentials, and storage are available, then constructs the execution services (`SpeechService`, `ImageService`, `EmbeddingService`) with it. Provider-backed target visibility delegates to `ModelRegistry.query()` (the shared capability/task filter in `core/models/query.py`) plus usable provider credentials. Local targets bypass provider catalogs and credentials, but must be registered explicitly with `LocalTaskTargetRegistry`.
 
 ## Data Model
 
@@ -38,13 +43,13 @@ Server RPC delegates in `server/rpc/settings_methods.py` expose `task_model.sett
 
 Option schemas are backend-owned render hints, not a provider capability matrix. Accessors should render `text`, `textarea`, `select`, `number`, `boolean`, and `json` fields generically and must not hardcode provider-specific option rules. The `json` field type accepts free-form JSON (arrays/objects/primitives) rendered as a monospace textarea with inline validation; the value round-trips as the parsed JSON structure.
 
-Execution domains own final option interpretation and wire shaping. `core/model_tasks/options.py` provides conservative defaults, while `core/speech/`, `core/image/`, and provider-specific clients decide which options are sent to which API.
+The per-task execution modules own final option interpretation and wire shaping. `core/model_tasks/options.py` provides conservative defaults, while the per-task wire clients (`speech_providers.py`, `image_providers.py`, `embeddings_providers.py`) decide which options are sent to which API.
 
-Add a new specialized workflow in this order: add/confirm the task type in `core/model_tasks/constants.py`, ensure provider model discovery produces matching `Model.capabilities.task_types`, add option fields in `core/model_tasks/options.py` only if the Settings UI needs them, then implement execution in the task domain. Do not add task execution code to `core/model_tasks/`.
+Add a new specialized workflow in this order: add/confirm the task type in `core/model_tasks/constants.py`, ensure provider model discovery produces matching `Model.capabilities.task_types`, add option fields in `core/model_tasks/options.py` only if the Settings UI needs them, then implement execution as a new per-task module pair (`<task>.py` service + `<task>_providers.py` wire client) in this package, with a child spec under `.vorch/specs/model_tasks/`.
 
 ## Constraints & Gotchas
 
-- `core/model_tasks/` must not execute media tasks. Speech execution belongs in `core/speech/`; image generation belongs in `core/image/`; future video or image-edit execution should get their own domains.
+- The binding/discovery layer (`model_tasks.py`, `options.py`, `local_targets.py`, `constants.py`) must not call provider media APIs or shape wire payloads — that belongs in the per-task execution modules. Conversely, execution modules resolve bindings only through `TaskModelService`, never by reading `settings.json` themselves.
 - Provider-backed discovery is credential-gated and strictly filtered through `ModelRegistry.query()` by task type. If a target is missing from Settings, first check provider credentials and the generated model catalog before changing UI code.
 - Generated provider catalogs may be stale. If a newly released OpenRouter speech or image model is missing from the target list, refresh the model database after configuring the provider API key; do not hand-edit `resources/models/<provider>.json` as a durable fix.
 - The Settings UI currently renders rows for `speech_to_text`, `text_to_speech`, `image_generation`, and `text_embedding`. `video_generation` is accepted by backend validation and discovery, but has no complete UI/execution workflow yet.

@@ -16,7 +16,7 @@ Data-directory bootstrap, atomic settings and credential persistence, and raw pr
 
 Bundled prompt fragments live in `resources/prompts/`. Default-scope user copies live in `<data_dir>/prompts/` and may include `system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`, and backend-only `compaction.md`. Agent-scoped prompt fragments live in `<data_dir>/agents/<agent-id>/prompts/` and may contain only the five normal editable fragments: `system.md`, `runtime.md`, `tools.md`, `channels.md`, and `skills.md`.
 
-Other domains may create additional data under the same root on demand. For example, `core/image/` owns `<data_dir>/images/`, `core/debug/` owns trace files under `<data_dir>/debug/`, and `core/automation/` owns extra Cron internals under `<data_dir>/cron/`. Do not add a directory to Storage's bootstrap list just because a domain can create it itself.
+Other domains may create additional data under the same root on demand. For example, `core/model_tasks/` (image execution) owns `<data_dir>/images/`, `core/debug/` owns trace files under `<data_dir>/debug/`, and `core/automation/` owns extra Cron internals under `<data_dir>/cron/`. Do not add a directory to Storage's bootstrap list just because a domain can create it itself.
 
 ## Interfaces
 

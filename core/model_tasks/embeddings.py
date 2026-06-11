@@ -22,8 +22,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core.embeddings.providers import ProviderEmbeddingClient
-from core.model_tasks import TASK_TEXT_EMBEDDING, TaskModelError, parse_task_model_target_id
+from core.model_tasks.constants import TASK_TEXT_EMBEDDING
+from core.model_tasks.embeddings_providers import ProviderEmbeddingClient
+from core.model_tasks.model_tasks import TaskModelError, parse_task_model_target_id
 from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import EmbeddingError as _BaseEmbeddingError
 from core.utils.errors import VBotError

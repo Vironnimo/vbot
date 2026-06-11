@@ -6,7 +6,7 @@ import base64
 import re
 from typing import Any
 
-from core.image.types import ImageGenerationResult, JsonObject
+from core.model_tasks.image_types import ImageGenerationResult, JsonObject
 from core.providers.errors import ProviderError
 from core.providers.task_client import ProviderTaskClient
 from core.utils.logging import get_logger

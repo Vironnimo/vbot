@@ -4,7 +4,7 @@ Provider-neutral text embedding execution for the configured `text_embedding` ta
 
 ## Overview
 
-`core/embeddings/` owns text-to-vector embedding after Settings has selected one concrete task-model target. It resolves the `text_embedding` binding through `TaskModelService`, batches inputs, calls the provider embedding API, and returns `list[list[float]]` vectors preserving input order. It does not own model discovery, model catalogs, settings validation, UI controls, vector storage, or recall search; those live in `core/models/`, `core/model_tasks/`, `core/settings/`, `webui/`, `core/recall/`, and `core/tools/`.
+`core/model_tasks/` (`embeddings*.py`) owns text-to-vector embedding after Settings has selected one concrete task-model target. It resolves the `text_embedding` binding through `TaskModelService`, batches inputs, calls the provider embedding API, and returns `list[list[float]]` vectors preserving input order. It does not own model discovery, model catalogs, settings validation, UI controls, vector storage, or recall search; those live in `core/models/`, `core/model_tasks/`, `core/settings/`, `webui/`, `core/recall/`, and `core/tools/`.
 
 ## Interfaces
 
@@ -18,7 +18,7 @@ The `EmbeddingResult.resolved_model_id` is the single identity key the recall st
 
 ## Provider Wire Behavior
 
-`ProviderEmbeddingClient` subclasses `core.providers.task_client.ProviderTaskClient`, the shared plumbing it has in common with `core/image/providers.py` and `core/speech/providers.py` (constructor tuple, `from_runtime` factory, auth headers, POST/classify/parse cycle, retry policy — see `providers.md`). This module owns only the embeddings payload shape and response parsing:
+`ProviderEmbeddingClient` subclasses `core.providers.task_client.ProviderTaskClient`, the shared plumbing it has in common with `core/model_tasks/image_providers.py` and `core/model_tasks/speech_providers.py` (constructor tuple, `from_runtime` factory, auth headers, POST/classify/parse cycle, retry policy — see `providers.md`). This module owns only the embeddings payload shape and response parsing:
 
 - POSTs `/api/v1/embeddings` with `model`, `input` (array of strings), `encoding_format="float"`, and optional `dimensions` (only when present in options and non-zero).
 - Normalizes response `data[]` entries to ordered vectors by sorting on `index` before extracting `embedding` fields.
