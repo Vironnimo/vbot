@@ -147,7 +147,7 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 
 **Pattern:** AAA. Independent, deterministic, no shared state.
 
-**Quality gates:** Two scripts with the same interface — each runs format → lint → type-check → test (→ build for frontend). Both accept one or more paths (files or directories), or no args for full scan.
+**Quality gates:** Two scripts with the same interface — each runs format → lint → type-check → test (→ build for frontend). Both accept one or more paths (files or directories), or no args for full scan. Output is the agent contract: auto-fixed files are listed per step, failures forward the underlying tool output (pytest/vitest success noise filtered out), and the final line states the verdict. Source paths map to their mirrored test paths across all packages (`cli`, `core`, `desktop`, `scripts`, `server`); when the exact `test_<file>.py` mirror is missing, the mirrored test directory runs instead and a `note:` line says so. Nonexistent input paths abort with exit code 2 before any tool runs (a bad path would otherwise make pytest-xdist silently collect nothing).
 ```bash
 python scripts/quality.py [paths...]           # Backend
 python scripts/quality-frontend.py [paths...]  # Frontend
