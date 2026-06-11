@@ -201,17 +201,19 @@
       )}
     </div>
   </div>
-  <div class="s-row-control s-row-control--checkbox">
-    <label class="s-checkbox-wrap">
-      <input
-        class="s-checkbox"
-        type="checkbox"
-        checked={compactionSettings.auto === true}
-        aria-label={t('settings.compaction.auto', 'Auto-compact')}
-        onchange={(event) =>
-          handleCompactionSettingChange('auto', event.currentTarget.checked)}
-      />
-    </label>
+  <div class="s-row-control">
+    <button
+      class="toggle"
+      class:on={compactionSettings.auto === true}
+      type="button"
+      role="switch"
+      aria-checked={compactionSettings.auto === true}
+      aria-label={t('settings.compaction.auto', 'Auto-compact')}
+      onclick={() =>
+        handleCompactionSettingChange('auto', compactionSettings.auto !== true)}
+    >
+      <span class="t-knob"></span>
+    </button>
   </div>
 </div>
 
