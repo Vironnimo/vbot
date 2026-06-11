@@ -8,10 +8,9 @@ from typing import Any
 
 import httpx
 
-from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.errors import ProviderError
+from core.providers.task_client import ProviderTaskClient
 from core.speech.types import SpeechSynthesisResult, SpeechTranscriptionResult
-from core.utils.retry import retry_async
 
 JsonObject = dict[str, Any]
 OPENROUTER_TRANSCRIPTIONS_ENDPOINT = "/audio/transcriptions"
@@ -20,39 +19,8 @@ SPEECH_ENDPOINT = "/audio/speech"
 DEFAULT_SPEECH_TIMEOUT = 120.0
 
 
-class ProviderSpeechClient:
+class ProviderSpeechClient(ProviderTaskClient):
     """Small OpenAI-compatible speech HTTP client bound to one target."""
-
-    def __init__(
-        self,
-        *,
-        provider: Any,
-        connection: Any,
-        credential: str,
-        model_id: str,
-    ) -> None:
-        self._provider = provider
-        self._connection = connection
-        self._credential = credential
-        self._model_id = model_id
-        self._base_url = connection.base_url or provider.base_url
-
-    @classmethod
-    def from_runtime(cls, runtime: Any, target_ref: Any) -> ProviderSpeechClient:
-        """Create a client from runtime provider configuration and credentials."""
-
-        provider = runtime.providers.get(target_ref.provider_id)
-        connection = provider.get_connection(target_ref.local_connection_id)
-        credential = runtime.provider_credentials.get_credentials(
-            target_ref.provider_id,
-            target_ref.connection_id,
-        )
-        return cls(
-            provider=provider,
-            connection=connection,
-            credential=credential,
-            model_id=target_ref.model_id,
-        )
 
     async def transcribe(
         self,
@@ -105,23 +73,12 @@ class ProviderSpeechClient:
         }
         payload.update(_normalized_stt_options(options, provider_id=self._provider.id))
 
-        async def _do_request() -> SpeechTranscriptionResult:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=DEFAULT_SPEECH_TIMEOUT,
-            ) as client:
-                try:
-                    response = await client.post(
-                        OPENROUTER_TRANSCRIPTIONS_ENDPOINT,
-                        json=payload,
-                        headers=self._headers(),
-                    )
-                except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                    raise wrap_network_error(exc) from exc
-                _classify_response(response)
-                return _transcription_result(response.json())
-
-        return await retry_async(_do_request)
+        return await self.post_and_parse(
+            OPENROUTER_TRANSCRIPTIONS_ENDPOINT,
+            timeout=DEFAULT_SPEECH_TIMEOUT,
+            parse=lambda response: _transcription_result(response.json()),
+            json=payload,
+        )
 
     async def _transcribe_openai_compatible(
         self,
@@ -136,27 +93,19 @@ class ProviderSpeechClient:
         data.update(_multipart_stt_options(options))
         files = {"file": (normalized_filename, audio, media_type or "application/octet-stream")}
 
-        async def _do_request() -> SpeechTranscriptionResult:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=DEFAULT_SPEECH_TIMEOUT,
-            ) as client:
-                try:
-                    response = await client.post(
-                        OPENAI_TRANSCRIPTIONS_ENDPOINT,
-                        data=data,
-                        files=files,
-                        headers=self._headers(),
-                    )
-                except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                    raise wrap_network_error(exc) from exc
-                _classify_response(response)
-                content_type = response.headers.get("content-type", "")
-                if content_type.startswith("text/"):
-                    return SpeechTranscriptionResult(text=response.text)
-                return _transcription_result(response.json())
+        def _parse(response: httpx.Response) -> SpeechTranscriptionResult:
+            content_type = response.headers.get("content-type", "")
+            if content_type.startswith("text/"):
+                return SpeechTranscriptionResult(text=response.text)
+            return _transcription_result(response.json())
 
-        return await retry_async(_do_request)
+        return await self.post_and_parse(
+            OPENAI_TRANSCRIPTIONS_ENDPOINT,
+            timeout=DEFAULT_SPEECH_TIMEOUT,
+            parse=_parse,
+            data=data,
+            files=files,
+        )
 
     async def _synthesize_openai_compatible(
         self,
@@ -171,38 +120,23 @@ class ProviderSpeechClient:
         }
         payload.update(_normalized_tts_options(options, provider_id=self._provider.id))
 
-        async def _do_request() -> SpeechSynthesisResult:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=DEFAULT_SPEECH_TIMEOUT,
-            ) as client:
-                try:
-                    response = await client.post(
-                        SPEECH_ENDPOINT,
-                        json=payload,
-                        headers=self._headers(),
-                    )
-                except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                    raise wrap_network_error(exc) from exc
-                _classify_response(response)
-                media_type = response.headers.get("content-type", "")
-                if not media_type:
-                    media_type = _media_type_for_format(response_format)
-                return SpeechSynthesisResult(
-                    audio=response.content,
-                    media_type=media_type.split(";", 1)[0],
-                    format=response_format,
-                    generation_id=response.headers.get("x-generation-id"),
-                )
+        def _parse(response: httpx.Response) -> SpeechSynthesisResult:
+            media_type = response.headers.get("content-type", "")
+            if not media_type:
+                media_type = _media_type_for_format(response_format)
+            return SpeechSynthesisResult(
+                audio=response.content,
+                media_type=media_type.split(";", 1)[0],
+                format=response_format,
+                generation_id=response.headers.get("x-generation-id"),
+            )
 
-        return await retry_async(_do_request)
-
-    def _headers(self) -> dict[str, str]:
-        auth = self._connection.auth
-        headers = {auth.header: f"{auth.prefix}{self._credential}"}
-        if self._provider.extra_headers:
-            headers.update(self._provider.extra_headers)
-        return headers
+        return await self.post_and_parse(
+            SPEECH_ENDPOINT,
+            timeout=DEFAULT_SPEECH_TIMEOUT,
+            parse=_parse,
+            json=payload,
+        )
 
 
 def audio_format_from(filename: str = "", media_type: str = "") -> str:
@@ -295,14 +229,6 @@ def _media_type_for_format(audio_format: str) -> str:
         "opus": "audio/opus",
         "pcm": "audio/pcm",
     }.get(audio_format, "application/octet-stream")
-
-
-def _classify_response(response: httpx.Response) -> None:
-    detail = response.text if response.status_code >= 400 else ""
-    classify_http_status(
-        response.status_code,
-        detail=f"{response.status_code} {detail}".strip() if detail else str(response.status_code),
-    )
 
 
 def _transcription_result(payload: Any) -> SpeechTranscriptionResult:
