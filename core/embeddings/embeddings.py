@@ -24,6 +24,7 @@ from typing import Any
 
 from core.embeddings.providers import ProviderEmbeddingClient
 from core.model_tasks import TASK_TEXT_EMBEDDING, TaskModelError, parse_task_model_target_id
+from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import EmbeddingError as _BaseEmbeddingError
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -82,7 +83,7 @@ class EmbeddingService:
     def __init__(
         self,
         model_tasks: Any,
-        runtime: Any,
+        runtime: TaskClientRuntime,
     ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime

@@ -36,7 +36,7 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 
 ## Provider Wire Behavior
 
-Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient.from_runtime()` reads provider config, connection auth, credentials, and base URL from runtime state, then `core/speech/providers.py` builds speech-specific `httpx` requests with the shared provider error classifier and retry helper.
+Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy — see `providers.md`); `core/speech/providers.py` owns only the speech payload shapes and response parsing.
 
 OpenRouter STT sends Base64 JSON to `/audio/transcriptions`:
 
@@ -69,7 +69,7 @@ TTS tool output is stored under `<data_dir>/speech/` as one audio file and one s
 
 ## Errors
 
-Callers of `SpeechService` should see expected speech errors as `SpeechError` subclasses:
+Callers of `SpeechService` should see expected speech errors as `SpeechError` subclasses (`SpeechError` derives from the shared `TaskError` base in `core/utils/errors.py`):
 
 - `SpeechConfigurationError` for missing bindings, empty input, invalid artifact ids, and missing artifacts.
 - `SpeechUnsupportedTargetError` for configured local targets with no execution adapter.
