@@ -781,3 +781,10 @@ export function init(locale = DEFAULT_LOCALE) {
 
   return activeLocale;
 }
+
+// BCP 47 tag of the active UI language, for Intl formatters. Dates and times
+// must follow the app language, not the browser/OS locale — a German OS must
+// not inject German month names or comma decimals into the English UI.
+export function activeLocaleTag() {
+  return activeLocale;
+}
