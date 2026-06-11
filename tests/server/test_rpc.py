@@ -801,6 +801,8 @@ class StubStorage:
 
 
 class StubPrompts:
+    app_dir = Path("app")
+
     def build_system_prompt(self, agent: StubAgent, scope: object = None) -> str:
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
@@ -915,6 +917,11 @@ class StubAdapter:
         return cast(list[JsonObject], self._stream_deltas)
 
 
+class StubProcessManager:
+    def cancel_scope(self, run_id: str) -> None:
+        del run_id
+
+
 class RecordingCompactionService:
     def __init__(self) -> None:
         self.calls = 0
@@ -944,8 +951,16 @@ class StubRuntime:
         self.providers = StubProviders()
         self.adapter = adapter
         self.chat_runs: ChatRunManager | None = None
+        self.extensions: Any = None
+        self.process_manager = StubProcessManager()
         self.trigger_service: Any = None
         self.recall_reload_count = 0
+
+    @property
+    def chat_run_manager(self) -> ChatRunManager:
+        if self.chat_runs is None:
+            self.chat_runs = ChatRunManager()
+        return self.chat_runs
 
     def start(self) -> None:
         return None
@@ -1022,7 +1037,7 @@ class StubRuntime:
 
 
 def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
-    runtime = StubRuntime(tmp_path, adapter)
+    runtime: Any = StubRuntime(tmp_path, adapter)
     chat_runs = ChatRunManager()
     runtime.chat_runs = chat_runs
     chat_loop = ChatLoop(runtime)
@@ -4624,7 +4639,7 @@ async def test_agent_delete_publishes_agent_deleted_event(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_agent_crud_events_not_published_without_event_bus(tmp_path: Path) -> None:
-    runtime = StubRuntime(tmp_path, StubAdapter())
+    runtime: Any = StubRuntime(tmp_path, StubAdapter())
     chat_runs = ChatRunManager()
     runtime.chat_runs = chat_runs
     state = SimpleNamespace(

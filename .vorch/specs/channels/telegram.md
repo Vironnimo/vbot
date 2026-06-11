@@ -16,7 +16,7 @@ Telegram adapter for vBot channels. Owns Telegram long polling, Telegram chat ro
 
 ## Interfaces
 
-- `TelegramChannelAdapter(config, trigger_service, chat_sessions, runtime, attachment_store=None, command_dispatcher=...)`
+- `TelegramChannelAdapter(config, trigger_service, chat_sessions, credential_resolver, attachment_store=None, *, command_dispatcher)` — constructor injection only, no runtime handle; `credential_resolver` is the `Callable[[str], str]` passed down from `ChannelService`.
 - `start()` builds a Telegram application, registers text, media (photo/document/voice/audio/video/video-note), and unsupported-message-type handlers, deletes the webhook with `drop_pending_updates=False`, starts polling, and waits until stopped. Handlers are restricted with `filters.UpdateType.MESSAGE` to new messages only: edited messages and channel posts are ignored (edits must not trigger new Runs; `filters.UpdateType.MESSAGES` would still match `edited_message` and is deliberately not used).
 - Animation and sticker messages from allowed chats get an eager "this message type isn't supported yet" reply directly from the handler; no Run is triggered and no Session is created. Animations usually carry a backward-compat `document` field and therefore hit the media handler first (where the allowlist rejects them with the unsupported-file reply); the ANIMATION filter is a fallback in case Telegram stops setting that field.
 - `stop()` sets the stop event, cancels per-chat workers and album flush tasks, then stops the updater/application and shuts it down.
@@ -26,7 +26,7 @@ Telegram adapter for vBot channels. Owns Telegram long polling, Telegram chat ro
 
 ## Conventions
 
-- Telegram tokens resolve through `runtime.resolve_environment_credential()` when available, which currently prefers process environment over the data-dir `.env` fallback. Without that runtime hook, the adapter reads `os.environ` directly.
+- Telegram tokens resolve through the injected `credential_resolver` (Runtime wires `resolve_environment_credential`, which prefers process environment over the data-dir `.env` fallback). The adapter never reads `os.environ` itself; a missing or empty token raises `ChannelConfigError` at construction.
 - Empty `allowed_chat_ids` denies all inbound Telegram chats.
 - Pure text messages are command-dispatched before entering the per-chat queue. Directly handled commands (e.g. `/stop`, `/help`) reply eagerly from the update handler and do not trigger a Run; unknown slash text follows the normal inbound chat path.
 - Command actions are channel-safe: `/compact` calls `TriggerService.compact_session()` and replies with its result, `/retry` calls `TriggerService.retry_run()` and relays that Run's final reply, and `/new` replies that starting a new Session is unavailable from Telegram channels until routing has persisted rotation state. Any other recognized command action (e.g. `/handoff`) replies that the command is not available from Telegram channels — recognized commands never fall through silently.

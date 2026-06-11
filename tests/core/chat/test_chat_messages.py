@@ -804,7 +804,7 @@ class TestRepairDanglingToolCalls:
         from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
 
         agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-        runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+        runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
         session = runtime.chat_sessions.create("coder", session_id="session-one")
 
         tail_user = ChatMessage.user("Current question", timestamp=FIXED_TIMESTAMP)
@@ -903,7 +903,7 @@ class TestRepairDanglingToolCalls:
         from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
 
         agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-        runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+        runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
         session = runtime.chat_sessions.create("coder", session_id="session-one")
 
         session.append(ChatMessage.user("Please read", timestamp=FIXED_TIMESTAMP))
