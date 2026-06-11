@@ -4,6 +4,9 @@ const FENCE_PATTERN = /^[ \t]{0,3}```[^\n]*$/gm;
 
 const md = markdownit({
   html: false,
+  // Chat output is conversational: a single newline is an intentional line
+  // break ("one number per line" lists), not a soft wrap to collapse.
+  breaks: true,
   linkify: false,
   typographer: false,
 });
