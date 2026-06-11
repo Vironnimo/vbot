@@ -1,15 +1,17 @@
 <script>
+  import ProviderConnectModal from './ProviderConnectModal.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     describeProvider,
-    getOAuthConnectionStatus,
+    getAddProviderCandidates,
+    getAddableConnections,
+    getConfiguredConnections,
+    getConnectedProviderItems,
     getProviderItems,
     getPublicConnectionId,
     isOAuthConnection,
     isOAuthDeviceFlowConnection,
-    providerStatusClass,
-    providerStatusLabel,
   } from '$lib/settingsView.js';
 
   const noop = () => {};
@@ -28,25 +30,25 @@
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
-    handleProviderAuthEvent(event);
+    forwardedAuthEvent = event;
   }
 
   let refreshingModels = $state(false);
   let modelRefreshMessage = $state('');
   let modelRefreshError = $state('');
-  let oauthConnectionStates = $state({});
-  let handledProviderAuthEvent = null;
-  let copiedDeviceFlowConnectionId = $state('');
+  let modalScope = $state(null);
+  let forwardedAuthEvent = $state(null);
 
   let providerItems = $derived(getProviderItems(settings));
+  let connectedProviders = $derived(getConnectedProviderItems(settings));
+  let addProviderCandidates = $derived(getAddProviderCandidates(settings));
   let hasRefreshEligibleProvider = $derived(
     providerItems.some((provider) => providerAppearsRefreshEligible(provider)),
   );
 
   $effect(() => {
-    if (providerAuthEvent && providerAuthEvent !== handledProviderAuthEvent) {
-      handledProviderAuthEvent = providerAuthEvent;
-      handleProviderAuthEvent(providerAuthEvent);
+    if (providerAuthEvent) {
+      forwardedAuthEvent = providerAuthEvent;
     }
   });
 
@@ -73,96 +75,58 @@
     );
   }
 
-  function getOAuthState(connectionId) {
-    return (
-      oauthConnectionStates[connectionId] ?? {
-        flowActive: false,
-        showDialog: false,
-        dialogData: null,
-      }
-    );
-  }
-
-  function updateOAuthState(connectionId, patch) {
-    oauthConnectionStates = {
-      ...oauthConnectionStates,
-      [connectionId]: {
-        ...getOAuthState(connectionId),
-        ...patch,
-      },
-    };
-  }
-
-  function isConnectionConfigured(connection) {
-    return connection?.configured === true || connection?.usable === true;
-  }
-
-  function oauthStatus(connection) {
-    return getOAuthConnectionStatus(
-      providerItems,
-      connection.id,
-      getOAuthState(connection.id).flowActive,
-    );
-  }
-
   function providerDisplayName(provider) {
     return provider?.name ?? provider?.id ?? 'Provider';
   }
 
-  function providerTranslationValues(provider) {
-    return { provider: providerDisplayName(provider) };
-  }
-
-  async function startOAuthConnect(provider, connection) {
-    const connectionId = getPublicConnectionId(connection);
-
-    onError('');
-    copiedDeviceFlowConnectionId = '';
-    updateOAuthState(connection.id, {
-      flowActive: true,
-      showDialog: false,
-      dialogData: null,
-    });
-
-    try {
-      const response = await callConnectProvider(provider.id, connectionId);
-      updateOAuthState(connection.id, {
-        flowActive: true,
-        showDialog: Boolean(response?.user_code),
-        dialogData: response,
-      });
-    } catch (error) {
-      updateOAuthState(connection.id, {
-        flowActive: false,
-        showDialog: false,
-        dialogData: null,
-      });
-      onError(
-        `${t('settings.providers.connectError', 'Provider connection could not be started.')} ${error.message}`,
+  function connectionDescription(connection) {
+    if (isOAuthDeviceFlowConnection(connection)) {
+      return t(
+        'settings.providers.oauthDescription',
+        'OAuth device authorization managed by the provider.',
       );
     }
+    if (isOAuthConnection(connection)) {
+      return t(
+        'settings.providers.oauthTokenDescription',
+        'OAuth token configured from environment or data directory.',
+      );
+    }
+    return t(
+      'settings.providers.apiKeyDescription',
+      'Static credential configured from environment or data directory.',
+    );
   }
 
-  async function cancelOAuthFlow(provider, connection) {
-    await disconnectOAuthProvider(provider, connection, { reload: false });
+  function openAddProviderModal() {
+    modalScope = { provider: null, connection: null };
   }
 
-  async function disconnectOAuthProvider(provider, connection, options = {}) {
-    const connectionId = getPublicConnectionId(connection);
+  function openAddConnectionModal(provider) {
+    modalScope = { provider, connection: null };
+  }
+
+  function openReplaceKeyModal(provider, connection) {
+    modalScope = { provider, connection };
+  }
+
+  function closeModal() {
+    modalScope = null;
+  }
+
+  async function reloadAfterConnect() {
+    await onReloadSettings();
+  }
+
+  async function disconnectOAuthConnection(provider, connection) {
     onError('');
-    copiedDeviceFlowConnectionId = '';
 
     try {
-      await callDisconnectProvider(provider.id, connectionId);
-      updateOAuthState(connection.id, {
-        flowActive: false,
-        showDialog: false,
-        dialogData: null,
-      });
-
-      if (options.reload ?? true) {
-        await onReloadSettings();
-      }
+      await callDisconnectProvider(
+        provider.id,
+        getPublicConnectionId(connection),
+      );
+      await onReloadSettings();
     } catch (error) {
       onError(
         `${t('settings.providers.disconnectError', 'Provider connection could not be disconnected.')} ${error.message}`,
@@ -170,87 +134,36 @@
     }
   }
 
-  async function completeOAuthFlow(connectionId, provider) {
-    copiedDeviceFlowConnectionId = '';
-    updateOAuthState(connectionId, {
-      flowActive: false,
-      showDialog: false,
-      dialogData: null,
-    });
-    showSettingsToast(
-      t(
-        'settings.providers.device_flow.success_toast',
-        '{provider} connected successfully',
-        providerTranslationValues(provider),
-      ),
-      'success',
-    );
-    await onReloadSettings();
-  }
-
-  function failOAuthFlow(connectionId) {
-    copiedDeviceFlowConnectionId = '';
-    updateOAuthState(connectionId, {
-      flowActive: false,
-      showDialog: false,
-      dialogData: null,
-    });
-    showSettingsToast(
-      t(
-        'settings.providers.device_flow.error_toast',
-        'Authorization failed or timed out',
-      ),
-      'error',
-    );
-  }
-
-  function showSettingsToast(message, variant = 'success') {
-    onToast?.({ title: message, variant });
-  }
-
-  async function copyDeviceFlowUserCode(connection, userCode) {
-    if (!userCode) {
-      return;
-    }
-
-    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
-      showSettingsToast(
-        t(
-          'settings.providers.device_flow.copy_error',
-          'Device code could not be copied.',
-        ),
-        'error',
-      );
-      return;
-    }
+  async function removeApiKey(provider, connection) {
+    onError('');
 
     try {
-      await navigator.clipboard.writeText(userCode);
-      copiedDeviceFlowConnectionId = connection.id;
-      showSettingsToast(
-        t('settings.providers.device_flow.copy_success', 'Device code copied.'),
-        'success',
-      );
-    } catch {
-      showSettingsToast(
-        t(
-          'settings.providers.device_flow.copy_error',
-          'Device code could not be copied.',
-        ),
-        'error',
+      const result = await rpc('provider.unset_key', {
+        provider_id: provider.id,
+        connection_id: getPublicConnectionId(connection),
+      });
+
+      if (result?.configured === true) {
+        onToast({
+          title: t(
+            'settings.providers.removeKeyStillEnv',
+            'Key removed, but the process environment still provides a credential.',
+          ),
+          variant: 'warn',
+        });
+      } else {
+        onToast({
+          title: t('settings.providers.removeKeySuccess', 'API key removed.'),
+          variant: 'success',
+        });
+      }
+
+      await onReloadSettings();
+    } catch (error) {
+      onError(
+        `${t('settings.providers.removeKeyError', 'API key could not be removed.')} ${error.message}`,
       );
     }
-  }
-
-  async function callConnectProvider(providerId, connectionId) {
-    if (typeof connectProvider === 'function') {
-      return connectProvider(providerId, connectionId, { rpc });
-    }
-
-    return rpc('provider.connect', {
-      provider_id: providerId,
-      connection_id: connectionId,
-    });
   }
 
   async function callDisconnectProvider(providerId, connectionId) {
@@ -262,42 +175,6 @@
       provider_id: providerId,
       connection_id: connectionId,
     });
-  }
-
-  function handleProviderAuthEvent(event) {
-    const payload = event.payload ?? event;
-    const connectionContext = findConnectionContext(
-      payload.provider_id,
-      payload.connection_id,
-    );
-    const connectionStateId = connectionContext.connectionStateId;
-
-    if (!connectionStateId || !getOAuthState(connectionStateId).flowActive) {
-      return;
-    }
-
-    if (payload.success === true) {
-      completeOAuthFlow(connectionStateId, connectionContext.provider);
-      return;
-    }
-
-    failOAuthFlow(connectionStateId);
-  }
-
-  function findConnectionContext(providerId, connectionId) {
-    const provider = providerItems.find((item) => item.id === providerId);
-    const connections = Array.isArray(provider?.connections)
-      ? provider.connections
-      : [];
-    const connection = connections.find(
-      (item) => getPublicConnectionId(item) === connectionId,
-    );
-
-    return {
-      provider,
-      connection,
-      connectionStateId: connection?.id ?? '',
-    };
   }
 
   async function refreshModelDatabase() {
@@ -397,211 +274,92 @@
     </div>
   {/if}
 
-  {#if providerItems.length === 0}
+  <div class="s-providers-toolbar">
+    <button class="btn-primary" type="button" onclick={openAddProviderModal}>
+      {t('settings.providers.add.button', 'Add provider')}
+    </button>
+  </div>
+
+  {#if connectedProviders.length === 0}
     <div class="s-feedback s-feedback--neutral">
-      {t('settings.providers.empty', 'No providers are available.')}
+      {t(
+        'settings.providers.noneConnected',
+        'No providers connected yet. Add one to make its models available.',
+      )}
     </div>
   {:else}
-    {#each providerItems as provider (provider.id)}
+    {#each connectedProviders as provider (provider.id)}
       <div class="s-provider-card">
         <div class="s-row s-row--provider">
           <div class="s-row-info">
             <div class="s-row-label">
-              {provider.name ?? provider.id}
+              {providerDisplayName(provider)}
             </div>
             <div class="s-row-desc">
               {describeProvider(provider, t)}
             </div>
           </div>
-          <div class="s-row-control">
-            <div class="s-row-actions s-row-actions--provider">
-              <span class={`chip ${providerStatusClass(provider)}`}
-                >{providerStatusLabel(provider, t)}</span
-              >
-            </div>
-          </div>
         </div>
 
-        {#if provider.connections?.length > 0}
-          <div class="s-provider-connections">
-            {#each provider.connections as connection (connection.id)}
-              <div class="s-provider-connection-row">
-                <div class="s-row-info">
-                  <div class="s-provider-connection-label">
-                    {connection.label ?? connection.id}
-                  </div>
-                  <div class="s-row-desc">
-                    {isOAuthDeviceFlowConnection(connection)
-                      ? t(
-                          'settings.providers.oauthDescription',
-                          'OAuth device authorization managed by the provider.',
-                        )
-                      : isOAuthConnection(connection)
-                        ? t(
-                            'settings.providers.oauthTokenDescription',
-                            'OAuth token configured from environment or data directory.',
-                          )
-                        : t(
-                            'settings.providers.apiKeyDescription',
-                            'Static credential configured from environment or data directory.',
-                          )}
-                  </div>
+        <div class="s-provider-connections">
+          {#each getConfiguredConnections(provider) as connection (connection.id)}
+            <div class="s-provider-connection-row">
+              <div class="s-row-info">
+                <div class="s-provider-connection-label">
+                  {connection.label ?? connection.id}
                 </div>
+                <div class="s-row-desc">
+                  {connectionDescription(connection)}
+                </div>
+              </div>
 
-                <div class="s-row-control">
+              <div class="s-row-control">
+                <div class="s-row-actions s-row-actions--provider">
+                  <span class="chip chip-green">
+                    {t('settings.providers.connected', 'Connected')}
+                  </span>
                   {#if isOAuthDeviceFlowConnection(connection)}
-                    {@const state = getOAuthState(connection.id)}
-                    {@const status = oauthStatus(connection)}
-                    <div class="s-row-actions s-row-actions--provider">
-                      {#if status === 'pending'}
-                        <span class="s-inline-waiting">
-                          <span class="s-inline-spinner" aria-hidden="true"
-                          ></span>
-                          {t(
-                            'settings.providers.device_flow.waiting',
-                            'Waiting for {provider} authorization…',
-                            providerTranslationValues(provider),
-                          )}
-                        </span>
-                        <button
-                          class="btn-outline"
-                          type="button"
-                          onclick={() => cancelOAuthFlow(provider, connection)}
-                        >
-                          {t('settings.providers.device_flow.cancel', 'Cancel')}
-                        </button>
-                      {:else if status === 'connected'}
-                        <span class="chip chip-green">
-                          {t('settings.providers.connected', 'Connected')}
-                        </span>
-                        <button
-                          class="btn-outline"
-                          type="button"
-                          onclick={() =>
-                            disconnectOAuthProvider(provider, connection)}
-                        >
-                          {t('settings.providers.disconnect', 'Disconnect')}
-                        </button>
-                      {:else}
-                        <button
-                          class="btn-primary"
-                          type="button"
-                          onclick={() =>
-                            startOAuthConnect(provider, connection)}
-                        >
-                          {t('settings.providers.connect', 'Connect')}
-                        </button>
-                      {/if}
-                    </div>
-
-                    {#if state.showDialog && state.dialogData}
-                      <div
-                        class="device-flow-inline"
-                        role="dialog"
-                        aria-modal="false"
-                        aria-labelledby={`device-flow-title-${connection.id}`}
-                      >
-                        <div class="device-flow-header">
-                          <p class="device-flow-eyebrow">
-                            {t(
-                              'settings.providers.device_flow.eyebrow',
-                              'OAuth',
-                            )}
-                          </p>
-                          <h3 id={`device-flow-title-${connection.id}`}>
-                            {t(
-                              'settings.providers.device_flow.title',
-                              'Connect {provider}',
-                              providerTranslationValues(provider),
-                            )}
-                          </h3>
-                        </div>
-                        <p class="device-flow-instructions">
-                          {t(
-                            'settings.providers.device_flow.instructions',
-                            'Enter this code at the link below:',
-                          )}
-                        </p>
-                        <div class="device-flow-code-row">
-                          <code class="device-flow-code"
-                            >{state.dialogData.user_code}</code
-                          >
-                          <button
-                            class="btn-outline device-flow-copy"
-                            type="button"
-                            aria-label={t(
-                              'settings.providers.device_flow.copy_aria',
-                              'Copy device code {code}',
-                              { code: state.dialogData.user_code },
-                            )}
-                            onclick={() =>
-                              copyDeviceFlowUserCode(
-                                connection,
-                                state.dialogData.user_code,
-                              )}
-                          >
-                            {copiedDeviceFlowConnectionId === connection.id
-                              ? t(
-                                  'settings.providers.device_flow.copied',
-                                  'Copied',
-                                )
-                              : t('common.copy', 'Copy')}
-                          </button>
-                        </div>
-                        <a
-                          class="device-flow-link"
-                          href={state.dialogData.verification_uri}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {state.dialogData.verification_uri}
-                        </a>
-                        <div class="device-flow-waiting" aria-live="polite">
-                          <span class="s-inline-spinner" aria-hidden="true"
-                          ></span>
-                          <span>
-                            {t(
-                              'settings.providers.device_flow.waiting',
-                              'Waiting for {provider} authorization…',
-                              providerTranslationValues(provider),
-                            )}
-                          </span>
-                        </div>
-                        <div class="device-flow-actions">
-                          <button
-                            class="btn-outline"
-                            type="button"
-                            onclick={() =>
-                              cancelOAuthFlow(provider, connection)}
-                          >
-                            {t(
-                              'settings.providers.device_flow.cancel',
-                              'Cancel',
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    {/if}
-                  {:else}
-                    <span
-                      class={`chip ${isConnectionConfigured(connection) ? 'chip-green' : 'chip-amber'}`}
+                    <button
+                      class="btn-outline"
+                      type="button"
+                      onclick={() =>
+                        disconnectOAuthConnection(provider, connection)}
                     >
-                      {isConnectionConfigured(connection)
-                        ? t(
-                            'settings.providers.status.configured',
-                            'Configured',
-                          )
-                        : t(
-                            'settings.providers.status.missingCredentials',
-                            'Missing credentials',
-                          )}
-                    </span>
+                      {t('settings.providers.disconnect', 'Disconnect')}
+                    </button>
+                  {:else if !isOAuthConnection(connection)}
+                    <button
+                      class="btn-outline"
+                      type="button"
+                      onclick={() => openReplaceKeyModal(provider, connection)}
+                    >
+                      {t('settings.providers.replaceKey', 'Replace key…')}
+                    </button>
+                    <button
+                      class="btn-outline danger"
+                      type="button"
+                      onclick={() => removeApiKey(provider, connection)}
+                    >
+                      {t('common.remove', 'Remove')}
+                    </button>
                   {/if}
                 </div>
               </div>
-            {/each}
-          </div>
-        {/if}
+            </div>
+          {/each}
+
+          {#if getAddableConnections(provider).length > 0}
+            <div class="s-provider-add-connection">
+              <button
+                class="btn-outline"
+                type="button"
+                onclick={() => openAddConnectionModal(provider)}
+              >
+                {t('settings.providers.add.connectionButton', 'Add connection')}
+              </button>
+            </div>
+          {/if}
+        </div>
       </div>
     {/each}
   {/if}
@@ -629,4 +387,18 @@
       </div>
     </div>
   </div>
+
+  {#if modalScope}
+    <ProviderConnectModal
+      providers={addProviderCandidates}
+      scopedProvider={modalScope.provider}
+      scopedConnection={modalScope.connection}
+      providerAuthEvent={forwardedAuthEvent}
+      {connectProvider}
+      {disconnectProvider}
+      {onToast}
+      onCompleted={reloadAfterConnect}
+      onClose={closeModal}
+    />
+  {/if}
 {/if}

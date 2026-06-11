@@ -20,6 +20,7 @@ export const englishCatalog = Object.freeze({
 
   'common.archive': 'Archive',
   'common.alreadySaved': 'Already saved',
+  'common.back': 'Back',
   'common.cancel': 'Cancel',
   'common.clear': 'Clear',
   'common.close': 'Close',
@@ -505,18 +506,15 @@ export const englishCatalog = Object.freeze({
   'settings.specializedModels.jsonInvalid': 'Invalid JSON',
 
   'settings.providers.title': 'Providers',
-  'settings.providers.subtitle':
-    'Credential status and endpoint metadata for available providers.',
-  'settings.providers.empty': 'No providers are available.',
+  'settings.providers.subtitle': 'Connected providers and their credentials.',
+  'settings.providers.noneConnected':
+    'No providers connected yet. Add one to make its models available.',
   'settings.providers.description.credentialKey':
     'Credential key: {credentialKey}.',
   'settings.providers.description.baseUrl': 'Endpoint: {baseUrl}.',
   'settings.providers.description.modelCount': '{count} models available.',
   'settings.providers.description.none':
     'Provider metadata is not available yet.',
-  'settings.providers.status.configured': 'Configured',
-  'settings.providers.status.missingCredentials': 'Missing credentials',
-  'settings.providers.status.placeholder': 'Placeholder',
   'settings.providers.customEndpoint': 'Custom endpoint',
   'settings.providers.customEndpointDescription':
     'OpenAI-compatible custom endpoints remain placeholder-only in this phase.',
@@ -556,6 +554,32 @@ export const englishCatalog = Object.freeze({
     '{provider} connected successfully',
   'settings.providers.device_flow.error_toast':
     'Authorization failed or timed out',
+  'settings.providers.replaceKey': 'Replace key…',
+  'settings.providers.removeKeySuccess': 'API key removed.',
+  'settings.providers.removeKeyError': 'API key could not be removed.',
+  'settings.providers.removeKeyStillEnv':
+    'Key removed, but the process environment still provides a credential.',
+  'settings.providers.add.button': 'Add provider',
+  'settings.providers.add.connectionButton': 'Add connection',
+  'settings.providers.add.title': 'Add provider',
+  'settings.providers.add.chooseProvider': 'Choose a provider to connect.',
+  'settings.providers.add.chooseMethod': 'Choose how to connect {provider}.',
+  'settings.providers.add.allConnected':
+    'All available providers are already connected.',
+  'settings.providers.add.methodApiKey': 'API key',
+  'settings.providers.add.methodApiKeyDescription':
+    'Paste a static API key; it is stored in the data directory.',
+  'settings.providers.add.methodOAuth': 'Sign in (OAuth)',
+  'settings.providers.add.methodOAuthDescription':
+    'Authorize vBot through the provider account in a browser.',
+  'settings.providers.add.apiKeyLabel': 'API key',
+  'settings.providers.add.apiKeyPlaceholder': 'Paste the API key…',
+  'settings.providers.add.apiKeyHint':
+    'Stored as {credentialKey} in the data directory .env.',
+  'settings.providers.add.saveKey': 'Save key',
+  'settings.providers.add.keyError': 'API key could not be saved.',
+  'settings.providers.add.oauthIntro':
+    'vBot opens an authorization code you confirm at {provider} in the browser.',
   'settings.channels.title': 'Channels',
   'settings.channels.subtitle': 'Manage channel routing and runtime status.',
   'settings.channels.add': 'Add channel',
