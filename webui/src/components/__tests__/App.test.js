@@ -48,6 +48,9 @@ describe('App', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
     localStorage.clear();
+    // Tests share one jsdom window: drop the location hash a previous test's
+    // history navigation left behind so every mount starts on the default tab.
+    window.history.replaceState(null, '', window.location.pathname);
     init('en');
     mountedComponent = null;
     listLogsMock.mockReset();
@@ -358,6 +361,61 @@ describe('App', () => {
         ),
       ).toHaveLength(2);
       expect(document.body.textContent).toContain('Sub-agent response');
+    });
+  });
+
+  it('treats tab switches as history entries so browser back returns to the previous tab', async () => {
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    sidebarNavButton('Logs')?.click();
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(document.querySelector('#logs-title')).toBeTruthy();
+      expect(window.location.hash).toBe('#logs');
+    });
+
+    window.history.back();
+
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#chat');
+      expect(document.querySelector('#logs-title')).toBeFalsy();
+      expect(sidebarNavButton('Chat')?.getAttribute('aria-current')).toBe(
+        'page',
+      );
+    });
+  });
+
+  it('returns from a sub-agent session override to the parent session via browser back', async () => {
+    const agents = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'session-parent',
+      },
+    ];
+    rpcMock.mockImplementation(createSubAgentNavigationRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain('Inspect again');
+    });
+
+    viewSessionButton()?.click();
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(returnToCurrentSessionButton()).toBeTruthy();
+    });
+
+    window.history.back();
+
+    await waitForCondition(() => {
+      expect(document.body.textContent).toContain('Inspect again');
+      expect(returnToCurrentSessionButton()).toBeFalsy();
     });
   });
 
