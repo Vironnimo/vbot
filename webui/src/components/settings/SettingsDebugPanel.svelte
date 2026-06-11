@@ -121,22 +121,24 @@
       )}
     </div>
   </div>
-  <div class="s-row-control s-row-control--checkbox">
-    <label class="s-checkbox-wrap">
-      <input
-        class="s-checkbox"
-        type="checkbox"
-        checked={debugSettings.enabled === true}
-        aria-label={t('debug.enabled', 'Enable debug mode')}
-        onchange={(event) => {
-          debugSettings = {
-            ...debugSettings,
-            enabled: event.currentTarget.checked,
-          };
-          onError('');
-        }}
-      />
-    </label>
+  <div class="s-row-control">
+    <button
+      class="toggle"
+      class:on={debugSettings.enabled === true}
+      type="button"
+      role="switch"
+      aria-checked={debugSettings.enabled === true}
+      aria-label={t('debug.enabled', 'Enable debug mode')}
+      onclick={() => {
+        debugSettings = {
+          ...debugSettings,
+          enabled: debugSettings.enabled !== true,
+        };
+        onError('');
+      }}
+    >
+      <span class="t-knob"></span>
+    </button>
   </div>
 </div>
 

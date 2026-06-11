@@ -383,9 +383,9 @@ describe('App', () => {
     flushSync();
 
     await waitForCondition(() => {
-      const checkbox = debugEnabledCheckbox();
-      expect(checkbox).toBeTruthy();
-      expect(checkbox.checked).toBe(false);
+      const toggle = debugEnabledToggle();
+      expect(toggle).toBeTruthy();
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
     });
 
     const currentMount = mountedComponent;
@@ -393,7 +393,7 @@ describe('App', () => {
       ([method]) => method === 'settings.update',
     ).length;
 
-    debugEnabledCheckbox()?.click();
+    debugEnabledToggle()?.click();
     flushSync();
 
     await waitForCondition(() => {
@@ -435,9 +435,9 @@ describe('App', () => {
     flushSync();
 
     await waitForCondition(() => {
-      const checkbox = debugEnabledCheckbox();
-      expect(checkbox).toBeTruthy();
-      expect(checkbox.checked).toBe(true);
+      const toggle = debugEnabledToggle();
+      expect(toggle).toBeTruthy();
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
     });
 
     const currentMount = mountedComponent;
@@ -445,7 +445,7 @@ describe('App', () => {
       ([method]) => method === 'settings.update',
     ).length;
 
-    debugEnabledCheckbox()?.click();
+    debugEnabledToggle()?.click();
     flushSync();
 
     await waitForCondition(() => {
@@ -848,9 +848,9 @@ function settingsPanelButton(text) {
   ).find((button) => button.textContent?.trim() === text);
 }
 
-function debugEnabledCheckbox() {
+function debugEnabledToggle() {
   return document.querySelector(
-    'input.s-checkbox[type="checkbox"][aria-label="Enable debug mode"]',
+    'button.toggle[role="switch"][aria-label="Enable debug mode"]',
   );
 }
 
