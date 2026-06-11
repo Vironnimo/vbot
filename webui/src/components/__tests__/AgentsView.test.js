@@ -820,7 +820,7 @@ describe('AgentsView', () => {
     getButton('New').click();
     flushSync();
 
-    const modal = getDialog('Create Agent');
+    const modal = getDialog('Create agent');
     expect(modal.textContent).toContain('Agent ID');
     expect(modal.textContent).toContain('Name');
     expect(modal.textContent).toContain('Model');
@@ -939,10 +939,10 @@ describe('AgentsView', () => {
     await Promise.resolve();
     flushSync();
 
-    const modal = getDialog('Create Agent');
+    const modal = getDialog('Create agent');
     expect(modal.textContent).toContain('Create agent');
     expect(document.body.textContent).toContain('id: alpha');
-    expect(document.body.textContent).toContain('Delete Agent');
+    expect(document.body.textContent).toContain('Delete agent');
     expect(
       document.body.querySelector('button.agent-item.active'),
     ).toBeTruthy();
@@ -978,7 +978,7 @@ describe('AgentsView', () => {
     await Promise.resolve();
     flushSync();
 
-    const modal = getDialog('Create Agent');
+    const modal = getDialog('Create agent');
     expect(modal).toBeTruthy();
     getButton('Cancel').click();
     flushSync();
@@ -998,7 +998,7 @@ describe('AgentsView', () => {
     );
 
     expect(document.body.textContent).toContain('Save changes');
-    expect(document.body.textContent).toContain('Delete Agent');
+    expect(document.body.textContent).toContain('Delete agent');
     expect(textInputValue(0)).toBe('bravo');
     expect(textInputValue(1)).toBe('Bravo');
   });
