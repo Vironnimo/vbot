@@ -644,6 +644,7 @@ export const englishCatalog = Object.freeze({
 
   'debug.settings': 'Debug',
   'debug.enabled': 'Enable debug mode',
+  'debug.save': 'Save',
   'debug.traceLimit': 'Trace limit',
   'debug.localWarning':
     'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
