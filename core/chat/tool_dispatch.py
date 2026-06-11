@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.chat.events import _emit_tool_context_event, _timing_payload
 from core.chat.messages import ChatMessage, JsonObject, ToolCall
@@ -32,6 +32,10 @@ from core.tools import ToolCall as ScheduledToolCall
 from core.tools.availability import effective_agent_allowed_tools
 from core.tools.skill import load_skill_content
 from core.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from core.runtime.interfaces import RuntimeServices
+    from core.skills.skills import SkillRegistry
 
 _LOGGER = get_logger("chat")
 
@@ -220,7 +224,7 @@ class _EmittingToolRegistry(ToolRegistry):
 
 
 async def _dispatch_tool_calls(
-    runtime: Any,
+    runtime: RuntimeServices,
     agent: Any,
     tool_calls: list[ToolCall],
     session: ChatSession,
@@ -232,7 +236,7 @@ async def _dispatch_tool_calls(
     emitting_registry = _EmittingToolRegistry(
         runtime.tools,
         run,
-        getattr(runtime, "extensions", None),
+        runtime.extensions,
     )
     executor = ToolExecutor(emitting_registry)
     results = await executor.execute_many(
@@ -248,9 +252,9 @@ async def _dispatch_tool_calls(
             agent_id=run.agent_id,
             session_id=run.session_id,
             run_id=run.id,
-            workspace=_agent_workspace(agent, _runtime_data_root(runtime)),
-            app_root=_runtime_app_root(runtime),
-            data_root=_runtime_data_root(runtime),
+            workspace=_agent_workspace(agent, Path(runtime.storage.data_dir)),
+            app_root=Path(runtime.system_prompts.app_dir),
+            data_root=Path(runtime.storage.data_dir),
             allowed_tools=_runtime_allowed_tools(agent, runtime.tools),
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
             emit_hook=lambda event_type, payload: _emit_tool_context_event(
@@ -280,23 +284,16 @@ async def _dispatch_tool_calls(
 
 
 def _activate_triggered_skills(
-    runtime: Any, agent: Any, session: ChatSession, content: str
+    runtime: RuntimeServices, agent: Any, session: ChatSession, content: str
 ) -> None:
-    skill_registry = getattr(runtime, "skills", None)
-    if skill_registry is None:
-        return
-
     if not _triggered_skill_names(content):
         return
 
-    filter_allowed = getattr(skill_registry, "filter_allowed", None)
-    if not callable(filter_allowed):
-        return
-
+    skill_registry = runtime.skills
     allowed_skills = getattr(agent, "allowed_skills", None)
     if allowed_skills is None:
         allowed_skills = ["*"]
-    allowed_by_name = _allowed_loadable_skills(skill_registry, allowed_skills, filter_allowed)
+    allowed_by_name = _allowed_loadable_skills(skill_registry, allowed_skills)
     for skill_name in _triggered_skill_names(content):
         skill = allowed_by_name.get(skill_name)
         if skill is None:
@@ -412,54 +409,26 @@ def _validated_extension_tool_hook_result(
 
 
 def _allowed_loadable_skills(
-    skill_registry: Any,
+    skill_registry: SkillRegistry,
     allowed_skills: list[str],
-    filter_allowed: Any,
 ) -> dict[str, Any]:
-    list_all = getattr(skill_registry, "list_all", None)
-    is_allowed = getattr(skill_registry, "is_allowed", None)
-    if callable(list_all) and callable(is_allowed):
-        return {skill.name: skill for skill in list_all() if is_allowed(skill.name, allowed_skills)}
-    return {skill.name: skill for skill in filter_allowed(allowed_skills)}
+    return {
+        skill.name: skill
+        for skill in skill_registry.list_all()
+        if skill_registry.is_allowed(skill.name, allowed_skills)
+    }
 
 
 def _unavailable_skill_reason(
-    skill_registry: Any,
+    skill_registry: SkillRegistry,
     skill_name: str,
     allowed_skills: list[str],
 ) -> str | None:
-    availability_for = getattr(skill_registry, "availability_for", None)
-    if not callable(availability_for):
+    availability = skill_registry.availability_for(skill_name, allowed_skills)
+    if availability.state == "available":
         return None
-
-    availability = availability_for(skill_name, allowed_skills)
-    if getattr(availability, "state", "available") == "available":
-        return None
-    missing = list(getattr(availability, "missing", ()))
-    return "; ".join(missing) if missing else str(getattr(availability, "state", "unavailable"))
-
-
-def _runtime_data_root(runtime: Any) -> Path:
-    storage = getattr(runtime, "storage", None)
-    data_dir = getattr(storage, "data_dir", None)
-    if data_dir is not None:
-        return Path(data_dir)
-
-    chat_sessions = getattr(runtime, "chat_sessions", None)
-    session_data_dir = getattr(chat_sessions, "data_dir", None)
-    if session_data_dir is not None:
-        return Path(session_data_dir)
-
-    return Path.cwd()
-
-
-def _runtime_app_root(runtime: Any) -> Path:
-    system_prompts = getattr(runtime, "system_prompts", None)
-    app_root = getattr(system_prompts, "_app_dir", None)
-    if app_root is not None:
-        return Path(app_root)
-
-    return Path.cwd()
+    missing = list(availability.missing)
+    return "; ".join(missing) if missing else str(availability.state)
 
 
 def _runtime_allowed_tools(agent: Any, tool_registry: ToolRegistry) -> Sequence[str] | None:

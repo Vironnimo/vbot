@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -36,17 +37,6 @@ class AgentStoreStub:
         return SimpleNamespace(id=agent_id)
 
 
-def make_runtime(
-    tmp_path: Path,
-    *,
-    known_agent_ids: set[str] | None = None,
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        storage=SimpleNamespace(data_dir=tmp_path),
-        agents=AgentStoreStub(known_agent_ids=known_agent_ids),
-    )
-
-
 def make_service(
     tmp_path: Path,
     *,
@@ -56,7 +46,9 @@ def make_service(
     return ChannelService(
         cast(Any, SimpleNamespace()),
         cast(Any, SimpleNamespace()),
-        make_runtime(tmp_path, known_agent_ids=known_agent_ids),
+        agent_store=cast(Any, AgentStoreStub(known_agent_ids=known_agent_ids)),
+        data_root=tmp_path,
+        credential_resolver=lambda key: os.environ.get(key, ""),
         attachment_store=attachment_store,
         command_dispatcher=cast(Any, SimpleNamespace(dispatch=lambda *_args: NotACommand())),
     )

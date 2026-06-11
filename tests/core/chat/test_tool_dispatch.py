@@ -50,7 +50,7 @@ class _StubStorage:
 
 
 class _StubSystemPrompts:
-    _app_dir = Path.cwd()
+    app_dir = Path.cwd()
 
 
 def _build_session(tmp_path: Path, agent_id: str = "coder", session_id: str = "session-one") -> Any:
@@ -58,9 +58,7 @@ def _build_session(tmp_path: Path, agent_id: str = "coder", session_id: str = "s
     return manager.create(agent_id, session_id=session_id)
 
 
-def _build_runtime_and_agent(
-    tmp_path: Path, tools: ToolRegistry
-) -> tuple[_StubRuntime, _StubAgent]:
+def _build_runtime_and_agent(tmp_path: Path, tools: ToolRegistry) -> tuple[Any, _StubAgent]:
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
     agent = _StubAgent(id="coder", workspace=workspace, allowed_tools=["*"])

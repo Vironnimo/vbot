@@ -20,8 +20,6 @@ from core.chat.events import (
     _is_streaming_fallback_error,
     _maybe_persist_partial_thinking,
     _persist_run_error,
-    _runtime_extensions,
-    _runtime_run_manager,
     _timing_payload,
 )
 from core.chat.events import (
@@ -125,13 +123,14 @@ from core.runs import (
     Run,
     RunExecutor,
 )
-from core.sessions import ChatSession, ChatSessionManager
+from core.sessions import ChatSession
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
     from core.compaction import CompactionService, CompactionSettings
+    from core.runtime.interfaces import RuntimeServices
 
 _LOGGER = get_logger("chat")
 
@@ -143,7 +142,7 @@ class ChatLoop:
 
     def __init__(
         self,
-        runtime: Any,
+        runtime: RuntimeServices,
         *,
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
         streaming: bool = False,
@@ -158,6 +157,27 @@ class ChatLoop:
         self._attachment_resolver = attachment_resolver
         self._compaction_service = compaction_service
         self._nesting_depth = 0
+
+    def child_loop(self, *, nesting_depth: int) -> ChatLoop:
+        """Create a sub-agent child loop sharing this loop's wiring.
+
+        The child reuses the attachment resolver and compaction service so
+        child runs behave like normal live runs; only the nesting depth
+        differs.
+        """
+        child = ChatLoop(
+            self._runtime,
+            max_tool_iterations=self._max_tool_iterations,
+            streaming=self._streaming,
+            attachment_resolver=self._attachment_resolver,
+            compaction_service=self._compaction_service,
+        )
+        child._nesting_depth = nesting_depth
+        return child
+
+    def run_executor(self, content: str | list[ContentBlock]) -> RunExecutor:
+        """Return a run-manager executor that runs *content* through this loop."""
+        return lambda run: self._execute_run(run, content)
 
     async def send(
         self,
@@ -210,7 +230,7 @@ class ChatLoop:
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
         session = self._get_session(agent_id, session_id, create_missing=False)
-        manager = _runtime_run_manager(self._runtime)
+        manager = self._runtime.chat_run_manager
         return await manager.enqueue(
             agent_id=agent_id,
             session_id=session.id,
@@ -251,7 +271,7 @@ class ChatLoop:
         messages = session.load()
         if not any(message.role == "user" for message in messages):
             raise ChatSessionError("no user message in session to retry")
-        manager = _runtime_run_manager(self._runtime)
+        manager = self._runtime.chat_run_manager
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
@@ -269,7 +289,7 @@ class ChatLoop:
         if self._compaction_service is None:
             return "Compaction is not available."
 
-        manager = _runtime_run_manager(self._runtime)
+        manager = self._runtime.chat_run_manager
         if manager.active_run(agent_id=agent_id, session_id=session_id) is not None:
             return "Cannot compact while a run is active for this session."
 
@@ -323,7 +343,7 @@ class ChatLoop:
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
         session = self._get_session(agent_id, session_id, create_missing=create_missing)
-        manager = _runtime_run_manager(self._runtime)
+        manager = self._runtime.chat_run_manager
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
@@ -350,10 +370,9 @@ class ChatLoop:
         _ensure_provider_exists(self._runtime.providers, provider_id)
         adapter = self._runtime.get_adapter(provider_id, connection_id)
         run.add_cancel_callback(lambda: _close_adapter(adapter))
-        process_manager = getattr(self._runtime, "process_manager", None)
-        if process_manager is not None:
-            run.add_cancel_callback(lambda: process_manager.cancel_scope(run.id))
-        session = cast(ChatSessionManager, self._runtime.chat_sessions).get(
+        process_manager = self._runtime.process_manager
+        run.add_cancel_callback(lambda: process_manager.cancel_scope(run.id))
+        session = self._runtime.chat_sessions.get(
             run.agent_id,
             run.session_id,
         )
@@ -362,7 +381,7 @@ class ChatLoop:
         _run_succeeded = True
 
         try:
-            extension_registry = _runtime_extensions(self._runtime)
+            extension_registry = self._runtime.extensions
             if extension_registry is not None:
                 extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
                 for extension_name, handler in extension_registry._handlers.get(
@@ -404,7 +423,7 @@ class ChatLoop:
             messages = await self._build_request_messages(agent, session)
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
-            extension_registry = _runtime_extensions(self._runtime)
+            extension_registry = self._runtime.extensions
             if extension_registry is not None:
                 extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
                 prompt_appends: list[str] = []
@@ -535,7 +554,7 @@ class ChatLoop:
                 )
             )
 
-            extension_registry = _runtime_extensions(self._runtime)
+            extension_registry = self._runtime.extensions
             if extension_registry is not None:
                 extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
                 for extension_name, handler in extension_registry._handlers.get(
@@ -567,7 +586,7 @@ class ChatLoop:
         *,
         create_missing: bool,
     ) -> ChatSession:
-        session_manager = cast(ChatSessionManager, self._runtime.chat_sessions)
+        session_manager = self._runtime.chat_sessions
         if session_id is None:
             if not create_missing:
                 raise ChatSessionError("session id is required")
@@ -664,7 +683,7 @@ class ChatLoop:
             if pending_notes:
                 messages.append(_notes_to_synthetic_user_message(pending_notes))
             _sync_skill_context_messages(messages, session)
-            extension_registry = _runtime_extensions(self._runtime)
+            extension_registry = self._runtime.extensions
             messages_for_request = [dict(message) for message in messages]
             if extension_registry is not None:
                 extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
@@ -783,10 +802,6 @@ class ChatLoop:
         if self._compaction_service is None:
             return messages
 
-        storage = getattr(self._runtime, "storage", None)
-        if storage is None:
-            return messages
-
         settings = self._load_compaction_settings()
         if not settings.auto:
             return messages
@@ -825,7 +840,7 @@ class ChatLoop:
                 agent=agent,
                 summary_adapter=summary_adapter,
                 summary_model_id=summary_model_id,
-                storage=storage,
+                storage=self._runtime.storage,
                 settings=settings,
             )
         except Exception:
@@ -856,10 +871,6 @@ class ChatLoop:
 
     def _resolve_context_window(self, agent: Any) -> int | None:
         """Resolve context window for the active agent model from model registry."""
-        models = getattr(self._runtime, "models", None)
-        if models is None:
-            return None
-
         bare_model = parse_bare_model(agent.model)
         if "/" not in bare_model:
             return None
@@ -869,7 +880,7 @@ class ChatLoop:
             return None
 
         try:
-            model_entry = models.get(provider_id, resolved_model_id)
+            model_entry = self._runtime.models.get(provider_id, resolved_model_id)
         except (KeyError, AttributeError):
             return None
 

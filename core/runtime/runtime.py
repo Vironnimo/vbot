@@ -305,7 +305,9 @@ class Runtime:
         self._channel_service = ChannelService(
             self._trigger_service,
             self._chat_sessions,
-            self,
+            agent_store=self._agents,
+            data_root=self._storage.data_dir,
+            credential_resolver=self.resolve_environment_credential,
             attachment_store=self._attachment_store,
             command_dispatcher=self._command_dispatcher,
         )

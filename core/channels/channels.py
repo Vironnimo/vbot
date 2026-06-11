@@ -10,7 +10,7 @@ import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from core.attachments import AttachmentStore
@@ -20,6 +20,7 @@ from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.agents.agents import AgentStore
     from core.automation.automation import TriggerService
     from core.chat.commands import CommandDispatcher
     from core.sessions import ChatSessionManager
@@ -233,17 +234,20 @@ class ChannelService:
         self,
         trigger_service: TriggerService,
         chat_sessions: ChatSessionManager,
-        runtime: object,
-        attachment_store: AttachmentStore | None = None,
         *,
+        agent_store: AgentStore,
+        data_root: str | Path,
+        credential_resolver: Callable[[str], str],
+        attachment_store: AttachmentStore | None = None,
         command_dispatcher: CommandDispatcher,
     ) -> None:
         self._trigger_service = trigger_service
         self._chat_sessions = chat_sessions
-        self._runtime = runtime
+        self._agent_store = agent_store
+        self._credential_resolver = credential_resolver
         self._attachment_store = attachment_store
         self._command_dispatcher = command_dispatcher
-        self._storage = ChannelStorage(_resolve_runtime_data_root(runtime))
+        self._storage = ChannelStorage(Path(data_root))
         self._adapters: dict[str, ChannelAdapter] = {}
         self._adapter_tasks: dict[str, asyncio.Task[None]] = {}
         self._adapter_stop_tasks: dict[str, asyncio.Task[None]] = {}
@@ -576,7 +580,7 @@ class ChannelService:
                 config,
                 self._trigger_service,
                 self._chat_sessions,
-                self._runtime,
+                self._credential_resolver,
                 attachment_store=self._attachment_store,
                 command_dispatcher=self._command_dispatcher,
             )
@@ -591,18 +595,8 @@ class ChannelService:
         self._create_adapter(config)
 
     def _validate_agent_exists(self, agent_id: str) -> None:
-        runtime_obj = cast(Any, self._runtime)
-        agents = getattr(runtime_obj, "_agents", None)
-        if agents is None:
-            try:
-                agents = runtime_obj.agents
-            except Exception:
-                agents = None
-
-        if agents is None:
-            raise ChannelConfigError("Runtime agent store is unavailable")
         try:
-            agents.get(agent_id)
+            self._agent_store.get(agent_id)
         except Exception as error:
             raise ChannelConfigError(f"Unknown agent_id: {agent_id}") from error
 
@@ -887,27 +881,6 @@ def _normalize_channel_id(channel_id: str) -> str:
     if not isinstance(channel_id, str) or not channel_id.strip():
         raise ChannelConfigError("channel_id must be a non-empty string")
     return channel_id.strip()
-
-
-def _resolve_runtime_data_root(runtime: object) -> Path:
-    try:
-        runtime_obj = cast(Any, runtime)
-        storage = runtime_obj.storage
-    except Exception:
-        storage = None
-    data_dir = getattr(storage, "data_dir", None)
-    if data_dir is not None:
-        return Path(data_dir).expanduser()
-
-    runtime_data_dir = getattr(runtime, "data_dir", None)
-    if runtime_data_dir is not None:
-        return Path(runtime_data_dir).expanduser()
-
-    runtime_private_data_dir = getattr(runtime, "_data_dir", None)
-    if runtime_private_data_dir is not None:
-        return Path(runtime_private_data_dir).expanduser()
-
-    raise ChannelConfigError("Runtime does not expose a data directory")
 
 
 def _get_running_loop_or_none() -> asyncio.AbstractEventLoop | None:

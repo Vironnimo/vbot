@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatError
+
+if TYPE_CHECKING:
+    from core.providers.providers import ProviderRegistry
+    from core.runtime.interfaces import RuntimeServices
 
 
 def parse_bare_model(model: str) -> str:
@@ -39,7 +43,7 @@ def _split_agent_model(model: str) -> tuple[str, str]:
     return provider_id, model_id
 
 
-def _model_input_modalities(runtime: Any, agent: Any) -> frozenset[str]:
+def _model_input_modalities(runtime: RuntimeServices, agent: Any) -> frozenset[str]:
     """Return the agent model's input modalities, empty when the model is unknown."""
     try:
         provider_id, model_id = _split_agent_model(agent.model)
@@ -52,7 +56,7 @@ def _model_input_modalities(runtime: Any, agent: Any) -> frozenset[str]:
     return frozenset(str(modality) for modality in modalities)
 
 
-def _resolve_agent_connection(runtime: Any, agent: Any) -> tuple[str, str]:
+def _resolve_agent_connection(runtime: RuntimeServices, agent: Any) -> tuple[str, str]:
     model_provider_id, _model_id, connection_suffix = parse_model_with_connection(agent.model)
     if connection_suffix:
         return model_provider_id, f"{model_provider_id}:{connection_suffix}"
@@ -60,7 +64,7 @@ def _resolve_agent_connection(runtime: Any, agent: Any) -> tuple[str, str]:
     return model_provider_id, _first_usable_connection_id(runtime, model_provider_id)
 
 
-def _resolve_fallback(runtime: Any, agent: Any) -> tuple[str, str, str] | None:
+def _resolve_fallback(runtime: RuntimeServices, agent: Any) -> tuple[str, str, str] | None:
     fallback_model = getattr(agent, "fallback_model", "")
     if not fallback_model:
         return None
@@ -87,16 +91,13 @@ def _resolve_fallback(runtime: Any, agent: Any) -> tuple[str, str, str] | None:
     return fallback_model, fallback_provider_id, fallback_connection_id
 
 
-def _first_usable_connection_id(runtime: Any, provider_id: str) -> str:
+def _first_usable_connection_id(runtime: RuntimeServices, provider_id: str) -> str:
     try:
         provider_config = runtime.providers.get(provider_id)
     except KeyError as exc:
         raise ChatError(f"provider not found: {provider_id}") from exc
 
-    credential_resolver = getattr(runtime, "provider_credentials", None)
-    if credential_resolver is None:
-        raise ChatError(f"agent has no connection set for provider: {provider_id}")
-
+    credential_resolver = runtime.provider_credentials
     for connection in provider_config.connections:
         connection_id = f"{provider_id}:{connection.id}"
         if credential_resolver.has_credentials(provider_id, connection_id):
@@ -105,7 +106,7 @@ def _first_usable_connection_id(runtime: Any, provider_id: str) -> str:
     raise ChatError(f"provider has no usable connections: {provider_id}")
 
 
-def _ensure_provider_exists(providers: Any, provider_id: str) -> None:
+def _ensure_provider_exists(providers: ProviderRegistry, provider_id: str) -> None:
     try:
         providers.get(provider_id)
     except KeyError as exc:
