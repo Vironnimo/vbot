@@ -158,6 +158,7 @@ export const englishCatalog = Object.freeze({
   'chat.pastSessionHint':
     'This is not the agent’s current session. Messages sent here continue this past session.',
   'chat.runError': 'Run failed.',
+  'chat.errorDetails': 'Details',
   'chat.compacted': 'Context compacted',
 
   'sessions.title': 'Sessions',

@@ -1458,6 +1458,43 @@ textarea::placeholder {
   line-height: 1.55;
 }
 
+.error-details {
+  max-width: min(720px, 100%);
+  margin-top: 6px;
+}
+
+.error-details-summary {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-lo);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.error-details-summary:hover {
+  color: var(--text-med);
+}
+
+.error-details-body {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-2);
+  border-radius: var(--r-sm);
+  color: var(--text-med);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .reasoning-block {
   align-self: flex-start;
 }
