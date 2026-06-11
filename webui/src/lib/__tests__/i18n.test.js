@@ -151,7 +151,7 @@ describe('i18n t()', () => {
       'agents.detail.model',
       'agents.detail.systemPrompt',
       'agents.detail.access',
-      'agents.detail.session',
+      'agents.detail.metadata',
       'agents.detail.idValue',
       'agents.form.modelPlaceholder',
       'agents.form.modelUnavailableOption',
