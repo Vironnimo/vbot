@@ -21,7 +21,7 @@ PROCESS_BUFFER_CAP_BYTES = 500 * 1024
 FINISHED_SESSION_TTL = timedelta(minutes=30)
 SWEEP_INTERVAL_SECONDS = 60.0
 INPUT_IDLE_SECONDS = 15.0
-SUBMIT_BYTES = b"\r\n"
+SUBMIT_BYTES = b"\r\n" if os.name == "nt" else b"\n"
 HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 
 ProcessStatus = Literal["running", "completed", "failed", "killed"]
@@ -295,7 +295,7 @@ class ProcessManager:
             await self._close_stdin(session)
 
     async def submit(self, session_id: str, agent_id: str) -> None:
-        """Submit the current stdin line with CRLF."""
+        """Submit the current stdin line with the platform line ending."""
         session = self._session_for_agent(session_id, agent_id)
         stdin = session.proc.stdin
         if stdin is None or not session.stdin_open:
