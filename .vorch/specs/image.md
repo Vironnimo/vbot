@@ -18,6 +18,8 @@ Provider-neutral image generation execution and artifact storage for the configu
 
 ## Provider Wire Behavior
 
+`ProviderImageClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy — see `providers.md`); this module owns only the image payload shapes and response parsing.
+
 OpenRouter uses the selected provider connection's base URL (or provider base URL), connection auth header, provider `extra_headers`, a 120-second HTTP timeout, and `retry_async()` around retryable provider/network errors. The request is `POST /chat/completions` with `model`, one user text message, `modalities: ["image"]`, and `image_config` built from the task-model options. Only known `image_config` keys present in the options dict are forwarded — absent keys are never invented. Empty placeholder values (`None`, `""`, `[]`, `{}`) are treated as unset and dropped, because the option schema injects empty defaults for optional text/json fields (e.g. `background_hex_color: ""`, empty `font_inputs`) that the provider would otherwise reject; numeric `0`/`0.0` and `False` are real values and are kept. The same empty-placeholder omission applies to the OpenAI `/v1/images/generations` keys.
 
 Universal image_config keys forwarded: `aspect_ratio`, `image_size`. Top-level `seed` is sent separately (not under `image_config`) when present in options and the model's `supported_parameters` includes `"seed"`.
@@ -55,5 +57,6 @@ Artifact ids are `uuid4().hex`. The filename extension is inferred from the resu
 - `image_generation` targets are discovered from model capabilities where `output_modalities` includes `image`; do not hard-code image models in `core/image/`.
 - Provider/image options belong in `core/model_tasks/options.py`; the agent-facing `image_generation` tool intentionally accepts only `prompt`.
 - New provider execution belongs in `ProviderImageClient` and should keep returning normalized `ImageGenerationResult`; do not route image generation through chat adapters or attachment storage.
-- Debug trace capture is not wired through `ProviderImageClient`; it constructs a plain `httpx.AsyncClient` rather than `core.providers._http_shared.build_async_client()`.
+- Debug trace capture is not wired through `ProviderImageClient`; the shared `ProviderTaskClient.post_and_parse` constructs a plain `httpx.AsyncClient` rather than `core.providers._http_shared.build_async_client()` (deliberate).
+- `ImageError` derives from the shared `TaskError` base in `core/utils/errors.py`; the HTTP mappings above are unchanged by that.
 - `generate_artifacts()` writes blob then sidecar without a rollback transaction. Treat partially written artifacts as possible if the process dies mid-write; `get_artifact()` already fails closed when metadata or blob is missing/unreadable.

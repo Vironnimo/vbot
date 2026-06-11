@@ -10,10 +10,11 @@ from typing import Any
 from uuid import uuid4
 
 from core.model_tasks import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH, TaskModelError
+from core.providers.task_client import TaskClientRuntime
 from core.speech.local import LocalSpeechError, LocalSpeechExecutor
 from core.speech.providers import ProviderSpeechClient
 from core.speech.types import SpeechSynthesisResult, SpeechTranscriptionResult
-from core.utils.errors import VBotError
+from core.utils.errors import TaskError
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -21,7 +22,7 @@ _LOGGER = get_logger("speech")
 _ARTIFACT_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
 
-class SpeechError(VBotError):
+class SpeechError(TaskError):
     """Base class for expected speech errors."""
 
 
@@ -68,7 +69,7 @@ class SpeechService:
     def __init__(
         self,
         model_tasks: Any,
-        runtime: Any,
+        runtime: TaskClientRuntime,
         data_dir: str | Path,
         *,
         local_executor: LocalSpeechExecutor | None = None,

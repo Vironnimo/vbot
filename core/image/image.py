@@ -11,7 +11,8 @@ from uuid import uuid4
 from core.image.providers import ProviderImageClient
 from core.image.types import ImageArtifact, ImageGenerationResult, JsonObject
 from core.model_tasks import TASK_IMAGE_GENERATION, TaskModelError
-from core.utils.errors import VBotError
+from core.providers.task_client import TaskClientRuntime
+from core.utils.errors import TaskError
 from core.utils.logging import get_logger
 
 JsonObject = JsonObject
@@ -19,7 +20,7 @@ _LOGGER = get_logger("image")
 _ARTIFACT_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
 
-class ImageError(VBotError):
+class ImageError(TaskError):
     """Base class for expected image generation errors."""
 
 
@@ -41,7 +42,7 @@ class ImageService:
     def __init__(
         self,
         model_tasks: Any,
-        runtime: Any,
+        runtime: TaskClientRuntime,
         data_dir: str | Path,
     ) -> None:
         self._model_tasks = model_tasks
