@@ -57,6 +57,13 @@
   } from '$lib/connectionState.js';
   import { rpc, debugStatus } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import {
+    createNavigationHistoryState,
+    isNavigationHistoryState,
+    locationHashForView,
+    sameSessionOverride,
+    viewIdFromLocationHash,
+  } from '$lib/navigationHistory.js';
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
   import {
     isDesktopAccessor,
@@ -95,14 +102,27 @@
     }
   };
 
-  let activeViewId = $state(navigationItems[0].id);
+  const knownViewIds = navigationItems.map((item) => item.id);
+
+  const initialViewId = () => {
+    try {
+      return (
+        viewIdFromLocationHash(window.location.hash, knownViewIds) ||
+        navigationItems[0].id
+      );
+    } catch {
+      return navigationItems[0].id;
+    }
+  };
+
+  let activeViewId = $state(initialViewId());
   let debugEnabled = $state(false);
   let agents = $state([]);
   let selectedAgentId = $state(readStoredSelectedAgentId());
   let agentsRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
   let toastState = $state(createToastState());
-  let pendingSubAgentNavigation = $state(null);
+  let pendingSessionNavigation = $state(null);
   let providerAuthEvent = $state(null);
   let runServerEvents = $state([]);
   // Holds the most recent `/ws` `connection_ready` hello frame (epoch,
@@ -115,7 +135,12 @@
   let wakewordStatus = $state({ enabled: false, state: 'off' });
   let settingsPanelTarget = $state('');
   let settingsPanelTargetRequestId = $state(0);
-  let subAgentNavigationRequestId = 0;
+  let sessionNavigationRequestId = 0;
+  // Mirror of ChatView's accessor-local session override (sub-agent session or
+  // drawer selection), kept so history entries can encode it and history-driven
+  // restores can be distinguished from new user navigation. Only read inside
+  // handlers — no reactivity needed.
+  let chatSessionOverride = null;
   let cleanupWakewordPoll = null;
   const toastDismissTimers = new SvelteMap();
 
@@ -131,8 +156,83 @@
     }
   });
 
+  const pushNavigationState = () => {
+    try {
+      history.pushState(
+        createNavigationHistoryState(activeViewId, chatSessionOverride),
+        '',
+        locationHashForView(activeViewId),
+      );
+    } catch {
+      // History API unavailable (non-browser environment)
+    }
+  };
+
   const selectView = (viewId) => {
+    if (viewId === activeViewId) {
+      return;
+    }
+    if (activeViewId === 'chat') {
+      // ChatView unmounts and loses its local session override with it; a
+      // stale pending navigation must not re-apply on the next chat mount.
+      chatSessionOverride = null;
+      pendingSessionNavigation = null;
+    }
     activeViewId = viewId;
+    pushNavigationState();
+  };
+
+  // ChatView reports user-initiated session-override changes (drawer
+  // selection, return-to-current, override cleared by an agent switch) so they
+  // become history entries. History-driven restores arrive back through
+  // `pendingSessionNavigation` and are reported nowhere, so they cannot
+  // re-push; this handler also dedups against the mirror for safety.
+  const handleChatSessionNavigation = (override) => {
+    const next = override ?? null;
+    if (sameSessionOverride(chatSessionOverride, next)) {
+      return;
+    }
+    chatSessionOverride = next;
+    pushNavigationState();
+  };
+
+  const applyNavigationState = (navState) => {
+    let viewId = knownViewIds.includes(navState.view)
+      ? navState.view
+      : navigationItems[0].id;
+    if (viewId === 'debug' && !debugEnabled) {
+      viewId = 'settings';
+    }
+    activeViewId = viewId;
+
+    if (viewId !== 'chat') {
+      chatSessionOverride = null;
+      pendingSessionNavigation = null;
+      return;
+    }
+
+    const target = navState.session ?? null;
+    if (sameSessionOverride(chatSessionOverride, target)) {
+      return;
+    }
+    chatSessionOverride = target;
+    sessionNavigationRequestId += 1;
+    pendingSessionNavigation = target
+      ? { ...target, requestId: sessionNavigationRequestId }
+      : { returnToCurrent: true, requestId: sessionNavigationRequestId };
+  };
+
+  const handlePopState = (event) => {
+    if (isNavigationHistoryState(event.state)) {
+      applyNavigationState(event.state);
+      return;
+    }
+    // Entry without our state (e.g. a manually edited hash): derive the view
+    // from the hash and treat the chat surface as override-free.
+    const viewId =
+      viewIdFromLocationHash(window.location.hash, knownViewIds) ||
+      navigationItems[0].id;
+    applyNavigationState(createNavigationHistoryState(viewId, null));
   };
 
   const syncAgents = (nextAgents = []) => {
@@ -169,11 +269,13 @@
     }
 
     selectView('chat');
-    subAgentNavigationRequestId += 1;
-    pendingSubAgentNavigation = {
+    handleChatSessionNavigation({ agentId, sessionId, subAgent: true });
+    sessionNavigationRequestId += 1;
+    pendingSessionNavigation = {
       agentId,
       sessionId,
-      requestId: subAgentNavigationRequestId,
+      subAgent: true,
+      requestId: sessionNavigationRequestId,
     };
   };
 
@@ -291,6 +393,19 @@
   onMount(() => {
     let cancelled = false;
 
+    try {
+      // Seed the current history entry so Back can always restore it; later
+      // navigation pushes new entries on top.
+      history.replaceState(
+        createNavigationHistoryState(activeViewId, null),
+        '',
+        locationHashForView(activeViewId),
+      );
+    } catch {
+      // History API unavailable (non-browser environment)
+    }
+    window.addEventListener('popstate', handlePopState);
+
     connect(connectionState, { onEvent: handleServerEvent });
 
     // Detect desktop capabilities and start wakeword status polling
@@ -329,7 +444,9 @@
     debugStatus()
       .then((result) => {
         if (!cancelled) {
-          debugEnabled = result?.enabled ?? false;
+          // Also leaves the Debug view when the initial hash pointed at it
+          // while Debug Mode is disabled.
+          handleDebugEnabledChange(result?.enabled ?? false);
         }
       })
       .catch(() => {
@@ -338,6 +455,7 @@
 
     return () => {
       cancelled = true;
+      window.removeEventListener('popstate', handlePopState);
       disconnect(connectionState);
       clearToastDismissTimers();
       if (cleanupWakewordPoll) {
@@ -362,7 +480,8 @@
       onAgentsChanged={syncAgents}
       onAgentSelected={selectAgent}
       {navigateToSubAgent}
-      {pendingSubAgentNavigation}
+      {pendingSessionNavigation}
+      onSessionNavigation={handleChatSessionNavigation}
       {runServerEvents}
       {connectionSnapshot}
       {wakewordStatus}

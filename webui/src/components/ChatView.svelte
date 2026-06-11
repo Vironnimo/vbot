@@ -55,7 +55,8 @@
     onAgentsChanged,
     onAgentSelected,
     navigateToSubAgent = () => {},
-    pendingSubAgentNavigation = null,
+    pendingSessionNavigation = null,
+    onSessionNavigation = () => {},
     runServerEvent = null,
     runServerEvents = [],
     connectionSnapshot = null,
@@ -80,7 +81,7 @@
   let submittedTurnScrollRunId = $state('');
   let subAgentRunStatuses = $state({});
   let subAgentResults = $state({});
-  let handledSubAgentNavigationKey = '';
+  let handledSessionNavigationKey = '';
   let handledConnectionSnapshot = null;
   const ACTION_INFO_TIMEOUT_MS = 4000;
   const HISTORY_INITIAL_LIMIT = 100;
@@ -157,18 +158,25 @@
     }
   });
 
+  // App-driven session navigation: sub-agent link clicks routed through
+  // `navigateToSubAgent` and browser-history restores. Both arrive here so
+  // they never echo back through `onSessionNavigation` as a new history push.
   $effect(() => {
-    const agentId = pendingSubAgentNavigation?.agentId;
-    const sessionId = pendingSubAgentNavigation?.sessionId;
-    const requestId = pendingSubAgentNavigation?.requestId ?? '';
-    const navigationKey =
-      agentId && sessionId ? `${agentId}::${sessionId}::${requestId}` : '';
-    if (!navigationKey || navigationKey === handledSubAgentNavigationKey) {
+    const navigation = pendingSessionNavigation;
+    const requestId = navigation?.requestId ?? '';
+    const navigationKey = !navigation
+      ? ''
+      : navigation.returnToCurrent
+        ? `::return::${requestId}`
+        : navigation.agentId && navigation.sessionId
+          ? `${navigation.agentId}::${navigation.sessionId}::${navigation.subAgent === true}::${requestId}`
+          : '';
+    if (!navigationKey || navigationKey === handledSessionNavigationKey) {
       return;
     }
 
-    handledSubAgentNavigationKey = navigationKey;
-    handleSubAgentNavigation(agentId, sessionId);
+    handledSessionNavigationKey = navigationKey;
+    applySessionNavigation(navigation);
   });
 
   // Apply each distinct `/ws` `connection_ready` hello frame to the run stream
@@ -176,7 +184,7 @@
   // sub-agent statuses (see `chatRunStream.applyConnectionSnapshot`); the
   // local `handledConnectionSnapshot` reference is the dedup guard so a re-run
   // of this effect for the same snapshot object cannot re-trigger side effects
-  // (same pattern as `pendingSubAgentNavigation` above).
+  // (same pattern as `pendingSessionNavigation` above).
   $effect(() => {
     if (
       !connectionSnapshot ||
@@ -634,6 +642,7 @@
     if (agentId === chatState.selectedAgentId) {
       if (sessionOverrideActive) {
         clearSessionOverride();
+        reportSessionNavigation();
         await loadCurrentHistory();
       }
       return;
@@ -641,6 +650,7 @@
     clearSessionOverride();
     selectAgent(chatState, agentId);
     onAgentSelected?.(agentId);
+    reportSessionNavigation();
     await loadCurrentHistory();
   };
 
@@ -653,6 +663,32 @@
     viewingSessionId = sessionId;
     viewingSubAgentSession = true;
     await loadHistoryForSession(agentId, sessionId);
+  };
+
+  // Apply an App-driven navigation request: a sub-agent link click or a
+  // browser-history restore. Restores re-enter past overrides (or return to
+  // the current session) without creating new history entries.
+  const applySessionNavigation = async (navigation) => {
+    if (navigation.returnToCurrent) {
+      if (sessionOverrideActive) {
+        clearSessionOverride();
+        await loadCurrentHistory();
+      }
+      return;
+    }
+
+    if (navigation.subAgent === true) {
+      await handleSubAgentNavigation(navigation.agentId, navigation.sessionId);
+      return;
+    }
+
+    viewingSessionAgentId =
+      navigation.agentId === chatState.selectedAgentId
+        ? ''
+        : navigation.agentId;
+    viewingSubAgentSession = false;
+    viewingSessionId = navigation.sessionId;
+    await loadHistoryForSession(navigation.agentId, navigation.sessionId);
   };
 
   const handleSessionSelected = async (sessionId) => {
@@ -669,6 +705,7 @@
       isSelectedAgent && normalizedSessionId === agent.current_session_id
         ? ''
         : normalizedSessionId;
+    reportSessionNavigation();
     await loadHistoryForSession(agent.id, normalizedSessionId);
   };
 
@@ -678,12 +715,28 @@
     viewingSubAgentSession = false;
   };
 
+  // Report the (possibly cleared) session override to App so it becomes a
+  // browser-history entry. Only user-initiated navigation calls this —
+  // App-driven navigation through `pendingSessionNavigation` must not.
+  const reportSessionNavigation = () => {
+    onSessionNavigation?.(
+      viewingSessionId
+        ? {
+            agentId: viewingSessionAgentId || chatState.selectedAgentId,
+            sessionId: viewingSessionId,
+            subAgent: viewingSubAgentSession,
+          }
+        : null,
+    );
+  };
+
   const handleReturnToCurrentSession = async () => {
     if (!sessionOverrideActive || loadingHistory) {
       return;
     }
 
     clearSessionOverride();
+    reportSessionNavigation();
     await loadCurrentHistory();
   };
 
@@ -723,6 +776,7 @@
     setAgents(chatState, updatedAgents);
     onAgentsChanged?.(updatedAgents);
     onAgentSelected?.(agentId);
+    reportSessionNavigation();
     ensureSessionState(chatState, agentId, normalizedSessionId);
     await loadHistoryForSession(agentId, normalizedSessionId);
   };
