@@ -1242,9 +1242,10 @@ describe('ChatView', () => {
       props: {
         sharedAgents: [createAgent()],
         sharedSelectedAgentId: 'alpha',
-        pendingSubAgentNavigation: {
+        pendingSessionNavigation: {
           agentId: 'alpha',
           sessionId: 'sub-session-1',
+          subAgent: true,
         },
       },
     });
@@ -1358,9 +1359,10 @@ describe('ChatView', () => {
       props: {
         sharedAgents: [createAgent()],
         sharedSelectedAgentId: 'alpha',
-        pendingSubAgentNavigation: {
+        pendingSessionNavigation: {
           agentId: 'alpha',
           sessionId: 'sub-session-1',
+          subAgent: true,
         },
       },
     });
@@ -1505,9 +1507,10 @@ describe('ChatView', () => {
       props: {
         sharedAgents: [createAgent()],
         sharedSelectedAgentId: 'alpha',
-        pendingSubAgentNavigation: {
+        pendingSessionNavigation: {
           agentId: 'alpha',
           sessionId: 'sub-session-1',
+          subAgent: true,
         },
       },
     });
@@ -1587,9 +1590,10 @@ describe('ChatView', () => {
       props: {
         sharedAgents: agents,
         sharedSelectedAgentId: 'alpha',
-        pendingSubAgentNavigation: {
+        pendingSessionNavigation: {
           agentId: 'beta',
           sessionId: 'beta-sub-session',
+          subAgent: true,
         },
       },
     });
@@ -1649,9 +1653,10 @@ describe('ChatView', () => {
       props: {
         sharedAgents: [createAgent()],
         sharedSelectedAgentId: 'alpha',
-        pendingSubAgentNavigation: {
+        pendingSessionNavigation: {
           agentId: 'alpha',
           sessionId: 'sub-session-1',
+          subAgent: true,
         },
       },
     });
@@ -1704,9 +1709,10 @@ describe('ChatView', () => {
       props: {
         sharedAgents: [createAgent()],
         sharedSelectedAgentId: 'alpha',
-        pendingSubAgentNavigation: {
+        pendingSessionNavigation: {
           agentId: 'alpha',
           sessionId: 'sub-session-1',
+          subAgent: true,
         },
       },
     });
@@ -1789,9 +1795,10 @@ describe('ChatView', () => {
       props: {
         sharedAgents: agents,
         sharedSelectedAgentId: 'alpha',
-        pendingSubAgentNavigation: {
+        pendingSessionNavigation: {
           agentId: 'beta',
           sessionId: 'beta-sub-session',
+          subAgent: true,
         },
       },
     });
