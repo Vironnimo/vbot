@@ -17,6 +17,7 @@ vi.mock('svelte', async () => {
 });
 
 const { default: ChatTimeline } = await import('../ChatTimeline.svelte');
+const { reactiveProps } = await import('./reactiveProps.svelte.js');
 
 describe('ChatTimeline', () => {
   let mountedComponent;
@@ -3933,7 +3934,146 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.subagent-tool-event')).toBeNull();
     expect(document.body.textContent).not.toContain('PREPARING TOOL');
   });
+
+  it('restores the saved scroll position when returning to a previously viewed session', async () => {
+    const { parentSession, childSession } = scrollMemorySessions();
+    const props = reactiveProps({
+      sessionState: parentSession,
+      agentName: 'Alpha',
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const { setScrollTop, currentScrollTop } = mockScrollGeometry(
+      document.querySelector('.messages'),
+    );
+    // Let the mount-time restore settle before simulating a user scroll.
+    await waitForCondition(() => true);
+
+    setScrollTop(700);
+
+    props.sessionState = childSession;
+    flushSync();
+    // First view of the child session starts at the bottom.
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    props.sessionState = parentSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 700);
+  });
+
+  it('returns to the bottom of a session the user left at the bottom', async () => {
+    const { parentSession, childSession } = scrollMemorySessions();
+    const props = reactiveProps({
+      sessionState: parentSession,
+      agentName: 'Alpha',
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const { setScrollTop, currentScrollTop } = mockScrollGeometry(
+      document.querySelector('.messages'),
+    );
+    await waitForCondition(() => true);
+
+    // Near the bottom (within the 56px stick-to-bottom threshold).
+    setScrollTop(1980);
+
+    props.sessionState = childSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+    setScrollTop(300);
+
+    props.sessionState = parentSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    // And the child session's mid-position survived the round trip too.
+    props.sessionState = childSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 300);
+  });
 });
+
+// Two sessions with distinct keys for the per-session scroll memory tests.
+function scrollMemorySessions() {
+  const chatState = createChatState();
+  const parentSession = ensureSessionState(
+    chatState,
+    'alpha',
+    'session-scroll-memory-parent',
+  );
+  parentSession.messages = [
+    {
+      id: 'parent-user-one',
+      role: 'user',
+      content: 'Parent question',
+      timestamp: '2026-05-10T09:00:00',
+    },
+    {
+      id: 'parent-assistant-one',
+      role: 'assistant',
+      content: 'Parent answer',
+      timestamp: '2026-05-10T09:01:00',
+    },
+  ];
+  const childSession = ensureSessionState(
+    chatState,
+    'subagent',
+    'session-scroll-memory-child',
+  );
+  childSession.messages = [
+    {
+      id: 'child-user-one',
+      role: 'user',
+      content: 'Child task',
+      timestamp: '2026-05-10T09:02:00',
+    },
+  ];
+  return { parentSession, childSession };
+}
+
+// jsdom has no layout: pin the container to a 2000px-tall content area in a
+// 500px viewport and route scrollTo through the same writable scrollTop.
+function mockScrollGeometry(container) {
+  let scrollTop = 0;
+  Object.defineProperty(container, 'scrollHeight', {
+    configurable: true,
+    get: () => 2000,
+  });
+  Object.defineProperty(container, 'offsetHeight', {
+    configurable: true,
+    get: () => 500,
+  });
+  Object.defineProperty(container, 'clientHeight', {
+    configurable: true,
+    get: () => 500,
+  });
+  Object.defineProperty(container, 'scrollTop', {
+    configurable: true,
+    get: () => scrollTop,
+    set: (value) => {
+      scrollTop = value;
+    },
+  });
+  container.scrollTo = (_x, y) => {
+    scrollTop = y;
+  };
+  return {
+    setScrollTop: (value) => {
+      scrollTop = value;
+    },
+    currentScrollTop: () => scrollTop,
+  };
+}
 
 async function waitForCondition(check, attempts = 20) {
   for (let index = 0; index < attempts; index += 1) {
