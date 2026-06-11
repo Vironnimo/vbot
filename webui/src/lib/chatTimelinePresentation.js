@@ -3,7 +3,7 @@ import {
   compactToolValue,
   toolNameHasHiddenArguments,
 } from '$lib/chatToolDetails.js';
-import { t } from '$lib/i18n.js';
+import { activeLocaleTag, t } from '$lib/i18n.js';
 
 const TOOL_DISPLAY_ARGS = {
   read: ['path'],
@@ -744,7 +744,7 @@ export const formatTime = (timestamp) => {
   if (Number.isNaN(date.getTime())) {
     return '';
   }
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(activeLocaleTag(), {
     hour: 'numeric',
     minute: '2-digit',
   }).format(date);
@@ -760,7 +760,7 @@ export const formatDate = (timestamp) => {
   if (Number.isNaN(date.getTime())) {
     return t('chat.today', 'Today');
   }
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(activeLocaleTag(), {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
