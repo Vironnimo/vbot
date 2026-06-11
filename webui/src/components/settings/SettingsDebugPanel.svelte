@@ -82,6 +82,23 @@
     );
   }
 
+  function handleManualDebugSettingsSave() {
+    if (saving) {
+      return;
+    }
+
+    if (saveDisabled) {
+      onToast({
+        title: t('common.alreadySaved', 'Already saved'),
+        variant: 'success',
+      });
+      return;
+    }
+
+    clearAutoSaveTimer();
+    void saveDebugSettings();
+  }
+
   async function saveDebugSettings() {
     if (saveDisabled) {
       return;
@@ -214,4 +231,14 @@
       'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
     )}
   </p>
+</div>
+
+<div class="s-footer">
+  <button
+    class="btn-primary s-save-button s-save-button--inline"
+    type="button"
+    onclick={handleManualDebugSettingsSave}
+  >
+    {saving ? t('common.saving', 'Saving…') : t('debug.save', 'Save')}
+  </button>
 </div>
