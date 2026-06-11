@@ -77,6 +77,12 @@
   // bookkeeping: the map is read and written inside the scroll pre-effect,
   // and a SvelteMap would register itself as a dependency of that effect.
   let renderedSessionScrollKey = null;
+  // While a mid-history restore is pinned, content turbulence after a session
+  // switch (history reload, late-rendering content, run events) re-asserts the
+  // restored position instead of letting stick-to-bottom steal it; only real
+  // user scroll input (wheel/touch/pointer/keys) or a new submitted turn
+  // releases the pin.
+  let pinnedRestoreTop = null;
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const sessionScrollPositions = new Map();
 
@@ -87,22 +93,34 @@
     ) {
       pendingSubmittedTurnScrollKey = submittedTurnScrollKey;
       pendingSubmittedTurnScrollRunId = submittedTurnScrollRunId;
+      pinnedRestoreTop = null;
       syncSubmittedTurnSpacerHeight();
     }
   });
 
-  // One pre-effect owns both scroll behaviors so they cannot fight: a
+  // One pre-effect owns all scroll behaviors so they cannot fight: a
   // session switch saves the outgoing session's position (in a pre-effect
   // the DOM still shows the old session) and restores the incoming one's
-  // after render, while content changes within the same session keep the
-  // stick-to-bottom behavior.
+  // after render; while a mid-history restore is pinned, content changes
+  // re-assert it; otherwise content changes within the same session keep
+  // the stick-to-bottom behavior.
   $effect.pre(() => {
     timelineSignature;
     const key = sessionScrollKey;
     if (key !== renderedSessionScrollKey) {
       saveSessionScrollPosition(renderedSessionScrollKey);
       renderedSessionScrollKey = key;
+      pinnedRestoreTop = null;
       tick().then(() => restoreSessionScrollPosition(key));
+      return;
+    }
+    if (pinnedRestoreTop !== null) {
+      const top = pinnedRestoreTop;
+      tick().then(() => {
+        if (pinnedRestoreTop === top && key === renderedSessionScrollKey) {
+          scrollContainer?.scrollTo?.(0, top);
+        }
+      });
       return;
     }
     const shouldAutoscroll =
@@ -155,13 +173,33 @@
 
   // Delegated listener (not a markup handler) because Markdown images are
   // rendered through {@html} and cannot carry their own Svelte click handler.
+  // The user-input listeners release a pinned restore position: only the
+  // user moving the view (not programmatic scrolls or browser re-clamps)
+  // hands scroll ownership back to the stick-to-bottom behavior.
   $effect(() => {
     const container = scrollContainer;
     if (!container) {
       return undefined;
     }
+    const releasePinnedRestore = () => {
+      pinnedRestoreTop = null;
+    };
     container.addEventListener('click', handleTimelineClick);
-    return () => container.removeEventListener('click', handleTimelineClick);
+    container.addEventListener('wheel', releasePinnedRestore, {
+      passive: true,
+    });
+    container.addEventListener('touchstart', releasePinnedRestore, {
+      passive: true,
+    });
+    container.addEventListener('pointerdown', releasePinnedRestore);
+    container.addEventListener('keydown', releasePinnedRestore);
+    return () => {
+      container.removeEventListener('click', handleTimelineClick);
+      container.removeEventListener('wheel', releasePinnedRestore);
+      container.removeEventListener('touchstart', releasePinnedRestore);
+      container.removeEventListener('pointerdown', releasePinnedRestore);
+      container.removeEventListener('keydown', releasePinnedRestore);
+    };
   });
 
   function isNearBottom(container) {
@@ -249,6 +287,7 @@
     }
     const saved = sessionScrollPositions.get(key);
     if (saved && !saved.atBottom) {
+      pinnedRestoreTop = saved.top;
       scrollContainer.scrollTo?.(0, saved.top);
       return;
     }
