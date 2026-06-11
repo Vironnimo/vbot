@@ -48,7 +48,7 @@ Each domain has a spec in `.vorch/specs/`, named after its module. A **domain** 
 | `.vorch/specs/sessions.md` | `core/sessions/` | Session persistence, metadata, current JSONL storage contract |
 | `.vorch/specs/recall.md` | `core/recall/` | Session recall backend interface, JSONL scan backend, SQLite FTS derived index, vector chunked semantic index |
 | `.vorch/specs/memory.md` | `core/memory/` | Pinned memory service, workspace memory files, backend boundary |
-| `.vorch/specs/settings.md` | `core/settings/` | Public settings update schemas, validation, parser errors |
+| `.vorch/specs/settings.md` | `core/settings/` | Public settings update schemas, validation, section normalization, parser errors |
 | `.vorch/specs/prompts.md` | `core/prompts/` | System Prompt assembly, editable fragments, prompt variables |
 | `.vorch/specs/attachments.md` | `core/attachments/` | Blob storage, MIME sniffing, attachment metadata, text extraction |
 | `.vorch/specs/extensions.md` | `core/extensions/` | Extension hook loading, handler registration, runtime/chat event contracts |

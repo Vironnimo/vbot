@@ -6,12 +6,16 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any, Literal, cast
 
 from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
+from core.settings.normalizers import (
+    SUPPORTED_APPEARANCE_LANGUAGES,
+    is_absolute_or_home_relative_path,
+)
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     ALLOWED_THINKING_EFFORTS,
@@ -53,7 +57,6 @@ SUBAGENT_SETTING_FIELDS = (
     "subagent_timeout_minutes",
 )
 APPEARANCE_FIELDS = frozenset({"language"})
-SUPPORTED_APPEARANCE_LANGUAGES = frozenset({"en"})
 COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_model"})
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
@@ -562,7 +565,7 @@ def _validate_directory_list(diagnostics: list[JsonDiagnostic], path: str, value
         if not isinstance(item, str) or not item.strip():
             _error(diagnostics, item_path, "must be a non-empty string")
             continue
-        if not _is_absolute_or_home_relative_path(item.strip()):
+        if not is_absolute_or_home_relative_path(item.strip()):
             _error(diagnostics, item_path, "must be an absolute or home-relative path")
 
 
@@ -894,14 +897,6 @@ def _child_path(parent_path: str, key: str) -> str:
     if key.replace("_", "").isalnum():
         return f"{parent_path}.{key}"
     return f"{parent_path}[{key!r}]"
-
-
-def _is_absolute_or_home_relative_path(path: str) -> bool:
-    if path == "~" or path.startswith(("~/", "~\\")):
-        return True
-    # Accept both POSIX and Windows absolute forms on any host so the same
-    # settings.json validates identically across platforms.
-    return PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
 
 
 def _error(diagnostics: list[JsonDiagnostic], path: str, message: str) -> None:

@@ -318,3 +318,12 @@ streaming loop). The clean fix is to construct the canonical ChatLoops in `Runti
 compaction service (constructor injection), removing the server-side private poke. Found during the
 deep-modules audit (A3); deferred because it changes Runtime bootstrap wiring and the server tests
 around `app.state.compaction_service`, which is out of scope for the audit fixes.
+
+## 2026-06-11 — agent.json is validated twice (settings validators + AgentStore's own family)
+
+`core/settings/validation.py` (`validate_agent_data`) and `core/agents/agents.py` (`_validate_string_field`,
+`_validate_temperature`, `_validate_thinking_effort`, `_validate_memory_prompt_mode`, …) both encode the
+agent.json field rules — two validators for one format, found during the deep-modules audit (A2 symptom).
+Consolidating means deciding which side owns the schema (settings as central authority vs. the agent domain)
+and rewiring AgentStore create/update paths plus their tests. Deferred: behavior-relevant refactor beyond
+the audit's settings-consolidation scope.

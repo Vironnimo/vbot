@@ -1,8 +1,9 @@
 """Pure validation and normalization for persisted ``settings.json`` sections.
 
 Every function here is stateless: it takes raw settings data and returns the
-normalized value, raising :class:`StorageError` on invalid input. ``StorageManager``
-owns the read-modify-write transactions and delegates section normalization here.
+normalized value, raising :class:`StorageError` on invalid input. The settings
+domain owns the per-section schema knowledge; ``StorageManager`` owns the
+read-modify-write transactions and delegates section normalization here.
 """
 
 from __future__ import annotations
@@ -18,7 +19,13 @@ from core.search_config import (
     DEFAULT_WEB_SEARCH_PROVIDER,
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
 )
-from core.storage.errors import StorageError
+from core.settings.settings import (
+    AGENT_DEFAULT_FIELDS,
+    ALLOWED_THINKING_EFFORTS,
+    MAX_TEMPERATURE,
+    MIN_TEMPERATURE,
+)
+from core.utils.errors import StorageError
 
 DEFAULT_APPEARANCE_LANGUAGE = "en"
 SUPPORTED_APPEARANCE_LANGUAGES = frozenset({DEFAULT_APPEARANCE_LANGUAGE})
@@ -37,12 +44,6 @@ COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
     "tail_tokens": 15_000,
     "summary_model": None,
 }
-AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thinking_effort"})
-ALLOWED_THINKING_EFFORTS = frozenset(
-    {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
-)
-MIN_TEMPERATURE = 0.0
-MAX_TEMPERATURE = 2.0
 
 
 # --- appearance ---------------------------------------------------------------
@@ -108,7 +109,7 @@ def normalize_skill_directories(directories: Any) -> list[str]:
         if not isinstance(directory, str) or not directory.strip():
             raise StorageError("Skill directories must be non-empty strings")
         normalized_directory = directory.strip()
-        if not _is_absolute_or_home_relative_path(normalized_directory):
+        if not is_absolute_or_home_relative_path(normalized_directory):
             raise StorageError(
                 "Skill directories must be absolute paths or home-relative paths starting with ~"
             )
@@ -470,7 +471,9 @@ def _normalize_json_value(value: Any, path: str) -> Any:
 # --- shared path helper -------------------------------------------------------
 
 
-def _is_absolute_or_home_relative_path(path: str) -> bool:
+def is_absolute_or_home_relative_path(path: str) -> bool:
+    """Return whether *path* is absolute (POSIX or Windows form) or home-relative."""
+
     if path == "~" or path.startswith(("~/", "~\\")):
         return True
     # Accept both POSIX and Windows absolute forms on any host so the same
