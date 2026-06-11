@@ -292,3 +292,20 @@ tests — possibly superseded, but deleting them means rewriting the tests that 
 
 **Why deferred:** removing them is a test refactor, not a dead-code deletion — each needs its tests
 rewritten against the surviving API and re-verified. Do it per-domain when those tests are touched anyway.
+
+## 2026-06-11 — Linux readiness: remaining unverified pieces
+
+A Linux-readiness audit found the process layer already platform-branched (POSIX kill via
+`os.killpg`, `start_new_session`, bash-tool runs real `bash` off-Windows). Fixed in this pass:
+stdin submit sent CRLF on all platforms (`core/tools/process_manager.py` `SUBMIT_BYTES`), and a
+Linux installer (`scripts/install.sh` + `uninstall.sh`, systemd user unit) now exists. Still open:
+
+- **No CI / no recurring Linux test runs.** The suite was verified once in WSL Ubuntu during this
+  pass; nothing guards against future Windows-only regressions.
+- **sqlite-vec on the actual Pi is unverified.** `core/recall/vector_store.py` hard-imports
+  `sqlite_vec` and loads it as a native SQLite extension; needs an aarch64 wheel for the Pi's
+  Python and a `sqlite3` built with extension loading. Verify on first Pi deploy (64-bit
+  Raspberry Pi OS required) before enabling `recall.backend: vector`.
+
+**Why deferred:** CI is an infrastructure decision the user hasn't made; the sqlite-vec check
+needs the physical Pi.
