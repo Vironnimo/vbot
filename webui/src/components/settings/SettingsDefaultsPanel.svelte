@@ -317,10 +317,8 @@
     <input
       id="settings-defaults-temperature"
       class="s-input"
-      type="number"
-      min="0"
-      max="2"
-      step="0.1"
+      type="text"
+      inputmode="decimal"
       value={agentDefaults.temperature}
       aria-label={t('settings.defaults.temperature', 'Temperature')}
       oninput={(event) =>

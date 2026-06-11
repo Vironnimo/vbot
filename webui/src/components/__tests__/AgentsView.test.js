@@ -699,7 +699,7 @@ describe('AgentsView', () => {
     await waitForCondition(() => thinkingTriggerLabel() === 'high', 100);
 
     const temperatureInput = document.body.querySelector(
-      'input.s-input[type="number"]',
+      'input.s-input[inputmode="decimal"]',
     );
     expect(temperatureInput).toBeTruthy();
     temperatureInput.value = '';
@@ -1436,7 +1436,7 @@ function setTextInputValueWithin(container, index, value) {
 
 function setNumberInputValueWithin(container, index, value) {
   const input = Array.from(
-    container.querySelectorAll('input.s-input[type="number"]'),
+    container.querySelectorAll('input.s-input[inputmode="decimal"]'),
   )[index];
   expect(input).toBeTruthy();
   input.value = value;

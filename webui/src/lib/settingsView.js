@@ -303,7 +303,9 @@ export function normalizeSubAgentSettings(rawSettings) {
 
 export function normalizeCompactionSettings(rawSettings) {
   const compaction = rawSettings?.compaction ?? {};
-  const threshold = Number(compaction.threshold);
+  const threshold = Number(
+    String(compaction.threshold).trim().replace(',', '.'),
+  );
   const summaryModel =
     typeof compaction.summary_model === 'string'
       ? compaction.summary_model.trim()
@@ -716,7 +718,8 @@ function normalizeAgentDefaultsTemperature(value) {
     return null;
   }
 
-  const numberValue = Number(normalized);
+  // Tolerate a comma decimal separator typed in comma-decimal locales.
+  const numberValue = Number(normalized.replace(',', '.'));
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
