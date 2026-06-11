@@ -100,6 +100,10 @@
                 d="M3 2.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5z"
               />
               <path d="M5 5.5h6M5 8h6M5 10.5h4" />
+            {:else if item.id === 'debug'}
+              <rect x="5.5" y="5" width="5" height="7.5" rx="2.5" />
+              <path d="M6.5 5 5 3m4.5 2L11 3" />
+              <path d="M5.5 7.5H3m2.5 3-2 1.5m7-4.5H13m-2.5 3 2 1.5" />
             {/if}
           </svg>
           <span>{t(item.labelKey, item.labelFallback)}</span>
