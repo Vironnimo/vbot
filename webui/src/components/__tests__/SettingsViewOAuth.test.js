@@ -52,22 +52,22 @@ describe('SettingsView OAuth providers', () => {
     rpcMock.mockReset();
   });
 
-  it('renders Connect for disconnected oauth connections and preserves api-key status rendering', async () => {
+  it('hides disconnected oauth providers from the panel and offers them in the add modal', async () => {
     mountedComponent = mountSettingsView();
     await openProvidersPanel();
 
-    expect(providerRow('GitHub Copilot').textContent).toContain('Connect');
-    expect(providerRow('OpenRouter').textContent).toContain('Configured');
+    expect(document.body.textContent).not.toContain('GitHub Copilot');
+    expect(providerRow('OpenRouter').textContent).toContain('Connected');
+
+    openAddProviderModal();
+
+    expect(modalRoot().textContent).toContain('GitHub Copilot');
+    expect(modalRoot().textContent).not.toContain('OpenRouter');
   });
 
-  it('starts provider.connect and shows the device flow dialog with the user code', async () => {
+  it('starts provider.connect from the add modal and shows the device flow user code', async () => {
     mountedComponent = mountSettingsView();
-    await openProvidersPanel();
-
-    buttonByText('Connect').click();
-    await waitForCondition(() =>
-      document.body.textContent.includes('ABCD-1234'),
-    );
+    await startDeviceFlowFromAddModal();
 
     expect(rpcMock).toHaveBeenCalledWith('provider.connect', {
       provider_id: 'github-copilot',
@@ -81,10 +81,8 @@ describe('SettingsView OAuth providers', () => {
 
   it('copies the displayed device flow user code from an explicit copy control', async () => {
     mountedComponent = mountSettingsView();
-    await openProvidersPanel();
+    await startDeviceFlowFromAddModal();
 
-    buttonByText('Connect').click();
-    await waitForCondition(() => buttonByText('Copy'));
     buttonByText('Copy').click();
     await waitForCondition(() => toastMock.mock.calls.length > 0);
 
@@ -97,14 +95,10 @@ describe('SettingsView OAuth providers', () => {
     );
   });
 
-  it('closes the dialog and shows a success toast after auth completion', async () => {
+  it('closes the modal and shows a success toast after auth completion', async () => {
     mountedComponent = mountSettingsView();
-    await openProvidersPanel();
+    await startDeviceFlowFromAddModal();
 
-    buttonByText('Connect').click();
-    await waitForCondition(() =>
-      document.body.textContent.includes('ABCD-1234'),
-    );
     currentSettings = settingsPayload({ oauthConfigured: true });
 
     mountedComponent.handleProviderAuthCompleted({
@@ -127,18 +121,17 @@ describe('SettingsView OAuth providers', () => {
         variant: 'success',
       }),
     );
-    expect(document.body.textContent).not.toContain('ABCD-1234');
-    expect(providerRow('GitHub Copilot').textContent).toContain('Disconnect');
+    await waitForCondition(
+      () => !document.body.textContent.includes('ABCD-1234'),
+    );
+    await waitForCondition(() =>
+      providerRow('GitHub Copilot').textContent.includes('Disconnect'),
+    );
   });
 
-  it('closes the dialog and shows an error toast after auth failure', async () => {
+  it('keeps the modal open with an inline error after auth failure', async () => {
     mountedComponent = mountSettingsView();
-    await openProvidersPanel();
-
-    buttonByText('Connect').click();
-    await waitForCondition(() =>
-      document.body.textContent.includes('ABCD-1234'),
-    );
+    await startDeviceFlowFromAddModal();
 
     mountedComponent.handleProviderAuthCompleted({
       type: 'provider_auth_completed',
@@ -149,29 +142,17 @@ describe('SettingsView OAuth providers', () => {
       },
     });
     await waitForCondition(() =>
-      toastMock.mock.calls.some(
-        (call) => call[0]?.title === 'Authorization failed or timed out',
-      ),
+      document.body.textContent.includes('Authorization failed or timed out'),
     );
 
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: 'Authorization failed or timed out',
-        variant: 'error',
-      }),
-    );
     expect(document.body.textContent).not.toContain('ABCD-1234');
-    expect(providerRow('GitHub Copilot').textContent).toContain('Connect');
+    expect(modalRoot()).toBeTruthy();
   });
 
-  it('cancels an active device flow through provider.disconnect', async () => {
+  it('cancels an active device flow through provider.disconnect and closes the modal', async () => {
     mountedComponent = mountSettingsView();
-    await openProvidersPanel();
+    await startDeviceFlowFromAddModal();
 
-    buttonByText('Connect').click();
-    await waitForCondition(() =>
-      document.body.textContent.includes('ABCD-1234'),
-    );
     buttonByText('Cancel').click();
     await waitForCondition(
       () => !document.body.textContent.includes('ABCD-1234'),
@@ -181,6 +162,7 @@ describe('SettingsView OAuth providers', () => {
       provider_id: 'github-copilot',
       connection_id: 'github-copilot:oauth',
     });
+    expect(modalRoot()).toBeUndefined();
   });
 
   it('renders Disconnect for connected oauth connections and refreshes settings after disconnect', async () => {
@@ -192,8 +174,8 @@ describe('SettingsView OAuth providers', () => {
 
     currentSettings = settingsPayload({ oauthConfigured: false });
     buttonByText('Disconnect').click();
-    await waitForCondition(() =>
-      providerRow('GitHub Copilot').textContent.includes('Connect'),
+    await waitForCondition(
+      () => !document.body.textContent.includes('GitHub Copilot'),
     );
 
     expect(rpcMock).toHaveBeenCalledWith('provider.disconnect', {
@@ -217,9 +199,30 @@ async function openProvidersPanel() {
   await waitForCondition(() => buttonByText('Providers'));
   buttonByText('Providers').click();
   flushSync();
-  await waitForCondition(() =>
-    document.body.textContent.includes('GitHub Copilot'),
-  );
+  await waitForCondition(() => buttonByText('Add provider'));
+}
+
+function openAddProviderModal() {
+  buttonByText('Add provider').click();
+  flushSync();
+}
+
+async function startDeviceFlowFromAddModal() {
+  await openProvidersPanel();
+  openAddProviderModal();
+
+  buttonContaining('GitHub Copilot').click();
+  flushSync();
+
+  await waitForCondition(() => buttonByText('Connect'));
+  buttonByText('Connect').click();
+  await waitForCondition(() => document.body.textContent.includes('ABCD-1234'));
+}
+
+function modalRoot() {
+  return Array.from(
+    document.body.querySelectorAll('.provider-connect-modal'),
+  )[0];
 }
 
 function providerRow(providerName) {
@@ -233,6 +236,14 @@ function buttonByText(label) {
   return Array.from(document.body.querySelectorAll('button')).find(
     (button) => button.textContent.trim() === label,
   );
+}
+
+function buttonContaining(label) {
+  const button = Array.from(document.body.querySelectorAll('button')).find(
+    (candidate) => candidate.textContent.includes(label),
+  );
+  expect(button).toBeTruthy();
+  return button;
 }
 
 function createSettingsRpcMock(getSettings) {
@@ -309,6 +320,7 @@ function settingsPayload({ oauthConfigured, extraProviders = [] }) {
               type: 'api_key',
               label: 'API Key',
               configured: true,
+              credential_key: 'OPENROUTER_API_KEY',
             },
           ],
         },

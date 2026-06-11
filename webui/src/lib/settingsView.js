@@ -442,6 +442,53 @@ export function getProviderItems(settings) {
     : [];
 }
 
+export function isConnectionConfigured(connection) {
+  return connection?.configured === true || connection?.usable === true;
+}
+
+export function providerHasConfiguredConnection(provider) {
+  return (
+    Array.isArray(provider?.connections) &&
+    provider.connections.some(isConnectionConfigured)
+  );
+}
+
+export function getConnectedProviderItems(settings) {
+  return getProviderItems(settings).filter(providerHasConfiguredConnection);
+}
+
+export function getConfiguredConnections(provider) {
+  return Array.isArray(provider?.connections)
+    ? provider.connections.filter(isConnectionConfigured)
+    : [];
+}
+
+export function isConnectionAddable(connection) {
+  if (isConnectionConfigured(connection)) {
+    return false;
+  }
+
+  if (connection?.type === 'api_key') {
+    return true;
+  }
+
+  return isOAuthDeviceFlowConnection(connection);
+}
+
+export function getAddableConnections(provider) {
+  return Array.isArray(provider?.connections)
+    ? provider.connections.filter(isConnectionAddable)
+    : [];
+}
+
+export function getAddProviderCandidates(settings) {
+  return getProviderItems(settings).filter(
+    (provider) =>
+      !providerHasConfiguredConnection(provider) &&
+      getAddableConnections(provider).length > 0,
+  );
+}
+
 export function isOAuthConnection(connection) {
   return connection?.type === 'oauth';
 }
@@ -452,39 +499,6 @@ export function isOAuthDeviceFlowConnection(connection) {
 
 export function getPublicConnectionId(connection) {
   return typeof connection?.id === 'string' ? connection.id : '';
-}
-
-export function getOAuthConnectionStatus(
-  providerItems,
-  connectionId,
-  flowActive = false,
-) {
-  if (flowActive) {
-    return 'pending';
-  }
-
-  const connection = getOAuthConnection(providerItems, connectionId);
-
-  return connection?.configured === true || connection?.usable === true
-    ? 'connected'
-    : 'disconnected';
-}
-
-function getOAuthConnection(providerItems, connectionId) {
-  const providers = Array.isArray(providerItems) ? providerItems : [];
-
-  for (const provider of providers) {
-    const connections = Array.isArray(provider?.connections)
-      ? provider.connections
-      : [];
-    const connection = connections.find((item) => item.id === connectionId);
-
-    if (connection) {
-      return connection;
-    }
-  }
-
-  return null;
 }
 
 export function buildProviderConnectPayload(providerId, connectionId) {
@@ -570,56 +584,6 @@ export function describeProvider(provider, translate) {
       'Provider metadata is not available yet.',
     )
   );
-}
-
-export function providerStatusKey(provider) {
-  if (typeof provider?.status === 'string' && provider.status.length > 0) {
-    return provider.status;
-  }
-
-  if (provider?.credentials_configured === true) {
-    return 'configured';
-  }
-
-  if (
-    typeof provider?.credential_key === 'string' &&
-    provider.credential_key.length > 0
-  ) {
-    return 'missing_credentials';
-  }
-
-  return 'placeholder';
-}
-
-export function providerStatusClass(provider) {
-  const status = providerStatusKey(provider);
-
-  if (status === 'configured') {
-    return 'chip-green';
-  }
-
-  if (status === 'missing_credentials') {
-    return 'chip-amber';
-  }
-
-  return 'chip-orange';
-}
-
-export function providerStatusLabel(provider, translate) {
-  const status = providerStatusKey(provider);
-
-  if (status === 'configured') {
-    return translate('settings.providers.status.configured', 'Configured');
-  }
-
-  if (status === 'missing_credentials') {
-    return translate(
-      'settings.providers.status.missingCredentials',
-      'Missing credentials',
-    );
-  }
-
-  return translate('settings.providers.status.placeholder', 'Placeholder');
 }
 
 export function normalizeSettingsForDisplay(settings, translate) {

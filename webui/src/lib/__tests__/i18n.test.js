@@ -231,14 +231,31 @@ describe('i18n t()', () => {
       'settings.specializedModels.embeddingModelDescription',
       'settings.providers.title',
       'settings.providers.subtitle',
-      'settings.providers.empty',
+      'settings.providers.noneConnected',
       'settings.providers.description.credentialKey',
       'settings.providers.description.baseUrl',
       'settings.providers.description.modelCount',
       'settings.providers.description.none',
-      'settings.providers.status.configured',
-      'settings.providers.status.missingCredentials',
-      'settings.providers.status.placeholder',
+      'settings.providers.replaceKey',
+      'settings.providers.removeKeySuccess',
+      'settings.providers.removeKeyError',
+      'settings.providers.removeKeyStillEnv',
+      'settings.providers.add.button',
+      'settings.providers.add.connectionButton',
+      'settings.providers.add.title',
+      'settings.providers.add.chooseProvider',
+      'settings.providers.add.chooseMethod',
+      'settings.providers.add.allConnected',
+      'settings.providers.add.methodApiKey',
+      'settings.providers.add.methodApiKeyDescription',
+      'settings.providers.add.methodOAuth',
+      'settings.providers.add.methodOAuthDescription',
+      'settings.providers.add.apiKeyLabel',
+      'settings.providers.add.apiKeyPlaceholder',
+      'settings.providers.add.apiKeyHint',
+      'settings.providers.add.saveKey',
+      'settings.providers.add.keyError',
+      'settings.providers.add.oauthIntro',
       'settings.providers.customEndpoint',
       'settings.providers.customEndpointDescription',
       'settings.providers.customEndpointStatus',
@@ -287,11 +304,9 @@ describe('i18n t()', () => {
       }),
     ).toBe('3 models available.');
     expect(t('settings.providers.subtitle')).toBe(
-      'Credential status and endpoint metadata for available providers.',
+      'Connected providers and their credentials.',
     );
-    expect(t('settings.providers.status.missingCredentials')).toBe(
-      'Missing credentials',
-    );
+    expect(t('settings.providers.add.button')).toBe('Add provider');
   });
 
   it('contains Logs tab copy for navigation, filters, and states', () => {

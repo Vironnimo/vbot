@@ -18,15 +18,17 @@ import {
   createSkillDirectoriesUpdatePayload,
   describeProvider,
   formatServerHost,
+  getAddProviderCandidates,
+  getAddableConnections,
+  getConnectedProviderItems,
   getDefaultSkillDirectoryValue,
   getRecallSettings,
   getSkillDirectories,
   getWebSearchSettings,
+  isConnectionConfigured,
   normalizeAgentDefaultsSettings,
   normalizeCompactionSettings,
   normalizeSubAgentSettings,
-  providerStatusClass,
-  providerStatusLabel,
 } from '../settingsView.js';
 
 const rpcMock = vi.fn();
@@ -93,10 +95,10 @@ describe('SettingsView', () => {
 
     clickButton('Providers');
 
-    expect(document.body.textContent).toContain('Anthropic');
-    expect(document.body.textContent).toContain('Missing credentials');
     expect(document.body.textContent).toContain('OpenAI');
-    expect(document.body.textContent).toContain('Configured');
+    expect(document.body.textContent).toContain('Connected');
+    expect(document.body.textContent).not.toContain('Anthropic');
+    expect(document.body.textContent).toContain('Add provider');
     expect(document.body.textContent).toContain('Custom endpoint');
     expect(document.body.textContent).toContain('Placeholder');
   });
@@ -435,6 +437,74 @@ describe('SettingsView', () => {
 });
 
 describe('settingsView helpers', () => {
+  it('filters connected providers and add candidates by connection state', () => {
+    const apiKeyConfigured = {
+      id: 'openai:api-key',
+      type: 'api_key',
+      label: 'API Key',
+      configured: true,
+      credential_key: 'OPENAI_API_KEY',
+    };
+    const apiKeyMissing = {
+      id: 'anthropic:api-key',
+      type: 'api_key',
+      label: 'API Key',
+      configured: false,
+      credential_key: 'ANTHROPIC_API_KEY',
+    };
+    const oauthConnectable = {
+      id: 'openai:subscription',
+      type: 'oauth',
+      label: 'ChatGPT Plus/Pro',
+      configured: false,
+      connectable: true,
+    };
+    const oauthStatic = {
+      id: 'minimax:oauth',
+      type: 'oauth',
+      label: 'Token',
+      configured: false,
+      connectable: false,
+    };
+    const settings = {
+      providers: {
+        items: [
+          {
+            id: 'openai',
+            name: 'OpenAI',
+            connections: [apiKeyConfigured, oauthConnectable],
+          },
+          {
+            id: 'anthropic',
+            name: 'Anthropic',
+            connections: [apiKeyMissing],
+          },
+          {
+            id: 'minimax',
+            name: 'MiniMax',
+            connections: [oauthStatic],
+          },
+        ],
+      },
+    };
+
+    expect(isConnectionConfigured(apiKeyConfigured)).toBe(true);
+    expect(isConnectionConfigured(apiKeyMissing)).toBe(false);
+    expect(
+      getConnectedProviderItems(settings).map((provider) => provider.id),
+    ).toEqual(['openai']);
+    expect(
+      getAddableConnections(settings.providers.items[0]).map(
+        (connection) => connection.id,
+      ),
+    ).toEqual(['openai:subscription']);
+    // MiniMax has no UI-addable connection (static oauth token), so only
+    // Anthropic remains an add candidate.
+    expect(
+      getAddProviderCandidates(settings).map((provider) => provider.id),
+    ).toEqual(['anthropic']);
+  });
+
   it('formats provider metadata and current status labels', () => {
     const provider = {
       name: 'OpenAI',
@@ -581,8 +651,6 @@ describe('settingsView helpers', () => {
     expect(describeProvider(provider, translate)).toBe(
       'Credential key: OPENAI_API_KEY. Endpoint: https://api.openai.com/v1. 2 models available.',
     );
-    expect(providerStatusClass(provider)).toBe('chip-green');
-    expect(providerStatusLabel(provider, translate)).toBe('Configured');
     expect(AGENT_DEFAULTS_FIELDS).toEqual([
       'model',
       'fallback_model',
@@ -679,19 +747,35 @@ function createSettingsPayload(overrides = {}) {
           id: 'anthropic',
           name: 'Anthropic',
           base_url: 'https://api.anthropic.com/v1',
-          credential_key: 'ANTHROPIC_API_KEY',
           credentials_configured: false,
           status: 'missing_credentials',
           model_count: 1,
+          connections: [
+            {
+              id: 'anthropic:api-key',
+              type: 'api_key',
+              label: 'API Key',
+              configured: false,
+              credential_key: 'ANTHROPIC_API_KEY',
+            },
+          ],
         },
         {
           id: 'openai',
           name: 'OpenAI',
           base_url: 'https://api.openai.com/v1',
-          credential_key: 'OPENAI_API_KEY',
           credentials_configured: true,
           status: 'configured',
           model_count: 2,
+          connections: [
+            {
+              id: 'openai:api-key',
+              type: 'api_key',
+              label: 'API Key',
+              configured: true,
+              credential_key: 'OPENAI_API_KEY',
+            },
+          ],
         },
       ],
     },
@@ -800,9 +884,6 @@ function translate(key, fallback, values) {
     'settings.providers.description.modelCount': '{count} models available.',
     'settings.providers.description.none':
       'Provider metadata is not available yet.',
-    'settings.providers.status.configured': 'Configured',
-    'settings.providers.status.missingCredentials': 'Missing credentials',
-    'settings.providers.status.placeholder': 'Placeholder',
     'settings.recall.backends.jsonl_scan': 'JSONL scan',
     'settings.recall.backends.sqlite_fts': 'SQLite FTS',
     'settings.webSearch.providers.brave': 'Brave Search',
