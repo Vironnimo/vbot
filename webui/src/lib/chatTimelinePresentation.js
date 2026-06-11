@@ -109,6 +109,51 @@ export const textFromMessage = (message) => {
   return '';
 };
 
+// Provider errors are persisted as "<prefix>: <status> <json-body>" with the
+// human-readable message buried inside the JSON (usually `error.message`,
+// sometimes top-level `message`). Splits such a text into a readable summary
+// and the pretty-printed raw body for a collapsible details block. Texts
+// without a parseable embedded JSON object stay summary-only.
+export const errorMessagePresentation = (text) => {
+  const fullText = typeof text === 'string' ? text.trim() : '';
+  const jsonStart = fullText.indexOf('{');
+  if (jsonStart === -1) {
+    return { summary: fullText, details: '' };
+  }
+
+  let parsedBody;
+  try {
+    parsedBody = JSON.parse(fullText.slice(jsonStart));
+  } catch {
+    return { summary: fullText, details: '' };
+  }
+  if (!isPlainObject(parsedBody)) {
+    return { summary: fullText, details: '' };
+  }
+
+  const prefix = fullText.slice(0, jsonStart).trim();
+  const providerMessage = embeddedErrorMessage(parsedBody);
+  const summary = providerMessage
+    ? [prefix, providerMessage].filter(Boolean).join(' ')
+    : prefix || fullText;
+
+  return { summary, details: JSON.stringify(parsedBody, null, 2) };
+};
+
+function embeddedErrorMessage(value) {
+  if (!isPlainObject(value)) {
+    return '';
+  }
+  const nested = embeddedErrorMessage(value.error);
+  if (nested) {
+    return nested;
+  }
+  if (typeof value.message === 'string' && value.message.trim()) {
+    return value.message.trim();
+  }
+  return '';
+}
+
 export const userContentBlocks = (message) => {
   if (!Array.isArray(message?.content)) {
     return [];

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   compactToolValue,
+  errorMessagePresentation,
   isRowCancellable,
   subAgentDisplayResult,
   subAgentDotStatus,
@@ -556,5 +557,69 @@ describe('chatTimelinePresentation', () => {
     expect(isRowCancellable(undefined)).toBe(false);
     expect(isRowCancellable({})).toBe(false);
     expect(isRowCancellable({ kind: 'reasoning' })).toBe(false);
+  });
+});
+
+describe('errorMessagePresentation', () => {
+  it('extracts the nested provider message and keeps the prefix', () => {
+    const presentation = errorMessagePresentation(
+      'Provider error: 400 {"error":{"message":"max_tokens: Field required","code":"invalid_request_body"}}',
+    );
+
+    expect(presentation.summary).toBe(
+      'Provider error: 400 max_tokens: Field required',
+    );
+    expect(presentation.details).toContain('"code": "invalid_request_body"');
+  });
+
+  it('extracts a top-level message field', () => {
+    const presentation = errorMessagePresentation(
+      'Provider error: 400 {"message":"max_tokens: Field required"}',
+    );
+
+    expect(presentation.summary).toBe(
+      'Provider error: 400 max_tokens: Field required',
+    );
+    expect(presentation.details).toContain('"message"');
+  });
+
+  it('prefers the deepest error.message over sibling fields', () => {
+    const presentation = errorMessagePresentation(
+      'Rate limited: 429 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_1"}',
+    );
+
+    expect(presentation.summary).toBe('Rate limited: 429 Overloaded');
+    expect(presentation.details).toContain('"request_id": "req_1"');
+  });
+
+  it('keeps the prefix as summary when the body has no message', () => {
+    const presentation = errorMessagePresentation(
+      'Provider error: 500 {"status":"boom"}',
+    );
+
+    expect(presentation.summary).toBe('Provider error: 500');
+    expect(presentation.details).toContain('"status": "boom"');
+  });
+
+  it('returns plain text unchanged without an embedded JSON object', () => {
+    expect(errorMessagePresentation('Connection refused')).toEqual({
+      summary: 'Connection refused',
+      details: '',
+    });
+  });
+
+  it('returns the full text when the embedded JSON does not parse', () => {
+    const text = 'Provider error: 400 {broken json';
+    expect(errorMessagePresentation(text)).toEqual({
+      summary: text,
+      details: '',
+    });
+  });
+
+  it('handles non-string input', () => {
+    expect(errorMessagePresentation(null)).toEqual({
+      summary: '',
+      details: '',
+    });
   });
 });
