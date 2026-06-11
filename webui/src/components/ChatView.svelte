@@ -100,6 +100,9 @@
   let subAgentSessionActive = $derived(
     Boolean(viewingSessionId) && viewingSubAgentSession,
   );
+  // Any local override away from the selected agent's current session — also
+  // true for same-agent drawer selections, which must offer a return path too.
+  let sessionOverrideActive = $derived(Boolean(viewingSessionId));
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(!activeAgent || loadingHistory);
   let lastSharedSelectedAgentId = '';
@@ -629,7 +632,7 @@
 
   const handleSelectAgent = async (agentId) => {
     if (agentId === chatState.selectedAgentId) {
-      if (subAgentSessionActive) {
+      if (sessionOverrideActive) {
         clearSessionOverride();
         await loadCurrentHistory();
       }
@@ -676,7 +679,7 @@
   };
 
   const handleReturnToCurrentSession = async () => {
-    if (!subAgentSessionActive || loadingHistory) {
+    if (!sessionOverrideActive || loadingHistory) {
       return;
     }
 
@@ -987,6 +990,7 @@
         <SessionListDrawer
           agentId={activeAgent.id}
           currentSessionId={viewingSessionId || activeAgent.current_session_id}
+          agentCurrentSessionId={activeAgent.current_session_id}
           onSessionSelected={handleSessionSelected}
         />
       {/if}
@@ -1042,20 +1046,27 @@
           />
         </div>
         <div class="chat-view__footer-stack">
-          {#if subAgentSessionActive}
+          {#if sessionOverrideActive}
             <div class="chat-view__subagent-session-notice" aria-live="polite">
               <div class="chat-view__subagent-session-copy">
                 <p class="chat-view__subagent-session-title">
-                  {t(
-                    'chat.subagentSessionNotice',
-                    'Viewing a sub-agent session',
-                  )}
+                  {subAgentSessionActive
+                    ? t(
+                        'chat.subagentSessionNotice',
+                        'Viewing a sub-agent session',
+                      )
+                    : t('chat.pastSessionNotice', 'Viewing a past session')}
                 </p>
                 <p class="chat-view__subagent-session-hint">
-                  {t(
-                    'chat.subagentSessionHint',
-                    'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
-                  )}
+                  {subAgentSessionActive
+                    ? t(
+                        'chat.subagentSessionHint',
+                        'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
+                      )
+                    : t(
+                        'chat.pastSessionHint',
+                        'This is not the agent’s current session. Messages sent here continue this past session.',
+                      )}
                 </p>
               </div>
               <button
