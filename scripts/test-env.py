@@ -35,7 +35,15 @@ STARTUP_TIMEOUT_SECONDS = 15
 
 def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     """Run a command and return the result."""
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    # npm/vite emit UTF-8 regardless of the console code page.
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 def build_frontend() -> int:
@@ -48,13 +56,14 @@ def build_frontend() -> int:
             install_result = _run([npm, "install"], cwd=WEBUI_DIR)
             if install_result.returncode != 0:
                 print(" FAILED")
-                print(install_result.stderr)
+                # npm writes build errors to both streams — forward everything.
+                print((install_result.stdout + install_result.stderr).strip())
                 return 1
 
         build_result = _run([npm, "run", "build"], cwd=WEBUI_DIR)
         if build_result.returncode != 0:
             print(" FAILED")
-            print(build_result.stderr)
+            print((build_result.stdout + build_result.stderr).strip())
             return 1
     except KeyboardInterrupt:
         print(" INTERRUPTED")

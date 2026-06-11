@@ -115,28 +115,29 @@ def translate_to_vitest_targets(paths: list[str]) -> list[str]:
 
 # ---------- vitest output parsing ----------
 
-# vitest verbose reporter summary lines:
+# vitest summary line, with any combination of segments:
 #   Tests  2 passed (2)
 #   Tests  1 failed | 2 passed (3)
+#   Tests  1 skipped | 4 passed (5)
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-_VITEST_FAILED_PASSED_RE = re.compile(r"Tests\s+(\d+)\s+failed\s+\|\s+(\d+)\s+passed\s+\((\d+)\)")
-_VITEST_PASSED_RE = re.compile(r"Tests\s+(\d+)\s+passed\s+\((\d+)\)")
+_VITEST_TESTS_SUMMARY_RE = re.compile(
+    r"^\s*Tests\s+(?P<details>[^()\n]+)\((?P<total>\d+)\)\s*$", re.MULTILINE
+)
+_VITEST_PASSED_COUNT_RE = re.compile(r"(\d+)\s+passed")
 
 
 def parse_vitest_counts(output: str) -> tuple[int, int]:
     """Return ``(passed, total)`` from vitest verbose output."""
     cleaned_output = _ANSI_ESCAPE_RE.sub("", output)
 
-    m = _VITEST_FAILED_PASSED_RE.search(cleaned_output)
-    if m:
-        return int(m.group(2)), int(m.group(3))
+    summary = _VITEST_TESTS_SUMMARY_RE.search(cleaned_output)
+    if summary is None:
+        return 0, 0
 
-    m = _VITEST_PASSED_RE.search(cleaned_output)
-    if m:
-        return int(m.group(1)), int(m.group(2))
-
-    return 0, 0
+    passed_match = _VITEST_PASSED_COUNT_RE.search(summary.group("details"))
+    passed = int(passed_match.group(1)) if passed_match else 0
+    return passed, int(summary.group("total"))
 
 
 def hash_file(path: Path) -> str:
@@ -264,8 +265,16 @@ def main() -> int:
     normalized = [p.replace("\\", "/").rstrip("/") for p in raw_paths]
     paths = deduplicate_paths(normalized)
 
-    # Strip webui/ prefix — all npm commands run with cwd="webui".
+    # Strip webui/ prefix — all npm commands run with cwd=WEBUI_ROOT.
     stripped = [strip_webui_prefix(p) for p in paths]
+
+    # Reject unknown paths before running anything: a typo would otherwise
+    # surface as a confusing tool error instead of a clear message.
+    missing_inputs = [p for p in stripped if not (WEBUI_ROOT / p).exists()]
+    if missing_inputs:
+        for missing in missing_inputs:
+            print(f"ERROR: path not found under webui/: {missing}")
+        return 2
 
     # ---------- Build command lists ----------
     is_full_scan = len(stripped) == 0
@@ -300,7 +309,9 @@ def main() -> int:
         ("eslint", [npx_exe, "eslint"] + eslint_check_paths, "gate", None),
         (
             "vitest",
-            [npx_exe, "vitest", "run", "--reporter=verbose"] + vitest_paths,
+            # --passWithNoTests: a path filter without nearby tests must not
+            # fail the gate (vitest exits 1 on "No test files found").
+            [npx_exe, "vitest", "run", "--reporter=verbose", "--passWithNoTests"] + vitest_paths,
             "test",
             None,
         ),
@@ -330,7 +341,7 @@ def main() -> int:
             cmd,
             capture_output=True,
             text=True,
-            cwd="webui",
+            cwd=WEBUI_ROOT,
             encoding="utf-8",
             errors="replace",
         )
@@ -355,6 +366,7 @@ def main() -> int:
                 status = describe_fix_result(result.returncode, elapsed, changed_files)
             else:
                 status = f"FAIL ({elapsed:.1f}s)"
+                validation_passed = False
                 failures.append((label, output))
         elif kind == "test":
             passed, total = parse_vitest_counts(output)
@@ -394,8 +406,7 @@ def main() -> int:
     if validation_passed:
         print(f"All gates passed in {total_elapsed:.1f}s.")
     else:
-        # Count validation-gate failures (eslint, vitest, build) for the summary.
-        failed_count = sum(1 for label, _ in failures if label not in ("prettier", "eslint fix"))
+        failed_count = len(failures)
         gate_word = "s" if failed_count != 1 else ""
         print(f"{failed_count} gate{gate_word} failed in {total_elapsed:.1f}s.")
 
