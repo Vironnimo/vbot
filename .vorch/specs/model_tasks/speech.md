@@ -65,7 +65,7 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
 
 ## Artifacts
 
-TTS tool output is stored under `<data_dir>/speech/` as one audio file and one sidecar JSON metadata file per artifact. Artifact IDs are UUID4 hex strings, filenames are `<artifact_id>.<extension>`, and sidecars contain `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
+TTS tool output is stored under `<data_dir>/speech/` through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`): one audio file and one sidecar JSON metadata file per artifact. Artifact IDs are UUID4 hex strings, filenames are `<artifact_id>.<extension>`, and sidecars contain `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
 
 ## Errors
 
@@ -83,5 +83,5 @@ Provider request failures raised inside `ProviderSpeechClient` are `ProviderErro
 - Binary audio transport stays outside JSON-RPC. Accessors use dedicated HTTP endpoints for recording upload and synthesized audio download.
 - The speech HTTP client is not the chat adapter stack. Provider-specific chat behavior, debug capture, streaming behavior, or message formatting changes do not automatically apply here.
 - Local speech execution hooks must stay optional and dependency-free until a concrete local backend is approved.
-- Artifact persistence writes the audio file before the JSON sidecar and currently has no rollback/atomic replace wrapper; interrupted writes can leave orphaned audio blobs.
+- Artifact persistence (shared `TaskArtifactStore`) writes the audio file before the JSON sidecar and currently has no rollback/atomic replace wrapper; interrupted writes can leave orphaned audio blobs.
 - No credentials may be logged, persisted in artifacts, or returned to accessors.
