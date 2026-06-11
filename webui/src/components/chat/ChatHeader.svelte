@@ -237,7 +237,7 @@
       </svg>
       {creatingSession
         ? t('common.loading', 'Loading…')
-        : t('chat.newSession', 'New Session')}
+        : t('chat.newSession', 'New session')}
     </button>
   </div>
 </header>

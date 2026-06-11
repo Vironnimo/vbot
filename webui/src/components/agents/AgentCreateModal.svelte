@@ -160,7 +160,7 @@
   >
     <div class="modal-header">
       <h3 id="agent-create-modal-title" class="modal-title">
-        {t('agents.create', 'Create Agent')}
+        {t('agents.create', 'Create agent')}
       </h3>
       <button
         type="button"
