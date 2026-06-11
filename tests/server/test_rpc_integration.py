@@ -206,6 +206,7 @@ class IntegrationStorage:
 class IntegrationPrompts:
     def __init__(self, tools: ToolRegistry) -> None:
         self._tools = tools
+        self.app_dir = Path("app")
 
     def build_system_prompt(self, agent: IntegrationAgent) -> str:
         return f"System prompt for {agent.id}"
@@ -275,6 +276,11 @@ class AdapterPool:
         return adapter
 
 
+class IntegrationProcessManager:
+    def cancel_scope(self, run_id: str) -> None:
+        del run_id
+
+
 class IntegrationRuntime:
     def __init__(
         self,
@@ -296,8 +302,16 @@ class IntegrationRuntime:
         self._adapter_pool = AdapterPool(adapter_list)
         self._configured_provider_ids = configured_provider_ids or {"openai"}
         self.chat_runs: ChatRunManager | None = None
+        self.extensions: Any = None
+        self.process_manager = IntegrationProcessManager()
         self.started = False
         self.stopped = False
+
+    @property
+    def chat_run_manager(self) -> ChatRunManager:
+        if self.chat_runs is None:
+            self.chat_runs = ChatRunManager()
+        return self.chat_runs
 
     def start(self) -> None:
         self.started = True
@@ -720,7 +734,7 @@ async def test_same_session_queued_while_different_sessions_run_in_parallel(
     await run.wait()
 
 
-def _make_state(runtime: IntegrationRuntime) -> Any:
+def _make_state(runtime: Any) -> Any:
     chat_runs = ChatRunManager()
     runtime.chat_runs = chat_runs
     return type(

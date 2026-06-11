@@ -535,7 +535,8 @@ def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_tex
         )
     )
     session.append(ChatMessage.user("latest plain text"))
-    loop = ChatLoop(_StubRuntime(), attachment_resolver=ContentBlockResolver(store))
+    runtime: Any = _StubRuntime()
+    loop = ChatLoop(runtime, attachment_resolver=ContentBlockResolver(store))
 
     # Act
     request_messages = asyncio.run(loop._build_request_messages(_StubAgent(), session))
@@ -562,7 +563,8 @@ def test_chat_loop_skips_resolver_when_session_has_only_plain_text_user_messages
     session.append(ChatMessage.user("first"))
     session.append(ChatMessage.user("second"))
     resolver = Mock()
-    loop = ChatLoop(_StubRuntime(), attachment_resolver=resolver)
+    runtime: Any = _StubRuntime()
+    loop = ChatLoop(runtime, attachment_resolver=resolver)
 
     # Act
     request_messages = asyncio.run(loop._build_request_messages(_StubAgent(), session))

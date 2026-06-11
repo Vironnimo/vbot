@@ -416,6 +416,11 @@ class SystemPromptManager:
         self._os_name = os_name
         self._current_date = current_date or _current_utc_date
 
+    @property
+    def app_dir(self) -> Path:
+        """Application source directory this prompt manager was built with."""
+        return self._app_dir
+
     def update_skill_registry(self, skill_registry: SkillPromptRegistry) -> None:
         """Replace the skill registry used for prompt and provider tool decisions."""
         self._skill_registry = skill_registry

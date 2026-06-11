@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from functools import partial
 from importlib import import_module
@@ -100,7 +99,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         config: ChannelConfig,
         trigger_service: TriggerService,
         chat_sessions: ChatSessionManager,
-        runtime: object,
+        credential_resolver: Callable[[str], str],
         attachment_store: AttachmentStore | None = None,
         *,
         command_dispatcher: CommandDispatcher,
@@ -108,11 +107,10 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._config = config
         self._trigger_service = trigger_service
         self._chat_sessions = chat_sessions
-        self._runtime = runtime
         self._attachment_store = attachment_store
         self._command_dispatcher = command_dispatcher
 
-        token = _resolve_channel_token(config.token_env_var, runtime)
+        token = credential_resolver(config.token_env_var)
         if not isinstance(token, str) or not token.strip():
             raise ChannelConfigError(
                 f"Missing Telegram token in environment variable: {config.token_env_var}"
@@ -1119,19 +1117,6 @@ def _media_failure_reply(error: Exception) -> str:
     if isinstance(error, AttachmentTooLargeError):
         return _FILE_TOO_LARGE_REPLY
     return _MEDIA_FAILED_REPLY
-
-
-def _resolve_channel_token(token_env_var: str, runtime: object) -> str:
-    resolver = getattr(runtime, "resolve_environment_credential", None)
-    if callable(resolver):
-        try:
-            resolved = resolver(token_env_var)
-        except Exception:
-            resolved = ""
-        if isinstance(resolved, str):
-            return resolved
-
-    return os.environ.get(token_env_var, "")
 
 
 def _parse_platform_target(platform_target: str) -> int:

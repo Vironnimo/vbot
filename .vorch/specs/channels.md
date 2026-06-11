@@ -18,6 +18,7 @@ Messaging-platform accessors for vBot. Owns channel configuration, adapter lifec
 
 ## Interfaces
 
+- `ChannelService(trigger_service, chat_sessions, *, agent_store, data_root, credential_resolver, attachment_store=None, command_dispatcher)` — constructor injection only, no runtime handle. `credential_resolver` is a `Callable[[str], str]`; Runtime wires `resolve_environment_credential`, which already prefers process environment over the data-dir `.env` fallback, so adapters never read `os.environ` themselves.
 - `ChannelService` is the domain facade for config CRUD, lifecycle (`start`, `stop`, per-channel start/stop), active/failed health checks, `send(channel_id, message, platform_target, files=...)`, and `ensure_outbound_session(channel_id, platform_target)` (delegates to the active adapter; raises `ChannelNotFoundError` when the channel is not active).
 - `ChannelAdapter` exposes `platform`, `start()`, `stop()`, `send(message, platform_target, files=None)`, and `ensure_outbound_session(platform_target) -> RouteFacts` (resolves and ensures the Session mirroring an outbound target chat, creating it with channel context when missing). Platform-specific receiving, command dispatch, routing, and file-send details belong in child specs.
 - Server RPCs live in `server/rpc/channel_methods.py`: `channel.list`, `channel.create`, `channel.update`, `channel.delete`, `channel.enable`, `channel.disable`, and `channel.status`. Mutation RPCs call `runtime.reload_channel_tool()` after changing channel state.

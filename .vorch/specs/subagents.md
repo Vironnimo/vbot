@@ -17,7 +17,7 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 
 ## Interfaces
 
-- `SubAgentCoordinator(runtime, trigger_service, batch_tracker=None)`
+- `SubAgentCoordinator(runtime, trigger_service, *, batch_tracker=None)` — `runtime` is typed as the `RuntimeServices` protocol (imported under `TYPE_CHECKING`); services are accessed directly, without `getattr` probes.
 - `SubAgentCoordinator.spawn(context, arguments) -> JsonObject`
 - `SubAgentCoordinator.result(context, arguments) -> JsonObject`
 - `SubAgentCoordinator.batch_tracker -> SubAgentBatchTracker`
@@ -26,7 +26,7 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 ## Conventions
 
 - With `session_id`, spawning routes into an existing Session; otherwise it creates a new persisted Session for the target Agent.
-- Child Runs execute through a streaming `ChatLoop`, matching normal live Runs and allowing long provider generations to make progress through stream deltas instead of waiting for one complete non-streaming response. The child loop inherits the attachment resolver and compaction service from `runtime.streaming_chat_loop` (`_make_subagent_executor`), so child Runs resolve persisted media blocks and auto-compact like live Runs; only the nesting depth is private to the child loop instance.
+- Child Runs execute through a streaming `ChatLoop`, matching normal live Runs and allowing long provider generations to make progress through stream deltas instead of waiting for one complete non-streaming response. `_make_subagent_executor(runtime, content, context)` builds the child via the public `runtime.streaming_chat_loop.child_loop(nesting_depth=...)` + `run_executor(content)` API, so child Runs inherit the attachment resolver and compaction service and resolve persisted media blocks / auto-compact like live Runs; only the nesting depth differs. A runtime without `streaming_chat_loop` is a wiring bug — there is no silent fallback loop.
 - An explicitly targeted existing Session that is busy enqueues a follow-up Run through `ChatRunManager`; a freshly created Session that is already busy instead fails with `session_busy` (a new Session should never be busy).
 - Blocking mode waits for completion and returns the result payload.
 - The `subagent` tool emits `subagent_session_started` Run events as soon as a child Session is known, then again when run/queue details are known. The event payload includes the parent tool-call id/index plus child `agent_id`, `session_id`, optional `run_id` or `queue_item_id`, and `status` so accessors can link to running child Sessions before the final tool result exists.
@@ -46,4 +46,4 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 - When all unfetched sub-agent Runs in a batch finish, the tracker sends one internal automation trigger to continue the parent Agent via a system-reminder note. The note carries each sub-agent's complete final output (untruncated) plus its run status, so the parent does not need a `subagent_result` fetch to read batch results. Runtime automation triggers use the streaming Chat loop, so this follow-up Run emits the same SSE delta timeline as a normal streamed chat turn.
 - Entries embedded in the completion note are marked fetched immediately after the trigger is scheduled, so the batch is dropped right away. Without this the standard non-blocking flow leaks one batch (including each child's full final output string) per parent run for the server-process lifetime, because the tool contract forbids fetching noted results via `subagent_result` (handoff3 B4).
 - Tool descriptions instruct callers to end their turn after a non-blocking spawn and rely on the automatic completion note; `subagent_result` is only for explicit user-requested status checks before the batch finishes.
-- `SubAgentCoordinator` still starts child Runs through ChatLoop internals; keep this boundary narrow until Runs exposes a cleaner child-run API.
+- `SubAgentCoordinator` starts child Runs through the public `ChatLoop.child_loop` / `run_executor` surface; keep this boundary narrow until Runs exposes a dedicated child-run API.

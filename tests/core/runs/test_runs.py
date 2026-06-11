@@ -660,6 +660,7 @@ async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_pat
         chat_sessions=ChatSessionManager(tmp_path),
         chat_runs=ChatRunManager(),
     )
+    runtime.chat_run_manager = runtime.chat_runs
     runtime.chat_sessions.create("coder", session_id=session_id)
 
     async def active_execute(_run: Run) -> str:
