@@ -4001,6 +4001,96 @@ describe('ChatTimeline', () => {
     flushSync();
     await waitForCondition(() => currentScrollTop() === 300);
   });
+
+  it('re-asserts a restored mid-history position against content turbulence after the switch', async () => {
+    const { parentSession, childSession } = scrollMemorySessions();
+    const props = reactiveProps({
+      sessionState: parentSession,
+      agentName: 'Alpha',
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const { setScrollTop, currentScrollTop } = mockScrollGeometry(
+      document.querySelector('.messages'),
+    );
+    await waitForCondition(() => true);
+
+    setScrollTop(700);
+
+    props.sessionState = childSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    props.sessionState = parentSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 700);
+
+    // Post-return turbulence (history reload, browser re-clamp, late content)
+    // moves the view near the bottom without any user input; the next content
+    // change must re-assert the restored position instead of letting the
+    // stick-to-bottom autoscroll take over from the stolen position.
+    setScrollTop(1980);
+    props.sessionState.messages = [
+      ...props.sessionState.messages,
+      {
+        id: 'parent-assistant-two',
+        role: 'assistant',
+        content: 'Late parent answer',
+        timestamp: '2026-05-10T09:05:00',
+      },
+    ];
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 700);
+  });
+
+  it('hands scroll ownership back to stick-to-bottom once the user scrolls', async () => {
+    const { parentSession, childSession } = scrollMemorySessions();
+    const props = reactiveProps({
+      sessionState: parentSession,
+      agentName: 'Alpha',
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { setScrollTop, currentScrollTop } = mockScrollGeometry(container);
+    await waitForCondition(() => true);
+
+    setScrollTop(700);
+
+    props.sessionState = childSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    props.sessionState = parentSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 700);
+
+    // Real user scroll input releases the pin; from a near-bottom position
+    // the stick-to-bottom behavior then follows new content again.
+    container.dispatchEvent(new Event('wheel'));
+    setScrollTop(1980);
+    props.sessionState.messages = [
+      ...props.sessionState.messages,
+      {
+        id: 'parent-assistant-two',
+        role: 'assistant',
+        content: 'Late parent answer',
+        timestamp: '2026-05-10T09:05:00',
+      },
+    ];
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+  });
 });
 
 // Two sessions with distinct keys for the per-session scroll memory tests.
