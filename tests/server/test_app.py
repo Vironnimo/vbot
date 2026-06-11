@@ -61,35 +61,15 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
     assert runtime.logger is not None
 
 
-def test_create_app_wires_runtime_owned_chat_runs_for_lazy_stub_runtime(tmp_path: Path) -> None:
-    runtime = _LazyChatRunRuntime(tmp_path)
+def test_create_app_wires_runtime_owned_chat_runs_for_stub_runtime(tmp_path: Path) -> None:
+    runtime = _StubServerRuntime(tmp_path)
     app = create_app(runtime=cast(Any, runtime))
 
     with TestClient(app):
-        assert isinstance(app.state.chat_runs, ChatRunManager)
-        assert runtime.chat_runs is app.state.chat_runs
-
-
-def test_create_app_falls_back_to_chat_runs_for_stub_runtime_error(tmp_path: Path) -> None:
-    runtime = _UnavailableChatRunRuntime(tmp_path)
-    app = create_app(runtime=cast(Any, runtime))
-
-    with TestClient(app):
-        assert isinstance(app.state.chat_runs, ChatRunManager)
-        assert runtime.chat_runs is app.state.chat_runs
-
-
-def test_runtime_chat_runs_reraises_runtime_lifecycle_error(tmp_path: Path) -> None:
-    import server.app as server_app
-
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
-
-    try:
-        server_app._runtime_chat_runs(runtime)
-    except RuntimeError as exc:
-        assert "Runtime not started" in str(exc)
-    else:
-        raise AssertionError("real Runtime lifecycle error should not be swallowed")
+        assert app.state.chat_runs is runtime.chat_run_manager
+        assert app.state.chat_loop is runtime.chat_loop
+        assert app.state.streaming_chat_loop is runtime.streaming_chat_loop
+        assert app.state.command_dispatcher is runtime.command_dispatcher
 
 
 def test_create_app_uses_explicit_server_bind_state(tmp_path: Path) -> None:
@@ -164,7 +144,7 @@ def test_create_app_lifecycle_prefers_async_runtime_shutdown(tmp_path: Path) -> 
 
 
 def test_create_app_lifecycle_closes_device_flow_engine(tmp_path: Path) -> None:
-    runtime = _LazyChatRunRuntime(tmp_path)
+    runtime = _StubServerRuntime(tmp_path)
     app = create_app(runtime=cast(Any, runtime))
     engine = _AsyncCloseDeviceFlowEngine()
 
@@ -381,15 +361,16 @@ def _write_webui_build(tmp_path: Path) -> Path:
     return dist_dir
 
 
-class _LazyChatRunRuntime:
-    def __init__(self, data_dir: Path) -> None:
-        self.chat_runs = None
-        self._chat_run_manager = ChatRunManager()
-        self.storage = type("Storage", (), {"data_dir": data_dir})()
+class _StubServerRuntime:
+    """Minimal runtime stub providing the services `_initialize_app_state` reads."""
 
-    @property
-    def chat_run_manager(self) -> ChatRunManager:
-        return self._chat_run_manager
+    def __init__(self, data_dir: Path) -> None:
+        self.chat_run_manager = ChatRunManager()
+        self.chat_runs = self.chat_run_manager
+        self.chat_loop = object()
+        self.streaming_chat_loop = object()
+        self.command_dispatcher = object()
+        self.storage = type("Storage", (), {"data_dir": data_dir})()
 
     def start(self) -> None:
         return None
@@ -398,7 +379,7 @@ class _LazyChatRunRuntime:
         return None
 
 
-class _AsyncCloseRuntime(_LazyChatRunRuntime):
+class _AsyncCloseRuntime(_StubServerRuntime):
     def __init__(self, data_dir: Path) -> None:
         super().__init__(data_dir)
         self.aclose_called = False
@@ -417,19 +398,3 @@ class _AsyncCloseDeviceFlowEngine:
 
     async def aclose(self) -> None:
         self.aclose_called = True
-
-
-class _UnavailableChatRunRuntime:
-    def __init__(self, data_dir: Path) -> None:
-        self.chat_runs = None
-        self.storage = type("Storage", (), {"data_dir": data_dir})()
-
-    @property
-    def chat_run_manager(self) -> ChatRunManager:
-        raise RuntimeError("stub chat run manager unavailable")
-
-    def start(self) -> None:
-        return None
-
-    def stop(self) -> None:
-        return None

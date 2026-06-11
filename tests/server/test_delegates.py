@@ -53,7 +53,8 @@ def _history_state(tmp_path: Path) -> tuple[SimpleNamespace, ChatSessionManager]
         runtime=SimpleNamespace(
             agents=HistoryAgentStore(),
             chat_sessions=chat_sessions,
-        )
+        ),
+        chat_runs=ChatRunManager(),
     )
     return state, chat_sessions
 
@@ -178,7 +179,8 @@ async def test_chat_history_hides_subagent_batch_completion_note(tmp_path: Path)
         runtime=SimpleNamespace(
             agents=HistoryAgentStore(),
             chat_sessions=chat_sessions,
-        )
+        ),
+        chat_runs=ChatRunManager(),
     )
 
     # Act
@@ -390,7 +392,10 @@ async def test_chat_stream_returns_queued_response_when_session_is_busy() -> Non
         start_run=AsyncMock(side_effect=ActiveRunError("session already has an active run")),
         queue_run=AsyncMock(return_value=queued_item),
     )
-    state = SimpleNamespace(streaming_chat_loop=streaming_chat_loop)
+    state = SimpleNamespace(
+        streaming_chat_loop=streaming_chat_loop,
+        command_dispatcher=CommandDispatcher(ChatRunManager()),
+    )
 
     response = await dispatch_rpc(
         state,
@@ -438,7 +443,10 @@ async def test_chat_send_busy_queue_bridges_started_run_to_event_bus(
         "_bridge_run_to_event_bus",
         lambda _state, run: bridged_runs.append(run),
     )
-    state = SimpleNamespace(chat_loop=chat_loop)
+    state = SimpleNamespace(
+        chat_loop=chat_loop,
+        command_dispatcher=CommandDispatcher(ChatRunManager()),
+    )
 
     response = await dispatch_rpc(
         state,
@@ -480,7 +488,10 @@ async def test_chat_stream_busy_queue_bridges_started_run_to_event_bus(
         "_bridge_run_to_event_bus",
         lambda _state, run: bridged_runs.append(run),
     )
-    state = SimpleNamespace(streaming_chat_loop=streaming_chat_loop)
+    state = SimpleNamespace(
+        streaming_chat_loop=streaming_chat_loop,
+        command_dispatcher=CommandDispatcher(ChatRunManager()),
+    )
 
     response = await dispatch_rpc(
         state,

@@ -158,6 +158,8 @@ class _StubProviderConfig:
 
 
 class StubPrompts:
+    app_dir = Path("app")
+
     def build_system_prompt(self, agent: StubAgent) -> str:
         return f"System for {agent.id}"
 
@@ -179,6 +181,19 @@ class StubProviderCredentials:
         return connection_id in self._usable_connection_ids
 
 
+class StubProcessManager:
+    def cancel_scope(self, run_id: str) -> None:
+        del run_id
+
+
+class StubStorage:
+    def __init__(self, data_dir: Path) -> None:
+        self.data_dir = data_dir
+
+    def load_compaction_settings(self) -> JsonObject:
+        return {"auto": False, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+
+
 class StubRuntime:
     def __init__(
         self,
@@ -193,6 +208,10 @@ class StubRuntime:
         self.system_prompts = StubPrompts()
         self.tools = tools or ToolRegistry()
         self.chat_runs = ChatRunManager()
+        self.chat_run_manager = self.chat_runs
+        self.process_manager = StubProcessManager()
+        self.extensions: Any = None
+        self.storage = StubStorage(data_dir)
         self.providers = StubProviders({agent.model.split("/", 1)[0]})
         self.provider_credentials = StubProviderCredentials(
             {f"{agent.model.split('/', 1)[0]}:api-key"}
@@ -219,7 +238,7 @@ async def test_debug_context_is_set_before_send(tmp_path: Path) -> None:
     adapter = DebugTrackingStubAdapter(
         [{"content": "Hello", "reasoning": None, "tool_calls": None}]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -239,7 +258,7 @@ async def test_debug_context_is_set_before_stream(tmp_path: Path) -> None:
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
@@ -261,7 +280,7 @@ async def test_debug_context_includes_correct_run_agent_session_ids(
     adapter = DebugTrackingStubAdapter(
         [{"content": "Hello", "reasoning": None, "tool_calls": None}]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -281,7 +300,7 @@ async def test_debug_context_includes_provider_and_connection_ids(
     adapter = DebugTrackingStubAdapter(
         [{"content": "Hello", "reasoning": None, "tool_calls": None}]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -297,7 +316,7 @@ async def test_debug_context_includes_model_id(tmp_path: Path) -> None:
     adapter = DebugTrackingStubAdapter(
         [{"content": "Hello", "reasoning": None, "tool_calls": None}]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -319,7 +338,7 @@ async def test_debug_context_streaming_false_for_non_streaming_loop(
     adapter = DebugTrackingStubAdapter(
         [{"content": "Hello", "reasoning": None, "tool_calls": None}]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -342,7 +361,7 @@ async def test_debug_context_streaming_true_for_streaming_loop(
             ]
         ],
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
@@ -362,7 +381,7 @@ async def test_debug_context_iteration_starts_at_one(tmp_path: Path) -> None:
     adapter = DebugTrackingStubAdapter(
         [{"content": "Hello", "reasoning": None, "tool_calls": None}]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -397,7 +416,7 @@ async def test_debug_context_iteration_increments_across_tool_calls(
         {"type": "object"},
         lambda _context, arguments: tool_success({"value": arguments["value"]}),
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     await ChatLoop(runtime).send("coder", "echo twice", session_id="session-one")
 
@@ -424,7 +443,7 @@ async def test_no_debug_context_for_adapters_without_set_debug_context(
     agent = BaseStubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = BaseStubAdapter([{"content": "Hello", "tool_calls": None}])
 
-    runtime = BaseStubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = BaseStubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     # Should not raise.
     assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
@@ -452,7 +471,7 @@ async def test_no_debug_context_for_streaming_without_set_debug_context(
             ]
         ],
     )
-    runtime = BaseStubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime: Any = BaseStubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await ChatLoop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
@@ -500,7 +519,7 @@ async def test_fallback_adapter_receives_debug_context(tmp_path: Path) -> None:
                 return self.fallback_adapter
             return self.adapter
 
-    runtime = FallbackStubRuntime(
+    runtime: Any = FallbackStubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=primary_adapter,

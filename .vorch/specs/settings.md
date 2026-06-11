@@ -14,12 +14,15 @@ When adding or changing a setting, touch the layer that owns it:
 
 - Raw `settings.json` validation → `core/settings/validation.py` (`KNOWN_RAW_SETTINGS_KEYS` plus a `_validate_*` helper).
 - Public `settings.update` schema → `core/settings/settings.py` (`SETTINGS_UPDATE_SECTIONS` plus a `_parse_*` helper).
-- Persistence, normalization, and defaults → `core/storage/` (`load_*` / `update_*` settings helpers).
+- Section normalization and defaults → `core/settings/normalizers.py` (stateless `normalize_*` / `coerce_*` per section; raises `StorageError`).
+- Persistence (transactions, atomic write, `load_*` / `update_*` accessors) → `core/storage/storage.py`, which delegates all section knowledge to the normalizers.
 - Live runtime side effect → a reload hook in `server/rpc/settings_methods._update_settings`. Today only `skills` → `runtime.reload_skills()` and `recall` → `runtime.reload_recall_backend()` reload live; every other section takes effect on the next start.
 
 ## Interfaces
 
-- `core/settings/__init__.py` exports `parse_settings_update`, `SettingsValidationError`, central JSON validator report types, load helpers, file validators, data validators, and shared Settings schema constants.
+- `core/settings/__init__.py` exports `parse_settings_update`, `SettingsValidationError`, central JSON validator report types, load helpers, file validators, data validators, and shared Settings schema constants (including `DEFAULT_APPEARANCE_LANGUAGE`, `SUPPORTED_APPEARANCE_LANGUAGES`, `DEFAULT_RECALL_SETTINGS`, `ALLOWED_THINKING_EFFORTS`, `MIN_TEMPERATURE`, `MAX_TEMPERATURE`).
+- `validate_temperature(value, *, label, allow_none)` / `validate_thinking_effort(value, *, label, allow_none)` are the canonical agent field-rule validators (raise `SettingsValidationError` with the label-prefixed message). `core/agents/` (AgentStore create/update) and `server/rpc/agent_methods.py` (RPC param checks) delegate to them instead of re-encoding the rules; only `core/settings/normalizers.py` keeps its own storage-facing variant with `Agent default …` messages.
+- `core/settings/normalizers.py` owns stateless per-section normalization for persisted `settings.json` sections (appearance, skills, sub-agents, compaction, defaults/agent, recall, debug, web search, model tasks) plus the section default constants. Functions raise `StorageError` (defined in `core/utils/errors.py`) on invalid persisted data; `StorageManager` calls them inside its transactions. The settings domain must not import `core/storage/` — that direction would recreate the import cycle the error relocation removed.
 - `parse_settings_update(params) -> dict[str, Any]` validates the public `settings.update` request body and returns a normalized per-section update dict.
 - `SettingsValidationError` signals malformed public payloads. Server delegates map it to RPC `invalid_request`.
 - `validate_settings_file(path) -> SettingsValidationReport` validates one raw `settings.json` file without writing or normalizing it. Missing files are OK because storage defaults apply.

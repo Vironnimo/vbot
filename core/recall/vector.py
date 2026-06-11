@@ -5,7 +5,7 @@ The backend inherits the canonical browse/scroll implementation from
 search path:
 
 1. Resolves the embedding binding through the runtime
-   :class:`core.embeddings.EmbeddingService`; if no binding is
+   :class:`core.model_tasks.EmbeddingService`; if no binding is
    configured the backend logs a warning and falls back to the JSONL
    scanner for that call.
 2. Ensures every JSONL session for the requested agent has fresh
@@ -41,7 +41,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from core.embeddings import (
+from core.model_tasks import (
     EmbeddingError,
     EmbeddingResult,
     EmbeddingService,

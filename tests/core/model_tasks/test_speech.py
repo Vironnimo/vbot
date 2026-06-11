@@ -4,21 +4,22 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
-from core.model_tasks import TaskModelError
-from core.speech import (
+from core.model_tasks import (
     LocalSpeechExecutor,
     SpeechConfigurationError,
     SpeechService,
     SpeechSynthesisResult,
+    TaskModelError,
 )
 
 
 @pytest.mark.asyncio
 async def test_transcribe_without_configured_binding_is_expected_error(tmp_path: Path) -> None:
-    service = SpeechService(_MissingModelTasks(), object(), tmp_path)
+    service = SpeechService(_MissingModelTasks(), cast(Any, object()), tmp_path)
 
     with pytest.raises(SpeechConfigurationError, match="configured"):
         await service.transcribe(b"audio")
@@ -26,7 +27,9 @@ async def test_transcribe_without_configured_binding_is_expected_error(tmp_path:
 
 @pytest.mark.asyncio
 async def test_synthesize_artifact_persists_metadata(tmp_path: Path) -> None:
-    service = SpeechService(_TtsModelTasks(), object(), tmp_path, local_executor=_LocalTts())
+    service = SpeechService(
+        _TtsModelTasks(), cast(Any, object()), tmp_path, local_executor=_LocalTts()
+    )
 
     artifact = await service.synthesize_artifact("hello")
 

@@ -21,7 +21,7 @@ cli/           ← CLI accessor. Server lifecycle locally; all other domains via
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
-**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels, speech, image, embeddings, skills, automation, storage, utils. Each is a folder with a main file as public API, soft limit 1000 lines per file. `model_tasks/` owns specialized task-model bindings and target discovery; task-specific execution stays in domains such as `speech/` and `embeddings/`. Provider and automation internals live in their specs (`providers.md`, `automation.md`).
+**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels, skills, automation, storage, utils. Each is a folder with a main file as public API, soft limit 1000 lines per file. `model_tasks/` is the single deep task module: it owns specialized task-model bindings and target discovery (`model_tasks.py` as the main file) **and** the per-task execution services with their provider wire clients (`speech*.py`, `image*.py`, `embeddings*.py`). Provider and automation internals live in their specs (`providers.md`, `automation.md`).
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push) + `/ws/logs` (selected log-file live tail) + SSE (streaming) + dedicated attachment HTTP endpoints (`POST /api/upload`, `GET /api/attachments/{id}`). No auth (single-user-local).
 
@@ -41,14 +41,17 @@ Each domain has a spec in `.vorch/specs/`, named after its module. A **domain** 
 | `.vorch/specs/providers.md` | `core/providers/` | Provider domain overview, per-connection `mode` / `models_endpoint` and per-model `connections` allowlist, index to provider-specific specs |
 | `.vorch/specs/providers/openai.md` | OpenAI provider | Single provider with `api-key` (chat/completions) and `subscription` (codex/responses) connections, Codex OAuth, ChatGPT account header, model discovery |
 | `.vorch/specs/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
-| `.vorch/specs/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas |
+| `.vorch/specs/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas; index to the task execution child specs |
+| `.vorch/specs/model_tasks/speech.md` | speech execution | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
+| `.vorch/specs/model_tasks/image.md` | image execution | Image generation execution, artifacts, provider wire behavior |
+| `.vorch/specs/model_tasks/embeddings.md` | embedding execution | Text-embedding execution, provider wire, vector output for recall |
 | `.vorch/specs/chat.md` | `core/chat/` | Canonical ChatMessage format, chat-loop constraints, Run execution |
 | `.vorch/specs/runs.md` | `core/runs/` | Run lifecycle, cancellation, timeline events, in-memory queues |
 | `.vorch/specs/compaction.md` | `core/compaction/` | Context-window compaction, checkpoints, summary strategy |
 | `.vorch/specs/sessions.md` | `core/sessions/` | Session persistence, metadata, current JSONL storage contract |
 | `.vorch/specs/recall.md` | `core/recall/` | Session recall backend interface, JSONL scan backend, SQLite FTS derived index, vector chunked semantic index |
 | `.vorch/specs/memory.md` | `core/memory/` | Pinned memory service, workspace memory files, backend boundary |
-| `.vorch/specs/settings.md` | `core/settings/` | Public settings update schemas, validation, parser errors |
+| `.vorch/specs/settings.md` | `core/settings/` | Public settings update schemas, validation, section normalization, parser errors |
 | `.vorch/specs/prompts.md` | `core/prompts/` | System Prompt assembly, editable fragments, prompt variables |
 | `.vorch/specs/attachments.md` | `core/attachments/` | Blob storage, MIME sniffing, attachment metadata, text extraction |
 | `.vorch/specs/extensions.md` | `core/extensions/` | Extension hook loading, handler registration, runtime/chat event contracts |
@@ -59,9 +62,6 @@ Each domain has a spec in `.vorch/specs/`, named after its module. A **domain** 
 | `.vorch/specs/skills.md` | `core/skills/` | Local skill metadata loading and prompt allowlist filtering |
 | `.vorch/specs/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
 | `.vorch/specs/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, Telegram-first routing, metadata, outbound send |
-| `.vorch/specs/speech.md` | `core/speech/` | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
-| `.vorch/specs/image.md` | `core/image/` | Image generation execution, artifacts, provider wire behavior |
-| `.vorch/specs/embeddings.md` | `core/embeddings/` | Text-embedding execution, provider wire, vector output for recall |
 | `.vorch/specs/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
 | `.vorch/specs/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
 | `.vorch/specs/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |

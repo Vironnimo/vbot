@@ -28,7 +28,6 @@ from core.chat.streaming import (
     StreamingChunkTimeoutError,
     StreamingDeltaError,
 )
-from core.extensions import ExtensionRegistry
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -40,7 +39,6 @@ from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
     REASONING_EVENT,
-    ChatRunManager,
     Run,
 )
 from core.sessions import ChatSession
@@ -48,19 +46,6 @@ from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("chat")
-
-
-def _runtime_run_manager(runtime: Any) -> ChatRunManager:
-    run_manager = getattr(runtime, "chat_runs", None)
-    if isinstance(run_manager, ChatRunManager):
-        return run_manager
-    run_manager = ChatRunManager()
-    runtime.chat_runs = run_manager
-    return run_manager
-
-
-def _runtime_extensions(runtime: Any) -> ExtensionRegistry | None:
-    return getattr(runtime, "extensions", None)
 
 
 async def _close_adapter(adapter: Any) -> None:

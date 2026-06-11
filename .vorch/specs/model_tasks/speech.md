@@ -4,7 +4,7 @@ Provider-neutral speech-to-text and text-to-speech execution for configured task
 
 ## Overview
 
-`core/speech/` executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and routes to either a provider-backed speech HTTP client or an optional local speech executor hook. The server enforces `settings.json` `speech_upload_max_size_bytes` before calling `SpeechService.transcribe`; the default limit is 20 MiB (`20_971_520` bytes).
+`core/model_tasks/` (`speech*.py`) executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and routes to either a provider-backed speech HTTP client or an optional local speech executor hook. The server enforces `settings.json` `speech_upload_max_size_bytes` before calling `SpeechService.transcribe`; the default limit is 20 MiB (`20_971_520` bytes).
 
 This domain owns speech wire payloads and runtime artifacts; it does not own task-target discovery, settings validation, chat message persistence, or generic attachments. The first implementation supports OpenAI-compatible audio endpoints and OpenRouter's audio endpoints. Mistral option schemas may be exposed through the generic task-model layer, but Mistral speech execution currently fails through provider execution error handling until a provider runtime contract exists.
 
@@ -36,7 +36,7 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 
 ## Provider Wire Behavior
 
-Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient.from_runtime()` reads provider config, connection auth, credentials, and base URL from runtime state, then `core/speech/providers.py` builds speech-specific `httpx` requests with the shared provider error classifier and retry helper.
+Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy — see `providers.md`); `core/model_tasks/speech_providers.py` owns only the speech payload shapes and response parsing.
 
 OpenRouter STT sends Base64 JSON to `/audio/transcriptions`:
 
@@ -65,11 +65,11 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
 
 ## Artifacts
 
-TTS tool output is stored under `<data_dir>/speech/` as one audio file and one sidecar JSON metadata file per artifact. Artifact IDs are UUID4 hex strings, filenames are `<artifact_id>.<extension>`, and sidecars contain `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
+TTS tool output is stored under `<data_dir>/speech/` through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`): one audio file and one sidecar JSON metadata file per artifact. Artifact IDs are UUID4 hex strings, filenames are `<artifact_id>.<extension>`, and sidecars contain `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
 
 ## Errors
 
-Callers of `SpeechService` should see expected speech errors as `SpeechError` subclasses:
+Callers of `SpeechService` should see expected speech errors as `SpeechError` subclasses (`SpeechError` derives from the shared `TaskError` base in `core/utils/errors.py`):
 
 - `SpeechConfigurationError` for missing bindings, empty input, invalid artifact ids, and missing artifacts.
 - `SpeechUnsupportedTargetError` for configured local targets with no execution adapter.
@@ -83,5 +83,5 @@ Provider request failures raised inside `ProviderSpeechClient` are `ProviderErro
 - Binary audio transport stays outside JSON-RPC. Accessors use dedicated HTTP endpoints for recording upload and synthesized audio download.
 - The speech HTTP client is not the chat adapter stack. Provider-specific chat behavior, debug capture, streaming behavior, or message formatting changes do not automatically apply here.
 - Local speech execution hooks must stay optional and dependency-free until a concrete local backend is approved.
-- Artifact persistence writes the audio file before the JSON sidecar and currently has no rollback/atomic replace wrapper; interrupted writes can leave orphaned audio blobs.
+- Artifact persistence (shared `TaskArtifactStore`) writes the audio file before the JSON sidecar and currently has no rollback/atomic replace wrapper; interrupted writes can leave orphaned audio blobs.
 - No credentials may be logged, persisted in artifacts, or returned to accessors.

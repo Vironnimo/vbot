@@ -22,6 +22,10 @@ class _AttachmentRuntime:
             max_size_bytes=MAX_ATTACHMENT_SIZE_BYTES,
         )
         self.chat_runs = ChatRunManager()
+        self.chat_run_manager = self.chat_runs
+        self.chat_loop = object()
+        self.streaming_chat_loop = object()
+        self.command_dispatcher = object()
 
     def start(self) -> None:
         self.storage.data_dir.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,7 @@ Bootstrap entry point. Wires services and manages start/stop lifecycle.
 - `ConfigProtocol` — `get(key: str, default: Any = None) -> Any` (the one injected dependency).
 - `LoggerProtocol` — `debug/info/warning/error(msg, *args)`; types the public `logger` attribute.
 - Registry/store protocols: `ProviderRegistryProtocol`, `ModelRegistryProtocol`, `ProviderCredentialResolverProtocol`, `StorageManagerProtocol`, `AgentStoreProtocol`, `ToolRegistryProtocol`, `SkillRegistryProtocol`, `ChatSessionManagerProtocol`.
+- `RuntimeServices` — the service surface of a *started* runtime as consumed by core modules that genuinely need the whole runtime handle (chat loop, tool dispatch, sub-agent coordination). Read-only properties `agents`, `providers`, `models`, `provider_credentials`, `storage`, `chat_sessions`, `chat_run_manager`, `tools`, `skills`, `extensions` (`ExtensionRegistry | None`), `system_prompts`, `process_manager`, `streaming_chat_loop`, plus `get_adapter(provider_id, connection_id)`. A missing attribute is a wiring bug, not a silently disabled feature — consumers access services directly, never via `getattr` probes. The heavy service types are imported under `TYPE_CHECKING` only, and consumers must likewise import `RuntimeServices` under `TYPE_CHECKING` (a runtime import of `core.runtime` loads `Runtime` and everything behind it — import cycle).
 
 ## Runtime class
 
@@ -31,7 +32,7 @@ Idempotent — a second call logs at debug and preserves the existing service in
 9. Load the `SkillRegistry` (`<data_dir>/skills`, bundled `resources/skills`, configured `skill_directories`) and register the internal `skill` tool; load the `ExtensionRegistry` (`<data_dir>/extensions` + configured `extension_directories`).
 10. Create `ChatSessionManager`, then ensure the bootstrap Agent exists (this happens before channels start — see Gotchas).
 11. Create `RecallBackendRegistry`, select the backend from `settings.recall.backend` (fallback `jsonl_scan` on unknown name), and register `session_search` against it.
-12. Create `ChatRunManager` (also exposed as `runtime.chat_runs`), the `CommandDispatcher` for built-in slash commands, and resolver-wired non-streaming + streaming `ChatLoop` instances.
+12. Create `ChatRunManager` (also exposed as `runtime.chat_runs`), the `CommandDispatcher` for built-in slash commands, and resolver-wired non-streaming + streaming `ChatLoop` instances — both constructed with one shared `CompactionService(SummarizationStrategy())` (constructor injection; no post-hoc wiring).
 13. Wire `TriggerService` (streaming loop for programmatic Runs, non-streaming loop for command helpers); wire + start `ChannelService` when an event loop is active and register `channel_send` while ≥1 channel is active; wire + start `CronService` when an event loop is active and register the `cron` tool; register `bash` (needs the process manager + trigger service).
 14. Create the `SubAgentCoordinator` (owns the in-memory batch tracking) and register sub-agent tools; register the `status` tool; build `SystemPromptManager`.
 15. Write one info-level inventory summary (tool + skill counts, usable/total provider + connection counts), set started, and log `Runtime started`.
@@ -45,6 +46,7 @@ Idempotent — a second call logs at debug and preserves the existing service in
 
 All service properties raise `RuntimeError` before `start()` and after `stop()`, **except `extensions`**, which returns `None` instead of raising. `chat_runs` is a plain attribute (not a property) that is `None` until `start()`.
 
+- `config` — the injected `ConfigProtocol`. Unlike the service properties it is available **before** `start()`; the server uses it for pre-start bind resolution.
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
 - `providers` / `models` — provider and model registries.
 - `provider_credentials` — central provider credential resolver; also exposed through `has_provider_credentials(provider_id)` and `get_provider_credentials(provider_id)`. `resolve_environment_credential(key)` resolves a single environment credential with the same precedence (process env first, then data-dir `.env` fallback) — this is what `web_search` and the Home Assistant tools use.
@@ -88,4 +90,4 @@ All service properties raise `RuntimeError` before `start()` and after `stop()`,
 - The bootstrap Agent is ensured **before** `ChannelService` starts, so a configured channel targeting `main` can come up during first-start recovery.
 - `ChannelService.start()` and `CronService.start()` share the event-loop guard: when runtime startup happens without an active asyncio loop, the service is wired but its listeners are not started.
 - Channel startup failures are isolated to the channel service and recorded as failed channel health state; they must not fail `Runtime.start()`.
-- Runtime owns the canonical resolver-wired chat loops and the canonical `CommandDispatcher`. Server/accessor code should reuse `runtime.chat_loop` / `runtime.streaming_chat_loop` / `runtime.command_dispatcher` instead of constructing fresh instances and bypassing attachment resolution.
+- Runtime owns the canonical resolver-wired chat loops (including their compaction service) and the canonical `CommandDispatcher`. Server/accessor code must reuse `runtime.chat_loop` / `runtime.streaming_chat_loop` / `runtime.command_dispatcher` — the server no longer probes for them or constructs fallbacks, so a stub runtime handed to `create_app` must provide them.

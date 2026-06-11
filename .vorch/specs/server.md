@@ -29,7 +29,7 @@ Clients call the vBot server contract; provider wire details stay behind `core/p
 
 ## Interfaces
 
-- `server.app.create_app(runtime=None, config=None)` — creates the FastAPI app, starts/stops `Runtime` during lifespan, and wires `runtime`, the Runtime-owned `ChatRunManager`, the runtime-provided resolver-wired chat loops when available, and the server event bus into `app.state`.
+- `server.app.create_app(runtime=None, config=None)` — creates the FastAPI app, starts/stops `Runtime` during lifespan, and wires `runtime` plus the runtime-owned services (`chat_run_manager` as `state.chat_runs`, `chat_loop`, `streaming_chat_loop`, `command_dispatcher`) and the server event bus into `app.state`. The server reads these directly — no `getattr` probes, no fallback construction; a runtime stub handed to `create_app` must provide them. Compaction wiring lives in `Runtime.start()`, not in the server.
 - `server.delegates.dispatch_rpc(state, request)` — validates and dispatches RPC methods through `server/rpc/dispatcher.py` and the domain-indexed method registries in `server/rpc/*_methods.py`. New handler code should live in the domain module directly; `server.delegates` should stay a thin facade.
 - `POST /api/upload` — accepts one multipart file upload and returns attachment metadata. The server reads the upload in bounded chunks and rejects payloads over the runtime attachment limit with HTTP 413 before calling attachment storage; blocked MIME types map to HTTP 415.
 - `GET /api/attachments/{attachment_id}` — returns the raw stored blob with its stored `media_type` as Content-Type, or 404 when the attachment does not exist.
