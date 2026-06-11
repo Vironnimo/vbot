@@ -154,6 +154,9 @@ export const englishCatalog = Object.freeze({
   'chat.subagentSessionHint':
     'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
   'chat.returnToCurrentSession': 'Return to current session',
+  'chat.pastSessionNotice': 'Viewing a past session',
+  'chat.pastSessionHint':
+    'This is not the agent’s current session. Messages sent here continue this past session.',
   'chat.runError': 'Run failed.',
   'chat.compacted': 'Context compacted',
 
@@ -161,6 +164,7 @@ export const englishCatalog = Object.freeze({
   'sessions.hide': 'Hide sessions',
   'sessions.loading': 'Loading sessions…',
   'sessions.no_sessions': 'No sessions found for this agent.',
+  'sessions.current': 'Current',
   'sessions.last_active': 'Last active',
   'sessions.link_to_channel': 'Link to channel',
   'sessions.link_channel_id': 'Channel ID',
