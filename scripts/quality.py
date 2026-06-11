@@ -46,7 +46,10 @@ PYTEST_NOISE_LINE_PATTERNS = [
     re.compile(r"^configfile:"),
     re.compile(r"^plugins:"),
     re.compile(r"^asyncio:"),
-    re.compile(r"^timeout"),
+    # pytest-timeout header lines only — not arbitrary output starting with "timeout".
+    re.compile(r"^timeout: \d"),
+    re.compile(r"^timeout method:"),
+    re.compile(r"^timeout func_only:"),
     re.compile(r"^\d+ workers\b"),
     re.compile(r"^scheduling tests via "),
 ]
@@ -73,33 +76,56 @@ def deduplicate_paths(paths: list[str]) -> list[str]:
     return result
 
 
-def translate_to_test_paths(paths: list[str]) -> list[str]:
-    """Translate source paths to their corresponding test paths.
+MIRRORED_TEST_PACKAGES = ("cli", "core", "desktop", "scripts", "server")
 
-    Rule for core/ paths:
-    - ``core/runtime/``   → ``tests/core/runtime/``
-    - ``core/utils/config.py`` → ``tests/core/utils/test_config.py``
 
-    Paths already under ``tests/`` are passed through unchanged.
-    Everything else is passed through unchanged.
+def translate_to_test_paths(paths: list[str]) -> tuple[list[str], list[str]]:
+    """Translate source paths to existing mirrored test paths.
+
+    Returns ``(test_paths, notes)``. Files map to
+    ``tests/<package>/<...>/test_<file>.py``; when that exact mirror file does
+    not exist, the mirrored test directory runs instead so related tests are
+    still exercised. Paths without any mirrored tests become a note instead of
+    a pytest argument: a nonexistent path makes pytest-xdist collect zero items
+    overall and silently skip even the valid paths next to it.
     """
-    result: list[str] = []
+    test_paths: list[str] = []
+    notes: list[str] = []
+
+    def add(path: str) -> None:
+        if path not in test_paths:
+            test_paths.append(path)
+
     for p in paths:
-        if p.startswith("core/"):
-            rest = p[len("core/") :]
-            if rest.endswith(".py"):
-                if "/" in rest:
-                    dir_part, filename = rest.rsplit("/", 1)
-                    result.append(f"tests/core/{dir_part}/test_{filename}")
-                else:
-                    result.append(f"tests/core/test_{rest}")
+        if p == "tests" or p.startswith("tests/"):
+            add(p)
+            continue
+
+        package = p.split("/", 1)[0]
+        if package not in MIRRORED_TEST_PACKAGES:
+            notes.append(f"{p}: not under a mirrored test package, no tests selected")
+            continue
+
+        if p.endswith(".py"):
+            directory, _, filename = p.rpartition("/")
+            mirror_dir = f"tests/{directory}" if directory else "tests"
+            mirror_file = f"{mirror_dir}/test_{filename}"
+            if (PROJECT_ROOT / mirror_file).is_file():
+                add(mirror_file)
+            elif (PROJECT_ROOT / mirror_dir).is_dir():
+                notes.append(f"{p}: no {mirror_file}, running {mirror_dir}/ instead")
+                add(mirror_dir)
             else:
-                result.append(f"tests/core/{rest}")
-        elif p.startswith("tests/"):
-            result.append(p)
+                notes.append(f"{p}: no mirrored tests ({mirror_file} and {mirror_dir}/ missing)")
+            continue
+
+        mirror_dir = f"tests/{p}"
+        if (PROJECT_ROOT / mirror_dir).is_dir():
+            add(mirror_dir)
         else:
-            result.append(p)
-    return result
+            notes.append(f"{p}: no mirrored test directory {mirror_dir}/")
+
+    return test_paths, notes
 
 
 def parse_pytest_counts(output: str) -> tuple[int, int, int]:
@@ -240,19 +266,28 @@ def main() -> int:
     normalized = [p.replace("\\", "/").rstrip("/") for p in raw_paths]
     paths = deduplicate_paths(normalized)
 
+    # Reject unknown paths before running anything: a typo would otherwise
+    # surface as a confusing tool error (or worse, as a silently green run).
+    missing_inputs = [p for p in paths if not (PROJECT_ROOT / p).exists()]
+    if missing_inputs:
+        for missing in missing_inputs:
+            print(f"ERROR: path not found: {missing}")
+        return 2
+
     # ---------- Build command lists ----------
     if paths:
         ruff_fmt_paths = paths
         ruff_fix_paths = paths
         ruff_check_paths = paths
         mypy_paths = paths
-        test_paths = translate_to_test_paths(paths)
+        test_paths, test_notes = translate_to_test_paths(paths)
     else:
         ruff_fmt_paths = ["."]
         ruff_fix_paths = ["."]
         ruff_check_paths = ["."]
         mypy_paths = ["core/", "server/", "cli/", "desktop/", "tests/"]
         test_paths = ["tests/"]
+        test_notes = []
 
     # Each step: (label, command, kind)
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
@@ -288,6 +323,14 @@ def main() -> int:
     failures: list[tuple[str, str]] = []  # (label, full_output)
 
     for label, cmd, kind, snapshot_paths in steps:
+        # Without any mirrored test path, running pytest with no arguments
+        # would execute the full suite — skip explicitly instead.
+        if kind == "pytest" and not test_paths:
+            print(f"{label:<14}.... SKIP (no mirrored tests)")
+            for note in test_notes:
+                print(f"{'':<18}note: {note}")
+            continue
+
         before_snapshot: dict[str, str] = {}
         if kind == "fix" and snapshot_paths is not None:
             before_snapshot = snapshot_target_files(snapshot_paths)
@@ -298,6 +341,7 @@ def main() -> int:
             cmd,
             capture_output=True,
             text=True,
+            cwd=PROJECT_ROOT,
             encoding="utf-8",
             errors="replace",
         )
@@ -317,6 +361,7 @@ def main() -> int:
                 status = describe_fix_result(result.returncode, elapsed, changed_files)
             else:
                 status = f"FAIL ({elapsed:.1f}s)"
+                validation_passed = False
                 failures.append((label, output))
         elif kind == "pytest":
             passed, failed, errors = parse_pytest_counts(output)
@@ -344,6 +389,9 @@ def main() -> int:
         if changed_files:
             for changed_path in changed_files:
                 print(f"{'':<18}{changed_path}")
+        if kind == "pytest":
+            for note in test_notes:
+                print(f"{'':<18}note: {note}")
 
     print()
 
@@ -358,8 +406,7 @@ def main() -> int:
     if validation_passed:
         print(f"All gates passed in {total_elapsed:.1f}s.")
     else:
-        # Count validation-gate failures (ruff check, mypy, pytest) for the summary.
-        failed_count = sum(1 for label, _ in failures if label not in ("ruff format", "ruff fix"))
+        failed_count = len(failures)
         gate_word = "s" if failed_count != 1 else ""
         print(f"{failed_count} gate{gate_word} failed in {total_elapsed:.1f}s.")
 

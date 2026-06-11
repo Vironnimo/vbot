@@ -88,7 +88,7 @@ def test_main_runs_pytest_verbose(monkeypatch, capsys):
 
     monkeypatch.setattr(module.sys, "argv", ["quality.py", "core/runtime/"])
 
-    def fake_run(cmd, capture_output, text, encoding, errors):
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
         commands.append(cmd)
         if cmd[2] == "pytest":
             return module.subprocess.CompletedProcess(
@@ -128,9 +128,9 @@ def test_main_filters_pytest_failure_output(monkeypatch, capsys):
         ]
     )
 
-    monkeypatch.setattr(module.sys, "argv", ["quality.py", "tests/example/test_demo.py"])
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "tests/scripts/test_quality.py"])
 
-    def fake_run(cmd, capture_output, text, encoding, errors):
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
         if cmd[2] == "pytest":
             return module.subprocess.CompletedProcess(cmd, 1, stdout=pytest_output, stderr="")
         return module.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -145,3 +145,106 @@ def test_main_filters_pytest_failure_output(monkeypatch, capsys):
     assert "tests/example/test_demo.py::test_ok\n" not in captured.out
     assert "tests/example/test_demo.py::test_ok PASSED" not in captured.out
     assert "FAILED tests/example/test_demo.py::test_bad - assert 1 == 2" in captured.out
+
+
+def test_translate_maps_existing_mirror_file():
+    module = _load_quality_module()
+
+    test_paths, notes = module.translate_to_test_paths(["core/prompts/prompts.py"])
+
+    assert test_paths == ["tests/core/prompts/test_prompts.py"]
+    assert notes == []
+
+
+def test_translate_falls_back_to_mirror_directory_with_note():
+    module = _load_quality_module()
+
+    test_paths, notes = module.translate_to_test_paths(["core/settings/validation.py"])
+
+    assert test_paths == ["tests/core/settings"]
+    assert len(notes) == 1
+    assert "core/settings/validation.py" in notes[0]
+    assert "tests/core/settings" in notes[0]
+
+
+def test_translate_maps_non_core_packages():
+    module = _load_quality_module()
+
+    test_paths, notes = module.translate_to_test_paths(
+        ["server/app.py", "scripts/quality.py", "cli"]
+    )
+
+    assert "tests/server/test_app.py" in test_paths
+    assert "tests/scripts/test_quality.py" in test_paths
+    assert "tests/cli" in test_paths
+    assert notes == []
+
+
+def test_translate_notes_unmirrored_package_instead_of_pytest_arg():
+    module = _load_quality_module()
+
+    test_paths, notes = module.translate_to_test_paths(["webui/src/App.svelte"])
+
+    assert test_paths == []
+    assert len(notes) == 1
+    assert "webui/src/App.svelte" in notes[0]
+
+
+def test_main_rejects_unknown_input_path(monkeypatch, capsys):
+    module = _load_quality_module()
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "core/does_not_exist.py"])
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("no tool may run for unknown input paths")
+
+    monkeypatch.setattr(module.subprocess, "run", fail_run)
+
+    assert module.main() == 2
+
+    captured = capsys.readouterr()
+    assert "ERROR: path not found: core/does_not_exist.py" in captured.out
+
+
+def test_main_skips_pytest_without_mirrored_tests(monkeypatch, capsys):
+    module = _load_quality_module()
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "webui/package.json"])
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        return module.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+
+    captured = capsys.readouterr()
+    assert "SKIP (no mirrored tests)" in captured.out
+    assert "note: webui/package.json" in captured.out
+    assert not any(cmd[2] == "pytest" for cmd in commands)
+
+
+def test_main_fails_when_fix_step_crashes(monkeypatch, capsys):
+    module = _load_quality_module()
+
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "core/prompts/prompts.py"])
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        if cmd[2:4] == ["ruff", "format"]:
+            return module.subprocess.CompletedProcess(
+                cmd, 2, stdout="", stderr="error: ruff crashed"
+            )
+        if cmd[2] == "pytest":
+            return module.subprocess.CompletedProcess(
+                cmd, 0, stdout="1 passed in 0.01s\n", stderr=""
+            )
+        return module.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 1
+
+    captured = capsys.readouterr()
+    assert "error: ruff crashed" in captured.out
+    assert "All gates passed" not in captured.out
