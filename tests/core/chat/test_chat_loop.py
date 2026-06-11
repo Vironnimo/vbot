@@ -1109,6 +1109,134 @@ async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
 
 
 @pytest.mark.asyncio
+async def test_compact_session_reports_unavailable_without_compaction_service(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    reply = await ChatLoop(runtime).compact_session("coder", "session-one")
+
+    assert reply == "Compaction is not available."
+
+
+@pytest.mark.asyncio
+async def test_compact_session_refuses_while_run_is_active(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="unused",
+        tail_boundary_id="unused",
+        compacted_token_count=1,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=StubAdapter([]),
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    release = asyncio.Event()
+
+    async def blocked_executor(run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    active_run = await runtime.chat_runs.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=blocked_executor,
+    )
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+
+    reply = await loop.compact_session("coder", "session-one")
+    release.set()
+    await active_run.wait()
+
+    assert reply == "Cannot compact while a run is active for this session."
+    assert compaction_service.compact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = ClosingStubAdapter([])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted context.",
+        tail_boundary_id=tail_user.id,
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+
+    reply = await loop.compact_session("coder", "session-one")
+
+    assert reply == "Context compacted."
+    assert persisted_roles(session.load()) == ["user", "assistant", "compaction_checkpoint"]
+    assert len(compaction_service.compact_calls) == 1
+    assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
+    assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
+    assert compaction_service.compact_calls[0]["storage"] is runtime.storage
+    assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    compaction_service = StubCompactionService(
+        should_auto=True,
+        compact_error=RuntimeError("compaction broke"),
+    )
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=StubAdapter([]),
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+
+    reply = await loop.compact_session("coder", "session-one")
+
+    assert reply == "Compaction failed: compaction broke"
+    assert persisted_roles(session.load()) == ["user"]
+
+
+@pytest.mark.asyncio
 async def test_slash_skill_trigger_activates_before_provider_request(tmp_path: Path) -> None:
     skill_file = _write_test_skill(tmp_path, "debugging")
     agent = StubAgent(

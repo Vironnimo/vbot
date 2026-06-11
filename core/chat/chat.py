@@ -131,7 +131,7 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
-    from core.compaction import CompactionService
+    from core.compaction import CompactionService, CompactionSettings
 
 _LOGGER = get_logger("chat")
 
@@ -257,6 +257,57 @@ class ChatLoop:
             session_id=session.id,
             executor=lambda run: self._execute_run(run, content=None, retry=True),
         )
+
+    async def compact_session(self, agent_id: str, session_id: str) -> str:
+        """Manually compact a session and return a user-facing command reply.
+
+        Refuses while a run is active for the session. On success one
+        compaction checkpoint is appended to the session; failures inside
+        the compaction itself are converted into a reply string instead of
+        raising, matching the `/compact` command contract.
+        """
+        if self._compaction_service is None:
+            return "Compaction is not available."
+
+        manager = _runtime_run_manager(self._runtime)
+        if manager.active_run(agent_id=agent_id, session_id=session_id) is not None:
+            return "Cannot compact while a run is active for this session."
+
+        agent = self._runtime.agents.get(agent_id)
+        session = self._get_session(agent_id, session_id, create_missing=False)
+        messages = session.load()
+        settings = self._load_compaction_settings()
+
+        adapter: Any | None = None
+        summary_adapter: Any | None = None
+        try:
+            provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)
+            adapter = self._runtime.get_adapter(provider_id, connection_id)
+            _model_provider_id, model_id = _split_agent_model(agent.model)
+            summary_adapter, summary_model_id = self._resolve_summary_adapter(
+                agent,
+                adapter,
+                model_id,
+                settings,
+            )
+            checkpoint = await self._compaction_service.compact(
+                messages,
+                agent=agent,
+                summary_adapter=summary_adapter,
+                summary_model_id=summary_model_id,
+                storage=self._runtime.storage,
+                settings=settings,
+            )
+            session.append(checkpoint)
+        except Exception as exc:
+            return f"Compaction failed: {exc}"
+        finally:
+            if adapter is not None:
+                await _close_adapter(adapter)
+            if summary_adapter is not None and summary_adapter is not adapter:
+                await _close_adapter(summary_adapter)
+
+        return "Context compacted."
 
     async def _start_run(
         self,
@@ -736,19 +787,7 @@ class ChatLoop:
         if storage is None:
             return messages
 
-        load_compaction_settings = getattr(storage, "load_compaction_settings", None)
-        if not callable(load_compaction_settings):
-            return messages
-
-        from core.compaction import CompactionSettings
-
-        raw_settings = load_compaction_settings()
-        settings = CompactionSettings(
-            auto=bool(raw_settings["auto"]),
-            threshold=float(raw_settings["threshold"]),
-            tail_tokens=int(raw_settings["tail_tokens"]),
-            summary_model=raw_settings["summary_model"],
-        )
+        settings = self._load_compaction_settings()
         if not settings.auto:
             return messages
 
@@ -800,6 +839,20 @@ class ChatLoop:
         run.emit(COMPACTION_COMPLETED_EVENT, {"message": checkpoint.to_dict()})
         rebuilt_messages = await self._build_request_messages(agent, session)
         return _restore_active_tool_continuation(rebuilt_messages, messages)
+
+    def _load_compaction_settings(self) -> CompactionSettings:
+        """Build typed compaction settings from the persisted normalized section."""
+        # Local import: core.compaction imports core.chat at module load, so
+        # chat must not import it back at module level (runtime cycle).
+        from core.compaction import CompactionSettings
+
+        raw_settings = self._runtime.storage.load_compaction_settings()
+        return CompactionSettings(
+            auto=bool(raw_settings["auto"]),
+            threshold=float(raw_settings["threshold"]),
+            tail_tokens=int(raw_settings["tail_tokens"]),
+            summary_model=raw_settings["summary_model"],
+        )
 
     def _resolve_context_window(self, agent: Any) -> int | None:
         """Resolve context window for the active agent model from model registry."""
