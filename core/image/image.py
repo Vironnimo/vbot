@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -34,17 +33,6 @@ class ImageUnsupportedTargetError(ImageError):
 
 class ImageExecutionError(ImageError):
     """Raised when a provider image generation request fails."""
-
-
-@dataclass(frozen=True)
-class _InternalImageArtifact:
-    """Internal artifact data before path resolution."""
-
-    id: str
-    filename: str
-    media_type: str
-    size_bytes: int
-    index: int
 
 
 class ImageService:
