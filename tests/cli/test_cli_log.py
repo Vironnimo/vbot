@@ -113,7 +113,7 @@ def test_run_dispatches_log_read(
         return CommandResult(ok=True, message="log: 2026-05-11", instance=instance)
 
     exit_code = cli_main.run(
-        ["log", "read", "--file", "2026-05-11"],
+        ["log", "read", "2026-05-11"],
         resolve=fake_resolve,
         read_log_fn=fake_read_log,
     )

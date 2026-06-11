@@ -31,7 +31,6 @@ def test_parse_args_supports_channel_add_options() -> None:
         [
             "channel",
             "add",
-            "--id",
             "tg-assistant",
             "--platform",
             "telegram",
@@ -72,7 +71,6 @@ def test_parse_args_supports_channel_id_commands(command: str) -> None:
         [
             "channel",
             command,
-            "--id",
             "tg-assistant",
             "--host",
             "0.0.0.0",
@@ -108,7 +106,6 @@ def test_parse_args_supports_channel_update_options() -> None:
         [
             "channel",
             "update",
-            "--id",
             "tg-assistant",
             "--agent",
             "coder",
@@ -401,7 +398,6 @@ def test_channel_commands_surface_rpc_domain_errors(
             [
                 "channel",
                 "add",
-                "--id",
                 "tg-assistant",
                 "--platform",
                 "telegram",
@@ -421,7 +417,7 @@ def test_channel_commands_surface_rpc_domain_errors(
         ("list", ["channel", "list"], "list", "result: channels:"),
         (
             "remove",
-            ["channel", "remove", "--id", "tg-assistant"],
+            ["channel", "remove", "tg-assistant"],
             "remove",
             "result: removed tg-assistant",
         ),
@@ -430,7 +426,6 @@ def test_channel_commands_surface_rpc_domain_errors(
             [
                 "channel",
                 "update",
-                "--id",
                 "tg-assistant",
                 "--agent",
                 "coder",
@@ -445,19 +440,19 @@ def test_channel_commands_surface_rpc_domain_errors(
         ),
         (
             "enable",
-            ["channel", "enable", "--id", "tg-assistant"],
+            ["channel", "enable", "tg-assistant"],
             "enable",
             "result: enabled tg-assistant",
         ),
         (
             "disable",
-            ["channel", "disable", "--id", "tg-assistant"],
+            ["channel", "disable", "tg-assistant"],
             "disable",
             "result: disabled tg-assistant",
         ),
         (
             "status",
-            ["channel", "status", "--id", "tg-assistant"],
+            ["channel", "status", "tg-assistant"],
             "status",
             "result: tg-assistant: enabled=yes running=no failed=no",
         ),
@@ -593,7 +588,7 @@ def test_channel_command_exit_code_maps_failed_result_to_failure(tmp_path: Path)
         )
 
     exit_code = cli_main.run(
-        ["channel", "disable", "--id", "tg-unknown"],
+        ["channel", "disable", "tg-unknown"],
         resolve=fake_resolve,
         disable_channel=fake_disable,
     )
