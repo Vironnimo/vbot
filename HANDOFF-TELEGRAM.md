@@ -1,8 +1,8 @@
 # Telegram Channel Review Handoff
 
-**Status:** Bugs 1–5 fixed (1–3: `830731c`, `d9d38ea`, `414e14b`, 2026-06-10; 4–5: 2026-06-12).
-M2 resolved separately (voice/audio/video handlers + unsupported-type reply now exist).
-M1, M3, M4 still open · **Date:** 2026-06-10 (updated 2026-06-12)
+**Status:** All findings resolved. Bugs 1–3: `830731c`, `d9d38ea`, `414e14b` (2026-06-10).
+Bugs 4–5 and M1, M3, M4: 2026-06-12. M2 resolved separately (voice/audio/video handlers +
+unsupported-type reply now exist) · **Date:** 2026-06-10 (updated 2026-06-12)
 **Scope reviewed:** `core/channels/` (channels.py, telegram.py, adapter.py), `core/tools/channel.py`,
 `server/rpc/channel_methods.py`, runtime wiring in `core/runtime/runtime.py`, plus the relevant
 parts of `core/runs/runs.py`, `core/chat/commands.py`, `core/chat/events.py`,
@@ -64,7 +64,11 @@ units. Low frequency, but a messaging bot replying with emoji makes it plausible
 
 ## Minor findings
 
-### M1 — Proactively created sessions get no channel metadata
+### M1 — Proactively created sessions get no channel metadata — FIXED (2026-06-12)
+
+**Resolution:** `engine.ensure_channel_session` now also calls `_update_session_metadata` with
+`track_participant=False`, so the outbound path writes the base sidecar keys (`source_channel_id`,
+`platform`, `platform_conv_id`, `last_reply_target`) but records no fake participant.
 
 Inbound routing (`_prepare_inbound_route`) writes `source_channel_id`, `platform`,
 `platform_conv_id`, `last_reply_target` via `_update_session_metadata`. The outbound path
@@ -82,7 +86,12 @@ feedback. Voice in particular is a gap given vBot has STT infrastructure
 (`input_origin: "speech_transcription"` already exists in the chat layer). At minimum a polite
 "unsupported content type" reply would help; STT ingestion is the obvious feature follow-up.
 
-### M3 — One corrupt `channel.json` prevents server startup
+### M3 — One corrupt `channel.json` prevents server startup — FIXED (2026-06-12)
+
+**Resolution:** `ChannelStorage.load_all()` now skips a config that fails to parse/validate with a
+logged warning instead of raising, so one bad file blocks neither server startup nor the other
+channels. Strict single-channel access (`get`) still raises. Per-channel degradation is now the
+intended behavior for config-schema failures too (spec `channels.md` updated).
 
 `ChannelStorage.load_all()` (`core/channels/channels.py:146`) raises on the first invalid config;
 `ChannelService.start()` only try/excepts around `start_channel(...)` *inside* the loop, not around
@@ -97,12 +106,15 @@ server, "one bad channel file = server won't boot" is a risky failure mode. Deci
 is intended and align code + spec; per-channel degradation with a failed-channel diagnostic would
 match the rest of the channel design better.
 
-### M4 — Duplicated channel reminder template
+### M4 — Duplicated channel reminder template — FIXED (2026-06-12)
 
-`_SYSTEM_REMINDER_TEMPLATE` in `core/channels/telegram.py` (~line 48) and
-`_channel_system_reminder()` in `server/rpc/channel_methods.py` (~line 275, used by
-`session.link_channel`) are two independent copies of the same text. They will drift. Move to one
-shared definition (e.g. in `core/channels/adapter.py` or `channels.py`).
+**Resolution:** one shared builder `channel_system_reminder()` now lives in
+`core/channels/adapter.py` (exported from `core.channels`). The engine and `session.link_channel`
+both call it; the duplicated `_SYSTEM_REMINDER_TEMPLATE` (engine) and `_channel_system_reminder`
+(server) copies are gone.
+
+(Note: the template had since moved from `telegram.py` to `engine.py`; the server copy lived in
+`channel_methods.py`.)
 
 ---
 

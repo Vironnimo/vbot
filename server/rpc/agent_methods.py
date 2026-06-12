@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.channels import ChannelConfigError
+from core.channels import ChannelConfigError, channel_system_reminder
 from core.memory import MEMORY_PROMPT_MODES
 from core.settings import (
     ALLOWED_THINKING_EFFORTS,
@@ -16,7 +16,7 @@ from core.settings import (
 )
 from server.events import AGENT_CREATED_EVENT, AGENT_DELETED_EVENT, AGENT_UPDATED_EVENT
 from server.rpc.agent_refs import _agent_reference_ids, _agent_reference_lock
-from server.rpc.channel_methods import _channel_config_by_id, _channel_system_reminder
+from server.rpc.channel_methods import _channel_config_by_id
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -191,7 +191,11 @@ def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
         )
         state.runtime.chat_sessions.set_metadata(agent_id, session_id, metadata)
         session.add_note(
-            _channel_system_reminder(channel_config.platform, channel_id, platform_conv_id)
+            channel_system_reminder(
+                platform_display_name=channel_config.platform.capitalize(),
+                channel_id=channel_id,
+                chat_id=platform_conv_id,
+            )
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

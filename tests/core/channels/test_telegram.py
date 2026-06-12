@@ -497,6 +497,32 @@ async def test_ensure_outbound_session_creates_session_with_channel_reminder(
 
 
 @pytest.mark.asyncio
+async def test_ensure_outbound_session_writes_channel_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    adapter.ensure_outbound_session("12345")
+
+    metadata = chat_sessions.get_metadata("assistant", "ch-tg-assistant-12345")
+    assert metadata["source_channel_id"] == "tg-assistant"
+    assert metadata["platform"] == "telegram"
+    assert metadata["platform_conv_id"] == "12345"
+    assert metadata["last_reply_target"] == {
+        "channel_id": "tg-assistant",
+        "platform_target": "12345",
+    }
+    # A proactive target has no real sender, so no participant is recorded.
+    assert "participants" not in metadata
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_ensure_outbound_session_reuses_existing_session_without_extra_reminder(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

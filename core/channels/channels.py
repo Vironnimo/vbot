@@ -204,7 +204,12 @@ class ChannelStorage:
         self._channels_dir = self._data_root / "channels"
 
     def load_all(self) -> list[ChannelConfig]:
-        """Load all persisted channel configs in stable id-order."""
+        """Load all valid persisted channel configs in stable id-order.
+
+        A config that fails to parse or validate is skipped with a logged warning rather
+        than aborting the whole load: one corrupt ``channel.json`` must not block server
+        startup or hide every other channel. Strict single-channel access stays in ``get``.
+        """
         if not self._channels_dir.exists():
             return []
 
@@ -215,7 +220,10 @@ class ChannelStorage:
             config_path = channel_dir / _CHANNEL_CONFIG_FILENAME
             if not config_path.is_file():
                 continue
-            configs.append(self._read_config(config_path))
+            try:
+                configs.append(self._read_config(config_path))
+            except ChannelError as error:
+                _LOGGER.warning("Skipping invalid channel config %s: %s", config_path, error)
 
         return sorted(configs, key=lambda config: config.id)
 

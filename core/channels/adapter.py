@@ -65,6 +65,24 @@ class FileData:
     data: bytes
 
 
+def channel_system_reminder(
+    *,
+    platform_display_name: str,
+    channel_id: str,
+    chat_id: str,
+) -> str:
+    """Build the one-time channel reminder note injected into a channel Session.
+
+    Shared by the conversation engine (new-session note) and the ``session.link_channel``
+    RPC so the two never drift.
+    """
+    return (
+        f"This session is receiving messages via {platform_display_name} "
+        f"(channel: {channel_id}, chat: {chat_id}).\n"
+        f"Respond in a style appropriate for {platform_display_name} messaging."
+    )
+
+
 class ChannelAdapter(ABC):
     """Base class for platform-specific channel adapters."""
 
