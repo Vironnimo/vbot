@@ -348,3 +348,20 @@ public, and both `core/agents/agents.py` and `server/rpc/agent_methods.py` deleg
 temperature check moved into `core/settings/validation.py` so nothing was lost.
 `core/settings/normalizers.py` keeps its storage-facing "Agent default …" variant deliberately
 (distinct message contract, shares the constants).
+
+## 2026-06-12 — Multi-user channels: deferred concerns from the group-chat design analysis
+
+Surfaced while designing multi-user channel support (roadmap in `CHANNELS-HANDOFF.md`); all three
+are consciously out of that roadmap's scope:
+
+- **Workspace memory assumes one human.** `USER.md` / user-scope memory models *the* user. In
+  group channels the agent will learn facts about several people into a one-person model.
+  Needs a product decision (per-peer memory? participant-scoped sections?) before group usage
+  gets serious.
+- **Group members get full agent capabilities.** A group allowlist entry currently means every
+  member can drive an agent with full host access. Step 2 of the roadmap adds owner-gated
+  commands and user allowlists, but a real capability story (restricted mode per channel?) is
+  unscoped.
+- **Telegram supergroup migration breaks session derivation.** When Telegram upgrades a group to
+  a supergroup the chat id changes (`migrate_to_chat_id`), so the derived session id changes and
+  history continuity silently breaks. No handling today.
