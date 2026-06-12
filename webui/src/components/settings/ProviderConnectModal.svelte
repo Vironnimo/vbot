@@ -2,8 +2,12 @@
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
+    DEFAULT_ACCOUNT_ID,
+    deriveAccountCredentialKey,
     getAddableConnections,
     getPublicConnectionId,
+    isValidAccountId,
+    normalizeAccountId,
   } from '$lib/settingsView.js';
 
   const noop = () => {};
@@ -12,6 +16,7 @@
     providers = [],
     scopedProvider = null,
     scopedConnection = null,
+    scopedAccount = null,
     providerAuthEvent = null,
     connectProvider = null,
     disconnectProvider = null,
@@ -36,12 +41,19 @@
   let selectedProvider = $state(scopedProvider ?? null);
   let selectedConnection = $state(initialConnection());
   let apiKeyValue = $state('');
+  let accountValue = $state(scopedAccount ?? '');
   let saving = $state(false);
   let errorMessage = $state('');
   let oauthData = $state(null);
   let oauthActive = $state(false);
+  let activeOAuthAccount = $state(DEFAULT_ACCOUNT_ID);
   let copiedCode = $state(false);
   let handledAuthEvent = null;
+
+  let accountFixed = $derived(scopedAccount !== null);
+  let accountInvalid = $derived(
+    accountValue.trim().length > 0 && !isValidAccountId(accountValue.trim()),
+  );
 
   let step = $derived(
     !selectedProvider
@@ -102,9 +114,16 @@
     errorMessage = '';
   }
 
+  function effectiveAccount() {
+    return scopedAccount ?? normalizeAccountId(accountValue);
+  }
+
   function goBack() {
     errorMessage = '';
     apiKeyValue = '';
+    if (!accountFixed) {
+      accountValue = '';
+    }
     if (selectedConnection && methodOptions.length > 1) {
       selectedConnection = null;
       return;
@@ -141,7 +160,7 @@
     event.preventDefault();
 
     const value = apiKeyValue.trim();
-    if (!value || saving) {
+    if (!value || saving || accountInvalid) {
       return;
     }
 
@@ -152,6 +171,7 @@
       await rpc('provider.set_key', {
         provider_id: selectedProvider.id,
         connection_id: getPublicConnectionId(selectedConnection),
+        account: effectiveAccount(),
         value,
       });
       onToast({
@@ -172,19 +192,21 @@
   }
 
   async function startOAuthFlow() {
-    if (oauthActive) {
+    if (oauthActive || accountInvalid) {
       return;
     }
 
     errorMessage = '';
     copiedCode = false;
     oauthActive = true;
+    activeOAuthAccount = effectiveAccount();
     oauthData = null;
 
     try {
       const response = await callConnectProvider(
         selectedProvider.id,
         getPublicConnectionId(selectedConnection),
+        activeOAuthAccount,
       );
       oauthData = response?.user_code ? response : null;
     } catch (error) {
@@ -198,6 +220,7 @@
       await callDisconnectProvider(
         selectedProvider.id,
         getPublicConnectionId(selectedConnection),
+        activeOAuthAccount,
       );
     } catch {
       // Cancelling a pending flow is best-effort; the dialog closes anyway.
@@ -214,7 +237,8 @@
       !selectedProvider ||
       !selectedConnection ||
       payload.provider_id !== selectedProvider.id ||
-      payload.connection_id !== getPublicConnectionId(selectedConnection)
+      payload.connection_id !== getPublicConnectionId(selectedConnection) ||
+      payload.account !== activeOAuthAccount
     ) {
       return;
     }
@@ -285,25 +309,27 @@
     }
   }
 
-  async function callConnectProvider(providerId, connectionId) {
+  async function callConnectProvider(providerId, connectionId, account) {
     if (typeof connectProvider === 'function') {
-      return connectProvider(providerId, connectionId, { rpc });
+      return connectProvider(providerId, connectionId, account, { rpc });
     }
 
     return rpc('provider.connect', {
       provider_id: providerId,
       connection_id: connectionId,
+      account,
     });
   }
 
-  async function callDisconnectProvider(providerId, connectionId) {
+  async function callDisconnectProvider(providerId, connectionId, account) {
     if (typeof disconnectProvider === 'function') {
-      return disconnectProvider(providerId, connectionId, { rpc });
+      return disconnectProvider(providerId, connectionId, account, { rpc });
     }
 
     return rpc('provider.disconnect', {
       provider_id: providerId,
       connection_id: connectionId,
+      account,
     });
   }
 
@@ -325,6 +351,41 @@
         );
   }
 </script>
+
+{#snippet accountField(fieldDisabled)}
+  <label class="modal-field">
+    <span class="modal-label">
+      {t('settings.providers.accounts.nameLabel', 'Account')}
+    </span>
+    <input
+      class="s-input"
+      type="text"
+      autocomplete="off"
+      placeholder={DEFAULT_ACCOUNT_ID}
+      value={accountValue}
+      disabled={fieldDisabled || accountFixed}
+      oninput={(event) => {
+        accountValue = event.currentTarget.value;
+        errorMessage = '';
+      }}
+    />
+  </label>
+  {#if accountInvalid}
+    <p class="provider-connect-modal__error" role="alert">
+      {t(
+        'settings.providers.accounts.invalidId',
+        'Account names use 1–32 lowercase letters, digits, or underscores and start with a letter or digit.',
+      )}
+    </p>
+  {:else if !accountFixed}
+    <p class="provider-connect-modal__hint">
+      {t(
+        'settings.providers.accounts.nameHint',
+        'Optional name for this credential slot. Leave empty for the default account.',
+      )}
+    </p>
+  {/if}
+{/snippet}
 
 <svelte:document onkeydown={handleDocumentKeydown} />
 
@@ -446,12 +507,18 @@
               }}
             />
           </label>
+          {@render accountField(saving)}
           {#if selectedConnection.credential_key}
             <p class="provider-connect-modal__hint">
               {t(
                 'settings.providers.add.apiKeyHint',
                 'Stored as {credentialKey} in the data directory .env.',
-                { credentialKey: selectedConnection.credential_key },
+                {
+                  credentialKey: deriveAccountCredentialKey(
+                    selectedConnection.credential_key,
+                    effectiveAccount(),
+                  ),
+                },
               )}
             </p>
           {/if}
@@ -518,6 +585,7 @@
               providerValues(selectedProvider),
             )}
           </p>
+          {@render accountField(false)}
         {/if}
       {/if}
 
@@ -552,7 +620,7 @@
           type="submit"
           form="provider-connect-key-form"
           class="modal-btn-confirm"
-          disabled={saving || apiKeyValue.trim().length === 0}
+          disabled={saving || apiKeyValue.trim().length === 0 || accountInvalid}
         >
           {saving
             ? t('common.saving', 'Saving…')
@@ -562,6 +630,7 @@
         <button
           type="button"
           class="modal-btn-confirm"
+          disabled={accountInvalid}
           onclick={startOAuthFlow}
         >
           {t('settings.providers.connect', 'Connect')}

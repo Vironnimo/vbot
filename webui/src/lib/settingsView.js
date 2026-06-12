@@ -442,8 +442,103 @@ export function getProviderItems(settings) {
     : [];
 }
 
+export const DEFAULT_ACCOUNT_ID = 'default';
+
+const ACCOUNT_ID_PATTERN = /^[a-z0-9][a-z0-9_]{0,31}$/;
+
+export const ACCOUNT_SOURCE_PROCESS_ENV = 'process_env';
+export const ACCOUNT_SOURCE_DATA_DIR = 'data_dir';
+export const ACCOUNT_SOURCE_OAUTH = 'oauth';
+
+export function isValidAccountId(value) {
+  return typeof value === 'string' && ACCOUNT_ID_PATTERN.test(value);
+}
+
+export function normalizeAccountId(value) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+
+  return trimmed.length > 0 ? trimmed : DEFAULT_ACCOUNT_ID;
+}
+
+export function getConnectionAccounts(connection) {
+  if (!Array.isArray(connection?.accounts)) {
+    return [];
+  }
+
+  return connection.accounts.filter(
+    (account) => typeof account?.id === 'string' && account.id.length > 0,
+  );
+}
+
+export function isAccountUsable(account) {
+  return account?.usable === true;
+}
+
+export function connectionHasUsableAccount(connection) {
+  return getConnectionAccounts(connection).some(isAccountUsable);
+}
+
+export function isProcessEnvAccount(account) {
+  return account?.source === ACCOUNT_SOURCE_PROCESS_ENV;
+}
+
+export function isOAuthAccount(account) {
+  return account?.source === ACCOUNT_SOURCE_OAUTH;
+}
+
+export function accountDisplayName(account, translate) {
+  if (account?.id === DEFAULT_ACCOUNT_ID) {
+    return translate('settings.providers.accounts.defaultLabel', 'Default');
+  }
+
+  return typeof account?.id === 'string' ? account.id : '';
+}
+
+export function describeAccountSource(account, translate) {
+  if (account?.source === ACCOUNT_SOURCE_PROCESS_ENV) {
+    return translate(
+      'settings.providers.accounts.source.processEnv',
+      'Process env',
+    );
+  }
+
+  if (account?.source === ACCOUNT_SOURCE_DATA_DIR) {
+    return translate('settings.providers.accounts.source.dataDir', '.env file');
+  }
+
+  if (account?.source === ACCOUNT_SOURCE_OAUTH) {
+    return translate('settings.providers.accounts.source.oauth', 'OAuth');
+  }
+
+  return '';
+}
+
+// Client-side preview of the credential key the server derives for an
+// account (e.g. OPENAI_API_KEY + "work" -> OPENAI_API_KEY__WORK). The
+// authoritative value comes back in the provider.set_key response.
+export function deriveAccountCredentialKey(baseKey, account) {
+  const base = typeof baseKey === 'string' ? baseKey : '';
+  const normalized = normalizeAccountId(account);
+
+  if (base.length === 0 || normalized === DEFAULT_ACCOUNT_ID) {
+    return base;
+  }
+
+  return `${base}__${normalized.toUpperCase()}`;
+}
+
+export function connectionSupportsAddAccount(connection) {
+  return (
+    connection?.type === 'api_key' || isOAuthDeviceFlowConnection(connection)
+  );
+}
+
 export function isConnectionConfigured(connection) {
-  return connection?.configured === true || connection?.usable === true;
+  return (
+    connection?.configured === true ||
+    connection?.usable === true ||
+    connectionHasUsableAccount(connection)
+  );
 }
 
 export function providerHasConfiguredConnection(provider) {
@@ -501,12 +596,28 @@ export function getPublicConnectionId(connection) {
   return typeof connection?.id === 'string' ? connection.id : '';
 }
 
-export function buildProviderConnectPayload(providerId, connectionId) {
-  return { provider_id: providerId, connection_id: connectionId };
+export function buildProviderConnectPayload(
+  providerId,
+  connectionId,
+  account = DEFAULT_ACCOUNT_ID,
+) {
+  return {
+    provider_id: providerId,
+    connection_id: connectionId,
+    account: normalizeAccountId(account),
+  };
 }
 
-export function buildProviderDisconnectPayload(providerId, connectionId) {
-  return { provider_id: providerId, connection_id: connectionId };
+export function buildProviderDisconnectPayload(
+  providerId,
+  connectionId,
+  account = DEFAULT_ACCOUNT_ID,
+) {
+  return {
+    provider_id: providerId,
+    connection_id: connectionId,
+    account: normalizeAccountId(account),
+  };
 }
 
 export function getPersistedLanguageId(settings) {
