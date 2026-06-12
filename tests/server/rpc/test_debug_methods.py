@@ -477,7 +477,10 @@ class TestDebugModelProbe:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert "does not belong to provider" in response["error"]["message"].lower()
+        assert (
+            "unknown connection id 'wrong-prefix:api-key' for provider 'openrouter'"
+            in response["error"]["message"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_rejects_missing_provider_id(self, tmp_path: Path) -> None:
