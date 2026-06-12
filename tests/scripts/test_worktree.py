@@ -355,6 +355,13 @@ def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypat
     ignored_worktree = worktrees_dir / "no-marker"
     ignored_worktree.mkdir()
 
+    trash_worktree = worktrees_dir / f"{module.TRASH_DIR_PREFIX}gone-123"
+    trash_worktree.mkdir()
+    (trash_worktree / module.WORKTREE_FILE_NAME).write_text(
+        json.dumps({"data_dir": str(tmp_path / "gone"), "managed_branch": True}),
+        encoding="utf-8",
+    )
+
     entries = module.iter_worktree_entries(worktrees_dir)
 
     assert entries == [
@@ -620,6 +627,166 @@ def test_cmd_delete_deletes_branch_when_marker_declares_managed_branch(tmp_path,
         ["git", "worktree", "remove", str(worktree_path)],
         ["git", "branch", "-d", name],
     ]
+
+
+def test_remove_directory_tree_clears_readonly_files(tmp_path):
+    module = _load_worktree_module()
+
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    locked_file = tree / "readonly.txt"
+    locked_file.write_text("x", encoding="utf-8")
+    locked_file.chmod(0o444)
+
+    result = module._remove_directory_tree(tree)
+
+    assert result is None
+    assert not tree.exists()
+
+
+def test_sweep_trash_directories_removes_only_trash_dirs(tmp_path):
+    module = _load_worktree_module()
+
+    worktrees_dir = tmp_path / ".worktrees"
+    trash_dir = worktrees_dir / f"{module.TRASH_DIR_PREFIX}old-task-123"
+    trash_dir.mkdir(parents=True)
+    (trash_dir / "leftover.txt").write_text("x", encoding="utf-8")
+    kept_dir = worktrees_dir / "active-task"
+    kept_dir.mkdir()
+
+    module.sweep_trash_directories(worktrees_dir)
+
+    assert not trash_dir.exists()
+    assert kept_dir.exists()
+
+
+def test_cmd_delete_finishes_removal_when_git_fails_on_locked_files(tmp_path, monkeypatch, capsys):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+
+    name = "locked-worktree"
+    worktree_path = module.WORKTREES_DIR / name
+    worktree_path.mkdir(parents=True)
+    (worktree_path / "leftover.txt").write_text("x", encoding="utf-8")
+
+    commands = []
+
+    def fake_run_command(command, *, cwd=None):
+        commands.append(command)
+        if command[:3] == ["git", "worktree", "remove"]:
+            return 1, f"error: failed to delete '{worktree_path}': Invalid argument"
+        return 0, ""
+
+    terminate_calls = []
+
+    def fake_terminate(path):
+        terminate_calls.append(path)
+        return [str(path / "webui" / "node_modules" / "esbuild.exe")]
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module, "_terminate_worktree_processes", fake_terminate)
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+
+    result = module.cmd_delete(argparse.Namespace(name=name, force=True))
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert terminate_calls == [worktree_path]
+    assert not worktree_path.exists()
+    assert ["git", "worktree", "prune"] in commands
+    assert "terminated:" in captured.out
+    assert "status: deleted" in captured.out
+
+
+def test_cmd_delete_moves_stuck_worktree_to_trash(tmp_path, monkeypatch, capsys):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+
+    name = "stuck-worktree"
+    worktree_path = module.WORKTREES_DIR / name
+    worktree_path.mkdir(parents=True)
+    (worktree_path / "held-by-editor.node").write_text("x", encoding="utf-8")
+
+    def fake_run_command(command, *, cwd=None):
+        if command[:3] == ["git", "worktree", "remove"]:
+            return 1, f"error: failed to delete '{worktree_path}': Invalid argument"
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module, "_terminate_worktree_processes", lambda _path: [])
+    monkeypatch.setattr(module, "_remove_directory_tree", lambda _path: "still locked")
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
+
+    result = module.cmd_delete(argparse.Namespace(name=name, force=True))
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert not worktree_path.exists()
+    trash_dirs = [
+        path
+        for path in module.WORKTREES_DIR.iterdir()
+        if path.name.startswith(module.TRASH_DIR_PREFIX)
+    ]
+    assert len(trash_dirs) == 1
+    assert "leftover:" in captured.out
+    assert "status: deleted" in captured.out
+
+
+def test_list_uncommitted_paths_returns_porcelain_lines(monkeypatch):
+    module = _load_worktree_module()
+
+    class FakeResult:
+        returncode = 0
+        stdout = " M webui/src/App.svelte\n?? docs/plans/task.md\n\n"
+
+    calls = []
+
+    def fake_run(command, *, capture_output, text, check):
+        calls.append(command)
+        return FakeResult()
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    lines = module._list_uncommitted_paths(Path("C:/repo/.worktrees/task"))
+
+    assert lines == [" M webui/src/App.svelte", "?? docs/plans/task.md"]
+    assert calls == [
+        ["git", "-C", str(Path("C:/repo/.worktrees/task")), "status", "--porcelain"]
+    ]
+
+
+def test_cmd_delete_lists_uncommitted_files_when_non_force_remove_fails(
+    tmp_path, monkeypatch, capsys
+):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+
+    name = "dirty-worktree"
+    worktree_path = module.WORKTREES_DIR / name
+    worktree_path.mkdir(parents=True)
+
+    def fake_run_command(command, *, cwd=None):
+        if command[:3] == ["git", "worktree", "remove"]:
+            return 1, f"fatal: '{worktree_path}' contains modified or untracked files"
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+    monkeypatch.setattr(
+        module,
+        "_list_uncommitted_paths",
+        lambda _path: ["?? docs/plans/task.md", " M webui/src/App.svelte"],
+    )
+    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
+
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "error: worktree has uncommitted changes, use --force to override" in captured.out
+    assert "uncommitted: ?? docs/plans/task.md" in captured.out
+    assert "uncommitted:  M webui/src/App.svelte" in captured.out
 
 
 def test_cmd_delete_restores_marker_after_failed_remove_for_retry(tmp_path, monkeypatch):
