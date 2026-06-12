@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +12,7 @@ from core.providers.adapter import ModelLookup
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai_assistant_message
 from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningReplayPolicy
 from core.providers.token_getter import TokenGetter
 
 _ANTHROPIC_MESSAGES_MODELS: frozenset[str] = frozenset(
@@ -21,9 +21,6 @@ _ANTHROPIC_MESSAGES_MODELS: frozenset[str] = frozenset(
         "minimax-m2.5",
         "qwen3.5-plus",
     }
-)
-_SYSTEM_REMINDER_BLOCKS_PATTERN = re.compile(
-    r"^<system-reminder>\n[\s\S]*?\n</system-reminder>(?:\n<system-reminder>\n[\s\S]*?\n</system-reminder>)*$"
 )
 _OUTPUT_LIMIT_KEYS = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
 
@@ -34,14 +31,13 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     Models with reasoning capability (DeepSeek, Kimi, GLM, ...) return
     ``reasoning_content`` in assistant messages.
 
-    For OpenCode Go models routed through the Anthropic ``/messages`` path,
-    this adapter replays reasoning only for the active assistant continuation
-    turn (assistant tool call followed by tool results) to avoid stale reasoning
-    from older completed turns and unbounded prompt growth.
-
-    For OpenCode Go models routed through OpenAI ``/chat/completions``, the
-    adapter replays assistant reasoning for every historical assistant message
-    because the provider expects full ``reasoning_content`` round-tripping.
+    Both routes replay assistant reasoning for the full same-model history
+    (``full_history`` policy): the OpenAI ``/chat/completions`` route expects
+    ``reasoning_content`` round-tripping for every historical assistant
+    message, and the Anthropic ``/messages`` route accepts replayed signed
+    thinking blocks across run boundaries (both verified against the real
+    gateway, 2026-06-13). History shaping is owned by the chat layer; this
+    adapter only translates whatever reasoning survives shaping onto the wire.
     """
 
     def __init__(
@@ -89,6 +85,17 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         await super().aclose()
         await self._anthropic.aclose()
 
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        """Replay persisted reasoning across runs on both gateway routes.
+
+        Verified against the real gateway (2026-06-13): the OpenAI route
+        accepts ``reasoning_content`` on completed historical assistant
+        messages, the Anthropic route accepts replayed signed thinking blocks
+        across run boundaries.
+        """
+        del model_id
+        return REASONING_REPLAY_FULL_HISTORY
+
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -98,9 +105,8 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
         if _uses_anthropic_messages_path(model_id):
-            bounded_messages = _bound_assistant_reasoning_replay(messages)
             return await self._anthropic.send(
-                bounded_messages,
+                messages,
                 model_id=model_id,
                 **request_kwargs,
             )
@@ -115,9 +121,8 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ) -> AsyncIterator[dict[str, Any]]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
         if _uses_anthropic_messages_path(model_id):
-            bounded_messages = _bound_assistant_reasoning_replay(messages)
             return self._anthropic.stream(
-                bounded_messages,
+                messages,
                 model_id=model_id,
                 **request_kwargs,
             )
@@ -129,11 +134,8 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        payload_messages = messages
-        if _uses_anthropic_messages_path(model_id):
-            payload_messages = _bound_assistant_reasoning_replay(messages)
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
-        return super()._build_payload(payload_messages, model_id, **request_kwargs)
+        return super()._build_payload(messages, model_id, **request_kwargs)
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         if "choices" in response:
@@ -186,74 +188,6 @@ def _model_lookup_candidates(model_id: str) -> tuple[str, ...]:
     if "/" in without_connection_suffix:
         candidates.append(without_connection_suffix.rsplit("/", 1)[-1])
     return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
-
-
-def _bound_assistant_reasoning_replay(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    keep_index = _active_assistant_continuation_index(messages)
-
-    sanitized_messages: list[dict[str, Any]] = []
-    changed = False
-    for index, message in enumerate(messages):
-        if message.get("role") != "assistant" or index == keep_index:
-            sanitized_messages.append(message)
-            continue
-        if "reasoning" not in message and "reasoning_meta" not in message:
-            sanitized_messages.append(message)
-            continue
-
-        sanitized_message = dict(message)
-        sanitized_message.pop("reasoning", None)
-        sanitized_message.pop("reasoning_meta", None)
-        sanitized_messages.append(sanitized_message)
-        changed = True
-
-    return sanitized_messages if changed else messages
-
-
-def _active_assistant_continuation_index(messages: list[dict[str, Any]]) -> int | None:
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        if message.get("role") != "assistant":
-            continue
-        if not message.get("tool_calls"):
-            return None
-        continuation_suffix = messages[index + 1 :]
-        if _is_active_continuation_suffix(continuation_suffix):
-            return index
-        return None
-    return None
-
-
-def _is_active_continuation_suffix(continuation_suffix: list[dict[str, Any]]) -> bool:
-    if not continuation_suffix:
-        return False
-
-    saw_tool_result = False
-    saw_synthetic_user_note = False
-    for candidate in continuation_suffix:
-        if candidate.get("role") == "tool":
-            if saw_synthetic_user_note:
-                return False
-            saw_tool_result = True
-            continue
-        if candidate.get("role") == "user" and _is_synthetic_system_reminder_message(candidate):
-            if not saw_tool_result:
-                return False
-            saw_synthetic_user_note = True
-            continue
-        return False
-    return saw_tool_result
-
-
-def _is_synthetic_system_reminder_message(message: dict[str, Any]) -> bool:
-    if "id" in message or "timestamp" in message:
-        return False
-
-    content = message.get("content")
-    if not isinstance(content, str):
-        return False
-
-    return bool(_SYSTEM_REMINDER_BLOCKS_PATTERN.fullmatch(content.strip()))
 
 
 def _uses_anthropic_messages_path(model_id: str) -> bool:

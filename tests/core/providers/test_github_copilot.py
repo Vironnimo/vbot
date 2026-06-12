@@ -488,6 +488,28 @@ async def test_send_routes_claude_to_messages_from_metadata(
     }
 
 
+@pytest.mark.parametrize(
+    ("model_id", "expected_policy"),
+    [
+        ("gpt-5.4", "full_history"),
+        ("claude-haiku-4.5", "full_history"),
+        ("gemini-3.1-pro-preview", "current_run"),
+    ],
+)
+def test_reasoning_replay_policy_follows_endpoint_family(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+    model_id: str,
+    expected_policy: str,
+) -> None:
+    assert metadata_copilot_adapter.reasoning_replay_policy(model_id) == expected_policy
+
+
+def test_reasoning_replay_policy_defaults_to_current_run_without_metadata(
+    copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    assert copilot_adapter.reasoning_replay_policy("unknown-model") == "current_run"
+
+
 @pytest.mark.parametrize("model_id", ["claude-sonnet-4.6", "claude-haiku-4.5"])
 @respx.mock
 @pytest.mark.asyncio

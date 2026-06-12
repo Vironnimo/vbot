@@ -106,6 +106,11 @@ def raw_mistral_model(
     return raw
 
 
+def test_reasoning_replay_policy_stays_current_run(mistral_adapter: MistralAdapter) -> None:
+    """Deliberate Phase-3 choice: no probe evidence that Mistral wants cross-run replay."""
+    assert mistral_adapter.reasoning_replay_policy("magistral-medium-latest") == "current_run"
+
+
 def test_normalize_catalog_entry_maps_chat_model_capabilities() -> None:
     model = MistralAdapter.normalize_catalog_entry(raw_mistral_model(), {"max_tokens": 8192})
 
