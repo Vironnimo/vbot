@@ -866,6 +866,92 @@
   flex-wrap: wrap;
 }
 
+/* --- Extensions panel --- */
+
+.s-ext-restart {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text-hi);
+}
+
+.s-ext-restart code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--amber);
+}
+
+.s-ext-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.s-ext-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.s-ext-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.s-ext-name-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.s-ext-name {
+  font-family: var(--font-mono);
+}
+
+.s-ext-version {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-lo);
+}
+
+.s-ext-capabilities {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.s-ext-error-text {
+  color: var(--red);
+}
+
+.s-ext-warning {
+  color: var(--amber);
+}
+
+.s-ext-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: fit-content;
+}
+
+.s-ext-config {
+  margin-top: 12px;
+}
+
+.s-ext-config-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 @media (max-width: 760px) {
   .settings-layout.view {
     flex-direction: column;
