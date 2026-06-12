@@ -14,12 +14,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import core.channels.engine as engine_module
 import core.channels.telegram as telegram_module
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
-    ConversationFacts,
     FileData,
-    MessageFacts,
     ReplyPlanFacts,
     RouteFacts,
 )
@@ -178,7 +177,7 @@ def make_adapter(
 
 
 async def drain_chat_queue(adapter: TelegramChannelAdapter, chat_id: int) -> None:
-    queue = adapter._chat_queues.get(str(chat_id))
+    queue = adapter._engine._chat_queues.get(str(chat_id))
     if queue is None:
         await asyncio.sleep(0)
         return
@@ -210,31 +209,50 @@ def install_fake_telegram_media(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("dm_scope", "chat_id", "user_id", "expected"),
-    [
-        ("per_conversation", 12345, 987, "ch-tg-assistant-12345"),
-        ("main", 12345, 987, "ch-tg-assistant-main"),
-        ("per_peer", 12345, 987, "ch-tg-assistant-u987"),
-        ("per_account_channel_peer", 12345, 987, "ch-tg-assistant-12345-u987"),
-        ("main", -10001, 987, "ch-tg-assistant--10001"),
-    ],
+    ("chat_id", "expected_kind"),
+    [(12345, "direct"), (-10001, "group")],
 )
-def test_derive_session_id(dm_scope: str, chat_id: int, user_id: int, expected: str) -> None:
+def test_conversation_facts_classifies_kind_by_chat_id_sign(
+    chat_id: int, expected_kind: str
+) -> None:
     adapter = TelegramChannelAdapter.__new__(TelegramChannelAdapter)
-    adapter._config = make_config(dm_scope=dm_scope, allowed_chat_ids=[chat_id])
+    adapter._config = make_config(allowed_chat_ids=[chat_id])
 
-    session_id = TelegramChannelAdapter._derive_session_id(
-        adapter,
-        ConversationFacts(
-            platform="telegram",
-            channel_id="tg-assistant",
-            chat_id=str(chat_id),
-            user_id=str(user_id),
-            thread_id=None,
-        ),
+    conversation = adapter._conversation_facts(
+        make_update(chat_id=chat_id, user_id=50, text="hi")
     )
 
-    assert session_id == expected
+    assert conversation is not None
+    assert conversation.kind == expected_kind
+
+
+@pytest.mark.asyncio
+async def test_negative_chat_id_routes_to_shared_group_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant--10001"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        dm_scope="main",
+        allowed_chat_ids=[-10001],
+        trigger_run=trigger_mock,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=-10001, user_id=50, text="hello"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    # Group chats ignore dm_scope and share one session keyed by the chat id.
+    assert chat_sessions.exists("assistant", session_id)
+    trigger_mock.assert_awaited_once_with("assistant", "hello", session_id)
+    await adapter.stop()
 
 
 def test_constructor_requires_token_env_var(
@@ -824,7 +842,7 @@ async def test_stop_command_is_eagerly_dispatched_while_chat_worker_is_blocked(
         await release_relay.wait()
 
     monkeypatch.setattr(
-        adapter,
+        adapter._engine,
         "_relay_run_events",
         AsyncMock(side_effect=block_relay),
     )
@@ -883,7 +901,7 @@ async def test_non_command_text_still_queues_while_chat_worker_is_blocked(
         await release_relay.wait()
 
     monkeypatch.setattr(
-        adapter,
+        adapter._engine,
         "_relay_run_events",
         AsyncMock(side_effect=block_relay),
     )
@@ -906,44 +924,12 @@ async def test_non_command_text_still_queues_while_chat_worker_is_blocked(
     assert second_call.args == ("assistant", session_id, "still queued")
     assert trigger_mock.await_count == 1
 
-    queue = adapter._chat_queues.get("12345")
+    queue = adapter._engine._chat_queues.get("12345")
     assert queue is not None
     assert queue.qsize() == 1
 
     release_relay.set()
     await drain_chat_queue(adapter, 12345)
-    await adapter.stop()
-
-
-@pytest.mark.asyncio
-async def test_non_text_content_skips_command_dispatch_and_triggers_run(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    session_id = "ch-tg-assistant-12345"
-    trigger_mock = AsyncMock(
-        return_value=make_completed_run(session_id=session_id, output_text="ok")
-    )
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
-    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
-        tmp_path,
-        monkeypatch,
-        allowed_chat_ids=[12345],
-        trigger_run=trigger_mock,
-        command_dispatcher=command_dispatcher,
-    )
-
-    queued = telegram_module._QueuedInboundMessage(
-        route=RouteFacts(agent_id="assistant", session_id=session_id),
-        reply_plan=ReplyPlanFacts(channel_id="tg-assistant", platform_target="12345"),
-        message=MessageFacts(content=[TextBlock(type="text", text="/stop")]),
-    )
-
-    await adapter._process_queued_message(queued)
-
-    command_dispatcher.dispatch.assert_not_called()
-    trigger_mock.assert_awaited_once_with("assistant", queued.message.content, session_id)
-    bot.send_message.assert_awaited_once_with(chat_id=12345, text="ok")
     await adapter.stop()
 
 
@@ -1301,7 +1287,7 @@ async def test_album_with_one_failing_item_keeps_siblings_and_reports_failure(
         ),
     ]
 
-    queued = telegram_module._QueuedInboundMedia(
+    queued = engine_module._QueuedInboundMedia(
         route=RouteFacts(agent_id="assistant", session_id=session_id),
         reply_plan=ReplyPlanFacts(channel_id="tg-assistant", platform_target="12345"),
         messages=(
@@ -1320,7 +1306,7 @@ async def test_album_with_one_failing_item_keeps_siblings_and_reports_failure(
         ),
     )
 
-    await adapter._process_queued_media(queued)
+    await adapter._engine._process_queued_media(queued)
 
     sent_texts = [call.kwargs["text"] for call in bot.send_message.await_args_list]
     assert sent_texts == [
@@ -1560,7 +1546,7 @@ async def test_trigger_run_exception_does_not_leak_internal_error_text(
         allowed_chat_ids=[12345],
         trigger_run=trigger_mock,
     )
-    caplog.set_level(logging.ERROR, logger="vbot.channels.telegram")
+    caplog.set_level(logging.ERROR, logger="vbot.channels.engine")
 
     await adapter._handle_inbound_message(
         make_update(chat_id=12345, user_id=50, text="hello"),
@@ -1574,7 +1560,7 @@ async def test_trigger_run_exception_does_not_leak_internal_error_text(
     log_records = [
         record
         for record in caplog.records
-        if record.message.startswith("Telegram trigger run failed")
+        if record.message.startswith("Channel trigger run failed")
     ]
     assert len(log_records) == 1
     assert log_records[0].exc_info is not None
@@ -1598,7 +1584,7 @@ async def test_compact_command_exception_is_logged_with_context(
         compact_session=compact_mock,
         command_dispatcher=command_dispatcher,
     )
-    caplog.set_level(logging.ERROR, logger="vbot.channels.telegram")
+    caplog.set_level(logging.ERROR, logger="vbot.channels.engine")
 
     await adapter._handle_inbound_message(
         make_update(chat_id=12345, user_id=50, text="/compact"),
@@ -1613,7 +1599,7 @@ async def test_compact_command_exception_is_logged_with_context(
     log_records = [
         record
         for record in caplog.records
-        if record.message.startswith("Telegram command action failed")
+        if record.message.startswith("Channel command action failed")
     ]
     assert len(log_records) == 1
     assert log_records[0].exc_info is not None
@@ -1637,7 +1623,7 @@ async def test_retry_command_exception_is_logged_with_context(
         retry_run=retry_mock,
         command_dispatcher=command_dispatcher,
     )
-    caplog.set_level(logging.ERROR, logger="vbot.channels.telegram")
+    caplog.set_level(logging.ERROR, logger="vbot.channels.engine")
 
     await adapter._handle_inbound_message(
         make_update(chat_id=12345, user_id=50, text="/retry"),
@@ -1652,7 +1638,7 @@ async def test_retry_command_exception_is_logged_with_context(
     log_records = [
         record
         for record in caplog.records
-        if record.message.startswith("Telegram command action failed")
+        if record.message.startswith("Channel command action failed")
     ]
     assert len(log_records) == 1
     assert log_records[0].exc_info is not None
