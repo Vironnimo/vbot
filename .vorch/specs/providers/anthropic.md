@@ -22,7 +22,10 @@ Anthropic Messages API adapter and Anthropic-style request/response normalizatio
 - `thinking_effort: none` sends `thinking: {type: disabled}`. Active Anthropic efforts send adaptive thinking, summarized display, and `output_config.effort` for efforts above `minimal`.
 - Anthropic rejects a sampling `temperature` while thinking is active. When the outgoing request activates thinking (adaptive via effort, or a raw `thinking` kwarg with type `adaptive`/`enabled`), `_build_payload` drops the caller `temperature` and skips the provider-default `temperature`. `thinking: {type: disabled}` does not conflict — temperature stays.
 - If injected `model_lookup` says reasoning is unsupported, Anthropic thinking/reasoning controls are stripped.
-- Opaque `thinking` and `redacted_thinking` blocks from provider responses are preserved under `reasoning_meta.content_blocks` and may be resent for the active tool-use continuation.
+- **Replay policy:** `reasoning_replay_policy` returns `full_history` — persisted `reasoning`/`reasoning_meta` replay across runs for assistant entries that pass the chat layer's same-model gate (Anthropic guidance: thinking blocks go back unchanged for the whole same-model conversation; stripping risks signature/ordering 400s and provider-side prompt-cache misses). Cross-model entries are stripped by the gate; same-model reasoning-only turns stay in the request history.
+- Opaque `thinking` and `redacted_thinking` blocks from provider responses are preserved under `reasoning_meta.content_blocks` and are resent for the active tool-use continuation and, via `full_history`, for prior same-model runs.
+- **Thinking-disabled guard:** when the outgoing request explicitly disables thinking (`thinking: {type: disabled}`, e.g. from `thinking_effort: none`) or the catalog marks the model reasoning-unsupported, `_build_payload` strips replayed `reasoning_meta` thinking blocks; an assistant turn left without content blocks is dropped from the request (the wire rejects empty content arrays). An absent thinking parameter does **not** strip — omitting blocks is the risk, the server drops unusable ones.
+- Live probe of API tolerance for replayed thinking blocks under explicitly disabled thinking was **not performed** (2026-06-13 — no Anthropic credentials in this environment; see FLAGGED.md). The guard above is the conservative default until probed.
 - Plain readable `reasoning` text without opaque metadata is not converted into Anthropic thinking blocks.
 
 ## Response Normalization
@@ -42,6 +45,6 @@ Anthropic Messages API adapter and Anthropic-style request/response normalizatio
 
 ## Constraints & Gotchas
 
-- Current-turn reasoning metadata may be resent for tool-use continuation, but stale completed-turn metadata must not be sent on later turns.
+- Same-model thinking blocks replay across the whole conversation (`full_history` policy); the chat layer's same-model gate strips cross-model entries, and the thinking-disabled guard strips them at payload build. Do not re-add history-wide reasoning strips in the adapter — the chat layer owns history shaping.
 - Preserve Anthropic signatures and redacted thinking bytes unchanged; vBot never interprets their contents.
 - Keep Anthropic protocol behavior in `AnthropicAdapter` or provider-specific wrappers such as `OpenCodeGoAdapter`; do not add Anthropic content-block rules to the generic OpenAI-compatible adapter.

@@ -24,6 +24,7 @@ from core.providers.errors import (
     ProviderTimeoutError,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1047,6 +1048,156 @@ class TestSendRequestFormat:
         assert "thinking" not in request_body
         assert "output_config" not in request_body
         assert "include_reasoning" not in request_body
+
+
+# ---------------------------------------------------------------------------
+# Reasoning replay policy and thinking-disabled guard
+# ---------------------------------------------------------------------------
+
+PRIOR_RUN_THINKING_BLOCK = {
+    "type": "thinking",
+    "thinking": "Prior-run reasoning.",
+    "signature": "opaque-prior-run-signature",
+}
+PRIOR_RUN_REDACTED_BLOCK = {"type": "redacted_thinking", "data": "opaque-prior-run-redacted"}
+
+TWO_RUN_HISTORY = [
+    {"role": "user", "content": "Q1"},
+    {
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4-20250219",
+        "content": "A1",
+        "reasoning": "Prior-run reasoning.",
+        "reasoning_meta": {"content_blocks": [PRIOR_RUN_THINKING_BLOCK, PRIOR_RUN_REDACTED_BLOCK]},
+    },
+    {"role": "user", "content": "Q2"},
+]
+
+
+class TestReasoningReplay:
+    """Cross-run thinking replay (full_history policy) and its disabled guard."""
+
+    def test_reasoning_replay_policy_is_full_history(self, anthropic_adapter):
+        assert (
+            anthropic_adapter.reasoning_replay_policy("claude-sonnet-4-20250219")
+            == REASONING_REPLAY_FULL_HISTORY
+        )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_replays_prior_run_thinking_blocks_byte_identical(self, anthropic_adapter):
+        """A two-run same-model history resends persisted thinking unchanged."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            TWO_RUN_HISTORY,
+            model_id="claude-sonnet-4-20250219",
+            thinking_effort="high",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"][1]["content"] == [
+            PRIOR_RUN_THINKING_BLOCK,
+            PRIOR_RUN_REDACTED_BLOCK,
+            {"type": "text", "text": "A1"},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_strips_replayed_thinking_blocks_when_thinking_disabled(
+        self, anthropic_adapter
+    ):
+        """Disabled thinking must not carry historical thinking blocks."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            TWO_RUN_HISTORY,
+            model_id="claude-sonnet-4-20250219",
+            thinking_effort="none",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "disabled"}
+        assert request_body["messages"][1]["content"] == [{"type": "text", "text": "A1"}]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_keeps_replayed_thinking_blocks_without_thinking_parameter(
+        self, anthropic_adapter
+    ):
+        """An absent thinking parameter is not 'disabled' — blocks stay."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(TWO_RUN_HISTORY, model_id="claude-sonnet-4-20250219")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert "thinking" not in request_body
+        assert request_body["messages"][1]["content"][:2] == [
+            PRIOR_RUN_THINKING_BLOCK,
+            PRIOR_RUN_REDACTED_BLOCK,
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_strips_replayed_thinking_blocks_for_non_reasoning_model(self):
+        """Catalog-known non-reasoning models never receive thinking blocks."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            ANTHROPIC_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_test_model(model_id, reasoning=False),
+        )
+
+        await adapter.send(
+            TWO_RUN_HISTORY,
+            model_id="claude-3-5-haiku-20241022",
+            thinking_effort="high",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert "thinking" not in request_body
+        assert request_body["messages"][1]["content"] == [{"type": "text", "text": "A1"}]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_drops_reasoning_only_assistant_turn_when_thinking_disabled(
+        self, anthropic_adapter
+    ):
+        """Stripping must not leave an empty assistant content array on the wire."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [
+            {"role": "user", "content": "Q1"},
+            {
+                "role": "assistant",
+                "model": "anthropic/claude-sonnet-4-20250219",
+                "content": None,
+                "reasoning": "Thinking-only turn",
+                "reasoning_meta": {"content_blocks": [PRIOR_RUN_THINKING_BLOCK]},
+            },
+            {"role": "user", "content": "Q2"},
+        ]
+
+        await anthropic_adapter.send(
+            messages,
+            model_id="claude-sonnet-4-20250219",
+            thinking_effort="none",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {"role": "user", "content": [{"type": "text", "text": "Q1"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Q2"}]},
+        ]
 
 
 # ---------------------------------------------------------------------------

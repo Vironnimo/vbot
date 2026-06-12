@@ -10,9 +10,10 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat import ChatLoop
+from core.chat import ChatLoop, ChatMessage
 from core.prompts import SkillPromptRegistry
 from core.providers.adapter import ProviderAdapter
+from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningReplayPolicy
 from core.runtime import Runtime
 from core.skills.skills import SkillRegistry
 from core.tools import tool_success
@@ -62,6 +63,14 @@ class FakeAdapter(ProviderAdapter):
 
     def normalize_response(self, response: JsonObject) -> JsonObject:
         return response
+
+
+class FullHistoryFakeAdapter(FakeAdapter):
+    """Fake adapter declaring the Anthropic-style full_history replay policy."""
+
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        del model_id
+        return REASONING_REPLAY_FULL_HISTORY
 
 
 @pytest.fixture
@@ -231,6 +240,169 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
         runtime.stop()
 
 
+RUN_ONE_REASONING_META = {
+    "content_blocks": [
+        {"type": "thinking", "thinking": "Run-one thinking", "signature": "sig-run-one"}
+    ]
+}
+
+
+def _full_history_runtime(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    adapter: FullHistoryFakeAdapter,
+) -> Runtime:
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["APP_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    return runtime
+
+
+@pytest.mark.asyncio
+async def test_full_history_adapter_replays_prior_run_reasoning_in_next_run(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FullHistoryFakeAdapter(
+        [
+            {
+                "content": "First answer",
+                "reasoning": "Run-one thinking",
+                "reasoning_meta": RUN_ONE_REASONING_META,
+                "tool_calls": None,
+            },
+            {"content": "Second answer", "tool_calls": None},
+        ]
+    )
+    runtime = _full_history_runtime(tmp_path, resources_dir, monkeypatch, adapter)
+
+    runtime.start()
+    try:
+        runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
+        loop = ChatLoop(runtime)
+
+        await loop.send("coder", "Q1", session_id="session-one")
+        await loop.send("coder", "Q2", session_id="session-one")
+
+        second_request = adapter.requests[1].messages
+        assert [message["role"] for message in second_request] == [
+            "system",
+            "user",
+            "assistant",
+            "user",
+        ]
+        prior_assistant = second_request[2]
+        assert prior_assistant["reasoning"] == "Run-one thinking"
+        assert prior_assistant["reasoning_meta"] == RUN_ONE_REASONING_META
+        assert "usage" not in prior_assistant
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_full_history_adapter_strips_reasoning_after_model_switch(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FullHistoryFakeAdapter(
+        [
+            {
+                "content": "First answer",
+                "reasoning": "Run-one thinking",
+                "reasoning_meta": RUN_ONE_REASONING_META,
+                "tool_calls": None,
+            },
+            {"content": "Second answer", "tool_calls": None},
+        ]
+    )
+    runtime = _full_history_runtime(tmp_path, resources_dir, monkeypatch, adapter)
+
+    runtime.start()
+    try:
+        runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
+        loop = ChatLoop(runtime)
+
+        await loop.send("coder", "Q1", session_id="session-one")
+        runtime.agents.update("coder", model="fake-provider/fake-model-v2")
+        await loop.send("coder", "Q2", session_id="session-one")
+
+        second_request = adapter.requests[1].messages
+        prior_assistant = second_request[2]
+        assert prior_assistant["role"] == "assistant"
+        assert prior_assistant["content"] == "First answer"
+        assert "reasoning" not in prior_assistant
+        assert "reasoning_meta" not in prior_assistant
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_full_history_adapter_replays_reasoning_for_compaction_tail_turns(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FullHistoryFakeAdapter([{"content": "Fresh answer", "tool_calls": None}])
+    runtime = _full_history_runtime(tmp_path, resources_dir, monkeypatch, adapter)
+
+    runtime.start()
+    try:
+        runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
+        session = runtime.chat_sessions.create("coder", session_id="session-one")
+        session.append(ChatMessage.user("Old question"))
+        session.append(
+            ChatMessage.assistant(model="fake-provider/fake-model-v1", content="Old answer")
+        )
+        tail_user = ChatMessage.user("Tail question")
+        session.append(tail_user)
+        session.append(
+            ChatMessage.assistant(
+                model="fake-provider/fake-model-v1",
+                content="Tail answer",
+                reasoning="Tail thinking",
+                reasoning_meta={
+                    "content_blocks": [
+                        {"type": "thinking", "thinking": "Tail thinking", "signature": "sig-tail"}
+                    ]
+                },
+            )
+        )
+        session.append(
+            ChatMessage.compaction_checkpoint(
+                summary="Compacted summary",
+                tail_boundary_id=tail_user.id,
+                compacted_token_count=123,
+            )
+        )
+
+        await ChatLoop(runtime).send("coder", "Q3", session_id="session-one")
+
+        request = adapter.requests[0].messages
+        assert [message["role"] for message in request] == [
+            "system",
+            "user",
+            "user",
+            "assistant",
+            "user",
+        ]
+        assert "Compacted summary" in request[1]["content"]
+        tail_assistant = request[3]
+        assert tail_assistant["reasoning"] == "Tail thinking"
+        assert tail_assistant["reasoning_meta"] == {
+            "content_blocks": [
+                {"type": "thinking", "thinking": "Tail thinking", "signature": "sig-tail"}
+            ]
+        }
+    finally:
+        runtime.stop()
+
+
 def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadata(
     tmp_path: Path,
     resources_dir: Path,
@@ -391,7 +563,18 @@ def _write_model_resource(resources: Path) -> None:
                         },
                         "context_window": 4096,
                         "max_output_tokens": 1024,
-                    }
+                    },
+                    "fake-model-v2": {
+                        "name": "Fake Model Two",
+                        "capabilities": {
+                            "vision": False,
+                            "tools": True,
+                            "json_mode": True,
+                            "reasoning": {"supported": True},
+                        },
+                        "context_window": 4096,
+                        "max_output_tokens": 1024,
+                    },
                 },
             }
         ),
