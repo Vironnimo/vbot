@@ -10,6 +10,7 @@ from server.rpc import (
     chat_methods,
     connection_methods,
     debug_methods,
+    extensions_methods,
     operations_methods,
     settings_methods,
 )
@@ -28,6 +29,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         channel_methods,
         automation_methods,
         settings_methods,
+        extensions_methods,
         operations_methods,
         debug_methods,
     ):

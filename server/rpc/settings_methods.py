@@ -97,7 +97,13 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             reload_recall_backend = getattr(state.runtime, "reload_recall_backend", None)
             if callable(reload_recall_backend):
                 reload_recall_backend()
-        return _settings_response(state)
+        response = _settings_response(state)
+        if "extensions" in settings_update:
+            # Extensions are restart-applied (decision #9): the new disabled set
+            # and config only take effect at the next Runtime.start(). Signal the
+            # caller so accessors can offer `vbot server restart`.
+            response["restart_required"] = True
+        return response
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 

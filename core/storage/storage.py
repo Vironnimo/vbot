@@ -30,6 +30,7 @@ from core.settings.normalizers import (
     normalize_compaction_settings,
     normalize_debug_settings,
     normalize_defaults_settings,
+    normalize_extensions_settings,
     normalize_json_object,
     normalize_model_task_settings,
     normalize_recall_settings,
@@ -63,6 +64,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "model_tasks",
         "web_search",
         "debug",
+        "extensions",
     }
 )
 SUPPORTED_DEFAULTS_SECTIONS = frozenset({"agent"})
@@ -328,6 +330,11 @@ class StorageManager:
                     settings,
                     settings_update["debug"],
                 )
+            if "extensions" in settings_update:
+                updated_sections["extensions"] = self._apply_extensions_settings(
+                    settings,
+                    settings_update["extensions"],
+                )
             return dict(updated_sections)
 
         return self.update_settings(apply_update)
@@ -464,6 +471,31 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_model_task_settings(settings.get("model_tasks"))
+
+    def load_extensions_settings(self) -> dict[str, Any]:
+        """Return the normalized persisted ``extensions`` section.
+
+        Shape ``{"disabled": [...], "config": {<name>: {...}}}``. Restart-applied
+        — the runtime reads it at ``Runtime.start()``; this accessor exists so the
+        ``extensions.list`` RPC can surface persisted config alongside records.
+        """
+
+        settings = self.load_settings()
+        return normalize_extensions_settings(settings.get("extensions"))
+
+    def _apply_extensions_settings(
+        self,
+        settings: dict[str, Any],
+        extensions: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge the ``extensions`` section into an in-memory settings mapping."""
+
+        if not isinstance(extensions, Mapping):
+            raise StorageError("Extensions settings must be a mapping")
+
+        normalized_extensions = normalize_extensions_settings(extensions)
+        settings["extensions"] = normalized_extensions
+        return dict(normalized_extensions)
 
     def update_recall_settings(self, recall: Mapping[str, Any]) -> dict[str, str]:
         """Persist the supported recall settings subset and return it."""
