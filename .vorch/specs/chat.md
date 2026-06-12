@@ -21,6 +21,7 @@ Canonical backend chat messages and chat-loop execution exposed through the serv
 - `reasoning` is readable thinking text. `reasoning_meta` is opaque provider data and must not be interpreted by chat.
 - `timing` is a canonical timing object `{ started_at, completed_at, duration_ms }`. Durations are non-negative milliseconds measured with a monotonic clock; timestamps are UTC ISO 8601 values used only for persistence and display. `timing` is not token usage and must not be stored under `usage`.
 - Activated skill context is persisted as a special internal `note` whose content begins with `[skill-context] `. These notes are not converted to `<system-reminder>` blocks; instead the chat loop restores them as `<skill_content>` user-context messages before provider requests.
+- Passively observed channel context is persisted as an ordinary internal `note` whose content begins with `[channel-message] `. The chat layer applies normal note handling and embeds it inside `<system-reminder>` context; formatting and acquisition are owned by `core/channels/`.
 
 ## Interfaces
 
