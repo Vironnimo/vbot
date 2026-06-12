@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from typing import Any, cast
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
-from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
 
 JsonObject = dict[str, Any]
+
+# Structural shape of a recall backend name (lowercase snake_case). Whether a
+# name actually resolves to a registered backend is a runtime concern checked
+# against the recall registry (built-ins + extension backends) at the RPC layer,
+# not here — the parser only enforces the shape.
+RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 ALLOWED_THINKING_EFFORTS = frozenset(
     {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -180,9 +186,11 @@ def _parse_recall_update(recall: Any) -> JsonObject:
         )
 
     backend = recall.get("backend")
-    if not isinstance(backend, str) or backend not in FIRST_PARTY_RECALL_BACKENDS:
-        allowed = ", ".join(sorted(FIRST_PARTY_RECALL_BACKENDS))
-        raise SettingsValidationError(f"params.recall.backend must be one of: {allowed}")
+    if not isinstance(backend, str) or not backend.strip():
+        raise SettingsValidationError("params.recall.backend must be a non-empty string")
+    backend = backend.strip()
+    if RECALL_BACKEND_PATTERN.fullmatch(backend) is None:
+        raise SettingsValidationError("params.recall.backend must use lowercase snake_case")
 
     return {"backend": backend}
 

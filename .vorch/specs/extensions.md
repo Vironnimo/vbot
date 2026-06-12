@@ -4,7 +4,7 @@ In-process Python extension system loaded by the runtime. Owns discovery, two-ph
 
 ## Overview
 
-`core/extensions/` lets power users extend vBot without editing application source. An **extension** is the single unit of discovery, identity, config, and enable/disable; hooks are one capability surface it uses (tools and recall backends follow in a later plan). Runtime loads Python modules from `<data_dir>/extensions/` plus optional extra scan roots from `settings.json` `extension_directories`, passing in the disabled set and per-extension config read from the `settings.json` `extensions` section.
+`core/extensions/` lets power users extend vBot without editing application source. An **extension** is the single unit of discovery, identity, config, and enable/disable; **hooks, tools, and recall backends** are the capability surfaces it uses (see Capability Surfaces). Runtime loads Python modules from `<data_dir>/extensions/` plus optional extra scan roots from `settings.json` `extension_directories`, passing in the disabled set and per-extension config read from the `settings.json` `extensions` section. `examples/extensions/` holds runnable, heavily-commented reference extensions (a `tool_call`-deny hook and a `register_tool` tool).
 
 Loading is **two-phase**:
 
@@ -22,8 +22,8 @@ The module then **dispatches every hook event** through typed per-event methods 
 - Decision types for `tool_call` (frozen dataclasses, importable from `core.extensions`): `Deny(reason: str)`, `Modify(input: dict)`, `Replace(result: dict)`. A handler returning `None` continues unchanged.
 - `ToolCallDecision` — structured outcome `dispatch_tool_call` hands back to chat: `effective_input` (the input after any `Modify`), `deny_reason`/`deny_extension` (set when denied), `replacement` (a validated envelope when replaced). Exactly one disposition holds: proceed, denied, or replaced.
 - `ExtensionManifest` (frozen dataclass, optional) — parsed from `extension.json`: `version: str | None`, `description: str | None`, `api_version: int | None`, `display_name: str | None` (from the manifest `name` field, display-only). Identity stays the filesystem name.
-- `ExtensionRecord` (one per discovered extension) — `name` (directory/file name, the identity), `root_path`, `entry_path`, `status` (`loaded` / `failed` / `disabled`), `error` (detail when `failed`, else `None`), `manifest` (or `None`), `declarations`. `declarations` are only meaningful for `loaded` records.
-- `ExtensionDeclarations` — what `ExtensionAPI` collects per extension: `hooks` (event → handler list), `startup`, `shutdown`. Internal; the registry applies/fires them.
+- `ExtensionRecord` (one per discovered extension) — `name` (directory/file name, the identity), `root_path`, `entry_path`, `status` (`loaded` / `failed` / `disabled`), `error` (detail when `failed`, else `None`), `manifest` (or `None`), `declarations`, `capability_errors`. `declarations` are only meaningful for `loaded` records. `capability_errors` is a list of **non-fatal** per-capability diagnostics (e.g. one tool skipped on a name collision); the extension still `loaded` and is **not** in `diagnostics()` — only `status="failed"` records are. Plan 5 surfaces both.
+- `ExtensionDeclarations` — what `ExtensionAPI` collects per extension: `hooks` (event → handler list), `startup`, `shutdown`, `tools` (`ToolDeclaration` list), `recall_backends` (`RecallBackendDeclaration` list). Internal; the registry applies/fires them. `ToolDeclaration` mirrors `ToolRegistry.register` args (`display` forwarded untyped so the module stays decoupled from `core/tools/`); `RecallBackendDeclaration` is `(name, factory)`.
 - `ExtensionRegistry`
   - `_handlers: dict[str, list[tuple[str, Callable]]]` — event name → ordered `(extension_name, handler)` pairs in load order. **Private to the registry**: only `install_handler` (the apply primitive) writes it and the registry's own `dispatch_*`/`_invoke` methods read it. No code outside `core/extensions/` touches it.
   - `_records: list[ExtensionRecord]` — every discovered extension in load order.
@@ -33,11 +33,14 @@ The module then **dispatches every hook event** through typed per-event methods 
 
 - `ExtensionAPI(extension_name, declarations, *, config, logger)` — registration facade passed into `register(api)`. Every call only collects a declaration; nothing is live until the apply phase.
   - `api.on(event, handler) -> None` — declare a hook handler. Called as `handler(ctx, **payload)`.
+  - `api.register_tool(name, description, parameters, handler, *, internal=False, display=None) -> None` — declare an agent tool, mirroring `ToolRegistry.register`. Applied into the runtime `ToolRegistry` (see Capability Surfaces).
+  - `api.register_recall_backend(name, factory) -> None` — declare a session-recall backend; `factory` is `RecallBackendContext -> RecallBackend`. Applied onto the recall registry.
   - `api.on_startup(handler) -> None` / `api.on_shutdown(handler) -> None` — declare a no-arg lifecycle handler (sync or async).
   - `api.config` — the extension's config object from `settings.extensions.config.<name>` (empty `dict` default).
   - `api.logger` — a `vbot.extensions.<name>` logger via the normal `LogManager` pipeline.
 - `ExtensionRegistry.load(extensions_dir, extra_dirs=None, *, disabled=None, config=None) -> ExtensionRegistry` — scans immediate children of each root in order (`extensions_dir` first), runs the two-phase load, and returns the populated registry. Extensions named in `disabled` are recorded `disabled` and **never imported**. `config` maps extension name → its `api.config` object.
 - `ExtensionRegistry.install_handler(extension_name, event, handler) -> None` — the apply phase's primitive: appends `(extension_name, handler)` to `_handlers[event]`. The single writer of `_handlers`; tests build a dispatch table through this seam without the filesystem load path.
+- `ExtensionRegistry.apply_tools(tool_registry) -> None` / `apply_recall_backends(recall_registry) -> None` — the capability apply phases the runtime calls at the right bootstrap points (see Capability Surfaces). Both diagnose collisions/errors onto the record's `capability_errors` and fail open.
 - `ExtensionRegistry.records() -> list[ExtensionRecord]` — every discovered record in load order.
 - `ExtensionRegistry.diagnostics() -> list[ExtensionRecord]` — only the `failed` records (mirrors the skills `invalid_diagnostics()` idea). Runtime logs a startup warning when non-empty.
 - `ExtensionRegistry.fire_startup() / fire_shutdown()` (async) — fire every loaded extension's startup/shutdown handlers in load order; fail-open per handler (log `error`, continue). `fire_shutdown_blocking()` runs `fire_shutdown()` to completion from synchronous shutdown paths.
@@ -74,6 +77,15 @@ Each handler receives `ctx: HookContext` first, then the event kwargs below. Han
 - `tool_call` — fired before a tool runs. `Modify` rewrites `input` and the pipeline continues (later handlers and the tool itself see the modified input). `Deny` stops the pipeline and the tool is not executed; chat builds a `tool_call_denied` failure envelope naming the denying extension. `Replace` stops the pipeline and skips execution; its envelope must pass the chat `validator` or it is logged and treated as continue. The modified arguments are what the tool executes with, what `tool_result` hooks receive, and what the `tool_call_started` timeline event shows; the persisted assistant `tool_calls` (the model's request) are untouched.
 - `tool_result` — fired after the result is produced (real run, `Deny` envelope, or `Replace` envelope). Each handler returns a full replacement envelope, re-validated through the chat `validator`; valid replaces the running envelope (the next handler sees it), invalid or non-dict or `None` leaves it unchanged.
 - `run_end` — fired in a `finally`, so it always runs. `outcome` is `"success"`, `"error"`, or `"cancelled"`.
+
+## Capability Surfaces (tools, recall backends)
+
+Hooks are not the only thing an extension declares. `register(api)` also collects tool and recall-backend declarations; the runtime applies them into the **existing** domain registries (`ToolRegistry`, `RecallBackendRegistry`) — the extension API is a thin facade, not a new registry. Apply points are order-sensitive (tools late, recall early), so they live in `Runtime.start()`:
+
+- **Tools** — `Runtime` calls `apply_tools(self._tools)` after the **last** built-in tool is registered (cron/bash/subagent/status), right before `SystemPromptManager` consumes the registry. Each declaration goes through the normal `ToolRegistry.register`, so an extension tool is a *normal* tool afterward: provider/prompt definitions, agent allowlists, and dispatch treat it like any other (no special-casing — see `.vorch/specs/tools.md` and `.vorch/specs/prompts.md`). Collision policy (load order must not silently decide behavior): a name already used by a **built-in** is skipped (built-in wins); between **two extensions** the first-loaded wins and **both** sides are diagnosed; a name already claimed by an earlier extension is skipped + diagnosed. Per-tool registration errors fail open. All skips/collisions land in the record's `capability_errors`.
+- **Recall backends** — `Runtime._build_recall_backend_registry` applies `apply_recall_backends` onto a fresh `RecallBackendRegistry.with_builtins()` **before** `recall.backend` is resolved, and again on every `reload_recall_backend` (so extension backends survive a live switch). The registry's own rules hold: a duplicate name (built-ins register first) or a non lowercase-snake_case name raises `ValueError`, which is caught, diagnosed on the record, and the backend skipped. `Runtime.available_recall_backends()` returns the registry names (built-ins + extensions); the Settings Recall panel and `settings.update` validation read from it (see `.vorch/specs/recall.md`).
+
+Both apply phases only touch `loaded` records and never abort bootstrap.
 
 ## Lifecycle (startup/shutdown)
 
