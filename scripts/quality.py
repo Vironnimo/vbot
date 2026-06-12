@@ -79,15 +79,78 @@ def deduplicate_paths(paths: list[str]) -> list[str]:
 MIRRORED_TEST_PACKAGES = ("cli", "core", "desktop", "scripts", "server")
 
 
+def _normalized_stem(name: str) -> str:
+    """Return a module-comparable stem: test modules turn hyphens into ``_``.
+
+    ``scripts/quality-frontend.py`` mirrors to ``test_quality_frontend.py``, so
+    source stems must be normalized before matching against test-file names.
+    """
+    return name.replace("-", "_")
+
+
+def _source_stems(source_dir: Path) -> list[str]:
+    """Return normalized source-file stems in *source_dir*, longest first.
+
+    Longest-first ordering lets :func:`_owning_source_stem` resolve a split test
+    file like ``test_openai_compatible_oauth`` to the most specific source
+    (``openai_compatible``) rather than a shorter prefix (``openai``).
+    """
+    if not source_dir.is_dir():
+        return []
+    stems = {_normalized_stem(entry.stem) for entry in source_dir.glob("*.py")}
+    return sorted(stems, key=len, reverse=True)
+
+
+def _owning_source_stem(test_rest: str, source_stems: list[str]) -> str | None:
+    """Return the source stem that owns a ``test_<test_rest>.py`` file, or None.
+
+    A test file belongs to source stem ``S`` when *test_rest* is exactly ``S``
+    or begins with ``S_`` (a split sibling such as ``test_<S>_oauth``). With
+    *source_stems* ordered longest-first, the first match is the most specific
+    owner, so ``test_openai_compatible_oauth`` resolves to ``openai_compatible``
+    rather than ``openai``.
+    """
+    for stem in source_stems:
+        if test_rest == stem or test_rest.startswith(stem + "_"):
+            return stem
+    return None
+
+
+def _owned_test_files(directory: str, stem: str) -> list[str]:
+    """Return mirror test files owned by source *stem* in *directory*.
+
+    Includes the exact mirror ``test_<stem>.py`` and any split siblings
+    ``test_<stem>_*.py`` that no more-specific source file claims. Returns
+    sorted project-relative posix paths; empty when the mirror directory is
+    absent or holds no test file owned by *stem*.
+    """
+    mirror_dir = f"tests/{directory}" if directory else "tests"
+    mirror_path = PROJECT_ROOT / mirror_dir
+    if not mirror_path.is_dir():
+        return []
+    source_dir = PROJECT_ROOT / directory if directory else PROJECT_ROOT
+    source_stems = _source_stems(source_dir)
+    target_stem = _normalized_stem(stem)
+    owned: list[str] = []
+    for test_file in sorted(mirror_path.glob("test_*.py")):
+        test_rest = test_file.stem[len("test_") :]
+        if _owning_source_stem(test_rest, source_stems) == target_stem:
+            owned.append(f"{mirror_dir}/{test_file.name}")
+    return owned
+
+
 def translate_to_test_paths(paths: list[str]) -> tuple[list[str], list[str]]:
     """Translate source paths to existing mirrored test paths.
 
-    Returns ``(test_paths, notes)``. Files map to
-    ``tests/<package>/<...>/test_<file>.py``; when that exact mirror file does
-    not exist, the mirrored test directory runs instead so related tests are
-    still exercised. Paths without any mirrored tests become a note instead of
-    a pytest argument: a nonexistent path makes pytest-xdist collect zero items
-    overall and silently skip even the valid paths next to it.
+    Returns ``(test_paths, notes)``. A source file maps to its exact mirror
+    ``tests/<package>/<...>/test_<file>.py`` **plus** any split-sibling test
+    files ``test_<file>_*.py`` in the same directory that no more-specific
+    source file owns (e.g. ``openai_compatible.py`` also runs
+    ``test_openai_compatible_oauth.py``). When no owned test file exists, the
+    mirrored test directory runs instead so related tests are still exercised.
+    Paths without any mirrored tests become a note instead of a pytest argument:
+    a nonexistent path makes pytest-xdist collect zero items overall and
+    silently skip even the valid paths next to it.
     """
     test_paths: list[str] = []
     notes: list[str] = []
@@ -108,15 +171,17 @@ def translate_to_test_paths(paths: list[str]) -> tuple[list[str], list[str]]:
 
         if p.endswith(".py"):
             directory, _, filename = p.rpartition("/")
+            stem = filename[: -len(".py")]
             mirror_dir = f"tests/{directory}" if directory else "tests"
-            mirror_file = f"{mirror_dir}/test_{filename}"
-            if (PROJECT_ROOT / mirror_file).is_file():
-                add(mirror_file)
+            owned = _owned_test_files(directory, stem)
+            if owned:
+                for mirror_file in owned:
+                    add(mirror_file)
             elif (PROJECT_ROOT / mirror_dir).is_dir():
-                notes.append(f"{p}: no {mirror_file}, running {mirror_dir}/ instead")
+                notes.append(f"{p}: no test_{stem}*.py, running {mirror_dir}/ instead")
                 add(mirror_dir)
             else:
-                notes.append(f"{p}: no mirrored tests ({mirror_file} and {mirror_dir}/ missing)")
+                notes.append(f"{p}: no mirrored tests (test_{stem}*.py and {mirror_dir}/ missing)")
             continue
 
         mirror_dir = f"tests/{p}"

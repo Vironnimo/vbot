@@ -190,6 +190,53 @@ def test_translate_notes_unmirrored_package_instead_of_pytest_arg():
     assert "webui/src/App.svelte" in notes[0]
 
 
+def test_translate_includes_split_sibling_test_files():
+    module = _load_quality_module()
+
+    test_paths, notes = module.translate_to_test_paths(["core/providers/openai_compatible.py"])
+
+    # The oauth split sibling has no own source file, so it belongs to the
+    # adapter and must run alongside the exact mirror.
+    assert "tests/core/providers/test_openai_compatible.py" in test_paths
+    assert "tests/core/providers/test_openai_compatible_oauth.py" in test_paths
+    assert notes == []
+
+
+def test_translate_does_not_claim_more_specific_siblings():
+    module = _load_quality_module()
+
+    test_paths, notes = module.translate_to_test_paths(["core/providers/openai.py"])
+
+    # openai.py must not pull in openai_compatible's mirrors: the longer source
+    # stem owns them.
+    assert test_paths == ["tests/core/providers/test_openai.py"]
+    assert notes == []
+
+
+def test_translate_normalizes_hyphenated_source_stem():
+    module = _load_quality_module()
+
+    frontend_paths, frontend_notes = module.translate_to_test_paths(["scripts/quality-frontend.py"])
+    quality_paths, quality_notes = module.translate_to_test_paths(["scripts/quality.py"])
+
+    # quality-frontend.py mirrors to the underscore module test_quality_frontend.py,
+    # and quality.py must not swallow it via the shared "quality" prefix.
+    assert frontend_paths == ["tests/scripts/test_quality_frontend.py"]
+    assert frontend_notes == []
+    assert quality_paths == ["tests/scripts/test_quality.py"]
+    assert quality_notes == []
+
+
+def test_owning_source_stem_prefers_longest_prefix():
+    module = _load_quality_module()
+
+    source_stems = ["openai_compatible", "openai"]  # longest first
+
+    assert module._owning_source_stem("openai_compatible_oauth", source_stems) == "openai_compatible"
+    assert module._owning_source_stem("openai", source_stems) == "openai"
+    assert module._owning_source_stem("unrelated", source_stems) is None
+
+
 def test_main_rejects_unknown_input_path(monkeypatch, capsys):
     module = _load_quality_module()
     monkeypatch.setattr(module.sys, "argv", ["quality.py", "core/does_not_exist.py"])
