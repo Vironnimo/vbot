@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 
@@ -51,6 +55,7 @@ SERVER_PORT_KEY = "server_port"
 MAIN_AGENT_ID = "main"
 UNKNOWN_VALUE = "unknown"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+TRASH_DIR_PREFIX = ".trash-"
 
 
 def print_ok(**fields: str | int | bool | Path) -> None:
@@ -137,6 +142,110 @@ def _resolve_remove_data_dir(name: str, marker_data: dict[str, object] | None) -
     return expected
 
 
+def _clear_readonly_and_retry(func: Callable[[str], object], path: str, _excinfo: object) -> None:
+    """rmtree error handler: clear the read-only attribute and retry."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _remove_directory_tree(tree_path: Path) -> str | None:
+    """Delete a directory tree, tolerating read-only files and transient locks.
+
+    Returns None on success, otherwise the last error text.
+    """
+    last_error: str | None = None
+    for attempt in range(3):
+        if attempt:
+            time.sleep(0.5)
+        try:
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(tree_path, onexc=_clear_readonly_and_retry)
+            else:
+                shutil.rmtree(tree_path, onerror=_clear_readonly_and_retry)
+            return None
+        except OSError as exc:
+            last_error = str(exc)
+        if not tree_path.exists():
+            return None
+    return last_error
+
+
+def _terminate_worktree_processes(worktree_path: Path) -> list[str]:
+    """Terminate processes whose executable image lives inside the worktree.
+
+    Windows cannot delete files whose executable is loaded by a running
+    process — orphaned esbuild service processes from Vite builds are the
+    common case. Such processes are disposable: their binary lives in a
+    worktree that is being deleted. POSIX can unlink running executables,
+    so this is a no-op there. Returns the terminated executable paths.
+    """
+    if os.name != "nt":
+        return []
+
+    pattern = f"{worktree_path}\\*".replace("'", "''")
+    script = (
+        f"Get-Process | Where-Object {{ $_.Path -and $_.Path -like '{pattern}' }} | "
+        "ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; $_.Path }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _move_to_trash(worktree_path: Path) -> Path | None:
+    """Rename a stuck worktree directory aside so its name becomes reusable.
+
+    A rename succeeds even when an external process (e.g. an editor language
+    server) still holds files inside the tree mapped. Trash directories are
+    swept on later create/delete runs once the locks are gone.
+    """
+    trash_path = worktree_path.parent / f"{TRASH_DIR_PREFIX}{worktree_path.name}-{time.time_ns()}"
+    try:
+        worktree_path.rename(trash_path)
+    except OSError:
+        return None
+    return trash_path
+
+
+def sweep_trash_directories(worktrees_dir: Path) -> None:
+    """Best-effort removal of trash directories left by earlier deletes."""
+    if not worktrees_dir.exists():
+        return
+
+    for candidate in worktrees_dir.iterdir():
+        if candidate.is_dir() and candidate.name.startswith(TRASH_DIR_PREFIX):
+            _remove_directory_tree(candidate)
+
+
+def _list_uncommitted_paths(worktree_path: Path) -> list[str]:
+    """List porcelain status lines for uncommitted files in a worktree."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree_path), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
 def _read_worktree_branch_name(worktree_path: Path) -> str | None:
     """Read the currently checked-out branch in a worktree."""
     try:
@@ -165,7 +274,7 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
         return ports
 
     for candidate in worktrees_dir.iterdir():
-        if not candidate.is_dir():
+        if not candidate.is_dir() or candidate.name.startswith("."):
             continue
 
         marker = candidate / WORKTREE_FILE_NAME
@@ -300,7 +409,7 @@ def iter_worktree_entries(worktrees_dir: Path) -> list[dict[str, str | int | Pat
 
     entries: list[dict[str, str | int | Path]] = []
     for worktree_path in sorted(worktrees_dir.iterdir(), key=lambda path: path.name):
-        if not worktree_path.is_dir():
+        if not worktree_path.is_dir() or worktree_path.name.startswith("."):
             continue
 
         marker_path = worktree_path / WORKTREE_FILE_NAME
@@ -335,7 +444,14 @@ def cleanup_failed_create(
     remove_data_dir: bool,
 ) -> None:
     """Remove artifacts created before a failed create operation."""
-    _run_command(["git", "worktree", "remove", "--force", str(worktree_path)])
+    return_code, _ = _run_command(["git", "worktree", "remove", "--force", str(worktree_path)])
+    if return_code != 0 and worktree_path.exists():
+        # The npm steps may leave processes (e.g. esbuild) locking files that
+        # break git's directory deletion on Windows — finish it ourselves.
+        _terminate_worktree_processes(worktree_path)
+        if _remove_directory_tree(worktree_path) is not None and worktree_path.exists():
+            _move_to_trash(worktree_path)
+        _run_command(["git", "worktree", "prune"])
 
     if remove_data_dir:
         shutil.rmtree(data_dir, ignore_errors=True)
@@ -354,6 +470,8 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     worktree_path = WORKTREES_DIR / name
     managed_branch = args.from_branch is None
+
+    sweep_trash_directories(WORKTREES_DIR)
 
     if worktree_path.exists():
         print_error(f"worktree '{name}' already exists")
@@ -472,6 +590,8 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
     worktree_path = WORKTREES_DIR / name
 
+    sweep_trash_directories(WORKTREES_DIR)
+
     if not worktree_path.exists():
         print_error(f"worktree '{name}' does not exist")
         return 1
@@ -504,18 +624,36 @@ def cmd_delete(args: argparse.Namespace) -> int:
         git_command = ["git", "worktree", "remove", str(worktree_path)]
 
     return_code, stderr = _run_command(git_command)
+    terminated_paths: list[str] = []
+    leftover_path: Path | None = None
     if return_code != 0:
-        if marker_text is not None and not marker.exists():
-            with suppress(OSError):
-                marker.write_text(marker_text, encoding="utf-8")
-
         reason = stderr or "git worktree remove failed"
-        if not args.force:
-            lowered = reason.lower()
-            if "dirty" in lowered or "modified" in lowered:
-                reason = "worktree has uncommitted changes, use --force to override"
-        print_error(reason)
-        return 1
+        lowered = reason.lower()
+        if not args.force and (
+            "dirty" in lowered or "modified" in lowered or "untracked" in lowered
+        ):
+            if marker_text is not None and not marker.exists():
+                with suppress(OSError):
+                    marker.write_text(marker_text, encoding="utf-8")
+            print_error("worktree has uncommitted changes, use --force to override")
+            for line in _list_uncommitted_paths(worktree_path):
+                print(f"uncommitted: {line}")
+            return 1
+
+        # git may have deregistered the worktree but failed to delete files
+        # locked by running processes (Windows) — finish the removal ourselves.
+        terminated_paths = _terminate_worktree_processes(worktree_path)
+        if worktree_path.exists():
+            removal_error = _remove_directory_tree(worktree_path)
+            if removal_error is not None and worktree_path.exists():
+                leftover_path = _move_to_trash(worktree_path)
+                if leftover_path is None:
+                    if marker_text is not None and not marker.exists():
+                        with suppress(OSError):
+                            marker.write_text(marker_text, encoding="utf-8")
+                    print_error(f"worktree directory could not be removed: {removal_error}")
+                    return 1
+        _run_command(["git", "worktree", "prune"])
 
     shutil.rmtree(data_dir, ignore_errors=True)
 
@@ -528,7 +666,18 @@ def cmd_delete(args: argparse.Namespace) -> int:
             reason = branch_stderr or f"git branch {branch_delete_flag} {name} failed"
             print_error(reason)
 
-    print_ok(name=name, path=worktree_path, **{"data-dir": data_dir}, status="deleted")
+    for terminated in terminated_paths:
+        print(f"terminated: {terminated}")
+    fields: dict[str, str | int | bool | Path] = {
+        "name": name,
+        "path": worktree_path,
+        "data-dir": data_dir,
+        "status": "deleted",
+    }
+    if leftover_path is not None:
+        # Still held by an external process (e.g. an editor); swept later.
+        fields["leftover"] = leftover_path
+    print_ok(**fields)
     return 0
 
 

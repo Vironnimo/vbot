@@ -27,6 +27,12 @@ desktop/settings.json
 .data-dir-base/
 .vorch/WORKTREE.md
 
+# Task plan files (worktree-local, never committed)
+docs/plans/
+
 # Node / webui
 node_modules/
 webui/dist/
+coverage/
+# Vite/Vitest temp config bundles left behind by interrupted processes
+*.timestamp-*.mjs
