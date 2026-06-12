@@ -859,33 +859,40 @@ export function getChannelStatus(channelId, options = {}) {
   return rpc('channel.status', { id: channelId }, options);
 }
 
-export async function connectProvider(providerId, connectionId, options = {}) {
+export async function connectProvider(
+  providerId,
+  connectionId,
+  account = undefined,
+  options = {},
+) {
   return (options.rpc ?? rpc)(
     'provider.connect',
-    buildProviderConnectPayload(providerId, connectionId),
+    buildProviderConnectPayload(providerId, connectionId, account),
   );
 }
 
 export async function disconnectProvider(
   providerId,
   connectionId,
+  account = undefined,
   options = {},
 ) {
   return (options.rpc ?? rpc)(
     'provider.disconnect',
-    buildProviderDisconnectPayload(providerId, connectionId),
+    buildProviderDisconnectPayload(providerId, connectionId, account),
   );
 }
 
 export async function getProviderConnectionStatus(
   providerId,
   connectionId,
+  account = undefined,
   options = {},
 ) {
-  return (options.rpc ?? rpc)('provider.connection_status', {
-    provider_id: providerId,
-    connection_id: connectionId,
-  });
+  return (options.rpc ?? rpc)(
+    'provider.connection_status',
+    buildProviderConnectPayload(providerId, connectionId, account),
+  );
 }
 
 export function debugStatus(options = {}) {

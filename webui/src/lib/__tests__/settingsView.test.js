@@ -7,25 +7,34 @@ import { init } from '../i18n.js';
 import {
   AGENT_DEFAULTS_FIELDS,
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
+  accountDisplayName,
   buildAgentDefaultsPayload,
   buildLanguageOptions,
+  buildProviderConnectPayload,
+  buildProviderDisconnectPayload,
   buildRecallBackendOptions,
   buildRecallSettingsPayload,
   buildSubAgentSettingsPayload,
   buildWebSearchProviderOptions,
   buildWebSearchSettingsPayload,
+  connectionSupportsAddAccount,
   createLanguageUpdatePayload,
   createSkillDirectoriesUpdatePayload,
+  deriveAccountCredentialKey,
+  describeAccountSource,
   describeProvider,
   formatServerHost,
   getAddProviderCandidates,
   getAddableConnections,
   getConnectedProviderItems,
+  getConnectionAccounts,
   getDefaultSkillDirectoryValue,
   getRecallSettings,
   getSkillDirectories,
   getWebSearchSettings,
   isConnectionConfigured,
+  isValidAccountId,
+  normalizeAccountId,
   normalizeAgentDefaultsSettings,
   normalizeCompactionSettings,
   normalizeSubAgentSettings,
@@ -444,6 +453,14 @@ describe('settingsView helpers', () => {
       label: 'API Key',
       configured: true,
       credential_key: 'OPENAI_API_KEY',
+      accounts: [
+        {
+          id: 'default',
+          usable: true,
+          source: 'data_dir',
+          credential_key: 'OPENAI_API_KEY',
+        },
+      ],
     };
     const apiKeyMissing = {
       id: 'anthropic:api-key',
@@ -451,6 +468,7 @@ describe('settingsView helpers', () => {
       label: 'API Key',
       configured: false,
       credential_key: 'ANTHROPIC_API_KEY',
+      accounts: [],
     };
     const oauthConnectable = {
       id: 'openai:subscription',
@@ -458,6 +476,7 @@ describe('settingsView helpers', () => {
       label: 'ChatGPT Plus/Pro',
       configured: false,
       connectable: true,
+      accounts: [],
     };
     const oauthStatic = {
       id: 'minimax:oauth',
@@ -465,6 +484,7 @@ describe('settingsView helpers', () => {
       label: 'Token',
       configured: false,
       connectable: false,
+      accounts: [],
     };
     const settings = {
       providers: {
@@ -503,6 +523,138 @@ describe('settingsView helpers', () => {
     expect(
       getAddProviderCandidates(settings).map((provider) => provider.id),
     ).toEqual(['anthropic']);
+  });
+
+  it('treats a connection with a usable account as configured without flags', () => {
+    const accountOnlyConnection = {
+      id: 'openai:api-key',
+      type: 'api_key',
+      accounts: [
+        {
+          id: 'work',
+          usable: true,
+          source: 'data_dir',
+          credential_key: 'OPENAI_API_KEY__WORK',
+        },
+      ],
+    };
+
+    expect(isConnectionConfigured(accountOnlyConnection)).toBe(true);
+    expect(
+      isConnectionConfigured({
+        id: 'openai:api-key',
+        type: 'api_key',
+        accounts: [{ id: 'default', usable: false, source: 'data_dir' }],
+      }),
+    ).toBe(false);
+    expect(isConnectionConfigured({ accounts: [] })).toBe(false);
+  });
+
+  it('extracts connection accounts and drops malformed entries', () => {
+    const connection = {
+      id: 'openai:api-key',
+      type: 'api_key',
+      accounts: [
+        {
+          id: 'default',
+          usable: true,
+          source: 'process_env',
+          credential_key: 'OPENAI_API_KEY',
+        },
+        {
+          id: 'work',
+          usable: false,
+          source: 'data_dir',
+          credential_key: 'OPENAI_API_KEY__WORK',
+        },
+        { id: '', usable: true },
+        { usable: true },
+      ],
+    };
+
+    expect(getConnectionAccounts(connection).map((item) => item.id)).toEqual([
+      'default',
+      'work',
+    ]);
+    expect(getConnectionAccounts({})).toEqual([]);
+    expect(getConnectionAccounts(null)).toEqual([]);
+  });
+
+  it('validates and normalizes account ids', () => {
+    expect(isValidAccountId('default')).toBe(true);
+    expect(isValidAccountId('work_2')).toBe(true);
+    expect(isValidAccountId('9lives')).toBe(true);
+    expect(isValidAccountId('a'.repeat(32))).toBe(true);
+
+    expect(isValidAccountId('')).toBe(false);
+    expect(isValidAccountId('_leading')).toBe(false);
+    expect(isValidAccountId('Upper')).toBe(false);
+    expect(isValidAccountId('with-dash')).toBe(false);
+    expect(isValidAccountId('a'.repeat(33))).toBe(false);
+    expect(isValidAccountId(42)).toBe(false);
+
+    expect(normalizeAccountId('')).toBe('default');
+    expect(normalizeAccountId('   ')).toBe('default');
+    expect(normalizeAccountId(' work ')).toBe('work');
+    expect(normalizeAccountId(undefined)).toBe('default');
+  });
+
+  it('describes accounts and builds account-aware provider payloads', () => {
+    expect(accountDisplayName({ id: 'default', usable: true }, translate)).toBe(
+      'Default',
+    );
+    expect(accountDisplayName({ id: 'work', usable: true }, translate)).toBe(
+      'work',
+    );
+
+    expect(describeAccountSource({ source: 'process_env' }, translate)).toBe(
+      'Process env',
+    );
+    expect(describeAccountSource({ source: 'data_dir' }, translate)).toBe(
+      '.env file',
+    );
+    expect(describeAccountSource({ source: 'oauth' }, translate)).toBe('OAuth');
+    expect(describeAccountSource({}, translate)).toBe('');
+
+    expect(connectionSupportsAddAccount({ type: 'api_key' })).toBe(true);
+    expect(
+      connectionSupportsAddAccount({ type: 'oauth', connectable: true }),
+    ).toBe(true);
+    expect(
+      connectionSupportsAddAccount({ type: 'oauth', connectable: false }),
+    ).toBe(false);
+
+    expect(deriveAccountCredentialKey('OPENAI_API_KEY', 'default')).toBe(
+      'OPENAI_API_KEY',
+    );
+    expect(deriveAccountCredentialKey('OPENAI_API_KEY', '')).toBe(
+      'OPENAI_API_KEY',
+    );
+    expect(deriveAccountCredentialKey('OPENAI_API_KEY', 'work')).toBe(
+      'OPENAI_API_KEY__WORK',
+    );
+
+    expect(
+      buildProviderConnectPayload('openai', 'openai:subscription', 'work'),
+    ).toEqual({
+      provider_id: 'openai',
+      connection_id: 'openai:subscription',
+      account: 'work',
+    });
+    expect(
+      buildProviderConnectPayload('openai', 'openai:subscription'),
+    ).toEqual({
+      provider_id: 'openai',
+      connection_id: 'openai:subscription',
+      account: 'default',
+    });
+    expect(
+      buildProviderDisconnectPayload('openai', 'openai:subscription', ''),
+    ).toEqual({
+      provider_id: 'openai',
+      connection_id: 'openai:subscription',
+      account: 'default',
+    });
   });
 
   it('formats provider metadata and current status labels', () => {
@@ -757,6 +909,7 @@ function createSettingsPayload(overrides = {}) {
               label: 'API Key',
               configured: false,
               credential_key: 'ANTHROPIC_API_KEY',
+              accounts: [],
             },
           ],
         },
@@ -774,6 +927,14 @@ function createSettingsPayload(overrides = {}) {
               label: 'API Key',
               configured: true,
               credential_key: 'OPENAI_API_KEY',
+              accounts: [
+                {
+                  id: 'default',
+                  usable: true,
+                  source: 'data_dir',
+                  credential_key: 'OPENAI_API_KEY',
+                },
+              ],
             },
           ],
         },
