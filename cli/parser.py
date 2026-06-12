@@ -350,7 +350,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         nargs="*",
         default=[],
         metavar="<chat-id>",
-        help="Allowed chat ids; empty means no restriction",
+        help="Allowed chat ids; empty denies all inbound chats",
     )
 
     _add_command_parser(channel_subparsers, "list", CHANNEL_HELP["list"], example="channel list")
