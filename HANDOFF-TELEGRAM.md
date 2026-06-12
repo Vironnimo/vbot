@@ -1,6 +1,8 @@
 # Telegram Channel Review Handoff
 
-**Status:** Bugs 1–3 fixed (commits `830731c`, `d9d38ea`, `414e14b`, 2026-06-10) — Bug 4, Bug 5, M1–M4 still open · **Date:** 2026-06-10
+**Status:** Bugs 1–5 fixed (1–3: `830731c`, `d9d38ea`, `414e14b`, 2026-06-10; 4–5: 2026-06-12).
+M2 resolved separately (voice/audio/video handlers + unsupported-type reply now exist).
+M1, M3, M4 still open · **Date:** 2026-06-10 (updated 2026-06-12)
 **Scope reviewed:** `core/channels/` (channels.py, telegram.py, adapter.py), `core/tools/channel.py`,
 `server/rpc/channel_methods.py`, runtime wiring in `core/runtime/runtime.py`, plus the relevant
 parts of `core/runs/runs.py`, `core/chat/commands.py`, `core/chat/events.py`,
@@ -16,7 +18,14 @@ coverage in `tests/core/channels/` is good. The findings below are ordered by se
 
 ---
 
-## Bug 4 — Caption limit (1024) not handled on outbound file sends
+## Bug 4 — Caption limit (1024) not handled on outbound file sends — FIXED (2026-06-12)
+
+**Resolution:** `send()` now routes file sends through `_send_with_files`: a message within
+`TELEGRAM_CAPTION_LIMIT` (1024 UTF-16 units) still rides as the first file's caption, a longer
+message is sent as standalone text first and the files go out uncaptioned. Both outbound entry
+points (`send`, `send_text`) run inside `_telegram_error_boundary`, which wraps
+`telegram.error.TelegramError` (incl. `BadRequest`) into `ChannelError` so `channel_send` returns
+a clean `tool_failure`.
 
 **Where:** `core/channels/telegram.py` → `send()` (~line 150–171), `_send_single_file`,
 `_send_homogeneous_batch`.
@@ -34,7 +43,11 @@ agent gets a raw exception instead of a clean `tool_failure`.
 and deliver the text via the normal `send_message` split path; and/or wrap PTB errors at the
 adapter boundary into `ChannelError` so tool/relay callers handle them uniformly.
 
-## Bug 5 — `split_telegram_message` counts code points, Telegram counts UTF-16 units
+## Bug 5 — `split_telegram_message` counts code points, Telegram counts UTF-16 units — FIXED (2026-06-12)
+
+**Resolution:** `split_telegram_message` now accumulates chunks by UTF-16 length (`_utf16_units`:
+2 for astral-plane characters, 1 otherwise) and only breaks at character boundaries, so no chunk
+exceeds the wire limit and surrogate pairs are never split.
 
 **Where:** `core/channels/telegram.py` → `split_telegram_message` (~line 851–857).
 
