@@ -48,6 +48,7 @@ _MUTABLE_FIELDS = frozenset(
         "response_mode",
         "mention_patterns",
         "owner_user_ids",
+        "observe_unaddressed",
     )
 )
 
@@ -78,6 +79,7 @@ class ChannelConfig:
     response_mode: str = _DEFAULT_RESPONSE_MODE
     mention_patterns: list[str] = field(default_factory=list)
     owner_user_ids: list[str] = field(default_factory=list)
+    observe_unaddressed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one channel config to JSON-compatible data."""
@@ -92,6 +94,7 @@ class ChannelConfig:
             "response_mode": self.response_mode,
             "mention_patterns": list(self.mention_patterns),
             "owner_user_ids": list(self.owner_user_ids),
+            "observe_unaddressed": self.observe_unaddressed,
         }
 
     @classmethod
@@ -108,6 +111,7 @@ class ChannelConfig:
             response_mode=payload.get("response_mode", _DEFAULT_RESPONSE_MODE),
             mention_patterns=list(payload.get("mention_patterns") or []),
             owner_user_ids=list(payload.get("owner_user_ids") or []),
+            observe_unaddressed=payload.get("observe_unaddressed", False),
         )
         config.validate()
         return config
@@ -149,6 +153,9 @@ class ChannelConfig:
 
         if not isinstance(self.enabled, bool):
             raise ChannelConfigError("enabled must be a boolean")
+
+        if not isinstance(self.observe_unaddressed, bool):
+            raise ChannelConfigError("observe_unaddressed must be a boolean")
 
         if not isinstance(self.response_mode, str) or self.response_mode not in (
             _ALLOWED_RESPONSE_MODES

@@ -15,6 +15,7 @@ def _channel_config(
     *,
     channel_id: str = "tg-assistant",
     enabled: bool = True,
+    observe_unaddressed: bool = False,
 ) -> ChannelConfig:
     return ChannelConfig(
         id=channel_id,
@@ -24,6 +25,7 @@ def _channel_config(
         allowed_chat_ids=[],
         token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
         enabled=enabled,
+        observe_unaddressed=observe_unaddressed,
     )
 
 
@@ -72,6 +74,7 @@ async def test_channel_create_happy_path_calls_service_and_reload() -> None:
                 "platform": "telegram",
                 "agent_id": "assistant",
                 "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
+                "observe_unaddressed": True,
             },
         },
     )
@@ -80,7 +83,7 @@ async def test_channel_create_happy_path_calls_service_and_reload() -> None:
     channel_service.create_channel.assert_called_once()
     created_config = channel_service.create_channel.call_args.args[0]
     assert isinstance(created_config, ChannelConfig)
-    assert created_config.to_dict() == _channel_config().to_dict()
+    assert created_config.to_dict() == _channel_config(observe_unaddressed=True).to_dict()
     state.runtime.agents.get.assert_called_once_with("assistant")
     state.runtime.reload_channel_tool.assert_called_once_with()
 
@@ -99,6 +102,7 @@ async def test_channel_update_happy_path_calls_service_and_reload() -> None:
                 "dm_scope": "main",
                 "allowed_chat_ids": [12345, -100],
                 "enabled": False,
+                "observe_unaddressed": True,
             },
         },
     )
@@ -109,6 +113,7 @@ async def test_channel_update_happy_path_calls_service_and_reload() -> None:
         dm_scope="main",
         allowed_chat_ids=[12345, -100],
         enabled=False,
+        observe_unaddressed=True,
     )
     state.runtime.agents.get.assert_not_called()
     state.runtime.reload_channel_tool.assert_called_once_with()
