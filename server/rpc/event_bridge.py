@@ -126,6 +126,7 @@ def _publish_provider_auth_completed_event(
     *,
     provider_id: str,
     connection_id: str,
+    account: str,
     success: bool,
 ) -> None:
     event_bus = getattr(state, "event_bus", None)
@@ -133,7 +134,12 @@ def _publish_provider_auth_completed_event(
         return
     event_bus.publish(
         PROVIDER_AUTH_COMPLETED_EVENT,
-        {"provider_id": provider_id, "connection_id": connection_id, "success": success},
+        {
+            "provider_id": provider_id,
+            "connection_id": connection_id,
+            "account": account,
+            "success": success,
+        },
     )
 
 
