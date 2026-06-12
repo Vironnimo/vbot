@@ -16,6 +16,7 @@ import asyncio
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -191,7 +192,7 @@ def test_extension_recall_backend_becomes_selectable(tmp_path: Path) -> None:
 
     assert "my_backend" in recall_registry.names()
     backend = recall_registry.create("my_backend", _recall_context(tmp_path))
-    assert backend.search(object()) == {"kind": "search"}
+    assert backend.search(cast(Any, object())) == {"kind": "search"}
     assert _record(registry, "recall_ext").capability_errors == []
 
 

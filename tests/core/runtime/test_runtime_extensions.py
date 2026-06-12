@@ -81,6 +81,7 @@ def test_disabled_extension_is_never_imported(tmp_path: Path) -> None:
 
     runtime = Runtime(config)
     runtime.start()
+    assert runtime.extensions is not None
     record = next(r for r in runtime.extensions.records() if r.name == "disabled_ext")
     runtime.stop()
 
