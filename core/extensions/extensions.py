@@ -30,10 +30,64 @@ ToolResultValidator = Callable[[str, dict[str, Any]], "dict[str, Any] | None"]
 _HANDLER_FAILED = object()
 
 
+def _ignore_note(text: str) -> None:
+    """Default no-op note sink for contexts built without a live session."""
+    return None
+
+
 @dataclass(frozen=True)
 class HookContext:
+    """First positional argument to every handler. Constructed in ``core/chat/``.
+
+    ``add_note`` appends a kernel-internal ``role: "note"`` entry to the active
+    session; chat wires it to ``session.add_note`` when constructing the context.
+    """
+
     session_id: str
     agent_id: str
+    run_id: str
+    add_note: Callable[[str], None] = _ignore_note
+
+
+@dataclass(frozen=True)
+class Deny:
+    """``tool_call`` decision: stop the pipeline and refuse execution with a reason."""
+
+    reason: str
+
+
+@dataclass(frozen=True)
+class Modify:
+    """``tool_call`` decision: replace the tool input; the pipeline keeps going."""
+
+    input: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Replace:
+    """``tool_call`` decision: skip execution and use this result envelope instead."""
+
+    result: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolCallDecision:
+    """Outcome of the ``tool_call`` decision pipeline handed back to chat.
+
+    Exactly one disposition holds:
+
+    - proceed — both ``deny_reason`` and ``replacement`` are ``None``: execute the
+      tool with ``effective_input`` (reflects any ``Modify`` applied in the pipeline).
+    - denied — ``deny_reason``/``deny_extension`` set: the tool is not executed and
+      chat builds a deny error envelope naming the extension.
+    - replaced — ``replacement`` is a validated result envelope used as the result;
+      the tool is not executed.
+    """
+
+    effective_input: dict[str, Any]
+    deny_reason: str | None = None
+    deny_extension: str | None = None
+    replacement: dict[str, Any] | None = None
 
 
 class HooksAPI:
@@ -121,20 +175,24 @@ class ExtensionRegistry:
                 appends.append(result["system_prompt_append"])
         return appends
 
-    async def dispatch_context(self, ctx: HookContext, *, messages: list) -> list | None:
-        """Pipeline event: first handler returning a list wins, the rest are skipped.
+    async def dispatch_context(self, ctx: HookContext, *, messages: list) -> list:
+        """Pipeline event: each handler may replace the running message list.
 
-        Returns the replacement message list, or ``None`` when no handler
-        replaced the messages (chat then keeps its own list).
+        Threads the list through every handler in load order: a handler returning
+        a list makes it the current list (the next handler sees it); any other
+        return leaves the running list unchanged. Returns the final list. Chat
+        passes a shallow per-message copy in, so this is safe to use as the
+        request messages.
         """
-        payload = {"messages": messages}
+        current = messages
         for extension_name, handler in self._handlers.get("context", []):
+            payload = {"messages": current}
             result = await self._invoke("context", extension_name, handler, ctx, payload)
             if result is _HANDLER_FAILED:
                 continue
             if isinstance(result, list):
-                return result
-        return None
+                current = result
+        return current
 
     async def dispatch_tool_call(
         self,
@@ -144,23 +202,54 @@ class ExtensionRegistry:
         tool_call_id: str,
         input: dict[str, Any],
         validator: ToolResultValidator,
-    ) -> dict[str, Any] | None:
-        """Pipeline event: first valid result envelope short-circuits the tool.
+    ) -> ToolCallDecision:
+        """Decision pipeline: handlers may modify the input, deny, or replace.
 
-        Each handler dict is run through ``validator``; the first that passes
-        wins and is returned. Returns ``None`` when nothing short-circuits.
+        Each handler returns ``None`` (continue unchanged), ``Modify(input)``
+        (the input is replaced and the next handler sees it), ``Deny(reason)``
+        (stops the pipeline; the tool is not executed), or ``Replace(result)``
+        (stops the pipeline; ``result`` must pass ``validator`` or it is logged
+        and treated as continue). Any other return is ignored with a warning —
+        plain dicts no longer short-circuit a tool call. Returns a
+        ``ToolCallDecision`` describing the effective input and disposition.
         """
-        payload = {"tool_name": tool_name, "tool_call_id": tool_call_id, "input": input}
+        current_input = input
         for extension_name, handler in self._handlers.get("tool_call", []):
-            result = await self._invoke("tool_call", extension_name, handler, ctx, payload)
-            if result is _HANDLER_FAILED:
+            payload = {
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "input": current_input,
+            }
+            decision = await self._invoke("tool_call", extension_name, handler, ctx, payload)
+            if decision is _HANDLER_FAILED or decision is None:
                 continue
-            if isinstance(result, dict):
-                validated = validator(extension_name, result)
+            if isinstance(decision, Modify):
+                if isinstance(decision.input, dict):
+                    current_input = decision.input
+                else:
+                    _LOGGER.warning(
+                        "Extension %r tool_call Modify ignored: input is not a dict",
+                        extension_name,
+                    )
+                continue
+            if isinstance(decision, Deny):
+                return ToolCallDecision(
+                    effective_input=current_input,
+                    deny_reason=decision.reason,
+                    deny_extension=extension_name,
+                )
+            if isinstance(decision, Replace):
+                validated = validator(extension_name, decision.result)
                 if validated is None:
                     continue
-                return validated
-        return None
+                return ToolCallDecision(effective_input=current_input, replacement=validated)
+            _LOGGER.warning(
+                "Extension %r tool_call handler returned an unsupported value (%s); "
+                "ignoring. Return None, Modify, Deny, or Replace.",
+                extension_name,
+                type(decision).__name__,
+            )
+        return ToolCallDecision(effective_input=current_input)
 
     async def dispatch_tool_result(
         self,
@@ -172,11 +261,12 @@ class ExtensionRegistry:
         result: dict[str, Any],
         validator: ToolResultValidator,
     ) -> dict[str, Any]:
-        """Pipeline event: every handler shallow-merge-patches the envelope in turn.
+        """Replace-style pipeline: each handler may swap in a full envelope.
 
-        Each handler's dict is shallow-merged onto the current envelope and
-        re-validated; valid patches replace the running result, invalid ones are
-        dropped. Returns the final (possibly unchanged) envelope.
+        Each handler receives the running envelope and returns a full
+        replacement envelope (validated; valid replaces the running result,
+        invalid is dropped) or ``None`` to leave it unchanged. There is no
+        shallow-merge patching. Returns the final (possibly unchanged) envelope.
         """
         current = result
         for extension_name, handler in self._handlers.get("tool_result", []):
@@ -187,12 +277,10 @@ class ExtensionRegistry:
                 "result": current,
             }
             hook_result = await self._invoke("tool_result", extension_name, handler, ctx, payload)
-            if hook_result is _HANDLER_FAILED:
+            if hook_result is _HANDLER_FAILED or hook_result is None:
                 continue
             if isinstance(hook_result, dict):
-                patched = dict(current)
-                patched.update(hook_result)
-                validated = validator(extension_name, patched)
+                validated = validator(extension_name, hook_result)
                 if validated is not None:
                     current = validated
         return current
@@ -316,4 +404,13 @@ def _load_extension_root(root: Path, registry: ExtensionRegistry) -> None:
                     _LOGGER.error("Extension %r async register() raised: %s", name, exc)
 
 
-__all__ = ["ExtensionRegistry", "HookContext", "HooksAPI", "ToolResultValidator"]
+__all__ = [
+    "Deny",
+    "ExtensionRegistry",
+    "HookContext",
+    "HooksAPI",
+    "Modify",
+    "Replace",
+    "ToolCallDecision",
+    "ToolResultValidator",
+]

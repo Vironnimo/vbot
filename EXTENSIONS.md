@@ -52,12 +52,20 @@ Festgezurrte Entscheidungen (Details und Begründungen im Plan-Suite-README):
 | # | Plan | Liefert | Status |
 |---|---|---|---|
 | 1 | Typed Dispatcher | Dispatch zentral in `core/extensions/`, chat ohne `_handlers`, erste direkte Tests | erledigt |
-| 2 | Decision-Modell | `Deny`/`Modify`/`Replace`, Pipeline-Semantik, `HookContext` + `run_id`/`add_note` | offen |
+| 2 | Decision-Modell | `Deny`/`Modify`/`Replace`, Pipeline-Semantik, `HookContext` + `run_id`/`add_note` | erledigt |
 | 3 | Registrierung | Zweiphasig, Records/Diagnostics, Manifest, enable/disable + Config, startup/shutdown | offen |
 | 4 | Capabilities | `register_tool`, `register_recall_backend`, Beispiel-Extensions | offen |
 | 5 | Sichtbarkeit | `extensions.list` RPC, CLI, WebUI-Panel, Autoren-Doku | offen |
 
-## Bestandsaufnahme (2026-06-11, weiterhin gültig bis Plan 1/2 gelandet sind)
+## Bestandsaufnahme (2026-06-11)
+
+> Plan 1 und 2 sind gelandet: Punkte 1–3 unten (lückenhaftes Eingreifen, uneinheitliche
+> Kompositions-Semantik, kopierter Dispatch) sind damit adressiert — Dispatch lebt zentral
+> in `core/extensions/`, jedes Event hat eine designte Kompositionsregel, und `tool_call`
+> kann via `Modify`/`Deny`/`Replace` modifizieren, ablehnen und ersetzen. Punkte 4–5
+> (Identität/Sichtbarkeit, Capabilities) bleiben für Plan 3–5. Der Rest ist historischer
+> Kontext.
+
 
 Der Loader ist solide und klein: Discovery aus `<data_dir>/extensions/` plus
 `settings.json` → `extension_directories`, drei Entry-Point-Formen (Single-File, Package,
