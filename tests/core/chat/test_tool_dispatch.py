@@ -12,7 +12,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat.messages import JsonObject, ToolCall
-from core.chat.tool_dispatch import _dispatch_tool_calls
+from core.chat.tool_dispatch import _dispatch_tool_calls, _sync_skill_context_messages
 from core.extensions import Deny, ExtensionRegistry, Modify, Replace
 from core.runs import TOOL_CALL_STARTED_EVENT, Run, RunStatus
 from core.sessions import ChatSessionManager
@@ -478,3 +478,85 @@ class TestExtensionDecisionWiring:
 
         note_contents = [m.content for m in session.load() if m.role == "note"]
         assert "hook was here" in note_contents
+
+
+class _StubSkillSession:
+    """Minimal session exposing only ``skill_context_messages`` for sync tests."""
+
+    def __init__(self, names: list[str]) -> None:
+        self._names = names
+
+    def skill_context_messages(self) -> list[JsonObject]:
+        return [
+            {"role": "user", "content": f'<skill_content name="{name}">…</skill_content>'}
+            for name in self._names
+        ]
+
+
+def _skill_content(name: str) -> str:
+    return f'<skill_content name="{name}">…</skill_content>'
+
+
+class TestSyncSkillContextMessages:
+    def test_inserts_at_front_without_system_message(self) -> None:
+        messages: list[JsonObject] = [{"role": "user", "content": "do the thing"}]
+        session = cast(Any, _StubSkillSession(["debugging"]))
+
+        _sync_skill_context_messages(messages, session)
+
+        # No system message → skill context must land at index 0, before history.
+        assert messages[0]["content"] == _skill_content("debugging")
+        assert messages[1]["content"] == "do the thing"
+
+    def test_inserts_after_system_message(self) -> None:
+        messages: list[JsonObject] = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "do the thing"},
+        ]
+        session = cast(Any, _StubSkillSession(["debugging"]))
+
+        _sync_skill_context_messages(messages, session)
+
+        assert messages[0]["role"] == "system"
+        assert messages[1]["content"] == _skill_content("debugging")
+        assert messages[2]["content"] == "do the thing"
+
+    def test_multiple_new_contexts_keep_activation_order(self) -> None:
+        messages: list[JsonObject] = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "do the thing"},
+        ]
+        session = cast(Any, _StubSkillSession(["alpha", "beta"]))
+
+        _sync_skill_context_messages(messages, session)
+
+        # Order is preserved (not reversed by repeated insert at a fixed index).
+        assert messages[1]["content"] == _skill_content("alpha")
+        assert messages[2]["content"] == _skill_content("beta")
+        assert messages[3]["content"] == "do the thing"
+
+    def test_new_context_lands_behind_existing_skill_block(self) -> None:
+        messages: list[JsonObject] = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": _skill_content("alpha")},
+            {"role": "user", "content": "do the thing"},
+        ]
+        session = cast(Any, _StubSkillSession(["alpha", "beta"]))
+
+        _sync_skill_context_messages(messages, session)
+
+        # Existing "alpha" is not duplicated; new "beta" appends after it.
+        assert messages[1]["content"] == _skill_content("alpha")
+        assert messages[2]["content"] == _skill_content("beta")
+        assert messages[3]["content"] == "do the thing"
+
+    def test_no_duplicate_when_all_present(self) -> None:
+        messages: list[JsonObject] = [
+            {"role": "user", "content": _skill_content("alpha")},
+            {"role": "user", "content": "do the thing"},
+        ]
+        session = cast(Any, _StubSkillSession(["alpha"]))
+
+        _sync_skill_context_messages(messages, session)
+
+        assert len(messages) == 2
