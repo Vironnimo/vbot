@@ -221,6 +221,20 @@ vbot tool list
 
 Use this to inspect public registered tools. Internal system-managed tools are omitted by the server.
 
+## Extensions
+
+```bash
+vbot extensions list
+vbot extensions enable <extension-name>
+vbot extensions disable <extension-name>
+```
+
+`list` shows loaded, failed (with the error), and disabled extensions plus each one's
+contributed capabilities (hooks, tools, recall backends, startup/shutdown). `enable` and
+`disable` edit the `extensions` settings section and are **restart-applied** — extensions
+are never hot-reloaded, so the command prints a restart hint and you must run
+`vbot server restart` for the change to take effect.
+
 ## Prompts
 
 ```bash

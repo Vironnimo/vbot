@@ -42,6 +42,7 @@ from cli.debug_management import (
     debug_trace_show,
 )
 from cli.doctor_management import doctor_config, doctor_settings
+from cli.extensions_management import extensions_disable, extensions_enable, extensions_list
 from cli.log_management import log_list, log_read
 from cli.model_management import model_list, model_refresh
 from cli.parser import parse_args
@@ -132,6 +133,9 @@ def run(
     list_models_fn: Callable[[ServerInstance], CommandResult] = model_list,
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
     list_skills_fn: Callable[[ServerInstance], CommandResult] = skill_list,
+    list_extensions_fn: Callable[[ServerInstance], CommandResult] = extensions_list,
+    enable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_enable,
+    disable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_disable,
     show_config_fn: Callable[[ServerInstance], CommandResult] = config_show,
     get_config_fn: Callable[[ServerInstance, str], CommandResult] = config_get,
     set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] = config_set,
@@ -254,6 +258,17 @@ def run(
 
     if args.area == "skill":
         result = dispatch_skill_command(args, instance, list_skills_fn=list_skills_fn)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "extensions":
+        result = dispatch_extensions_command(
+            args,
+            instance,
+            list_extensions_fn=list_extensions_fn,
+            enable_extension_fn=enable_extension_fn,
+            disable_extension_fn=disable_extension_fn,
+        )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -585,6 +600,25 @@ def dispatch_skill_command(
     if args.command == "list":
         return list_skills_fn(instance)
     raise ValueError(f"Unsupported skill command: {args.command}")
+
+
+def dispatch_extensions_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_extensions_fn: Callable[[ServerInstance], CommandResult],
+    enable_extension_fn: Callable[[ServerInstance, str], CommandResult],
+    disable_extension_fn: Callable[[ServerInstance, str], CommandResult],
+) -> CommandResult:
+    """Dispatch one parsed extensions command against the server RPC client."""
+
+    if args.command == "list":
+        return list_extensions_fn(instance)
+    if args.command == "enable":
+        return enable_extension_fn(instance, args.name)
+    if args.command == "disable":
+        return disable_extension_fn(instance, args.name)
+    raise ValueError(f"Unsupported extensions command: {args.command}")
 
 
 def dispatch_cron_command(
