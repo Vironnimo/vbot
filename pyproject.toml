@@ -12,10 +12,10 @@ dependencies = ["httpx", "pyyaml", "croniter", "tzdata", "beautifulsoup4", "sqli
 vbot = "cli.main:main"
 
 [project.optional-dependencies]
-server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "python-multipart"]
+server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "discord.py>=2.7,<3", "python-multipart"]
 cli     = ["rich", "psutil"]
 desktop = ["pywebview", "openwakeword"]
-dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "python-multipart", "psutil"]
+dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "discord.py>=2.7,<3", "python-multipart", "psutil"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]

@@ -59,7 +59,7 @@ def test_parse_args_supports_channel_add_options() -> None:
     assert args.agent == "assistant"
     assert args.token_env == "TELEGRAM_BOT_TOKEN_TG_ASSISTANT"
     assert args.dm_scope == "per_peer"
-    assert args.allow == [100, 101]
+    assert args.allow == ["100", "101"]
     assert args.host == "localhost"
     assert args.port == 8500
     assert args.data_dir == "dev-data"
@@ -127,7 +127,7 @@ def test_parse_args_supports_channel_update_options() -> None:
     assert args.agent == "coder"
     assert args.token_env == "TELEGRAM_BOT_TOKEN_CODER"
     assert args.dm_scope == "per_peer"
-    assert args.allow == [100, 101]
+    assert args.allow == ["100", "101"]
     assert args.enabled == "false"
 
 
@@ -148,7 +148,7 @@ def test_channel_add_posts_create_rpc(tmp_path: Path, monkeypatch: pytest.Monkey
         "assistant",
         "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
         "per_conversation",
-        [100, 101],
+        ["100", "101"],
     )
 
     assert result == CommandResult(ok=True, message="created tg-assistant", instance=instance)
@@ -163,7 +163,7 @@ def test_channel_add_posts_create_rpc(tmp_path: Path, monkeypatch: pytest.Monkey
                     "agent_id": "assistant",
                     "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
                     "dm_scope": "per_conversation",
-                    "allowed_chat_ids": [100, 101],
+                    "allowed_chat_ids": ["100", "101"],
                 },
             },
             "timeout": 10.0,
@@ -480,7 +480,7 @@ def test_run_dispatches_channel_commands(
         agent_id: str,
         token_env: str,
         dm_scope: str,
-        allowed_chat_ids: Sequence[int],
+        allowed_chat_ids: Sequence[str],
     ) -> CommandResult:
         calls.append(
             (
