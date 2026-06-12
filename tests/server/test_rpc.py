@@ -34,6 +34,7 @@ from core.providers.accounts import (
 )
 from core.runs import ChatRunManager, Run
 from core.settings import AGENT_DEFAULT_FIELDS
+from core.settings.normalizers import normalize_extensions_settings
 from core.storage import StorageError
 from core.tools import ToolRegistry, register_read_tool
 from core.utils.errors import ConfigError
@@ -740,7 +741,14 @@ class StubStorage:
         if "model_tasks" in settings_update:
             self._settings = {**self._settings, "model_tasks": settings_update["model_tasks"]}
             updated_sections["model_tasks"] = self.load_model_task_settings()
+        if "extensions" in settings_update:
+            normalized = normalize_extensions_settings(settings_update["extensions"])
+            self._settings = {**self._settings, "extensions": normalized}
+            updated_sections["extensions"] = normalized
         return updated_sections
+
+    def load_extensions_settings(self) -> JsonObject:
+        return normalize_extensions_settings(self._settings.get("extensions"))
 
     def save_settings(self, settings: JsonObject) -> None:
         self._settings = dict(settings)

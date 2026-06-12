@@ -165,6 +165,60 @@ def test_parse_settings_update_rejects_invalid_payloads(
         parse_settings_update(params)
 
 
+def test_parse_settings_update_normalizes_extensions_section() -> None:
+    parsed = parse_settings_update(
+        {
+            "extensions": {
+                "disabled": [" legacy ", "old"],
+                "config": {"guard_bash": {"deny": ["rm -rf"]}},
+            }
+        }
+    )
+
+    assert parsed == {
+        "extensions": {
+            "disabled": ["legacy", "old"],
+            "config": {"guard_bash": {"deny": ["rm -rf"]}},
+        }
+    }
+
+
+def test_parse_settings_update_defaults_empty_extensions_fields() -> None:
+    assert parse_settings_update({"extensions": {}}) == {
+        "extensions": {"disabled": [], "config": {}}
+    }
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"extensions": []}, "params.extensions must be an object"),
+        (
+            {"extensions": {"unknown": True}},
+            "unsupported extensions settings: unknown",
+        ),
+        (
+            {"extensions": {"disabled": ["ok", ""]}},
+            "params.extensions.disabled must be a list of non-empty strings",
+        ),
+        (
+            {"extensions": {"disabled": "one"}},
+            "params.extensions.disabled must be a list of non-empty strings",
+        ),
+        (
+            {"extensions": {"config": {"ext": "not-an-object"}}},
+            "params.extensions.config must be an object of objects",
+        ),
+    ],
+)
+def test_parse_settings_update_rejects_invalid_extensions(
+    params: dict,
+    message: str,
+) -> None:
+    with pytest.raises(SettingsValidationError, match=message):
+        parse_settings_update(params)
+
+
 def test_validate_settings_file_accepts_missing_settings(tmp_path: Path) -> None:
     report = validate_settings_file(tmp_path / "settings.json")
 

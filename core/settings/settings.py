@@ -35,6 +35,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "recall",
         "model_tasks",
         "web_search",
+        "extensions",
     }
 )
 SUBAGENT_SETTING_FIELDS = (
@@ -88,7 +89,47 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "web_search" in params:
         parsed_update["web_search"] = _parse_web_search_update(params["web_search"])
 
+    if "extensions" in params:
+        parsed_update["extensions"] = _parse_extensions_update(params["extensions"])
+
     return parsed_update
+
+
+def _parse_extensions_update(extensions: Any) -> JsonObject:
+    """Parse the restart-applied ``extensions`` section (disabled list + config).
+
+    Full-section write: ``disabled`` and ``config`` default to empty when
+    omitted, so callers send the complete section. Shape only — the runtime
+    reads this at the next ``Runtime.start()`` (decision #9, restart-applied);
+    deep JSON normalization of ``config`` happens in storage.
+    """
+    if not isinstance(extensions, dict):
+        raise SettingsValidationError("params.extensions must be an object")
+
+    unsupported_fields = sorted(set(extensions) - {"disabled", "config"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported extensions settings: {', '.join(unsupported_fields)}"
+        )
+
+    disabled = extensions.get("disabled", [])
+    if not isinstance(disabled, list) or not all(
+        isinstance(name, str) and name.strip() for name in disabled
+    ):
+        raise SettingsValidationError(
+            "params.extensions.disabled must be a list of non-empty strings"
+        )
+
+    config = extensions.get("config", {})
+    if not isinstance(config, dict) or not all(
+        isinstance(value, dict) for value in config.values()
+    ):
+        raise SettingsValidationError("params.extensions.config must be an object of objects")
+
+    return {
+        "disabled": [name.strip() for name in disabled],
+        "config": {name: dict(value) for name, value in config.items()},
+    }
 
 
 def _parse_web_search_update(web_search: Any) -> JsonObject:
