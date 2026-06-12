@@ -10,11 +10,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from core.providers.accounts import ACCOUNT_ID_PATTERN, DEFAULT_ACCOUNT_ID, sorted_account_ids
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("providers.token_store")
 
 TOKEN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_ACCOUNT_FILE_SEPARATOR = "--"
 
 
 @dataclass(frozen=True)
@@ -35,12 +37,19 @@ class TokenStore:
         self._oauth_dir = data_dir / "oauth"
         self._tmp_dir = data_dir / ".tmp"
 
-    def save(self, provider_id: str, local_connection_id: str, token: OAuthToken) -> None:
-        """Persist *token* atomically for the provider connection."""
+    def save(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        token: OAuthToken,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> None:
+        """Persist *token* atomically for the provider connection account."""
 
         self._oauth_dir.mkdir(parents=True, exist_ok=True)
         self._tmp_dir.mkdir(parents=True, exist_ok=True)
-        token_path = self._token_path(provider_id, local_connection_id)
+        token_path = self._token_path(provider_id, local_connection_id, account_id)
         temp_path = self._tmp_dir / f"{token_path.name}.{uuid4().hex}.tmp"
 
         temp_path.write_text(
@@ -49,15 +58,22 @@ class TokenStore:
         )
         os.replace(temp_path, token_path)
         _LOGGER.info(
-            "Saved OAuth token for provider '%s' connection '%s'",
+            "Saved OAuth token for provider '%s' connection '%s' account '%s'",
             provider_id,
             local_connection_id,
+            account_id,
         )
 
-    def load(self, provider_id: str, local_connection_id: str) -> OAuthToken | None:
-        """Load a token for the provider connection, if one exists."""
+    def load(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> OAuthToken | None:
+        """Load a token for the provider connection account, if one exists."""
 
-        token_path = self._token_path(provider_id, local_connection_id)
+        token_path = self._token_path(provider_id, local_connection_id, account_id)
         if not token_path.exists():
             return None
 
@@ -69,24 +85,37 @@ class TokenStore:
             extra=dict(data.get("extra", {})),
         )
 
-    def delete(self, provider_id: str, local_connection_id: str) -> None:
-        """Delete the token for a provider connection, if it exists."""
+    def delete(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> None:
+        """Delete the token for a provider connection account, if it exists."""
 
-        token_path = self._token_path(provider_id, local_connection_id)
+        token_path = self._token_path(provider_id, local_connection_id, account_id)
         try:
             token_path.unlink()
         except FileNotFoundError:
             return
         _LOGGER.info(
-            "Deleted OAuth token for provider '%s' connection '%s'",
+            "Deleted OAuth token for provider '%s' connection '%s' account '%s'",
             provider_id,
             local_connection_id,
+            account_id,
         )
 
-    def has_valid_token(self, provider_id: str, local_connection_id: str) -> bool:
+    def has_valid_token(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> bool:
         """Return whether a token exists and is usable without user interaction."""
 
-        token = self.load(provider_id, local_connection_id)
+        token = self.load(provider_id, local_connection_id, account_id=account_id)
         if token is None:
             return False
         if token.expires_at is None:
@@ -95,13 +124,41 @@ class TokenStore:
             return True
         return bool(token.refresh_token or token.extra.get("github_oauth_token"))
 
-    def _token_path(self, provider_id: str, local_connection_id: str) -> Path:
+    def list_account_ids(self, provider_id: str, local_connection_id: str) -> list[str]:
+        """Return stored account ids for the connection, default first then sorted."""
+
         safe_provider_id = self._validate_token_id("provider_id", provider_id)
         safe_connection_id = self._validate_token_id(
             "local_connection_id",
             local_connection_id,
         )
-        token_path = self._oauth_dir / f"{safe_provider_id}-{safe_connection_id}.json"
+        account_ids: list[str] = []
+        if (self._oauth_dir / f"{safe_provider_id}-{safe_connection_id}.json").exists():
+            account_ids.append(DEFAULT_ACCOUNT_ID)
+        if not self._oauth_dir.is_dir():
+            return account_ids
+
+        prefix = f"{safe_provider_id}-{safe_connection_id}{_ACCOUNT_FILE_SEPARATOR}"
+        for token_path in self._oauth_dir.glob(f"{prefix}*.json"):
+            suffix = token_path.name.removeprefix(prefix).removesuffix(".json")
+            if ACCOUNT_ID_PATTERN.fullmatch(suffix) and suffix not in account_ids:
+                account_ids.append(suffix)
+        return sorted_account_ids(account_ids)
+
+    def _token_path(self, provider_id: str, local_connection_id: str, account_id: str) -> Path:
+        safe_provider_id = self._validate_token_id("provider_id", provider_id)
+        safe_connection_id = self._validate_token_id(
+            "local_connection_id",
+            local_connection_id,
+        )
+        safe_account_id = self._validate_account_id(account_id)
+        file_name = f"{safe_provider_id}-{safe_connection_id}.json"
+        if safe_account_id != DEFAULT_ACCOUNT_ID:
+            file_name = (
+                f"{safe_provider_id}-{safe_connection_id}"
+                f"{_ACCOUNT_FILE_SEPARATOR}{safe_account_id}.json"
+            )
+        token_path = self._oauth_dir / file_name
         oauth_root = self._oauth_dir.resolve()
         resolved_path = token_path.resolve()
         if resolved_path.parent != oauth_root:
@@ -113,6 +170,14 @@ class TokenStore:
             raise ValueError(
                 f"OAuth token {field_name} must contain only letters, numbers, underscores, "
                 "or hyphens, and must start with a letter or number"
+            )
+        return value
+
+    def _validate_account_id(self, value: str) -> str:
+        if not ACCOUNT_ID_PATTERN.fullmatch(value):
+            raise ValueError(
+                "OAuth token account_id must contain only lowercase letters, digits, or "
+                "underscores, start with a letter or digit, and be at most 32 characters"
             )
         return value
 

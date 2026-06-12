@@ -23,6 +23,7 @@ from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.models import Model, ModelRegistry
 from core.prompts import SkillPromptRegistry, SystemPromptManager
+from core.providers.accounts import split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
@@ -913,8 +914,11 @@ class Runtime:
 
         Args:
             provider_id: Unique provider identifier (e.g. ``"openai"``).
-            connection_id: Compositional connection identifier
-                (e.g. ``"openai:api-key"``).
+            connection_id: Compositional connection identifier using the
+                ``provider:connection[:account]`` grammar (e.g.
+                ``"openai:api-key"`` or ``"openai:api-key:work"``). An
+                absent account resolves to the connection's first usable
+                account (``default`` first, then sorted alphabetically).
 
         Returns:
             A ``ProviderAdapter`` instance ready to make API calls.
@@ -929,8 +933,8 @@ class Runtime:
             raise RuntimeError("Runtime not started — call start() first")
 
         provider_config = self.providers.get(provider_id)
-        connection = self._get_connection_config(provider_config, connection_id)
-        token_getter = self._get_token_getter(provider_id, connection_id, connection)
+        connection, account_id = self._get_connection_config(provider_config, connection_id)
+        token_getter = self._get_token_getter(provider_id, connection_id, connection, account_id)
 
         adapter_class = _ADAPTER_MAP.get(provider_config.adapter)
         if adapter_class is None:
@@ -981,6 +985,7 @@ class Runtime:
         provider_id: str,
         connection_id: str,
         connection: ConnectionConfig,
+        account_id: str | None,
     ) -> TokenGetter:
         if connection.type == "api_key":
             raw_token = self.provider_credentials.get_credentials(provider_id, connection_id)
@@ -991,7 +996,22 @@ class Runtime:
                 # central credential path until they get token-store metadata.
                 raw_token = self.provider_credentials.get_credentials(provider_id, connection_id)
                 return StaticTokenGetter(raw_token)
-            return OAuthTokenGetter(self.token_store, provider_id, connection.id, connection.oauth)
+            # An explicitly pinned account is used exactly as given (a
+            # mid-flight login must still work); only an absent account
+            # resolves to the first usable one.
+            resolved_account_id = account_id
+            if resolved_account_id is None:
+                resolved_account_id = self.provider_credentials.resolve_account_id(
+                    provider_id,
+                    connection.id,
+                )
+            return OAuthTokenGetter(
+                self.token_store,
+                provider_id,
+                connection.id,
+                connection.oauth,
+                account_id=resolved_account_id,
+            )
         raise ConfigError(
             f"Unknown connection type '{connection.type}' for provider '{provider_id}' "
             f"connection '{connection.id}'"
@@ -1001,14 +1021,10 @@ class Runtime:
         self,
         provider_config: ProviderConfig,
         connection_id: str,
-    ) -> ConnectionConfig:
-        parts = connection_id.split(":", 1)
-        if len(parts) != 2 or parts[0] != provider_config.id or not parts[1]:
-            raise ConfigError(
-                f"Unknown connection id '{connection_id}' for provider '{provider_config.id}'"
-            )
+    ) -> tuple[ConnectionConfig, str | None]:
+        local_connection_id, account_id = split_connection_id(provider_config.id, connection_id)
         try:
-            return provider_config.get_connection(parts[1])
+            return provider_config.get_connection(local_connection_id), account_id
         except KeyError as error:
             raise ConfigError(
                 f"Unknown connection id '{connection_id}' for provider '{provider_config.id}'"

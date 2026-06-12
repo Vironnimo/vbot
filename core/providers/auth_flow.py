@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers.accounts import DEFAULT_ACCOUNT_ID
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
 from core.providers.providers import OPENAI_CODEX_DEVICE_FLOW, OAuthConfig
 from core.providers.token_store import OAuthToken, TokenStore
@@ -57,13 +58,15 @@ class DeviceFlowEngine:
 
     def __init__(self, token_store: TokenStore) -> None:
         self._token_store = token_store
-        self._active_flows: dict[tuple[str, str], asyncio.Task[None]] = {}
+        self._active_flows: dict[tuple[str, str, str], asyncio.Task[None]] = {}
 
     async def start_device_flow(
         self,
         provider_id: str,
         local_connection_id: str,
         oauth_config: OAuthConfig,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> DeviceFlowSession:
         """Request a Device Flow session from the provider."""
 
@@ -76,9 +79,10 @@ class DeviceFlowEngine:
 
         session = self._device_session_from_response(oauth_config, response.json())
         _LOGGER.info(
-            "Started OAuth device flow for provider '%s' connection '%s'",
+            "Started OAuth device flow for provider '%s' connection '%s' account '%s'",
             provider_id,
             local_connection_id,
+            account_id,
         )
         return session
 
@@ -92,10 +96,11 @@ class DeviceFlowEngine:
         expires_in: int,
         on_complete: OnCompleteCallback,
         user_code: str = "",
+        account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
         """Poll for Device Flow completion, store the token, and notify the caller."""
 
-        flow_key = (provider_id, local_connection_id)
+        flow_key = (provider_id, local_connection_id, account_id)
         current_task = asyncio.current_task()
         if current_task is not None:
             self._active_flows[flow_key] = current_task
@@ -109,30 +114,34 @@ class DeviceFlowEngine:
                 interval,
                 expires_in,
                 user_code,
+                account_id=account_id,
             )
         except asyncio.CancelledError:
             raise
         except DeviceFlowTerminalError as error:
             _LOGGER.warning(
-                "OAuth device flow failed for provider '%s' connection '%s': %s",
+                "OAuth device flow failed for provider '%s' connection '%s' account '%s': %s",
                 provider_id,
                 local_connection_id,
+                account_id,
                 error,
             )
             await self._notify_complete(on_complete, success=False)
         except ProviderError as error:
             _LOGGER.warning(
-                "OAuth device flow failed for provider '%s' connection '%s': %s",
+                "OAuth device flow failed for provider '%s' connection '%s' account '%s': %s",
                 provider_id,
                 local_connection_id,
+                account_id,
                 error.__class__.__name__,
             )
             await self._notify_complete(on_complete, success=False)
         except Exception:
             _LOGGER.error(
-                "OAuth device flow crashed for provider '%s' connection '%s'",
+                "OAuth device flow crashed for provider '%s' connection '%s' account '%s'",
                 provider_id,
                 local_connection_id,
+                account_id,
             )
             await self._notify_complete(on_complete, success=False)
             raise
@@ -142,10 +151,15 @@ class DeviceFlowEngine:
             if self._active_flows.get(flow_key) is current_task:
                 self._active_flows.pop(flow_key, None)
 
-    def cancel_flow(self, provider_id: str, local_connection_id: str) -> None:
-        """Cancel any in-flight polling task for the provider connection."""
+    def cancel_flow(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> None:
+        """Cancel any in-flight polling task for the provider connection account."""
 
-        task = self._active_flows.pop((provider_id, local_connection_id), None)
+        task = self._active_flows.pop((provider_id, local_connection_id, account_id), None)
         if task is not None and not task.done():
             task.cancel()
 
@@ -170,6 +184,8 @@ class DeviceFlowEngine:
         interval: int,
         expires_in: int,
         user_code: str = "",
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
         poll_interval = interval
         expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
@@ -193,7 +209,9 @@ class DeviceFlowEngine:
                     raise DeviceFlowTerminalError(data["error"])
 
                 token = await self._build_token(client, oauth_config, data)
-                self._token_store.save(provider_id, local_connection_id, token)
+                self._token_store.save(
+                    provider_id, local_connection_id, token, account_id=account_id
+                )
                 return
 
     async def _post_device_authorization(
