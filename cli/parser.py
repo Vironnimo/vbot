@@ -483,6 +483,11 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         help="Required when the provider has multiple API-key connections",
     )
     set_key_parser.add_argument(
+        "--account",
+        metavar="<account-id>",
+        help="Named credential slot on the connection (default: default)",
+    )
+    set_key_parser.add_argument(
         "--refresh-models",
         action="store_true",
         help="Refresh this provider's model catalog after setting the key",
@@ -504,6 +509,11 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         metavar="<provider:connection-id>",
         help="Required when the provider has multiple API-key connections",
     )
+    unset_key_parser.add_argument(
+        "--account",
+        metavar="<account-id>",
+        help="Named credential slot on the connection (default: default)",
+    )
 
     for command in ("connect", "disconnect", "connect-status"):
         command_parser = _add_command_parser(
@@ -520,6 +530,11 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
             required=True,
             metavar="<provider:connection-id>",
             help="Compositional OAuth connection id, for example openai:subscription",
+        )
+        command_parser.add_argument(
+            "--account",
+            metavar="<account-id>",
+            help="Named credential slot on the connection (default: default)",
         )
 
 

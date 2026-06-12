@@ -98,7 +98,14 @@ vbot model refresh openrouter
 
 Use `provider set-key` when the user gives you an API key and asks you to activate a provider. Add `--refresh-models` when the provider has a refreshable model catalog and the user wants it usable right away. Verify with `provider status <provider-id>` and `model list`.
 
-For OAuth/subscription connections, use the device flow:
+A connection can hold multiple credential **accounts** (named slots; default slot is `default`). Add `--account <id>` to `set-key`, `unset-key`, `connect`, `disconnect`, and `connect-status` to target a named slot (lowercase letters, digits, underscores, e.g. `work`). `provider list` and `provider status` show each connection's accounts with their usable state and source. Models can pin an account via the suffix `<provider>/<model>::<connection>:<account>`:
+
+```bash
+vbot provider set-key openrouter <api-key> --account work
+vbot provider status openrouter
+```
+
+For OAuth/subscription connections, use the device flow (add `--account <id>` for an additional login on the same connection):
 
 ```bash
 vbot provider connect openai --connection openai:subscription
