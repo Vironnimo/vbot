@@ -763,6 +763,49 @@ async def test_stream_responses_yields_normalized_deltas(
     ]
 
 
+class _RotatingTokenGetter:
+    """Async token getter that yields a fresh token on each call."""
+
+    def __init__(self, tokens: list[str]) -> None:
+        self._tokens = tokens
+        self.calls = 0
+
+    async def __call__(self) -> str:
+        token = self._tokens[min(self.calls, len(self._tokens) - 1)]
+        self.calls += 1
+        return token
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_responses_rebuilds_headers_per_connect_attempt() -> None:
+    """A retried Copilot stream connect re-consults the token getter (token refresh)."""
+    token_getter = _RotatingTokenGetter(["stale-token", "fresh-token"])
+    adapter = GitHubCopilotAdapter(
+        COPILOT_CONFIG, token_getter, model_lookup=_copilot_metadata_lookup
+    )
+    sse_body = (
+        "event: response.output_text.delta\n"
+        'data: {"type":"response.output_text.delta","delta":"Hi"}\n\n'
+        "event: response.completed\n"
+        'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+    route = respx.post(RESPONSES_URL).mock(
+        side_effect=[
+            httpx.Response(503, text="Service Unavailable"),
+            httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"}),
+        ]
+    )
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
+            pass
+
+    assert route.call_count == 2
+    assert route.calls[0].request.headers.get("authorization") == "Bearer stale-token"
+    assert route.calls[1].request.headers.get("authorization") == "Bearer fresh-token"
+
+
 @pytest.mark.asyncio
 async def test_stream_responses_raises_network_error_on_mid_stream_read_error(
     metadata_copilot_adapter: GitHubCopilotAdapter,
