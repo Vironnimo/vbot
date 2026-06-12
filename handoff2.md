@@ -23,25 +23,20 @@ Assistant-Einträgen der weiterverwendeten `messages`-Liste
 (`_strip_assistant_reasoning_fields` in `core/chat/messages.py`). Test
 `test_fallback_request_strips_primary_provider_reasoning_meta`; Spec `chat.md` aktualisiert.
 
-### M3 — `_sync_skill_context_messages` fügt stur bei Index 1 ein
-`core/chat/tool_dispatch.py:491-502`: neue Skill-Kontexte werden mit `messages.insert(1, ...)`
-eingefügt. Zwei Probleme: (a) Bei leerem System-Prompt enthält der Request **keine**
-System-Message (`core/chat/chat.py:528-532`) → Skill-Kontext landet hinter der ersten
-History-Message statt am Anfang. (b) Mehrere neue Skill-Kontexte landen in umgekehrter
-Aktivierungs-Reihenfolge (jeder insert(1) schiebt den vorherigen nach hinten).
-**Fix-Richtung:** Einfügeposition dynamisch bestimmen (nach System-Message, falls vorhanden, sonst
-Index 0; hinter bereits vorhandene Skill-Kontexte).
+### ~~M3 — `_sync_skill_context_messages` fügt stur bei Index 1 ein~~ ✅ Gefixt (2026-06-12)
+`_sync_skill_context_messages` (`core/chat/tool_dispatch.py`) bestimmt die Einfügeposition jetzt
+dynamisch über `_skill_context_insert_index`: hinter eine führende System-Message (falls vorhanden,
+sonst Index 0) und hinter den bereits vorhandenen Skill-Kontext-Block. Neue Kontexte zählen den
+Index pro Einfügung hoch, behalten also die Aktivierungs-Reihenfolge. Tests in
+`tests/core/chat/test_tool_dispatch.py::TestSyncSkillContextMessages`; Spec `chat.md` aktualisiert.
 
-### M4 — Stream-Connect-Retry nutzt veraltete Header/Token
-In `stream()` werden Header/Payload einmal **außerhalb** der Retry-Closure gebaut
-(`core/providers/openai_compatible.py:341`, `core/providers/anthropic.py:349`,
-`core/providers/openai.py:313` `_connect_stream`); `send()` baut die Header dagegen pro Versuch
-neu. Nach einem 429-Backoff über das OAuth-Refresh-Fenster hinweg verwendet der Reconnect den
-abgelaufenen Token. Spec-Hinweis providers.md: „OAuth tokens may refresh during requests through
-OAuthTokenGetter, so do not cache the raw OAuth access token outside the getter“ — genau das
-passiert hier faktisch pro Stream-Aufbau.
-**Fix-Richtung:** `_build_headers()` in die Connect-Closure ziehen (pro Versuch aufrufen), Payload
-kann draußen bleiben. Auch `github_copilot.py` prüfen.
+### ~~M4 — Stream-Connect-Retry nutzt veraltete Header/Token~~ ✅ Gefixt (2026-06-12)
+`_build_headers()` wird in allen vier Adaptern jetzt **innerhalb** der Connect-Closure aufgerufen,
+also pro Retry-Versuch (`openai_compatible.py` `stream`, `anthropic.py` `stream`, `openai.py`
+`_connect_stream`, `github_copilot.py` `_connect_stream`); Payload bleibt draußen. Ein Reconnect
+nach einem 429/503-Backoff über ein OAuth-/Token-Refresh-Fenster hinweg verwendet damit den frischen
+Token. Tests `test_stream*rebuilds_headers_per_connect_attempt` in den vier Provider-Testdateien;
+Spec `providers.md` (Gotcha zum Per-Versuch-Header-Bau) aktualisiert.
 
 ### M5 — Discovery überstempelt Override-only-Modelle mit der refreshenden Connection
 `core/models/discovery.py`: `apply_overrides` läuft vor dem Tagging; `_tag_fresh_models`
