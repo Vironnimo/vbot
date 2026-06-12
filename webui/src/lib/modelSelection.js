@@ -1,3 +1,5 @@
+const DEFAULT_ACCOUNT_ID = 'default';
+
 export function buildModelSelectOptions({
   models = [],
   connections = [],
@@ -15,6 +17,7 @@ export function buildModelSelectOptions({
     selectedModel.model,
     selectedModel.connectionLocalId,
   );
+  const canonicalSelectedValue = canonicalModelSelectionValue(selectedValue);
   const modelExistsInCatalog = models.some(
     (model) => model.id === selectedModel.model,
   );
@@ -36,19 +39,19 @@ export function buildModelSelectOptions({
   const catalogOptions = models.flatMap((model) => {
     const providerConnections = connectionsByProvider[model.provider_id] ?? [];
 
-    return providerConnections.map((connection) => ({
-      value: modelSelectionValue(
-        model.id,
-        connectionLocalIdFromConnectionId(connection.id),
+    return providerConnections.flatMap((connection) =>
+      connectionModelOptions(
+        model,
+        connection,
+        providerConnections.length,
+        translate,
       ),
-      label: modelOptionLabel(model, connection, providerConnections.length),
-      isUnavailable: false,
-    }));
+    );
   });
 
   if (
     !selectedValue ||
-    catalogOptions.some((option) => option.value === selectedValue) ||
+    catalogOptions.some((option) => option.value === canonicalSelectedValue) ||
     selectedModelOption
   ) {
     return selectedModelOption
@@ -88,6 +91,15 @@ export function selectModelValue(modelValue, options) {
     return exactValue;
   }
 
+  const canonicalValue = canonicalModelSelectionValue(exactValue);
+
+  if (
+    canonicalValue !== exactValue &&
+    options.some((option) => option.value === canonicalValue)
+  ) {
+    return canonicalValue;
+  }
+
   if (selection.connectionLocalId) {
     return exactValue;
   }
@@ -124,6 +136,93 @@ export function parseModelSelectionValue(selectedValue) {
   };
 }
 
+function connectionModelOptions(
+  model,
+  connection,
+  providerConnectionCount,
+  translate,
+) {
+  const localId = connectionLocalIdFromConnectionId(connection.id);
+  const usableAccounts = usableConnectionAccounts(connection);
+
+  if (usableAccounts.length <= 1) {
+    return [
+      {
+        value: modelSelectionValue(model.id, localId),
+        label: modelOptionLabel(model, connection, providerConnectionCount),
+        isUnavailable: false,
+      },
+    ];
+  }
+
+  return usableAccounts.map((account) => ({
+    value: modelSelectionValue(
+      model.id,
+      accountConnectionSuffix(localId, account.id),
+    ),
+    label: accountModelOptionLabel(
+      model,
+      connection,
+      account.id,
+      providerConnectionCount,
+      translate,
+    ),
+    isUnavailable: false,
+  }));
+}
+
+function accountConnectionSuffix(localId, accountId) {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return localId;
+  }
+
+  return `${localId}:${accountId}`;
+}
+
+function usableConnectionAccounts(connection) {
+  if (!Array.isArray(connection?.accounts)) {
+    return [];
+  }
+
+  return connection.accounts.filter(
+    (account) =>
+      account?.usable === true &&
+      typeof account.id === 'string' &&
+      account.id.length > 0,
+  );
+}
+
+function canonicalModelSelectionValue(value) {
+  const selection = parseModelSelectionValue(value);
+
+  if (!selection.connectionLocalId) {
+    return value;
+  }
+
+  const { localId, accountId } = splitConnectionSuffix(
+    selection.connectionLocalId,
+  );
+
+  if (accountId !== DEFAULT_ACCOUNT_ID) {
+    return value;
+  }
+
+  return modelSelectionValue(selection.model, localId);
+}
+
+function splitConnectionSuffix(suffix) {
+  const separatorIndex = suffix.indexOf(':');
+
+  if (separatorIndex === -1) {
+    return { localId: suffix, accountId: '' };
+  }
+
+  return {
+    localId: suffix.slice(0, separatorIndex),
+    accountId: suffix.slice(separatorIndex + 1),
+  };
+}
+
 function usableConnectionsByProvider(connections) {
   const connectionsByProvider = {};
 
@@ -150,6 +249,30 @@ function modelOptionLabel(model, connection, providerConnectionCount) {
   return `${model.id} (${connection.label})`;
 }
 
+function accountModelOptionLabel(
+  model,
+  connection,
+  accountId,
+  providerConnectionCount,
+  translate,
+) {
+  const accountName = accountDisplayName(accountId, translate);
+
+  if (providerConnectionCount <= 1) {
+    return `${model.id} (${accountName})`;
+  }
+
+  return `${model.id} (${connection.label} – ${accountName})`;
+}
+
+function accountDisplayName(accountId, translate) {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return translate('settings.providers.accounts.defaultLabel', 'Default');
+  }
+
+  return accountId;
+}
+
 function unavailableModelOptionLabel(
   model,
   connectionId,
@@ -170,16 +293,45 @@ function unavailableModelOptionLabel(
     'agents.form.modelUnavailableConnectionOption',
     'Unavailable / custom: {model} ({connection})',
     {
-      connection: connectionDisplayLabel(connectionId, connections),
+      connection: connectionDisplayLabel(connectionId, connections, translate),
       model,
     },
   );
 }
 
-function connectionDisplayLabel(connectionId, connections) {
-  const connection = connections.find((item) => item.id === connectionId);
+function connectionDisplayLabel(connectionId, connections, translate) {
+  const { baseConnectionId, accountId } =
+    splitAccountFromConnectionId(connectionId);
+  const connection = connections.find((item) => item.id === baseConnectionId);
+  const baseLabel = connection?.label || baseConnectionId;
 
-  return connection?.label || connectionId;
+  if (!accountId) {
+    return baseLabel;
+  }
+
+  return `${baseLabel} – ${accountDisplayName(accountId, translate)}`;
+}
+
+function splitAccountFromConnectionId(connectionId) {
+  const providerSeparatorIndex = connectionId.indexOf(':');
+
+  if (providerSeparatorIndex === -1) {
+    return { baseConnectionId: connectionId, accountId: '' };
+  }
+
+  const accountSeparatorIndex = connectionId.indexOf(
+    ':',
+    providerSeparatorIndex + 1,
+  );
+
+  if (accountSeparatorIndex === -1) {
+    return { baseConnectionId: connectionId, accountId: '' };
+  }
+
+  return {
+    baseConnectionId: connectionId.slice(0, accountSeparatorIndex),
+    accountId: connectionId.slice(accountSeparatorIndex + 1),
+  };
 }
 
 function connectionLocalIdFromConnectionId(connectionId) {
