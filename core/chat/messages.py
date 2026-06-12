@@ -18,6 +18,13 @@ from core.chat.content_blocks import (
     content_block_to_dict,
 )
 from core.chat.errors import ChatError, ChatMessageValidationError
+from core.chat.model_resolution import parse_bare_model
+from core.providers.reasoning import (
+    REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_FULL_HISTORY,
+    REASONING_REPLAY_NONE,
+    ReasoningReplayPolicy,
+)
 from core.sessions import ChatSession, is_skill_context_note
 from core.tools import tool_failure
 from core.utils.tokens import estimate_message_tokens
@@ -424,11 +431,17 @@ def _session_has_any_content_blocks(messages: list[ChatMessage]) -> bool:
     return any(message.role == "user" and isinstance(message.content, list) for message in messages)
 
 
-def _message_to_request_dict(message: ChatMessage) -> JsonObject:
+def _message_to_request_dict(
+    message: ChatMessage,
+    *,
+    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    agent_model: str | None = None,
+) -> JsonObject:
     data = message.to_dict()
     if data.get("role") == "assistant":
-        data.pop("reasoning", None)
-        data.pop("reasoning_meta", None)
+        if not _replays_assistant_reasoning(message, replay_policy, agent_model):
+            data.pop("reasoning", None)
+            data.pop("reasoning_meta", None)
         data.pop("usage", None)
     data.pop("timing", None)
     # Sender attribution exists only in the provider request: persisted content stays
@@ -437,6 +450,26 @@ def _message_to_request_dict(message: ChatMessage) -> JsonObject:
     if message.role == "user" and message.sender is not None:
         _apply_sender_attribution(data, message.sender)
     return data
+
+
+def _replays_assistant_reasoning(
+    message: ChatMessage,
+    replay_policy: ReasoningReplayPolicy,
+    agent_model: str | None,
+) -> bool:
+    """Return whether history shaping keeps this assistant turn's reasoning fields.
+
+    Only ``full_history`` replays persisted reasoning across runs, and only when
+    the entry's persisted model passes the same-model gate against the agent's
+    current model (optional ``::<connection>[:<account>]`` suffixes stripped on
+    both sides). A mismatch means the reasoning belongs to a different model and
+    is stripped exactly like under ``current_run``.
+    """
+    if replay_policy != REASONING_REPLAY_FULL_HISTORY:
+        return False
+    if agent_model is None or message.model is None:
+        return False
+    return parse_bare_model(message.model) == parse_bare_model(agent_model)
 
 
 # Characters removed from sender tag parts so a display name cannot forge the
@@ -464,16 +497,24 @@ def _sanitize_sender_tag_part(value: str) -> str:
     return sanitized or "unknown"
 
 
-def _assistant_continuation_dict(message: ChatMessage) -> JsonObject:
+def _assistant_continuation_dict(
+    message: ChatMessage,
+    *,
+    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+) -> JsonObject:
     """Return the live current-turn assistant dict for provider continuation.
 
     Keeps readable ``reasoning`` and opaque ``reasoning_meta`` so reasoning-aware
     adapters can round-trip the active tool-use turn, but drops ``usage`` because
-    token accounting is never part of the provider request contract.
+    token accounting is never part of the provider request contract. Under the
+    ``none`` replay policy even the live turn loses its reasoning fields.
     """
     data = message.to_dict()
     data.pop("usage", None)
     data.pop("timing", None)
+    if replay_policy == REASONING_REPLAY_NONE:
+        data.pop("reasoning", None)
+        data.pop("reasoning_meta", None)
     return data
 
 
@@ -490,44 +531,44 @@ def _strip_assistant_reasoning_fields(messages: list[JsonObject]) -> None:
             message.pop("reasoning_meta", None)
 
 
-def _restore_active_tool_continuation(
+def _restore_in_run_assistant_reasoning(
     rebuilt_messages: list[JsonObject],
     current_messages: list[JsonObject],
 ) -> list[JsonObject]:
-    active_assistant = _active_tool_continuation_assistant(current_messages)
-    if active_assistant is None:
-        return rebuilt_messages
+    """Carry in-run assistant reasoning fields into a rebuilt request list.
 
-    active_assistant_id = active_assistant.get("id")
-    if not isinstance(active_assistant_id, str):
+    Mid-run rebuilds (auto-compaction) re-shape history through the same
+    policy-aware path as fresh runs, which strips current-run reasoning under
+    ``current_run``. The live request list still carries those fields, so every
+    rebuilt assistant entry whose ``id`` matches a live entry gets its
+    ``reasoning``/``reasoning_meta`` restored — all current-run turns, not just
+    the latest tool continuation. Under ``none`` the live entries carry no
+    reasoning, so this is a no-op.
+    """
+    reasoning_by_id: dict[str, JsonObject] = {}
+    for message in current_messages:
+        if message.get("role") != "assistant":
+            continue
+        message_id = message.get("id")
+        if not isinstance(message_id, str):
+            continue
+        reasoning_fields = {
+            key: message[key] for key in ("reasoning", "reasoning_meta") if message.get(key)
+        }
+        if reasoning_fields:
+            reasoning_by_id[message_id] = reasoning_fields
+    if not reasoning_by_id:
         return rebuilt_messages
 
     restored_messages: list[JsonObject] = []
-    restored = False
     for message in rebuilt_messages:
-        if message.get("role") == "assistant" and message.get("id") == active_assistant_id:
-            restored_messages.append(dict(active_assistant))
-            restored = True
-            continue
-        restored_messages.append(message)
-    return restored_messages if restored else rebuilt_messages
-
-
-def _active_tool_continuation_assistant(messages: list[JsonObject]) -> JsonObject | None:
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        if message.get("role") != "assistant":
-            continue
-        if not message.get("tool_calls"):
-            return None
-        if _is_active_tool_continuation_suffix(messages[index + 1 :]):
-            return dict(message)
-        return None
-    return None
-
-
-def _is_active_tool_continuation_suffix(messages: list[JsonObject]) -> bool:
-    return bool(messages) and all(message.get("role") == "tool" for message in messages)
+        fields: JsonObject | None = None
+        if message.get("role") == "assistant":
+            message_id = message.get("id")
+            if isinstance(message_id, str):
+                fields = reasoning_by_id.get(message_id)
+        restored_messages.append({**message, **fields} if fields else message)
+    return restored_messages
 
 
 def _latest_compaction_checkpoint(messages: list[ChatMessage]) -> ChatMessage | None:
@@ -544,12 +585,26 @@ def _messages_from_boundary(messages: list[ChatMessage], boundary_id: str) -> li
     raise ChatError(f"compaction boundary id not found: {boundary_id}")
 
 
-def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
-    request_messages = _assemble_request_history(messages)
+def _embed_notes_into_request(
+    messages: list[ChatMessage],
+    *,
+    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    agent_model: str | None = None,
+) -> list[JsonObject]:
+    request_messages = _assemble_request_history(
+        messages,
+        replay_policy=replay_policy,
+        agent_model=agent_model,
+    )
     return _repair_dangling_tool_calls(request_messages)
 
 
-def _assemble_request_history(messages: list[ChatMessage]) -> list[JsonObject]:
+def _assemble_request_history(
+    messages: list[ChatMessage],
+    *,
+    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    agent_model: str | None = None,
+) -> list[JsonObject]:
     request_messages: list[JsonObject] = []
     pending_notes: list[ChatMessage] = []
     deferred_until_after_tools: list[ChatMessage] = []
@@ -576,9 +631,15 @@ def _assemble_request_history(messages: list[ChatMessage]) -> list[JsonObject]:
             request_messages.append(_message_to_request_dict(message))
             continue
 
-        # Reasoning-only assistant turns lose reasoning fields for follow-up turns.
-        # Skip them so request history never contains empty assistant entries.
-        if _is_empty_assistant_history_message(message):
+        # Reasoning-only assistant turns whose reasoning is not replayed would
+        # become empty request entries — skip them. Under ``full_history`` a
+        # same-model reasoning-only turn keeps its (signed) reasoning blocks
+        # and must stay in the request history.
+        if _is_empty_assistant_history_message(
+            message,
+            replay_policy=replay_policy,
+            agent_model=agent_model,
+        ):
             continue
 
         if deferred_until_after_tools:
@@ -588,7 +649,13 @@ def _assemble_request_history(messages: list[ChatMessage]) -> list[JsonObject]:
         if pending_notes:
             request_messages.append(_notes_to_synthetic_user_message(pending_notes))
             pending_notes = []
-        request_messages.append(_message_to_request_dict(message))
+        request_messages.append(
+            _message_to_request_dict(
+                message,
+                replay_policy=replay_policy,
+                agent_model=agent_model,
+            )
+        )
 
     if deferred_until_after_tools:
         request_messages.append(_notes_to_synthetic_user_message(deferred_until_after_tools))
@@ -679,8 +746,16 @@ def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:
     }
 
 
-def _is_empty_assistant_history_message(message: ChatMessage) -> bool:
-    return message.role == "assistant" and message.content is None and not message.tool_calls
+def _is_empty_assistant_history_message(
+    message: ChatMessage,
+    *,
+    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    agent_model: str | None = None,
+) -> bool:
+    if message.role != "assistant" or message.content is not None or message.tool_calls:
+        return False
+    has_reasoning = message.reasoning is not None or message.reasoning_meta is not None
+    return not (has_reasoning and _replays_assistant_reasoning(message, replay_policy, agent_model))
 
 
 def _system_reminder_block(message: ChatMessage) -> str:

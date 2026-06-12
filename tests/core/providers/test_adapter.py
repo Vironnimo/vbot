@@ -12,6 +12,7 @@ from typing import get_type_hints
 import pytest
 
 from core.providers.adapter import ProviderAdapter
+from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN
 
 # ---------------------------------------------------------------------------
 # Helper: minimal concrete subclass that satisfies the ABC
@@ -97,6 +98,12 @@ class TestProviderAdapterABC:
 
         adapter = _StubAdapter(model_lookup=lookup)
         assert adapter._model_lookup is lookup
+
+    def test_reasoning_replay_policy_defaults_to_current_run(self) -> None:
+        """Unmigrated adapters keep the historical current-run history shaping."""
+        adapter = _StubAdapter()
+
+        assert adapter.reasoning_replay_policy("any-model") == REASONING_REPLAY_CURRENT_RUN
 
     def test_default_normalize_response_requires_adapter_implementation(self) -> None:
         """Response normalization is optional for ABC construction but required at use."""

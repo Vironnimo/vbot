@@ -3,10 +3,30 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, MutableMapping
-from typing import Any
+from typing import Any, Literal
 
 THINKING_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 THINKING_EFFORT_RANKS = {effort: rank for rank, effort in enumerate(THINKING_EFFORT_ORDER)}
+
+ReasoningReplayPolicy = Literal["none", "current_run", "full_history"]
+"""How persisted assistant ``reasoning``/``reasoning_meta`` replays into provider requests.
+
+- ``none`` — assistant request entries never carry reasoning fields, not even
+  the live in-run continuation turn.
+- ``current_run`` — only the active run's assistant turns keep their reasoning
+  fields; history from earlier runs is stripped (the historical default).
+- ``full_history`` — assistant entries whose persisted model passes the chat
+  layer's same-model gate keep their reasoning fields across runs.
+"""
+
+REASONING_REPLAY_NONE: ReasoningReplayPolicy = "none"
+REASONING_REPLAY_CURRENT_RUN: ReasoningReplayPolicy = "current_run"
+REASONING_REPLAY_FULL_HISTORY: ReasoningReplayPolicy = "full_history"
+REASONING_REPLAY_POLICIES: tuple[ReasoningReplayPolicy, ...] = (
+    REASONING_REPLAY_NONE,
+    REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_FULL_HISTORY,
+)
 
 
 def normalize_thinking_effort(value: Any) -> str:

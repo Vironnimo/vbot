@@ -71,7 +71,7 @@ from core.chat.messages import (
     _message_to_request_dict,
     _messages_from_boundary,
     _notes_to_synthetic_user_message,
-    _restore_active_tool_continuation,
+    _restore_in_run_assistant_reasoning,
     _session_has_any_content_blocks,
     _strip_assistant_reasoning_fields,
 )
@@ -117,6 +117,7 @@ from core.chat.tool_dispatch import (
 from core.debug import DebugContext
 from core.extensions import HookContext
 from core.providers.errors import NetworkError
+from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
 from core.runs import (
     COMPACTION_COMPLETED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
@@ -137,6 +138,17 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("chat")
 
 MAX_TOOL_ITERATIONS = 1000
+
+
+def _resolve_reasoning_replay_policy(adapter: Any, model_id: str) -> ReasoningReplayPolicy:
+    """Resolve the adapter's reasoning replay policy for one request build.
+
+    Mirrors the ``set_debug_context`` probe: adapters and test doubles that do
+    not expose the hook get the historical ``current_run`` shaping.
+    """
+    if hasattr(adapter, "reasoning_replay_policy"):
+        return cast(ReasoningReplayPolicy, adapter.reasoning_replay_policy(model_id))
+    return REASONING_REPLAY_CURRENT_RUN
 
 
 class ChatLoop:
@@ -421,7 +433,11 @@ class ChatLoop:
                 if isinstance(content, str):
                     _activate_triggered_skills(self._runtime, agent, session, content)
             run.raise_if_cancelled()
-            messages = await self._build_request_messages(agent, session)
+            messages = await self._build_request_messages(
+                agent,
+                session,
+                replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+            )
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
             extension_registry = self._runtime.extensions
@@ -575,7 +591,13 @@ class ChatLoop:
                 raise
             return session_manager.create(agent_id, session_id=session_id)
 
-    async def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
+    async def _build_request_messages(
+        self,
+        agent: Any,
+        session: ChatSession,
+        *,
+        replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    ) -> list[JsonObject]:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_messages = (
             [ChatMessage.system(system_prompt, agent.model).to_dict()]
@@ -586,7 +608,11 @@ class ChatLoop:
         checkpoint = _latest_compaction_checkpoint(session_messages)
 
         if checkpoint is None:
-            history = _embed_notes_into_request(session_messages)
+            history = _embed_notes_into_request(
+                session_messages,
+                replay_policy=replay_policy,
+                agent_model=agent.model,
+            )
             request_messages = [
                 *system_messages,
                 *session.skill_context_messages(session_messages),
@@ -611,7 +637,11 @@ class ChatLoop:
                     f"{SYSTEM_REMINDER_OPEN_TAG}\n{summary_text}\n{SYSTEM_REMINDER_CLOSE_TAG}"
                 ),
             }
-            history = _embed_notes_into_request(tail_messages)
+            history = _embed_notes_into_request(
+                tail_messages,
+                replay_policy=replay_policy,
+                agent_model=agent.model,
+            )
             request_messages = [
                 *system_messages,
                 *session.skill_context_messages(session_messages),
@@ -652,6 +682,7 @@ class ChatLoop:
         provider_id: str,
         connection_id: str,
     ) -> ChatMessage:
+        replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
         tool_iteration_count = 0
         iteration_number = 1
         for _ in range(self._max_tool_iterations + 1):
@@ -702,7 +733,9 @@ class ChatLoop:
             session.append(assistant_message)
             if not self._streaming:
                 _emit_assistant_events(run, assistant_message)
-            messages.append(_assistant_continuation_dict(assistant_message))
+            messages.append(
+                _assistant_continuation_dict(assistant_message, replay_policy=replay_policy)
+            )
 
             if not assistant_message.tool_calls:
                 if self._compaction_service is not None:
@@ -820,8 +853,12 @@ class ChatLoop:
 
         session.append(checkpoint)
         run.emit(COMPACTION_COMPLETED_EVENT, {"message": checkpoint.to_dict()})
-        rebuilt_messages = await self._build_request_messages(agent, session)
-        return _restore_active_tool_continuation(rebuilt_messages, messages)
+        rebuilt_messages = await self._build_request_messages(
+            agent,
+            session,
+            replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+        )
+        return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)
 
     def _load_compaction_settings(self) -> CompactionSettings:
         """Build typed compaction settings from the persisted normalized section."""

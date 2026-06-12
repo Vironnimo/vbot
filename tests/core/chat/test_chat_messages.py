@@ -24,9 +24,15 @@ from core.chat.content_blocks import FileBlock, TextBlock
 from core.chat.messages import (
     INTERRUPTED_TOOL_RESULT_CODE,
     INTERRUPTED_TOOL_RESULT_MESSAGE,
+    _assistant_continuation_dict,
     _embed_notes_into_request,
     _message_to_request_dict,
     _repair_dangling_tool_calls,
+    _restore_in_run_assistant_reasoning,
+)
+from core.providers.reasoning import (
+    REASONING_REPLAY_FULL_HISTORY,
+    REASONING_REPLAY_NONE,
 )
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
@@ -1123,3 +1129,165 @@ class TestRepairDanglingToolCalls:
         # (not a tool entry), confirming the repair is request-only.
         reloaded = session.load()
         assert [message.role for message in reloaded] == ["user", "assistant"]
+
+
+class TestReasoningReplayShaping:
+    """History shaping follows the adapter's reasoning replay policy."""
+
+    def _assistant_with_reasoning(self, model: str, content: str | None) -> ChatMessage:
+        return ChatMessage.assistant(
+            model=model,
+            content=content,
+            reasoning="Readable thinking.",
+            reasoning_meta={"content_blocks": [{"type": "thinking", "signature": "signed"}]},
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+    def test_full_history_keeps_reasoning_on_same_model_entries(self) -> None:
+        # Arrange: persisted model carries a connection suffix; the gate must
+        # compare bare models on both sides.
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            self._assistant_with_reasoning("anthropic/claude-sonnet-4::api-key", "Answer"),
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="anthropic/claude-sonnet-4",
+        )
+
+        assert request[1]["reasoning"] == "Readable thinking."
+        assert request[1]["reasoning_meta"] == {
+            "content_blocks": [{"type": "thinking", "signature": "signed"}]
+        }
+        assert "usage" not in request[1]
+
+    def test_full_history_strips_reasoning_on_model_mismatch(self) -> None:
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            self._assistant_with_reasoning("openai/gpt-5.2", "Answer"),
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="anthropic/claude-sonnet-4",
+        )
+
+        assert "reasoning" not in request[1]
+        assert "reasoning_meta" not in request[1]
+
+    def test_current_run_default_strips_reasoning_even_for_same_model(self) -> None:
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            self._assistant_with_reasoning("anthropic/claude-sonnet-4", "Answer"),
+        ]
+
+        request = _embed_notes_into_request(messages, agent_model="anthropic/claude-sonnet-4")
+
+        assert "reasoning" not in request[1]
+        assert "reasoning_meta" not in request[1]
+
+    def test_full_history_keeps_same_model_reasoning_only_turn_in_history(self) -> None:
+        # Arrange: a reasoning-only assistant turn (no content, no tool calls).
+        # Same model → it survives the gate and must stay in the request;
+        # mismatched model → stripped reasoning would leave it empty, so skip.
+        same_model = self._assistant_with_reasoning("anthropic/claude-sonnet-4", None)
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            same_model,
+            ChatMessage.user("Follow up", timestamp=FIXED_TIMESTAMP),
+            self._assistant_with_reasoning("openai/gpt-5.2", None),
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="anthropic/claude-sonnet-4",
+        )
+
+        assert [message["role"] for message in request] == ["user", "assistant", "user"]
+        assert request[1]["id"] == same_model.id
+        assert request[1]["reasoning"] == "Readable thinking."
+
+    def test_none_policy_strips_reasoning_from_live_continuation_dict(self) -> None:
+        message = self._assistant_with_reasoning("anthropic/claude-sonnet-4", "Answer")
+
+        continuation = _assistant_continuation_dict(message, replay_policy=REASONING_REPLAY_NONE)
+        default_continuation = _assistant_continuation_dict(message)
+
+        assert "reasoning" not in continuation
+        assert "reasoning_meta" not in continuation
+        assert default_continuation["reasoning"] == "Readable thinking."
+
+    def test_restore_in_run_assistant_reasoning_restores_all_matching_turns(self) -> None:
+        # Arrange: the live request list carries reasoning for two in-run
+        # assistant turns; the rebuilt list (post-compaction) lost both. The
+        # old behavior restored only the latest tool-continuation turn.
+        live_messages: list[dict[str, Any]] = [
+            {
+                "id": "assistant-one",
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_one", "name": "read", "arguments": {}}],
+                "reasoning": "First step.",
+                "reasoning_meta": {"signature": "one"},
+            },
+            {"id": "tool-one", "role": "tool", "tool_call_id": "call_one", "content": "{}"},
+            {
+                "id": "assistant-two",
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_two", "name": "read", "arguments": {}}],
+                "reasoning": "Second step.",
+                "reasoning_meta": {"signature": "two"},
+            },
+            {"id": "tool-two", "role": "tool", "tool_call_id": "call_two", "content": "{}"},
+        ]
+        rebuilt_messages: list[dict[str, Any]] = [
+            {"role": "user", "content": "<system-reminder>\nSummary.\n</system-reminder>"},
+            {
+                "id": "assistant-one",
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_one", "name": "read", "arguments": {}}],
+            },
+            {"id": "tool-one", "role": "tool", "tool_call_id": "call_one", "content": "{}"},
+            {
+                "id": "assistant-two",
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_two", "name": "read", "arguments": {}}],
+            },
+            {"id": "tool-two", "role": "tool", "tool_call_id": "call_two", "content": "{}"},
+        ]
+
+        restored = _restore_in_run_assistant_reasoning(rebuilt_messages, live_messages)
+
+        assert restored[1]["reasoning"] == "First step."
+        assert restored[1]["reasoning_meta"] == {"signature": "one"}
+        assert restored[3]["reasoning"] == "Second step."
+        assert restored[3]["reasoning_meta"] == {"signature": "two"}
+        assert "reasoning" not in restored[0]
+
+    def test_restore_in_run_assistant_reasoning_skips_unmatched_entries(self) -> None:
+        # Arrange: a historical assistant turn that is not part of the live
+        # request list must stay stripped after the rebuild.
+        live_messages: list[dict[str, Any]] = [
+            {
+                "id": "assistant-live",
+                "role": "assistant",
+                "content": "Live answer",
+                "reasoning": "Live thinking.",
+            },
+        ]
+        rebuilt_messages: list[dict[str, Any]] = [
+            {"id": "assistant-old", "role": "assistant", "content": "Old answer"},
+            {"id": "assistant-live", "role": "assistant", "content": "Live answer"},
+        ]
+
+        restored = _restore_in_run_assistant_reasoning(rebuilt_messages, live_messages)
+
+        assert "reasoning" not in restored[0]
+        assert restored[1]["reasoning"] == "Live thinking."

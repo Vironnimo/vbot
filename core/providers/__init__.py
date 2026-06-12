@@ -31,9 +31,20 @@ from core.providers.providers import (
     ProviderConfig,
     ProviderRegistry,
 )
+from core.providers.reasoning import (
+    REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_FULL_HISTORY,
+    REASONING_REPLAY_NONE,
+    REASONING_REPLAY_POLICIES,
+    ReasoningReplayPolicy,
+)
 
 __all__ = [
     "DEFAULT_ACCOUNT_ID",
+    "REASONING_REPLAY_CURRENT_RUN",
+    "REASONING_REPLAY_FULL_HISTORY",
+    "REASONING_REPLAY_NONE",
+    "REASONING_REPLAY_POLICIES",
     "AnthropicAdapter",
     "AuthConfig",
     "ConnectionConfig",
@@ -54,6 +65,7 @@ __all__ = [
     "ProviderRegistry",
     "ProviderStreamingUnsupportedError",
     "ProviderTimeoutError",
+    "ReasoningReplayPolicy",
     "compose_connection_id",
     "derive_credential_key",
     "split_connection_id",
