@@ -81,6 +81,7 @@ def make_config(
     response_mode: str = "mention",
     mention_patterns: list[str] | None = None,
     owner_user_ids: list[str] | None = None,
+    observe_unaddressed: bool = False,
 ) -> ChannelConfig:
     return ChannelConfig(
         id="tg-assistant",
@@ -93,13 +94,14 @@ def make_config(
         response_mode=response_mode,
         mention_patterns=list(mention_patterns or []),
         owner_user_ids=list(owner_user_ids or []),
+        observe_unaddressed=observe_unaddressed,
     )
 
 
 def make_conversation(
     *,
     chat_id: int = 12345,
-    user_id: int = 50,
+    user_id: int | str = 50,
     kind: str = "direct",
     user_display_name: str | None = None,
     message_id: str | None = None,
@@ -162,6 +164,7 @@ def make_engine(
     response_mode: str = "mention",
     mention_patterns: list[str] | None = None,
     owner_user_ids: list[str] | None = None,
+    observe_unaddressed: bool = False,
     trigger_run: AsyncMock | None = None,
     retry_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
@@ -182,6 +185,7 @@ def make_engine(
             response_mode=response_mode,
             mention_patterns=mention_patterns,
             owner_user_ids=owner_user_ids,
+            observe_unaddressed=observe_unaddressed,
         ),
         cast(Any, trigger_service),
         cast(Any, chat_sessions),
@@ -534,6 +538,65 @@ async def test_non_command_text_queues_behind_blocked_worker(
 
 
 @pytest.mark.asyncio
+async def test_observed_message_waits_behind_active_channel_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trigger_mock = AsyncMock(
+        return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
+    )
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        observe_unaddressed=True,
+    )
+    relay_started = asyncio.Event()
+    release_relay = asyncio.Event()
+
+    async def block_relay(_run: Run, _reply_plan: ReplyPlanFacts) -> None:
+        relay_started.set()
+        await release_relay.wait()
+
+    monkeypatch.setattr(engine, "_relay_run_events", AsyncMock(side_effect=block_relay))
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", mentioned_bot=True),
+        "hello bot",
+    )
+    await asyncio.wait_for(relay_started.wait(), timeout=1)
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", user_display_name="Alice"),
+        "side conversation",
+    )
+    await asyncio.sleep(0)
+
+    notes_before_release = [
+        message.content
+        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        if message.role == "note"
+    ]
+    assert not any(
+        isinstance(content, str) and content.startswith("[channel-message] ")
+        for content in notes_before_release
+    )
+    queue = engine._chat_queues.get("12345")
+    assert queue is not None
+    assert queue.qsize() == 1
+
+    release_relay.set()
+    await drain(engine, 12345)
+
+    notes_after_release = [
+        message.content
+        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        if message.role == "note"
+    ]
+    assert notes_after_release[-1] == "[channel-message] Alice (50): side conversation"
+    await engine.stop()
+
+
+@pytest.mark.asyncio
 async def test_block_content_skips_command_dispatch_and_triggers_run(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
     command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
@@ -768,6 +831,67 @@ async def test_group_unaddressed_text_is_dropped_in_mention_mode(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_group_unaddressed_text_is_observed_as_note(tmp_path: Path) -> None:
+    command_dispatcher = make_command_dispatcher()
+    engine, chat_sessions, trigger_mock, transport = make_engine(
+        tmp_path,
+        command_dispatcher=command_dispatcher,
+        observe_unaddressed=True,
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(
+            kind="group",
+            user_id="|50]\r",
+            user_display_name="[Alice]\n|",
+        ),
+        "hello\nworld",
+    )
+    await drain(engine, 12345)
+
+    notes = [
+        message.content
+        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        if message.role == "note"
+    ]
+    assert notes == [
+        (
+            "This session is receiving messages via Telegram "
+            "(channel: tg-assistant, chat: 12345).\n"
+            "Respond in a style appropriate for Telegram messaging."
+        ),
+        "[channel-message] Alice (50): hello\nworld",
+    ]
+    trigger_mock.assert_not_awaited()
+    command_dispatcher.dispatch.assert_not_called()
+    assert transport.sent == []
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_observed_group_message_updates_metadata_and_participant(tmp_path: Path) -> None:
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        observe_unaddressed=True,
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", user_display_name="Alice"),
+        "hello everyone",
+    )
+    await drain(engine, 12345)
+
+    metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    assert metadata["last_reply_target"] == {
+        "channel_id": "tg-assistant",
+        "platform_target": "12345",
+    }
+    assert metadata["participants"]["50"]["display_name"] == "Alice"
+    assert metadata["participants"]["50"]["last_seen_at"].endswith("+00:00")
+    await engine.stop()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("mentioned_bot", "is_reply_to_bot"),
     [(True, False), (False, True)],
@@ -778,7 +902,11 @@ async def test_group_addressed_text_triggers_in_mention_mode(
     is_reply_to_bot: bool,
 ) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        observe_unaddressed=True,
+    )
 
     await engine.handle_inbound_text(
         make_conversation(
@@ -789,32 +917,62 @@ async def test_group_addressed_text_triggers_in_mention_mode(
     await drain(engine, 12345)
 
     trigger_mock.assert_awaited_once()
+    notes = chat_sessions.get("assistant", SESSION_ID).load()
+    assert not any(
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith("[channel-message] ")
+        for message in notes
+    )
     await engine.stop()
 
 
 @pytest.mark.asyncio
 async def test_group_wake_word_pattern_matches_case_insensitively(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path, trigger_run=trigger_mock, mention_patterns=[r"\bvbot\b"]
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        mention_patterns=[r"\bvbot\b"],
+        observe_unaddressed=True,
     )
 
     await engine.handle_inbound_text(make_conversation(kind="group"), "Hey VBOT, status?")
     await drain(engine, 12345)
 
     trigger_mock.assert_awaited_once()
+    notes = chat_sessions.get("assistant", SESSION_ID).load()
+    assert not any(
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith("[channel-message] ")
+        for message in notes
+    )
     await engine.stop()
 
 
 @pytest.mark.asyncio
 async def test_direct_message_always_triggers_in_mention_mode(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        observe_unaddressed=True,
+    )
 
     await engine.handle_inbound_text(make_conversation(kind="direct"), "hello")
     await drain(engine, 12345)
 
     trigger_mock.assert_awaited_once()
+    note_contents = [
+        message.content
+        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        if message.role == "note"
+    ]
+    assert not any(
+        isinstance(content, str) and content.startswith("[channel-message] ")
+        for content in note_contents
+    )
     await engine.stop()
 
 
@@ -838,7 +996,10 @@ async def test_group_command_from_owner_is_dispatched(tmp_path: Path) -> None:
 async def test_group_command_from_non_owner_is_denied_without_dispatch(tmp_path: Path) -> None:
     command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
     engine, chat_sessions, trigger_mock, transport = make_engine(
-        tmp_path, command_dispatcher=command_dispatcher, owner_user_ids=["99"]
+        tmp_path,
+        command_dispatcher=command_dispatcher,
+        owner_user_ids=["99"],
+        observe_unaddressed=True,
     )
 
     await engine.handle_inbound_text(make_conversation(kind="group", user_id=50), "/stop")
@@ -949,6 +1110,38 @@ async def test_group_media_without_addressing_is_dropped(tmp_path: Path) -> None
     trigger_mock.assert_not_awaited()
     assert transport.sent == []
     assert not chat_sessions.exists("assistant", SESSION_ID)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_unaddressed_media_is_observed_without_download(tmp_path: Path) -> None:
+    media_builder = AsyncMock(return_value=[])
+    transport = FakeTransport(media_builder=media_builder)
+    engine, chat_sessions, trigger_mock, _transport = make_engine(
+        tmp_path,
+        trigger_run=AsyncMock(),
+        transport=transport,
+        observe_unaddressed=True,
+    )
+
+    await engine.handle_inbound_media(
+        make_conversation(kind="group", user_display_name="Alice"),
+        (SimpleNamespace(caption="look"), SimpleNamespace(caption=None)),
+    )
+    await drain(engine, 12345)
+
+    notes = [
+        message.content
+        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        if message.role == "note"
+    ]
+    assert notes[-2:] == [
+        "[channel-message] Alice (50): [media] look",
+        "[channel-message] Alice (50): [media message]",
+    ]
+    media_builder.assert_not_awaited()
+    trigger_mock.assert_not_awaited()
+    assert transport.sent == []
     await engine.stop()
 
 
