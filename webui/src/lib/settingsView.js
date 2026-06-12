@@ -282,6 +282,180 @@ export function formatAllowedChatIds(value) {
     .join(', ');
 }
 
+// --- Extensions ---------------------------------------------------------------
+
+const EXTENSION_HOOK_EVENT_ORDER = [
+  'run_start',
+  'before_agent_start',
+  'context',
+  'tool_call',
+  'tool_result',
+  'run_end',
+];
+
+export function applyExtensionsPanelList(result) {
+  const extensions = Array.isArray(result?.extensions) ? result.extensions : [];
+
+  return extensions
+    .filter(
+      (extension) =>
+        extension &&
+        typeof extension === 'object' &&
+        typeof extension.name === 'string' &&
+        extension.name.length > 0,
+    )
+    .map((extension) => ({
+      name: extension.name,
+      status: textOrFallback(extension.status, 'loaded'),
+      disabled: extension.disabled === true,
+      version: textOrEmpty(extension.version),
+      description: textOrEmpty(extension.description),
+      error: textOrEmpty(extension.error),
+      capabilityErrors: Array.isArray(extension.capability_errors)
+        ? extension.capability_errors.filter(
+            (entry) => typeof entry === 'string' && entry.length > 0,
+          )
+        : [],
+      config:
+        extension.config && typeof extension.config === 'object'
+          ? extension.config
+          : {},
+      capabilities: normalizeExtensionCapabilities(extension.capabilities),
+    }));
+}
+
+function normalizeExtensionCapabilities(capabilities) {
+  const source =
+    capabilities && typeof capabilities === 'object' ? capabilities : {};
+  const hooks =
+    source.hooks && typeof source.hooks === 'object' ? source.hooks : {};
+
+  return {
+    hooks: EXTENSION_HOOK_EVENT_ORDER.filter(
+      (event) => Number(hooks[event]) > 0,
+    ).map((event) => ({ event, count: Number(hooks[event]) })),
+    tools: Array.isArray(source.tools)
+      ? source.tools.filter(
+          (tool) => typeof tool === 'string' && tool.length > 0,
+        )
+      : [],
+    recallBackends: Array.isArray(source.recall_backends)
+      ? source.recall_backends.filter(
+          (backend) => typeof backend === 'string' && backend.length > 0,
+        )
+      : [],
+    startup: source.startup === true,
+    shutdown: source.shutdown === true,
+  };
+}
+
+export function extensionStatusChipClass(status) {
+  if (status === 'loaded') {
+    return 'chip-green';
+  }
+  if (status === 'failed') {
+    return 'chip-red';
+  }
+  return 'chip-amber';
+}
+
+export function summarizeExtensionCapabilities(capabilities, translate) {
+  const normalized =
+    capabilities && Array.isArray(capabilities.hooks)
+      ? capabilities
+      : normalizeExtensionCapabilities(capabilities);
+  const parts = [];
+
+  if (normalized.hooks.length > 0) {
+    const hookSummary = normalized.hooks
+      .map((hook) => `${hook.event}(${hook.count})`)
+      .join(', ');
+    parts.push(
+      `${translate('settings.extensions.hooks', 'Hooks')}: ${hookSummary}`,
+    );
+  }
+  if (normalized.tools.length > 0) {
+    parts.push(
+      `${translate('settings.extensions.tools', 'Tools')}: ${normalized.tools.join(', ')}`,
+    );
+  }
+  if (normalized.recallBackends.length > 0) {
+    parts.push(
+      `${translate('settings.extensions.recallBackends', 'Recall backends')}: ${normalized.recallBackends.join(', ')}`,
+    );
+  }
+  if (normalized.startup) {
+    parts.push(translate('settings.extensions.startup', 'startup'));
+  }
+  if (normalized.shutdown) {
+    parts.push(translate('settings.extensions.shutdown', 'shutdown'));
+  }
+
+  return parts.join(' · ');
+}
+
+export function formatExtensionConfig(config) {
+  const value = config && typeof config === 'object' ? config : {};
+  if (Object.keys(value).length === 0) {
+    return '';
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+export function parseExtensionConfigDraft(text) {
+  const trimmed = typeof text === 'string' ? text.trim() : '';
+  if (trimmed.length === 0) {
+    return { ok: true, value: {} };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: 'not-object' };
+  }
+
+  return { ok: true, value: parsed };
+}
+
+export function buildExtensionsUpdatePayload(extensions, override = {}) {
+  const items = Array.isArray(extensions) ? extensions : [];
+  const disabled = [];
+  const config = {};
+
+  for (const extension of items) {
+    const name = textOrEmpty(extension?.name);
+    if (!name) {
+      continue;
+    }
+
+    const isOverride = name === override.name;
+    const extensionDisabled =
+      isOverride && typeof override.disabled === 'boolean'
+        ? override.disabled
+        : extension.disabled === true;
+    if (extensionDisabled) {
+      disabled.push(name);
+    }
+
+    const extensionConfig =
+      isOverride && override.config && typeof override.config === 'object'
+        ? override.config
+        : extension.config && typeof extension.config === 'object'
+          ? extension.config
+          : {};
+    if (Object.keys(extensionConfig).length > 0) {
+      config[name] = extensionConfig;
+    }
+  }
+
+  return { extensions: { disabled, config } };
+}
+
 export function normalizeSubAgentSettings(rawSettings) {
   const subagents = rawSettings?.subagents ?? {};
 
