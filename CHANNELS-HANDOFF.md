@@ -1,7 +1,7 @@
 # Channels Handoff — Multi-User / Group-Chat Support
 
-**Status:** steps 0–2 done, step 3 next · **Owner:** Julian · **Created:** 2026-06-12
-**Next action:** plan and execute step 3 (observed context / passive group listening).
+**Status:** steps 0–3 done, step 4 next · **Owner:** Julian · **Created:** 2026-06-12
+**Next action:** plan step 4 (Discord adapter).
 
 This document is self-contained: a fresh session should be able to continue from it alone.
 It is the roadmap; each step gets its own file-scoped plan (saved under `docs/plans/`) when it
@@ -115,7 +115,19 @@ unsupported-message-type reply is gated the same way. `CommandDispatcher` gained
 - Specs updated: `channels.md`, `channels/telegram.md`, `chat.md` (`recognizes()` contract);
   `settings.md` needed no change (channel schema details live in `channels.md`).
 
-### Step 3 — Observed context (passive group listening, Telegram)
+### Step 3 — Observed context (passive group listening, Telegram) — ✅ DONE (plan: `docs/plans/channels-step3-observed-context.md`)
+
+Landed as designed: `ChannelConfig.observe_unaddressed` is a strict boolean (default `false`),
+validated in persisted config and accepted by `channel.create` / `channel.update`. In group
+conversations using `response_mode: "mention"`, otherwise-unaddressed text and media placeholders
+are queued in the shared conversation FIFO and persisted as `[channel-message] ...` internal notes
+without starting a Run or sending a reply. The worker ensures the shared Session, writes the normal
+one-time channel reminder first, and updates channel metadata plus the participants registry.
+Unauthorized group commands remain dropped. Telegram needed no adapter code change; its existing
+inbound path already forwards every update Telegram delivers, so passive observation only requires
+BotFather privacy mode to be off. No deviations from the step-3 plan.
+
+Original design notes:
 
 - `observe_unaddressed: bool` on `ChannelConfig`. Telegram requires privacy mode **off**
   (BotFather) — document this; with privacy on, Telegram only delivers mentions/replies/commands

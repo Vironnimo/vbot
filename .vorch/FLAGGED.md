@@ -348,3 +348,15 @@ public, and both `core/agents/agents.py` and `server/rpc/agent_methods.py` deleg
 temperature check moved into `core/settings/validation.py` so nothing was lost.
 `core/settings/normalizers.py` keeps its storage-facing "Agent default …" variant deliberately
 (distinct message contract, shares the constants).
+
+## 2026-06-12 — Channel observed-note writes can race with non-channel Runs
+
+`ChannelConversationEngine` serializes `observe_unaddressed` note writes through its
+per-conversation FIFO, so they cannot land inside a tool cycle of a Run triggered by that same
+channel worker. A Run started for the same group Session through another accessor (for example the
+WebUI on a linked Session) is outside that queue, however, and an observed note could still append
+between that Run's assistant tool-call message and its tool results.
+
+**Why deferred:** fixing this requires Session-level append coordination across accessors rather
+than another channels-only queue rule. It is the same pre-existing exposure as the note written by
+`session.link_channel`; address both together when Session append serialization is designed.
