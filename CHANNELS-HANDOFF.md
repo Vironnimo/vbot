@@ -1,7 +1,7 @@
 # Channels Handoff — Multi-User / Group-Chat Support
 
-**Status:** step 0 done, step 1 next · **Owner:** Julian · **Created:** 2026-06-12
-**Next action:** plan and execute step 1 (sender identity in the canonical message format).
+**Status:** steps 0–1 done, step 2 next · **Owner:** Julian · **Created:** 2026-06-12
+**Next action:** plan and execute step 2 (response gating in groups).
 
 This document is self-contained: a fresh session should be able to continue from it alone.
 It is the roadmap; each step gets its own file-scoped plan (saved under `docs/plans/`) when it
@@ -57,7 +57,17 @@ per-adapter.
 Line counts: `telegram.py` 1152 → 610; new `engine.py` 462 (both well under the 1000 soft
 limit).
 
-### Step 1 — Sender identity in the canonical message format
+### Step 1 — Sender identity in the canonical message format — ✅ DONE (plan: `docs/plans/channels-step1-sender-identity.md`)
+
+Landed as designed: optional validated `sender: {id, display_name}` on user `ChatMessage`s,
+rendered as a sanitized `[<display_name>|<id>]` tag only at provider-request build time
+(`_message_to_request_dict`), threaded engine → `trigger_run` → `start_run`/`queue_run`,
+populated group-only from `ConversationFacts.user_display_name` (Telegram `full_name` →
+`username` → user id), engine-maintained `participants` sidecar registry for groups, WebUI
+user bubbles show the display name. Specs updated: `chat.md`, `channels.md`, `automation.md`
+(`sessions.md` needed no change — channel sidecar keys are documented in `channels.md`).
+
+Original design notes:
 
 - Optional `sender: {id, display_name}` on **user** `ChatMessage`s (`core/chat/messages.py`):
   persisted, validated in `from_dict()` (rejected on other roles), absent = unchanged behavior.
