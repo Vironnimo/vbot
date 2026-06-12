@@ -1,9 +1,13 @@
 # Extensions — Designnotiz
 
-Stand 2026-06-12: Die Bestandsaufnahme (unten) wurde zusammen durchgearbeitet, die
-Designentscheidungen sind gefallen, und die Umsetzung ist als Plan-Suite geschnitten:
-**`docs/plans/extensions/README.md`** (lokal, nicht committet) — fünf session-große
-Pläne, ein Agent, sequentiell.
+Stand 2026-06-12: **Plan-Suite vollständig umgesetzt (Pläne 1–5 erledigt).** Das
+Extension-System ist die einzige Extensibility-Schicht von vBot — ein
+Extension-Begriff mit mehreren Capability-Oberflächen (Hooks, Tools,
+Recall-Backends), zweiphasige Registrierung, Identität/Config/Lifecycle, und seit
+Plan 5 die Sichtbarkeits-/Management-Oberfläche (`extensions.list` RPC, CLI
+`vbot extensions …`, WebUI-Panel) plus Autoren-Guide (`docs/extensions.md`).
+Quelle der Wahrheit für den Contract bleibt `.vorch/specs/extensions.md`. Die
+Plan-Dateien lagen lokal unter `docs/plans/extensions/` (nicht committet).
 
 Quellen: `.vorch/specs/extensions.md`, `core/extensions/extensions.py`,
 Dispatch in `core/chat/chat.py` und `core/chat/tool_dispatch.py`.
@@ -55,7 +59,7 @@ Festgezurrte Entscheidungen (Details und Begründungen im Plan-Suite-README):
 | 2 | Decision-Modell | `Deny`/`Modify`/`Replace`, Pipeline-Semantik, `HookContext` + `run_id`/`add_note` | erledigt |
 | 3 | Registrierung | Zweiphasig, Records/Diagnostics, Manifest, enable/disable + Config, startup/shutdown | erledigt |
 | 4 | Capabilities | `register_tool`, `register_recall_backend`, Beispiel-Extensions | erledigt |
-| 5 | Sichtbarkeit | `extensions.list` RPC, CLI, WebUI-Panel, Autoren-Doku | offen |
+| 5 | Sichtbarkeit | `extensions.list` RPC, CLI, WebUI-Panel, Autoren-Doku | erledigt |
 
 ## Bestandsaufnahme (2026-06-11)
 
