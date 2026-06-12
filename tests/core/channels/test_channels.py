@@ -178,8 +178,8 @@ async def wait_until(predicate: Callable[[], bool], timeout: float = 1.0) -> Non
         await asyncio.sleep(0)
 
 
-def test_channel_config_enabled_defaults_true() -> None:
-    payload = {
+def make_config_payload(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "id": "tg-assistant",
         "platform": "telegram",
         "agent_id": "assistant",
@@ -187,10 +187,64 @@ def test_channel_config_enabled_defaults_true() -> None:
         "allowed_chat_ids": [],
         "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
     }
+    payload.update(overrides)
+    return payload
 
-    config = ChannelConfig.from_dict(payload)
+
+def test_channel_config_enabled_defaults_true() -> None:
+    config = ChannelConfig.from_dict(make_config_payload())
 
     assert config.enabled is True
+
+
+def test_channel_config_gating_defaults() -> None:
+    config = ChannelConfig.from_dict(make_config_payload())
+
+    assert config.response_mode == "mention"
+    assert config.mention_patterns == []
+    assert config.owner_user_ids == []
+
+
+def test_channel_config_rejects_unknown_response_mode() -> None:
+    with pytest.raises(ChannelConfigError, match="response_mode must be one of"):
+        ChannelConfig.from_dict(make_config_payload(response_mode="sometimes"))
+
+
+def test_channel_config_rejects_invalid_mention_pattern_regex() -> None:
+    with pytest.raises(ChannelConfigError, match="invalid regex"):
+        ChannelConfig.from_dict(make_config_payload(mention_patterns=["[unclosed"]))
+
+
+def test_channel_config_rejects_empty_mention_pattern() -> None:
+    with pytest.raises(ChannelConfigError, match="mention_patterns"):
+        ChannelConfig.from_dict(make_config_payload(mention_patterns=["  "]))
+
+
+def test_channel_config_normalizes_owner_user_ids_to_strings() -> None:
+    config = ChannelConfig.from_dict(make_config_payload(owner_user_ids=[50, " 51 "]))
+
+    assert config.owner_user_ids == ["50", "51"]
+
+
+def test_channel_config_rejects_boolean_owner_user_id() -> None:
+    with pytest.raises(ChannelConfigError, match="owner_user_ids"):
+        ChannelConfig.from_dict(make_config_payload(owner_user_ids=[True]))
+
+
+def test_channel_config_round_trips_gating_fields() -> None:
+    config = ChannelConfig.from_dict(
+        make_config_payload(
+            response_mode="all",
+            mention_patterns=["vbot", r"hey\s+bot"],
+            owner_user_ids=["50"],
+        )
+    )
+
+    restored = ChannelConfig.from_dict(config.to_dict())
+
+    assert restored.response_mode == "all"
+    assert restored.mention_patterns == ["vbot", r"hey\s+bot"]
+    assert restored.owner_user_ids == ["50"]
 
 
 def test_channel_storage_crud_round_trip(tmp_path: Path) -> None:
@@ -231,6 +285,34 @@ def test_channel_storage_validates_channel_json_on_read(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ChannelConfigError, match=r"\$\.enabled: must be a boolean"):
+        storage.get("tg-assistant")
+
+
+def test_channel_storage_read_rejects_invalid_mention_pattern(tmp_path: Path) -> None:
+    storage = ChannelStorage(tmp_path)
+    config_dir = tmp_path / "channels" / "tg-assistant"
+    config_dir.mkdir(parents=True)
+    config_dir.joinpath("channel.json").write_text(
+        json.dumps({**make_config().to_dict(), "mention_patterns": ["[unclosed"]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ChannelConfigError, match=r"\$\.mention_patterns\[0\]: must be a valid regex"
+    ):
+        storage.get("tg-assistant")
+
+
+def test_channel_storage_read_rejects_invalid_response_mode(tmp_path: Path) -> None:
+    storage = ChannelStorage(tmp_path)
+    config_dir = tmp_path / "channels" / "tg-assistant"
+    config_dir.mkdir(parents=True)
+    config_dir.joinpath("channel.json").write_text(
+        json.dumps({**make_config().to_dict(), "response_mode": "sometimes"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ChannelConfigError, match=r"\$\.response_mode: must be one of"):
         storage.get("tg-assistant")
 
 

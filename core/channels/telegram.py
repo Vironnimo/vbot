@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from functools import partial
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, TypeGuard
@@ -14,7 +16,6 @@ from core.channels.adapter import (
     ChannelAdapter,
     ConversationFacts,
     FileData,
-    ReplyPlanFacts,
     RouteFacts,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
@@ -74,9 +75,10 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._application: Any | None = None
         self._stop_event = asyncio.Event()
         self._allowed_chat_ids = frozenset(config.allowed_chat_ids)
+        self._bot_id: int | None = None
+        self._bot_username: str | None = None
+        self._bot_mention_pattern: re.Pattern[str] | None = None
         self._album_buffers: dict[str, list[Any]] = {}
-        self._album_routes: dict[str, RouteFacts] = {}
-        self._album_reply_plans: dict[str, ReplyPlanFacts] = {}
         self._album_conversations: dict[str, ConversationFacts] = {}
         self._album_tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -94,6 +96,10 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._stop_event.clear()
 
         await application.initialize()
+        # The bot's own identity feeds the addressing facts (@mention detection,
+        # reply-to-bot checks, /cmd@botname suffix parsing) for group gating.
+        bot_user = await application.bot.get_me()
+        self._set_bot_identity(bot_user)
         await application.bot.delete_webhook(drop_pending_updates=False)
         await application.start()
 
@@ -277,9 +283,56 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     # -- ConversationTransport ------------------------------------------------------------
 
-    async def send_text(self, platform_target: str, text: str) -> None:
+    async def send_text(
+        self,
+        platform_target: str,
+        text: str,
+        *,
+        reply_to_message_id: str | None = None,
+    ) -> None:
         """Deliver one outbound text reply (engine transport callback)."""
-        await self.send(text, platform_target)
+        reply_parameters = self._build_reply_parameters(reply_to_message_id)
+        if reply_parameters is None:
+            await self.send(text, platform_target)
+            return
+
+        bot = self._require_bot()
+        chat_id = _parse_platform_target(platform_target)
+        normalized_message = _normalize_optional_message(text)
+        if normalized_message is None:
+            raise ChannelConfigError("at least one of message or files must be provided")
+
+        # Only the first chunk references the replied-to message.
+        for index, chunk in enumerate(
+            split_telegram_message(normalized_message, TELEGRAM_MESSAGE_LIMIT)
+        ):
+            if index == 0:
+                await bot.send_message(
+                    chat_id=chat_id, text=chunk, reply_parameters=reply_parameters
+                )
+            else:
+                await bot.send_message(chat_id=chat_id, text=chunk)
+
+    def _build_reply_parameters(self, reply_to_message_id: str | None) -> Any | None:
+        if reply_to_message_id is None:
+            return None
+        try:
+            message_id = int(reply_to_message_id)
+        except (TypeError, ValueError):
+            _LOGGER.debug(
+                "Ignoring non-integer reply target message id (channel=%s): %r",
+                self._config.id,
+                reply_to_message_id,
+            )
+            return None
+        telegram = _load_telegram()
+        # allow_sending_without_reply keeps the reply deliverable when the original
+        # message was deleted in the meantime.
+        return telegram.ReplyParameters(message_id=message_id, allow_sending_without_reply=True)
+
+    def caption_text(self, raw_message: Any) -> str | None:
+        """Expose the Telegram caption for engine-side gating checks."""
+        return _extract_caption(raw_message)
 
     def activity_indicator(
         self, platform_target: str
@@ -410,7 +463,22 @@ class TelegramChannelAdapter(ChannelAdapter):
         if message_text is None:
             return
 
+        message_text = self._strip_bot_command_suffix(message_text)
         await self._engine.handle_inbound_text(conversation, message_text)
+
+    def _strip_bot_command_suffix(self, text: str) -> str:
+        # Telegram group clients send commands as `/cmd@botusername`. Strip the suffix
+        # only when it addresses this bot; `/cmd@otherbot` stays unchanged and is never
+        # treated as our command.
+        username = self._bot_username
+        if not username or not text.startswith("/"):
+            return text
+
+        first_token, separator, remainder = text.partition(" ")
+        command, at_sign, suffix = first_token.partition("@")
+        if not at_sign or suffix.casefold() != username.casefold():
+            return text
+        return command + separator + remainder
 
     async def _handle_inbound_media(self, update: Any, _context: Any) -> None:
         conversation = self._conversation_facts(update)
@@ -424,15 +492,12 @@ class TelegramChannelAdapter(ChannelAdapter):
         if message is None:
             return
 
-        route, reply_plan = self._engine.prepare_inbound_route(conversation)
         media_group_id = getattr(message, "media_group_id", None)
         if media_group_id is not None:
-            self._buffer_album_message(
-                str(media_group_id), route, reply_plan, conversation, message
-            )
+            self._buffer_album_message(str(media_group_id), conversation, message)
             return
 
-        self._engine.enqueue_media(route, reply_plan, (message,), conversation=conversation)
+        await self._engine.handle_inbound_media(conversation, (message,))
 
     async def _handle_unsupported_message_type(self, update: Any, _context: Any) -> None:
         """Reply to allowed chats that this message type cannot be processed yet."""
@@ -441,6 +506,11 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         if not self._is_chat_allowed(int(conversation.chat_id)):
+            return
+
+        # Unaddressed group messages are dropped, so an unsupported-type reply would be
+        # spam (e.g. for every sticker in a group). Same gating decision as real media.
+        if not self._engine.should_respond(conversation):
             return
 
         await self.send(_UNSUPPORTED_MESSAGE_TYPE_REPLY, conversation.chat_id)
@@ -469,18 +539,23 @@ class TelegramChannelAdapter(ChannelAdapter):
     def _buffer_album_message(
         self,
         album_id: str,
-        route: RouteFacts,
-        reply_plan: ReplyPlanFacts,
         conversation: ConversationFacts,
         message: Any,
     ) -> None:
         existing_messages = self._album_buffers.get(album_id)
         if existing_messages is not None:
             existing_messages.append(message)
+            # An @mention or reply-to-bot on any album item addresses the whole album.
+            buffered_conversation = self._album_conversations[album_id]
+            self._album_conversations[album_id] = replace(
+                buffered_conversation,
+                mentioned_bot=buffered_conversation.mentioned_bot or conversation.mentioned_bot,
+                is_reply_to_bot=(
+                    buffered_conversation.is_reply_to_bot or conversation.is_reply_to_bot
+                ),
+            )
         else:
             self._album_buffers[album_id] = [message]
-            self._album_routes[album_id] = route
-            self._album_reply_plans[album_id] = reply_plan
             self._album_conversations[album_id] = conversation
         self._restart_album_flush(album_id)
 
@@ -502,13 +577,11 @@ class TelegramChannelAdapter(ChannelAdapter):
         await asyncio.sleep(_ALBUM_FLUSH_SECONDS)
 
         messages = self._album_buffers.pop(album_id, [])
-        route = self._album_routes.pop(album_id, None)
-        reply_plan = self._album_reply_plans.pop(album_id, None)
         conversation = self._album_conversations.pop(album_id, None)
-        if not messages or route is None or reply_plan is None or conversation is None:
+        if not messages or conversation is None:
             return
 
-        self._engine.enqueue_media(route, reply_plan, tuple(messages), conversation=conversation)
+        await self._engine.handle_inbound_media(conversation, tuple(messages))
 
     def _on_album_task_done(self, album_id: str, task: asyncio.Task[None]) -> None:
         if self._album_tasks.get(album_id) is task:
@@ -545,6 +618,9 @@ class TelegramChannelAdapter(ChannelAdapter):
         thread_id_raw = getattr(message, "message_thread_id", None)
         thread_id = str(thread_id_raw) if thread_id_raw is not None else None
 
+        message_id_raw = getattr(message, "message_id", None)
+        message_id = str(message_id_raw) if _is_integer(message_id_raw) else None
+
         return ConversationFacts(
             platform=self.platform,
             channel_id=self._config.id,
@@ -554,7 +630,47 @@ class TelegramChannelAdapter(ChannelAdapter):
             # Telegram group chats are identified by negative chat ids.
             kind="group" if chat_id < 0 else "direct",
             user_display_name=_user_display_name(user),
+            message_id=message_id,
+            mentioned_bot=self._mentions_bot(message),
+            is_reply_to_bot=self._is_reply_to_bot(message),
         )
+
+    def _set_bot_identity(self, bot_user: Any) -> None:
+        bot_id = getattr(bot_user, "id", None)
+        self._bot_id = bot_id if _is_integer(bot_id) else None
+
+        username = getattr(bot_user, "username", None)
+        if isinstance(username, str) and username.strip():
+            self._bot_username = username.strip()
+            self._bot_mention_pattern = re.compile(
+                rf"@{re.escape(self._bot_username)}\b", re.IGNORECASE
+            )
+        else:
+            self._bot_username = None
+            self._bot_mention_pattern = None
+
+    def _mentions_bot(self, message: Any) -> bool:
+        # Word-boundary regex over text and caption instead of entity offsets: Telegram
+        # entity offsets are UTF-16 code units, and the regex catches the same practical
+        # @botusername mentions without that conversion.
+        pattern = self._bot_mention_pattern
+        if pattern is None:
+            return False
+        for attribute_name in ("text", "caption"):
+            value = getattr(message, attribute_name, None)
+            if isinstance(value, str) and pattern.search(value):
+                return True
+        return False
+
+    def _is_reply_to_bot(self, message: Any) -> bool:
+        if self._bot_id is None:
+            return False
+        replied_message = getattr(message, "reply_to_message", None)
+        if replied_message is None:
+            return False
+        replied_user = getattr(replied_message, "from_user", None)
+        replied_user_id = getattr(replied_user, "id", None)
+        return _is_integer(replied_user_id) and replied_user_id == self._bot_id
 
     def _is_chat_allowed(self, chat_id: int) -> bool:
         # D8: empty allowed_chat_ids means deny all inbound chats.
@@ -603,8 +719,6 @@ class TelegramChannelAdapter(ChannelAdapter):
         album_tasks = list(self._album_tasks.values())
         self._album_tasks.clear()
         self._album_buffers.clear()
-        self._album_routes.clear()
-        self._album_reply_plans.clear()
         self._album_conversations.clear()
         for task in album_tasks:
             task.cancel()

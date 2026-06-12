@@ -258,6 +258,50 @@ def test_dispatch_accessor_commands_return_actions(message: str, action_name: st
     assert result.name == action_name
 
 
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("/stop", True),
+        (" /STOP ", True),
+        ("/handoff", True),
+        ("/handoff coder", True),
+        ("/handoff a b", False),
+        ("/bogus", False),
+        ("/stop now", False),
+        ("hello", False),
+    ],
+)
+def test_recognizes_matches_dispatch_recognition(message: str, expected: bool) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    assert dispatcher.recognizes(message) is expected
+
+
+@pytest.mark.asyncio
+async def test_recognizes_does_not_execute_command_side_effects() -> None:
+    manager = ChatRunManager()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        started.set()
+        await release.wait()
+        run.raise_if_cancelled()
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    await started.wait()
+
+    dispatcher = CommandDispatcher(manager)
+    recognized = dispatcher.recognizes("/stop")
+
+    assert recognized is True
+    assert run.cancel_requested is False
+
+    release.set()
+    assert await run.wait() == "done"
+
+
 def test_dispatch_help_returns_current_command_list() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 

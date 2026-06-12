@@ -24,6 +24,11 @@ class ConversationFacts:
     kind: Literal["direct", "group"] = "direct"
     # Human-readable platform name of the sender; the engine falls back to user_id.
     user_display_name: str | None = None
+    # Platform message id of the inbound message; used for group reply threading.
+    message_id: str | None = None
+    # Addressing facts supplied by the adapter; the engine owns the gating decision.
+    mentioned_bot: bool = False
+    is_reply_to_bot: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,8 @@ class ReplyPlanFacts:
 
     channel_id: str
     platform_target: str
+    # Platform message id replies should reference (group conversations only).
+    reply_to_message_id: str | None = None
 
 
 @dataclass(frozen=True)
