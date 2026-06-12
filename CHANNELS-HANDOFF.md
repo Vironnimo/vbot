@@ -1,7 +1,7 @@
 # Channels Handoff — Multi-User / Group-Chat Support
 
-**Status:** steps 0–1 done, step 2 next · **Owner:** Julian · **Created:** 2026-06-12
-**Next action:** plan and execute step 2 (response gating in groups).
+**Status:** steps 0–2 done, step 3 next · **Owner:** Julian · **Created:** 2026-06-12
+**Next action:** plan and execute step 3 (observed context / passive group listening).
 
 This document is self-contained: a fresh session should be able to continue from it alone.
 It is the roadmap; each step gets its own file-scoped plan (saved under `docs/plans/`) when it
@@ -87,22 +87,33 @@ Original design notes:
 - WebUI: show `display_name` on user bubbles when present (timeline component).
 - Specs to update: `chat.md`, `sessions.md`, `channels.md`.
 
-### Step 2 — Response gating (when does the bot respond in groups)
+### Step 2 — Response gating (when does the bot respond in groups) — ✅ DONE
 
-- `ChannelConfig` additions (validated in `core/settings/validation.py`):
-  `response_mode: "mention" | "all"` (applies to groups; DMs always respond),
-  `mention_patterns: [regex]` (wake words; case-insensitive; also checked against captions),
-  `owner_user_ids: [...]` (command authorization).
-- "Addressed" = @botusername mention (Telegram: fetch own username via `get_me` at adapter
-  start), reply to a bot message, `mention_patterns` match, or command. Gating decision lives in
-  the engine; adapters supply facts (mentioned? reply-to-bot? raw text).
-- Non-triggering group messages are **dropped** in this step (observed in step 3).
-- Commands: restricted to `owner_user_ids`; Telegram `/cmd@botname` suffix must be parsed
-  (today the dispatcher misses it); group replies should use Telegram `reply_parameters` so it
-  is clear which message the bot answers.
-- **Open decision:** empty `owner_user_ids` = everyone may use commands (current behavior) vs.
-  deny-all (consistent with `allowed_chat_ids` deny-all semantics). Settle when planning.
-- Specs: `channels.md`, `channels/telegram.md`, `settings.md`.
+Landed as designed: `ChannelConfig` gained `response_mode: "mention" | "all"` (default
+`"mention"`; DMs always respond), `mention_patterns` (compile-validated regexes, matched
+case-insensitively against text and media captions), and `owner_user_ids` (strings end-to-end,
+integers normalized) — validated in `core/settings/validation.py` and exposed through
+`channel.create`/`channel.update` RPC. Gating decision is engine-owned
+(`should_respond(conversation, gating_texts)`); the Telegram adapter supplies facts on
+`ConversationFacts` (`message_id`, `mentioned_bot` via word-boundary `@botusername` regex over
+text+caption, `is_reply_to_bot`) from `get_me()` identity fetched at adapter start. Media goes
+through a new `handle_inbound_media` engine entry point (replaces public
+`prepare_inbound_route`+`enqueue_media` adapter flow), so albums gate at flush time with all
+captions and merged addressing facts. Non-triggering group messages are dropped before any
+session work (no Session, no metadata/participants). Telegram `/cmd@botname` suffix is stripped
+for our own bot only; group replies (run/command/media-failure) use `reply_parameters`
+referencing the triggering message (first chunk only, `allow_sending_without_reply`). The
+unsupported-message-type reply is gated the same way. `CommandDispatcher` gained `recognizes()`
+(shared resolution with `dispatch()`) so the engine can authorize before dispatch side effects.
+
+- **Settled decision (owner_user_ids):** group commands are restricted to `owner_user_ids`,
+  empty list = deny-all (consistent with `allowed_chat_ids`); unauthorized group commands are
+  silently dropped (info log). DM commands stay always-authorized — in a DM the chat allowlist
+  already identifies the sender and commands act on that sender's own session.
+- Not included (deliberately): CLI flags and WebUI form fields for the three new config keys —
+  config is reachable via RPC and hand-edit; accessor plumbing is its own small task.
+- Specs updated: `channels.md`, `channels/telegram.md`, `chat.md` (`recognizes()` contract);
+  `settings.md` needed no change (channel schema details live in `channels.md`).
 
 ### Step 3 — Observed context (passive group listening, Telegram)
 
