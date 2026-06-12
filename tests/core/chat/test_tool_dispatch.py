@@ -13,7 +13,7 @@ import pytest
 
 from core.chat.messages import JsonObject, ToolCall
 from core.chat.tool_dispatch import _dispatch_tool_calls
-from core.extensions import Deny, ExtensionRegistry, HooksAPI, Modify, Replace
+from core.extensions import Deny, ExtensionRegistry, Modify, Replace
 from core.runs import TOOL_CALL_STARTED_EVENT, Run, RunStatus
 from core.sessions import ChatSessionManager
 from core.tools import (
@@ -357,8 +357,8 @@ class TestExtensionDecisionWiring:
         tools.register("guarded", "Guarded tool.", {"type": "object"}, handler)
         runtime, agent = _build_runtime_and_agent(tmp_path, tools)
         registry = ExtensionRegistry()
-        HooksAPI(registry, "guard").on(
-            "tool_call", lambda ctx, **payload: Deny("not allowed here")
+        registry.install_handler(
+            "guard", "tool_call", lambda ctx, **payload: Deny("not allowed here")
         )
         runtime.extensions = registry
         session = _build_session(tmp_path)
@@ -388,8 +388,8 @@ class TestExtensionDecisionWiring:
         tools.register("echo", "Echo tool.", {"type": "object"}, echo_handler)
         runtime, agent = _build_runtime_and_agent(tmp_path, tools)
         registry = ExtensionRegistry()
-        HooksAPI(registry, "rewriter").on(
-            "tool_call", lambda ctx, **payload: Modify({"cmd": "rewritten"})
+        registry.install_handler(
+            "rewriter", "tool_call", lambda ctx, **payload: Modify({"cmd": "rewritten"})
         )
         runtime.extensions = registry
         session = _build_session(tmp_path)
@@ -419,8 +419,8 @@ class TestExtensionDecisionWiring:
         runtime, agent = _build_runtime_and_agent(tmp_path, tools)
         registry = ExtensionRegistry()
         replacement = tool_success({"replaced": True})
-        HooksAPI(registry, "replacer").on(
-            "tool_call", lambda ctx, **payload: Replace(replacement)
+        registry.install_handler(
+            "replacer", "tool_call", lambda ctx, **payload: Replace(replacement)
         )
         runtime.extensions = registry
         session = _build_session(tmp_path)
@@ -444,8 +444,8 @@ class TestExtensionDecisionWiring:
         runtime, agent = _build_runtime_and_agent(tmp_path, tools)
         registry = ExtensionRegistry()
         replacement = tool_success({"patched": True})
-        HooksAPI(registry, "patcher").on(
-            "tool_result", lambda ctx, **payload: replacement
+        registry.install_handler(
+            "patcher", "tool_result", lambda ctx, **payload: replacement
         )
         runtime.extensions = registry
         session = _build_session(tmp_path)
@@ -472,7 +472,7 @@ class TestExtensionDecisionWiring:
             ctx.add_note("hook was here")
             return None
 
-        HooksAPI(registry, "noter").on("tool_call", note_hook)
+        registry.install_handler("noter", "tool_call", note_hook)
         runtime.extensions = registry
         session = _build_session(tmp_path)
         run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)

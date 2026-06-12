@@ -190,6 +190,10 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
                     "summary_model": None,
                 },
                 "recall": {"backend": "sqlite_fts"},
+                "extensions": {
+                    "disabled": ["legacy-ext"],
+                    "config": {"weather": {"api_key": "x", "units": "metric"}},
+                },
                 "web_search": {
                     "provider": "searxng",
                     "searxng": {"base_url": "http://localhost:8888"},
@@ -302,6 +306,54 @@ def test_validate_settings_file_reports_invalid_recall_backend(tmp_path: Path) -
     assert diagnostics_as_tuples(report) == [
         ("error", "$.recall.backend", "must use lowercase snake_case")
     ]
+
+
+def test_validate_settings_file_rejects_non_object_extensions(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"extensions": []}), encoding="utf-8")
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is False
+    assert diagnostics_as_tuples(report) == [("error", "$.extensions", "must be an object")]
+
+
+def test_validate_settings_file_reports_invalid_extensions_fields(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "extensions": {
+                    "disabled": ["ok", "", 5],
+                    "config": {"good": {}, "bad": ["x"]},
+                    "weird": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is False
+    assert diagnostics_as_tuples(report) == [
+        ("warning", "$.extensions.weird", "unknown extensions field: weird"),
+        ("error", "$.extensions.disabled[1]", "must be a non-empty string"),
+        ("error", "$.extensions.disabled[2]", "must be a non-empty string"),
+        ("error", "$.extensions.config.bad", "must be an object"),
+    ]
+
+
+def test_validate_settings_file_rejects_non_list_disabled_extensions(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"extensions": {"disabled": "solo"}}), encoding="utf-8"
+    )
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is False
+    assert diagnostics_as_tuples(report) == [("error", "$.extensions.disabled", "must be a list")]
 
 
 def _valid_agent_data() -> dict[str, object]:
