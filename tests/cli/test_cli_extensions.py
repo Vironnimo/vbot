@@ -89,7 +89,9 @@ def test_extensions_list_formats_rows(
 
     def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
         assert json == {"method": "extensions.list", "params": {}}
-        return httpx.Response(200, json={"ok": True, "result": {"extensions": _extensions_payload()}})
+        return httpx.Response(
+            200, json={"ok": True, "result": {"extensions": _extensions_payload()}}
+        )
 
     monkeypatch.setattr(extensions_management.httpx, "post", fake_post)
 

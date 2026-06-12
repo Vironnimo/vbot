@@ -69,9 +69,9 @@ class TestRunStartRunEnd:
         _register(registry, "ext-a", "run_start", sync_handler)
         _register(registry, "ext-b", "run_start", async_handler)
 
-        result = await registry.dispatch_run_start(_ctx(), session_id="s1", agent_id="a1")
+        # Sync handler return values are ignored; dispatch itself returns nothing.
+        await registry.dispatch_run_start(_ctx(), session_id="s1", agent_id="a1")
 
-        assert result is None
         assert calls == ["sync:s1:a1", "async"]
 
     @pytest.mark.asyncio
@@ -105,16 +105,14 @@ class TestRunStartRunEnd:
         _register(registry, "ext-a", "run_end", handler)
         _register(registry, "ext-b", "run_end", handler)
 
-        await registry.dispatch_run_end(
-            _ctx(), session_id="s", agent_id="a", outcome="cancelled"
-        )
+        await registry.dispatch_run_end(_ctx(), session_id="s", agent_id="a", outcome="cancelled")
 
         assert seen == ["cancelled", "cancelled"]
 
     @pytest.mark.asyncio
     async def test_no_handlers_is_a_noop(self) -> None:
         registry = ExtensionRegistry()
-        assert await registry.dispatch_run_start(_ctx(), session_id="s", agent_id="a") is None
+        await registry.dispatch_run_start(_ctx(), session_id="s", agent_id="a")
         await registry.dispatch_run_end(_ctx(), session_id="s", agent_id="a", outcome="success")
 
     @pytest.mark.asyncio
@@ -609,9 +607,7 @@ class TestHookContext:
 
         _register(registry, "ext-a", "run_start", handler)
 
-        await registry.dispatch_run_start(
-            _ctx(add_note=notes.append), session_id="s", agent_id="a"
-        )
+        await registry.dispatch_run_start(_ctx(add_note=notes.append), session_id="s", agent_id="a")
 
         assert notes == ["from extension"]
 
