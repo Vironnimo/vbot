@@ -363,7 +363,15 @@ Important behavior:
   expected managed path
 - it does not blindly trust arbitrary marker paths for deletion
 - it deletes the branch only when the marker says the branch was script-managed
-- if the worktree is dirty, delete fails unless you explicitly use `--force`
+- if the worktree is dirty, delete fails unless you explicitly use `--force`;
+  the error output lists each blocking file as an `uncommitted:` line so you
+  can decide whether to commit the work or discard it with `--force`
+
+Ignored files never block a non-force delete. Build artifacts such as
+`node_modules/`, `webui/dist/`, `coverage/`, plan files under `docs/plans/`,
+and Vite temp config bundles (`*.timestamp-*.mjs`) are all gitignored, so a
+worktree that only contains generated artifacts deletes cleanly without
+`--force`.
 
 Examples:
 
@@ -409,6 +417,25 @@ Check these first:
 
 The script chooses the next free port when creating the worktree. If the chosen
 port becomes busy later, free the conflicting process or recreate the worktree.
+
+### Delete reported `terminated:` or `leftover:` lines
+
+On Windows, files inside the worktree can be locked by running processes —
+the common case is an orphaned `esbuild.exe` service process left behind by a
+Vite build, which blocks deletion of `webui/node_modules`. `delete` handles
+this automatically:
+
+1. Processes whose executable lives inside the worktree are terminated and
+   reported as `terminated:` lines. These are always disposable build helpers;
+   external programs (e.g. your editor) are never touched.
+2. If files remain locked by an external process (e.g. an editor language
+   server holding a native module), the stuck directory is renamed to
+   `.worktrees/.trash-<name>-<timestamp>` and reported as a `leftover:` line.
+   The worktree still counts as deleted; trash directories are swept
+   automatically on later create/delete runs once the locks are gone.
+
+In both cases the delete finishes: data dir and managed branch are cleaned up
+and the worktree name is immediately reusable.
 
 ### The worktree build step failed during creation
 
