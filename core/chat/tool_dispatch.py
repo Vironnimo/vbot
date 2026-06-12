@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,11 +50,21 @@ class _EmittingToolRegistry(ToolRegistry):
         registry: Any,
         run: Run,
         extension_registry: ExtensionRegistry | None = None,
+        note_hook: Callable[[str], None] | None = None,
     ) -> None:
         self._registry = registry
         self._run = run
         self._extension_registry = extension_registry
+        self._note_hook = note_hook
         self._tool_timings: dict[str, JsonObject] = {}
+
+    def _hook_context(self) -> HookContext:
+        return HookContext(
+            session_id=self._run.session_id,
+            agent_id=self._run.agent_id,
+            run_id=self._run.id,
+            add_note=self._note_hook or (lambda _text: None),
+        )
 
     async def dispatch(
         self,
@@ -65,29 +75,16 @@ class _EmittingToolRegistry(ToolRegistry):
         self._run.raise_if_cancelled()
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
-        original_arguments = deepcopy(arguments)
-        self._run.emit(
-            TOOL_CALL_STARTED_EVENT,
-            {
-                "tool_call": {
-                    "id": context.tool_call_id,
-                    "index": context.tool_call_index,
-                    "name": context.tool_name,
-                    "arguments": original_arguments,
-                },
-                "display": _tool_display_payload(
-                    self._registry,
-                    context.tool_name,
-                    original_arguments,
-                ),
-            },
-        )
         try:
+            # Decision pipeline runs before the started event so the timeline
+            # shows the effective (possibly modified) arguments. A deny or
+            # replace short-circuits execution; a modify rewrites the input the
+            # tool runs with and that tool_result hooks observe.
+            effective_arguments = arguments
             result: JsonObject | None = None
             if self._extension_registry is not None:
-                ctx = HookContext(session_id=self._run.session_id, agent_id=self._run.agent_id)
-                result = await self._extension_registry.dispatch_tool_call(
-                    ctx,
+                decision = await self._extension_registry.dispatch_tool_call(
+                    self._hook_context(),
                     tool_name=context.tool_name,
                     tool_call_id=context.tool_call_id,
                     input=arguments,
@@ -100,19 +97,50 @@ class _EmittingToolRegistry(ToolRegistry):
                         )
                     ),
                 )
+                effective_arguments = decision.effective_input
+                if decision.deny_reason is not None:
+                    _LOGGER.warning(
+                        "Extension %r denied %s tool call: %s",
+                        decision.deny_extension,
+                        context.tool_name,
+                        decision.deny_reason,
+                    )
+                    result = tool_failure(
+                        "tool_call_denied",
+                        f"Tool call denied by extension '{decision.deny_extension}': "
+                        f"{decision.deny_reason}",
+                    )
+                elif decision.replacement is not None:
+                    result = decision.replacement
+
+            self._run.emit(
+                TOOL_CALL_STARTED_EVENT,
+                {
+                    "tool_call": {
+                        "id": context.tool_call_id,
+                        "index": context.tool_call_index,
+                        "name": context.tool_name,
+                        "arguments": deepcopy(effective_arguments),
+                    },
+                    "display": _tool_display_payload(
+                        self._registry,
+                        context.tool_name,
+                        effective_arguments,
+                    ),
+                },
+            )
 
             if result is None:
                 result = await self._dispatch_with_failure_envelope(
-                    context, arguments, allowed_tools
+                    context, effective_arguments, allowed_tools
                 )
 
             if self._extension_registry is not None:
-                ctx = HookContext(session_id=self._run.session_id, agent_id=self._run.agent_id)
                 result = await self._extension_registry.dispatch_tool_result(
-                    ctx,
+                    self._hook_context(),
                     tool_name=context.tool_name,
                     tool_call_id=context.tool_call_id,
-                    input=arguments,
+                    input=effective_arguments,
                     result=result,
                     validator=lambda extension_name, candidate: (
                         _validated_extension_tool_hook_result(
@@ -202,6 +230,7 @@ async def _dispatch_tool_calls(
         runtime.tools,
         run,
         runtime.extensions,
+        note_hook=session.add_note,
     )
     executor = ToolExecutor(emitting_registry)
     results = await executor.execute_many(

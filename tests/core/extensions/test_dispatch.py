@@ -1,10 +1,10 @@
 """Direct tests for the per-event hook dispatcher on ``ExtensionRegistry``.
 
 These pin the composition semantics each event relies on (observer, accumulator,
-first-wins pipeline, decision-style validator pipeline) so the chat call sites
-can delegate without behavior drift. Handlers are registered through the public
-``HooksAPI`` facade, mixing sync and async callables and exercising per-handler
-exception isolation and load-order preservation.
+context pipeline, tool_call decision pipeline, tool_result replace pipeline) so
+the chat call sites can delegate without behavior drift. Handlers are registered
+through the public ``HooksAPI`` facade, mixing sync and async callables and
+exercising per-handler exception isolation and load-order preservation.
 """
 
 from __future__ import annotations
@@ -13,11 +13,20 @@ from typing import Any
 
 import pytest
 
-from core.extensions import ExtensionRegistry, HookContext, HooksAPI
+from core.extensions import (
+    Deny,
+    ExtensionRegistry,
+    HookContext,
+    HooksAPI,
+    Modify,
+    Replace,
+)
 
 
-def _ctx() -> HookContext:
-    return HookContext(session_id="s1", agent_id="a1")
+def _ctx(add_note: Any = None) -> HookContext:
+    if add_note is None:
+        return HookContext(session_id="s1", agent_id="a1", run_id="r1")
+    return HookContext(session_id="s1", agent_id="a1", run_id="r1", add_note=add_note)
 
 
 def _register(registry: ExtensionRegistry, extension_name: str, event: str, handler: Any) -> None:
@@ -196,37 +205,37 @@ class TestBeforeAgentStart:
 
 
 class TestContext:
-    """Pipeline event: first handler returning a list wins, the rest are skipped."""
+    """Pipeline event: each handler may replace the running message list in turn."""
 
     @pytest.mark.asyncio
-    async def test_first_list_wins_and_short_circuits(self) -> None:
+    async def test_handlers_chain_each_sees_previous_output(self) -> None:
         registry = ExtensionRegistry()
-        calls: list[str] = []
+        seen: list[list] = []
 
-        def returns_none(ctx: HookContext, *, messages: list) -> None:
-            calls.append("a")
-            return None
+        def first(ctx: HookContext, *, messages: list) -> list:
+            seen.append(messages)
+            return [{"role": "user", "content": "first"}]
 
-        async def returns_list(ctx: HookContext, *, messages: list) -> list:
-            calls.append("b")
-            return [{"role": "user", "content": "replaced"}]
+        async def second(ctx: HookContext, *, messages: list) -> list:
+            seen.append(messages)
+            return [*messages, {"role": "user", "content": "second"}]
 
-        def should_not_run(ctx: HookContext, *, messages: list) -> list:
-            calls.append("c")
-            return [{"role": "x"}]
-
-        _register(registry, "ext-a", "context", returns_none)
-        _register(registry, "ext-b", "context", returns_list)
-        _register(registry, "ext-c", "context", should_not_run)
+        _register(registry, "ext-a", "context", first)
+        _register(registry, "ext-b", "context", second)
 
         result = await registry.dispatch_context(_ctx(), messages=[{"role": "user"}])
 
-        assert result == [{"role": "user", "content": "replaced"}]
-        assert calls == ["a", "b"]
+        # second handler saw first handler's replacement, not the original input
+        assert seen == [[{"role": "user"}], [{"role": "user", "content": "first"}]]
+        assert result == [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+        ]
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_no_handler_replaces(self) -> None:
+    async def test_non_list_returns_leave_running_list_unchanged(self) -> None:
         registry = ExtensionRegistry()
+        original = [{"role": "user"}]
 
         def returns_none(ctx: HookContext, *, messages: list) -> None:
             return None
@@ -237,10 +246,13 @@ class TestContext:
         _register(registry, "ext-a", "context", returns_none)
         _register(registry, "ext-b", "context", returns_dict)
 
-        assert await registry.dispatch_context(_ctx(), messages=[]) is None
+        result = await registry.dispatch_context(_ctx(), messages=original)
+
+        # no handler replaced, so the original list is returned unchanged
+        assert result is original
 
     @pytest.mark.asyncio
-    async def test_exception_skipped_then_later_list_wins(self) -> None:
+    async def test_exception_skipped_pipeline_continues(self) -> None:
         registry = ExtensionRegistry()
 
         def boom(ctx: HookContext, *, messages: list) -> list:
@@ -256,78 +268,188 @@ class TestContext:
 
 
 class TestToolCall:
-    """Pipeline event: first valid result envelope short-circuits the tool."""
+    """Decision pipeline: handlers modify the input, deny, or replace the result."""
 
     @pytest.mark.asyncio
-    async def test_first_valid_envelope_short_circuits(self) -> None:
+    async def test_none_proceeds_with_unmodified_input(self) -> None:
         registry = ExtensionRegistry()
-        calls: list[str] = []
 
-        def invalid(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            calls.append("a")
-            return {"_invalid": True, "from": "a"}
+        def observe(ctx: HookContext, **payload: Any) -> None:
+            return None
 
-        async def valid(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            calls.append("b")
-            return {"from": "b"}
+        _register(registry, "ext-a", "tool_call", observe)
+        validator, _seen = _make_validator()
 
-        def should_not_run(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            calls.append("c")
-            return {"from": "c"}
-
-        _register(registry, "ext-a", "tool_call", invalid)
-        _register(registry, "ext-b", "tool_call", valid)
-        _register(registry, "ext-c", "tool_call", should_not_run)
-        validator, seen = _make_validator()
-
-        result = await registry.dispatch_tool_call(
+        decision = await registry.dispatch_tool_call(
             _ctx(), tool_name="t", tool_call_id="c1", input={"x": 1}, validator=validator
         )
 
-        assert result == {"from": "b"}
-        assert calls == ["a", "b"]
-        # validator saw the rejected candidate then the accepted one; ext-c never validated
-        assert [name for name, _ in seen] == ["ext-a", "ext-b"]
+        assert decision.effective_input == {"x": 1}
+        assert decision.deny_reason is None
+        assert decision.replacement is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_no_valid_envelope(self) -> None:
+    async def test_modify_rewrites_input_and_pipeline_continues(self) -> None:
         registry = ExtensionRegistry()
+        seen_inputs: list[dict[str, Any]] = []
 
-        def invalid(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"_invalid": True}
+        def rewrite(ctx: HookContext, *, tool_name: str, tool_call_id: str, input: dict) -> Modify:
+            seen_inputs.append(dict(input))
+            return Modify({"cmd": "ls -la"})
 
-        def non_dict(ctx: HookContext, **payload: Any) -> str:
-            return "nope"
+        def observe(ctx: HookContext, *, tool_name: str, tool_call_id: str, input: dict) -> None:
+            seen_inputs.append(dict(input))
+            return None
 
-        _register(registry, "ext-a", "tool_call", invalid)
-        _register(registry, "ext-b", "tool_call", non_dict)
+        _register(registry, "ext-a", "tool_call", rewrite)
+        _register(registry, "ext-b", "tool_call", observe)
         validator, _seen = _make_validator()
 
-        result = await registry.dispatch_tool_call(
+        decision = await registry.dispatch_tool_call(
+            _ctx(), tool_name="bash", tool_call_id="c1", input={"cmd": "ls"}, validator=validator
+        )
+
+        # second handler saw the modified input; the decision carries it as effective
+        assert seen_inputs == [{"cmd": "ls"}, {"cmd": "ls -la"}]
+        assert decision.effective_input == {"cmd": "ls -la"}
+        assert decision.deny_reason is None
+        assert decision.replacement is None
+
+    @pytest.mark.asyncio
+    async def test_deny_short_circuits_with_reason_and_extension(self) -> None:
+        registry = ExtensionRegistry()
+        calls: list[str] = []
+
+        def deny(ctx: HookContext, **payload: Any) -> Deny:
+            calls.append("a")
+            return Deny("blocked by policy")
+
+        def should_not_run(ctx: HookContext, **payload: Any) -> None:
+            calls.append("b")
+            return None
+
+        _register(registry, "ext-a", "tool_call", deny)
+        _register(registry, "ext-b", "tool_call", should_not_run)
+        validator, _seen = _make_validator()
+
+        decision = await registry.dispatch_tool_call(
             _ctx(), tool_name="t", tool_call_id="c1", input={}, validator=validator
         )
 
-        assert result is None
+        assert decision.deny_reason == "blocked by policy"
+        assert decision.deny_extension == "ext-a"
+        assert decision.replacement is None
+        assert calls == ["a"]
 
     @pytest.mark.asyncio
-    async def test_exception_skipped_then_valid_wins(self) -> None:
+    async def test_replace_validated_short_circuits(self) -> None:
+        registry = ExtensionRegistry()
+        calls: list[str] = []
+
+        def replace(ctx: HookContext, **payload: Any) -> Replace:
+            calls.append("a")
+            return Replace({"from": "replacement"})
+
+        def should_not_run(ctx: HookContext, **payload: Any) -> None:
+            calls.append("b")
+            return None
+
+        _register(registry, "ext-a", "tool_call", replace)
+        _register(registry, "ext-b", "tool_call", should_not_run)
+        validator, seen = _make_validator()
+
+        decision = await registry.dispatch_tool_call(
+            _ctx(), tool_name="t", tool_call_id="c1", input={}, validator=validator
+        )
+
+        assert decision.replacement == {"from": "replacement"}
+        assert decision.deny_reason is None
+        assert calls == ["a"]
+        assert [name for name, _ in seen] == ["ext-a"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_replace_treated_as_continue(self) -> None:
         registry = ExtensionRegistry()
 
-        def boom(ctx: HookContext, **payload: Any) -> dict[str, Any]:
+        def invalid_replace(ctx: HookContext, **payload: Any) -> Replace:
+            return Replace({"_invalid": True})
+
+        def then_replace(ctx: HookContext, **payload: Any) -> Replace:
+            return Replace({"from": "valid"})
+
+        _register(registry, "ext-a", "tool_call", invalid_replace)
+        _register(registry, "ext-b", "tool_call", then_replace)
+        validator, _seen = _make_validator()
+
+        decision = await registry.dispatch_tool_call(
+            _ctx(), tool_name="t", tool_call_id="c1", input={}, validator=validator
+        )
+
+        # the rejected Replace did not short-circuit; the next valid one did
+        assert decision.replacement == {"from": "valid"}
+
+    @pytest.mark.asyncio
+    async def test_plain_dict_return_is_ignored(self) -> None:
+        registry = ExtensionRegistry()
+
+        def legacy_dict(ctx: HookContext, **payload: Any) -> dict[str, Any]:
+            return {"ok": True, "error": None, "data": {}, "artifacts": []}
+
+        _register(registry, "ext-a", "tool_call", legacy_dict)
+        validator, seen = _make_validator()
+
+        decision = await registry.dispatch_tool_call(
+            _ctx(), tool_name="t", tool_call_id="c1", input={"x": 1}, validator=validator
+        )
+
+        # the old plain-dict short-circuit contract is gone: proceed unchanged
+        assert decision.effective_input == {"x": 1}
+        assert decision.deny_reason is None
+        assert decision.replacement is None
+        assert seen == []
+
+    @pytest.mark.asyncio
+    async def test_modify_then_deny_carries_modified_input(self) -> None:
+        registry = ExtensionRegistry()
+
+        def rewrite(ctx: HookContext, **payload: Any) -> Modify:
+            return Modify({"cmd": "rewritten"})
+
+        def deny(ctx: HookContext, **payload: Any) -> Deny:
+            return Deny("nope")
+
+        _register(registry, "ext-a", "tool_call", rewrite)
+        _register(registry, "ext-b", "tool_call", deny)
+        validator, _seen = _make_validator()
+
+        decision = await registry.dispatch_tool_call(
+            _ctx(), tool_name="t", tool_call_id="c1", input={"cmd": "orig"}, validator=validator
+        )
+
+        assert decision.deny_reason == "nope"
+        assert decision.deny_extension == "ext-b"
+        assert decision.effective_input == {"cmd": "rewritten"}
+
+    @pytest.mark.asyncio
+    async def test_exception_skipped_then_deny_wins(self) -> None:
+        registry = ExtensionRegistry()
+
+        def boom(ctx: HookContext, **payload: Any) -> Deny:
             raise RuntimeError()
 
-        def valid(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"from": "valid"}
+        def deny(ctx: HookContext, **payload: Any) -> Deny:
+            return Deny("stop")
 
         _register(registry, "ext-a", "tool_call", boom)
-        _register(registry, "ext-b", "tool_call", valid)
+        _register(registry, "ext-b", "tool_call", deny)
         validator, _seen = _make_validator()
 
-        result = await registry.dispatch_tool_call(
+        decision = await registry.dispatch_tool_call(
             _ctx(), tool_name="t", tool_call_id="c1", input={}, validator=validator
         )
 
-        assert result == {"from": "valid"}
+        assert decision.deny_reason == "stop"
+        assert decision.deny_extension == "ext-b"
 
     @pytest.mark.asyncio
     async def test_handler_receives_event_payload(self) -> None:
@@ -357,24 +479,24 @@ class TestToolCall:
 
 
 class TestToolResult:
-    """Pipeline event: every handler shallow-merge-patches the envelope in turn."""
+    """Replace pipeline: each handler may swap in a full validated envelope."""
 
     @pytest.mark.asyncio
-    async def test_each_handler_merges_onto_running_result(self) -> None:
+    async def test_each_handler_replaces_running_envelope(self) -> None:
         registry = ExtensionRegistry()
         seen_results: list[dict[str, Any]] = []
 
-        def patch_value(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"value": 1}
+        def first(ctx: HookContext, **payload: Any) -> dict[str, Any]:
+            return {"status": "first"}
 
-        async def patch_extra(
+        async def second(
             ctx: HookContext, *, tool_name: str, tool_call_id: str, input: dict, result: dict
         ) -> dict[str, Any]:
             seen_results.append(dict(result))
-            return {"extra": "e"}
+            return {"status": "second"}
 
-        _register(registry, "ext-a", "tool_result", patch_value)
-        _register(registry, "ext-b", "tool_result", patch_extra)
+        _register(registry, "ext-a", "tool_result", first)
+        _register(registry, "ext-b", "tool_result", second)
         validator, _seen = _make_validator()
 
         result = await registry.dispatch_tool_result(
@@ -382,30 +504,31 @@ class TestToolResult:
             tool_name="t",
             tool_call_id="c1",
             input={},
-            result={"status": "ok", "value": 0},
+            result={"status": "original", "value": 0},
             validator=validator,
         )
 
-        assert result == {"status": "ok", "value": 1, "extra": "e"}
-        # the second handler observed the result already patched by the first
-        assert seen_results == [{"status": "ok", "value": 1}]
+        # full replace (no merge): the prior keys are gone, not merged
+        assert result == {"status": "second"}
+        # the second handler observed the first handler's full replacement
+        assert seen_results == [{"status": "first"}]
 
     @pytest.mark.asyncio
-    async def test_invalid_patch_dropped_keeps_prior_result(self) -> None:
+    async def test_invalid_replacement_dropped_keeps_prior(self) -> None:
         registry = ExtensionRegistry()
         seen_results: list[dict[str, Any]] = []
 
-        def bad_patch(ctx: HookContext, **payload: Any) -> dict[str, Any]:
+        def bad(ctx: HookContext, **payload: Any) -> dict[str, Any]:
             return {"_invalid": True}
 
-        def good_patch(
+        def good(
             ctx: HookContext, *, tool_name: str, tool_call_id: str, input: dict, result: dict
         ) -> dict[str, Any]:
             seen_results.append(dict(result))
-            return {"value": 9}
+            return {"status": "good"}
 
-        _register(registry, "ext-a", "tool_result", bad_patch)
-        _register(registry, "ext-b", "tool_result", good_patch)
+        _register(registry, "ext-a", "tool_result", bad)
+        _register(registry, "ext-b", "tool_result", good)
         validator, _seen = _make_validator()
 
         result = await registry.dispatch_tool_result(
@@ -413,17 +536,20 @@ class TestToolResult:
             tool_name="t",
             tool_call_id="c1",
             input={},
-            result={"status": "ok"},
+            result={"status": "original"},
             validator=validator,
         )
 
-        assert result == {"status": "ok", "value": 9}
-        # the dropped patch never reached the next handler
-        assert seen_results == [{"status": "ok"}]
+        assert result == {"status": "good"}
+        # the dropped replacement never reached the next handler
+        assert seen_results == [{"status": "original"}]
 
     @pytest.mark.asyncio
-    async def test_non_dict_and_exceptions_ignored(self) -> None:
+    async def test_none_non_dict_and_exceptions_ignored(self) -> None:
         registry = ExtensionRegistry()
+
+        def returns_none(ctx: HookContext, **payload: Any) -> None:
+            return None
 
         def non_dict(ctx: HookContext, **payload: Any) -> str:
             return "x"
@@ -431,12 +557,13 @@ class TestToolResult:
         def boom(ctx: HookContext, **payload: Any) -> dict[str, Any]:
             raise RuntimeError()
 
-        def patch(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"added": True}
+        def replace(ctx: HookContext, **payload: Any) -> dict[str, Any]:
+            return {"status": "replaced"}
 
-        _register(registry, "ext-a", "tool_result", non_dict)
-        _register(registry, "ext-b", "tool_result", boom)
-        _register(registry, "ext-c", "tool_result", patch)
+        _register(registry, "ext-a", "tool_result", returns_none)
+        _register(registry, "ext-b", "tool_result", non_dict)
+        _register(registry, "ext-c", "tool_result", boom)
+        _register(registry, "ext-d", "tool_result", replace)
         validator, _seen = _make_validator()
 
         result = await registry.dispatch_tool_result(
@@ -444,11 +571,11 @@ class TestToolResult:
             tool_name="t",
             tool_call_id="c",
             input={},
-            result={"status": "ok"},
+            result={"status": "original"},
             validator=validator,
         )
 
-        assert result == {"status": "ok", "added": True}
+        assert result == {"status": "replaced"}
 
     @pytest.mark.asyncio
     async def test_returns_original_when_no_handlers(self) -> None:
@@ -465,3 +592,33 @@ class TestToolResult:
         )
 
         assert result == {"status": "ok"}
+
+
+class TestHookContext:
+    """``HookContext`` carries identity plus an ``add_note`` capability."""
+
+    @pytest.mark.asyncio
+    async def test_add_note_delegates_to_wired_callback(self) -> None:
+        registry = ExtensionRegistry()
+        notes: list[str] = []
+
+        def handler(ctx: HookContext, **payload: Any) -> None:
+            ctx.add_note("from extension")
+            return None
+
+        _register(registry, "ext-a", "run_start", handler)
+
+        await registry.dispatch_run_start(
+            _ctx(add_note=notes.append), session_id="s", agent_id="a"
+        )
+
+        assert notes == ["from extension"]
+
+    def test_default_add_note_is_a_noop(self) -> None:
+        ctx = HookContext(session_id="s", agent_id="a", run_id="r")
+        # no session wired: calling add_note must not raise
+        ctx.add_note("dropped")
+
+    def test_run_id_is_exposed(self) -> None:
+        ctx = HookContext(session_id="s", agent_id="a", run_id="run-42")
+        assert ctx.run_id == "run-42"
