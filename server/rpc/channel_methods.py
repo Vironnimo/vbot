@@ -374,15 +374,6 @@ def _channel_failure_reason(channel_service: Any, channel_id: str) -> str | None
     return None
 
 
-def _channel_system_reminder(platform: str, channel_id: str, platform_conv_id: str) -> str:
-    platform_name = platform.capitalize()
-    return (
-        f"This session is receiving messages via {platform_name} "
-        f"(channel: {channel_id}, chat: {platform_conv_id}).\n"
-        f"Respond in a style appropriate for {platform_name} messaging."
-    )
-
-
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return channel RPC handlers."""
 

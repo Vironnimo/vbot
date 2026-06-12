@@ -24,6 +24,7 @@ from core.channels.adapter import (
     MessageFacts,
     ReplyPlanFacts,
     RouteFacts,
+    channel_system_reminder,
 )
 from core.chat.commands import CommandAction, CommandDispatcher, CommandHandled
 from core.chat.content_blocks import ContentBlock
@@ -50,11 +51,6 @@ _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text 
 _UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
 _FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
 _MEDIA_FAILED_REPLY = "Sorry, I couldn't process the attached file. Please try again."
-_SYSTEM_REMINDER_TEMPLATE = (
-    "This session is receiving messages via {platform} "
-    "(channel: {channel_id}, chat: {chat_id}).\n"
-    "Respond in a style appropriate for {platform} messaging."
-)
 _OBSERVED_MESSAGE_PREFIX = "[channel-message]"
 _SENDER_TAG_UNSAFE_CHARACTERS = str.maketrans("", "", "[]|\r\n")
 
@@ -296,6 +292,16 @@ class ChannelConversationEngine:
     def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure the Session mirroring a conversation exists with channel context."""
         route, _session = self._ensure_channel_session(conversation)
+        # Proactive (outbound-only) sessions get the same channel sidecar metadata as inbound
+        # ones, so a channel_send-created session is recognizable as a channel session and has
+        # a last_reply_target before any inbound message arrives. No participant is recorded:
+        # an outbound target has no real sender.
+        self._update_session_metadata(
+            route,
+            conversation,
+            ReplyPlanFacts(channel_id=self._config.id, platform_target=conversation.chat_id),
+            track_participant=False,
+        )
         return route
 
     # -- Gating -------------------------------------------------------------------------
@@ -358,8 +364,8 @@ class ChannelConversationEngine:
         session = self._chat_sessions.get_or_create(route.agent_id, route.session_id)
         if is_new_session:
             session.add_note(
-                _SYSTEM_REMINDER_TEMPLATE.format(
-                    platform=self._transport.platform_display_name,
+                channel_system_reminder(
+                    platform_display_name=self._transport.platform_display_name,
                     channel_id=self._config.id,
                     chat_id=conversation.chat_id,
                 )
@@ -394,6 +400,8 @@ class ChannelConversationEngine:
         route: RouteFacts,
         conversation: ConversationFacts,
         reply_plan: ReplyPlanFacts,
+        *,
+        track_participant: bool = True,
     ) -> None:
         metadata = self._chat_sessions.get_metadata(route.agent_id, route.session_id)
         metadata.update(
@@ -407,7 +415,7 @@ class ChannelConversationEngine:
                 },
             }
         )
-        if conversation.kind == "group":
+        if track_participant and conversation.kind == "group":
             participants = metadata.get("participants")
             if not isinstance(participants, dict):
                 participants = {}

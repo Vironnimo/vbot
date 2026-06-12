@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import replace
@@ -337,6 +338,26 @@ def test_channel_storage_read_rejects_invalid_response_mode(tmp_path: Path) -> N
         storage.get("tg-assistant")
 
 
+def test_channel_storage_load_all_skips_invalid_configs(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    storage.save(make_config("tg-valid"))
+    broken_dir = tmp_path / "channels" / "tg-broken"
+    broken_dir.mkdir(parents=True)
+    broken_dir.joinpath("channel.json").write_text(
+        json.dumps({**make_config("tg-broken").to_dict(), "enabled": "not-a-bool"}),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        loaded = storage.load_all()
+
+    # One corrupt config is skipped (logged), not raised, so the rest stay loadable.
+    assert [config.id for config in loaded] == ["tg-valid"]
+    assert any("tg-broken" in record.getMessage() for record in caplog.records)
+
+
 def test_channel_service_create_rejects_duplicate_ids(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     config = make_config()
@@ -405,6 +426,24 @@ def test_channel_service_update_validates_agent_exists(tmp_path: Path) -> None:
 
     with pytest.raises(ChannelConfigError, match="Unknown agent_id"):
         service.update_channel(config.id, agent_id="missing-agent")
+
+
+def test_channel_service_start_tolerates_corrupt_config(tmp_path: Path) -> None:
+    storage = ChannelStorage(tmp_path)
+    storage.save(make_config("tg-valid", enabled=True))
+    broken_dir = tmp_path / "channels" / "tg-broken"
+    broken_dir.mkdir(parents=True)
+    broken_dir.joinpath("channel.json").write_text(
+        json.dumps({**make_config("tg-broken").to_dict(), "enabled": "not-a-bool"}),
+        encoding="utf-8",
+    )
+    service = make_service(tmp_path)
+
+    # A corrupt channel.json must never abort startup. No running loop here, so the valid
+    # channel only logs instead of launching, but start() must complete without raising.
+    service.start()
+
+    assert [config.id for config in service.list_channels()] == ["tg-valid"]
 
 
 def test_channel_service_start_marks_missing_agent_channel_failed(tmp_path: Path) -> None:
