@@ -63,7 +63,7 @@ def _write_directory_fallback(root: Path, name: str, marker: Path) -> None:
 
 
 def _fire_run_start(registry: ExtensionRegistry) -> None:
-    ctx = HookContext(session_id="s", agent_id="a")
+    ctx = HookContext(session_id="s", agent_id="a", run_id="r")
     asyncio.run(registry.dispatch_run_start(ctx, session_id="s", agent_id="a"))
 
 

@@ -13,7 +13,8 @@ import pytest
 
 from core.chat.messages import JsonObject, ToolCall
 from core.chat.tool_dispatch import _dispatch_tool_calls
-from core.runs import Run, RunStatus
+from core.extensions import Deny, ExtensionRegistry, HooksAPI, Modify, Replace
+from core.runs import TOOL_CALL_STARTED_EVENT, Run, RunStatus
 from core.sessions import ChatSessionManager
 from core.tools import (
     ToolContext,
@@ -329,3 +330,155 @@ async def _wait_for_registry_entry(run: Run, tool_call_id: str, *, timeout: floa
             return
         await asyncio.sleep(0.005)
     raise AssertionError(f"per-tool-call cancel callback for {tool_call_id!r} was never registered")
+
+
+def _started_event_arguments(run: Run) -> JsonObject:
+    """Return the arguments recorded on the run's tool_call_started event."""
+    for event in run.events:
+        if event.type == TOOL_CALL_STARTED_EVENT:
+            return cast(JsonObject, event.payload["tool_call"]["arguments"])
+    raise AssertionError("no tool_call_started event was emitted")
+
+
+class TestExtensionDecisionWiring:
+    """The tool_call decision model wired through ``_dispatch_tool_calls``."""
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_call_yields_error_envelope_and_never_executes(
+        self, tmp_path: Path
+    ) -> None:
+        executed: list[str] = []
+
+        def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            executed.append(context.tool_call_id)
+            return tool_success({"ran": True})
+
+        tools = ToolRegistry()
+        tools.register("guarded", "Guarded tool.", {"type": "object"}, handler)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        registry = ExtensionRegistry()
+        HooksAPI(registry, "guard").on(
+            "tool_call", lambda ctx, **payload: Deny("not allowed here")
+        )
+        runtime.extensions = registry
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        tool_calls = [ToolCall(id="call-1", name="guarded", arguments={"x": 1})]
+
+        messages = await _dispatch_tool_calls(
+            runtime, agent, tool_calls, session, run, nesting_depth=0
+        )
+
+        result = _decode_tool_result(messages[0].content)
+        assert result["ok"] is False
+        assert result["error"]["code"] == "tool_call_denied"
+        assert "not allowed here" in result["error"]["message"]
+        assert "guard" in result["error"]["message"]
+        # the guarded tool handler never ran
+        assert executed == []
+
+    @pytest.mark.asyncio
+    async def test_modified_input_reaches_handler_and_started_event(
+        self, tmp_path: Path
+    ) -> None:
+        def echo_handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+            return tool_success({"echo": arguments})
+
+        tools = ToolRegistry()
+        tools.register("echo", "Echo tool.", {"type": "object"}, echo_handler)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        registry = ExtensionRegistry()
+        HooksAPI(registry, "rewriter").on(
+            "tool_call", lambda ctx, **payload: Modify({"cmd": "rewritten"})
+        )
+        runtime.extensions = registry
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        tool_calls = [ToolCall(id="call-1", name="echo", arguments={"cmd": "original"})]
+
+        messages = await _dispatch_tool_calls(
+            runtime, agent, tool_calls, session, run, nesting_depth=0
+        )
+
+        result = _decode_tool_result(messages[0].content)
+        # the tool executed with the modified arguments
+        assert result["data"]["echo"] == {"cmd": "rewritten"}
+        # and the started event shows the effective (modified) arguments
+        assert _started_event_arguments(run) == {"cmd": "rewritten"}
+
+    @pytest.mark.asyncio
+    async def test_replace_short_circuits_with_envelope(self, tmp_path: Path) -> None:
+        executed: list[str] = []
+
+        def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            executed.append(context.tool_call_id)
+            return tool_success({"ran": True})
+
+        tools = ToolRegistry()
+        tools.register("replaced", "Replaceable tool.", {"type": "object"}, handler)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        registry = ExtensionRegistry()
+        replacement = tool_success({"replaced": True})
+        HooksAPI(registry, "replacer").on(
+            "tool_call", lambda ctx, **payload: Replace(replacement)
+        )
+        runtime.extensions = registry
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        tool_calls = [ToolCall(id="call-1", name="replaced", arguments={})]
+
+        messages = await _dispatch_tool_calls(
+            runtime, agent, tool_calls, session, run, nesting_depth=0
+        )
+
+        assert _decode_tool_result(messages[0].content) == replacement
+        assert executed == []
+
+    @pytest.mark.asyncio
+    async def test_tool_result_hook_replaces_envelope(self, tmp_path: Path) -> None:
+        def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            return tool_success({"original": True})
+
+        tools = ToolRegistry()
+        tools.register("t", "Tool.", {"type": "object"}, handler)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        registry = ExtensionRegistry()
+        replacement = tool_success({"patched": True})
+        HooksAPI(registry, "patcher").on(
+            "tool_result", lambda ctx, **payload: replacement
+        )
+        runtime.extensions = registry
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        tool_calls = [ToolCall(id="call-1", name="t", arguments={})]
+
+        messages = await _dispatch_tool_calls(
+            runtime, agent, tool_calls, session, run, nesting_depth=0
+        )
+
+        assert _decode_tool_result(messages[0].content) == replacement
+
+    @pytest.mark.asyncio
+    async def test_add_note_from_hook_lands_in_session(self, tmp_path: Path) -> None:
+        def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            return tool_success({"ran": True})
+
+        tools = ToolRegistry()
+        tools.register("t", "Tool.", {"type": "object"}, handler)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        registry = ExtensionRegistry()
+
+        def note_hook(ctx: Any, **payload: Any) -> None:
+            ctx.add_note("hook was here")
+            return None
+
+        HooksAPI(registry, "noter").on("tool_call", note_hook)
+        runtime.extensions = registry
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        tool_calls = [ToolCall(id="call-1", name="t", arguments={})]
+
+        await _dispatch_tool_calls(runtime, agent, tool_calls, session, run, nesting_depth=0)
+
+        note_contents = [m.content for m in session.load() if m.role == "note"]
+        assert "hook was here" in note_contents

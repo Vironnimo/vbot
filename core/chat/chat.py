@@ -382,7 +382,12 @@ class ChatLoop:
         try:
             extension_registry = self._runtime.extensions
             if extension_registry is not None:
-                extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
+                extension_ctx = HookContext(
+                    session_id=run.session_id,
+                    agent_id=run.agent_id,
+                    run_id=run.id,
+                    add_note=session.add_note,
+                )
                 await extension_registry.dispatch_run_start(
                     extension_ctx,
                     session_id=run.session_id,
@@ -411,7 +416,12 @@ class ChatLoop:
 
             extension_registry = self._runtime.extensions
             if extension_registry is not None:
-                extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
+                extension_ctx = HookContext(
+                    session_id=run.session_id,
+                    agent_id=run.agent_id,
+                    run_id=run.id,
+                    add_note=session.add_note,
+                )
                 prompt_appends = await extension_registry.dispatch_before_agent_start(
                     extension_ctx,
                     agent=agent,
@@ -521,7 +531,12 @@ class ChatLoop:
 
             extension_registry = self._runtime.extensions
             if extension_registry is not None:
-                extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
+                extension_ctx = HookContext(
+                    session_id=run.session_id,
+                    agent_id=run.agent_id,
+                    run_id=run.id,
+                    add_note=session.add_note,
+                )
                 await extension_registry.dispatch_run_end(
                     extension_ctx,
                     session_id=run.session_id,
@@ -638,13 +653,16 @@ class ChatLoop:
             extension_registry = self._runtime.extensions
             messages_for_request = [dict(message) for message in messages]
             if extension_registry is not None:
-                extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
-                replaced_messages = await extension_registry.dispatch_context(
+                extension_ctx = HookContext(
+                    session_id=run.session_id,
+                    agent_id=run.agent_id,
+                    run_id=run.id,
+                    add_note=session.add_note,
+                )
+                messages_for_request = await extension_registry.dispatch_context(
                     extension_ctx,
                     messages=messages_for_request,
                 )
-                if replaced_messages is not None:
-                    messages_for_request = replaced_messages
 
             if hasattr(adapter, "set_debug_context"):
                 adapter.set_debug_context(
