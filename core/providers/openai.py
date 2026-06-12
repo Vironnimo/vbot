@@ -312,9 +312,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         endpoint_path: str,
         payload: dict[str, Any],
     ) -> httpx.Response:
-        headers = await self._build_headers()
-
         async def _connect() -> httpx.Response:
+            # Rebuild headers per attempt: an OAuth token may refresh during a
+            # retry backoff, and the getter must be re-consulted each time.
+            headers = await self._build_headers()
             request = self._client.build_request(
                 "POST",
                 endpoint_path,
