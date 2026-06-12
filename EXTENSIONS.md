@@ -1,12 +1,63 @@
-# Extensions — Bestandsaufnahme & Ausbaurichtung
+# Extensions — Designnotiz
 
-Arbeitsnotiz (Stand 2026-06-11): Wo das Extension-System heute steht, was ihm zu einem
-echten Agent-Harness-Hook-System fehlt, und in welchen Stufen wir es ausbauen können.
+Stand 2026-06-12: Die Bestandsaufnahme (unten) wurde zusammen durchgearbeitet, die
+Designentscheidungen sind gefallen, und die Umsetzung ist als Plan-Suite geschnitten:
+**`docs/plans/extensions/README.md`** (lokal, nicht committet) — fünf session-große
+Pläne, ein Agent, sequentiell.
 
 Quellen: `.vorch/specs/extensions.md`, `core/extensions/extensions.py`,
 Dispatch in `core/chat/chat.py` und `core/chat/tool_dispatch.py`.
 
-## Wo wir stehen
+## Entschiedenes Design
+
+**Ein Extension-Begriff, mehrere Capability-Oberflächen.** Hooks sind kein eigenes
+System — sie sind eine Capability unter mehreren, die eine Extension nutzen kann (wie
+bei pytest-Plugins, VS-Code-Extensions, Claude-Code-Plugins). Die Extension bleibt die
+Einheit von Discovery, Identität, Config und enable/disable; `register(api)` wird zur
+Fassade über alle Extension Points. Intern bleiben die Domain-Registries
+(`ToolRegistry`, `RecallBackendRegistry`) — die Extension-API routet hinein, kein neuer
+God-Registry.
+
+Festgezurrte Entscheidungen (Details und Begründungen im Plan-Suite-README):
+
+1. Begriff bleibt **Extension** (kein "Plugin" daneben).
+2. **Dateisystem-Identität** (Name = Verzeichnis-/Dateiname), `extension.json` als
+   optionales Manifest (Version, Beschreibung, `api_version`) — nie Pflicht,
+   Single-File-Extensions bleiben erstklassig.
+3. **Zweiphasige Registrierung:** `register(api)` sammelt nur Deklarationen; die Runtime
+   wendet sie an den richtigen Bootstrap-Punkten an. Async `register()` wird
+   deterministisch awaited (kein fire-and-forget mehr).
+4. **Dispatch-Semantik wandert nach `core/extensions/`** (Inversion der alten
+   Spec-Regel): chat besitzt nur noch *wann* gefeuert wird und was Payloads fachlich
+   bedeuten.
+5. **Kompositionsmodell pro Event, designt statt gewachsen:** Observer
+   (`run_start`/`run_end`), Akkumulator (`before_agent_start`), Pipelines (`context`,
+   `tool_result`), Decision-Pipeline (`tool_call` mit `Deny(reason)` / `Modify(input)` /
+   `Replace(result)` / `None`=continue).
+6. **Public-API-Disziplin:** Die Extension-API ist vBots erste echte Public API. Typisierte
+   Objekte statt loser Dicts, wenige gut geschnittene Events statt spekulativer Breite,
+   `API_VERSION = 1` von Anfang an. Bis zur Stabil-Erklärung darf der Hook-Contract noch
+   frei brechen.
+7. **Trust-Boundary unverändert:** in-process, Kernel-Trust. Kein Sandboxing, kein
+   out-of-process, kein Marketplace.
+8. **Enable/disable ist restart-applied;** deaktivierte Extensions werden nie importiert.
+   Kein Hot-Reload.
+9. **Kein Core-Slimming jetzt.** Built-in-Extensions (`resources/extensions/`-Root) und
+   Extraktionen (Home Assistant, vector/hybrid-Recall, TTS/Image-Tools) sind bewusst auf
+   eine spätere Initiative verschoben — diese Suite baut nur das System, das jene
+   Migrationen dann benutzen. Test-/Beispiel-Extensions validieren die API stattdessen.
+
+## Plan-Suite (Status)
+
+| # | Plan | Liefert | Status |
+|---|---|---|---|
+| 1 | Typed Dispatcher | Dispatch zentral in `core/extensions/`, chat ohne `_handlers`, erste direkte Tests | offen |
+| 2 | Decision-Modell | `Deny`/`Modify`/`Replace`, Pipeline-Semantik, `HookContext` + `run_id`/`add_note` | offen |
+| 3 | Registrierung | Zweiphasig, Records/Diagnostics, Manifest, enable/disable + Config, startup/shutdown | offen |
+| 4 | Capabilities | `register_tool`, `register_recall_backend`, Beispiel-Extensions | offen |
+| 5 | Sichtbarkeit | `extensions.list` RPC, CLI, WebUI-Panel, Autoren-Doku | offen |
+
+## Bestandsaufnahme (2026-06-11, weiterhin gültig bis Plan 1/2 gelandet sind)
 
 Der Loader ist solide und klein: Discovery aus `<data_dir>/extensions/` plus
 `settings.json` → `extension_directories`, drei Entry-Point-Formen (Single-File, Package,
@@ -18,90 +69,39 @@ Die Schwächen liegen auf der Hook-Seite. Heute gibt es sechs Events, alle chat-
 
 ### 1. Eingreifen ist lückenhaft
 
-Abfangen, verändern, austauschen — geht nur teilweise:
-
 - `tool_call` kann einen Call nur **komplett schlucken** (Result-Envelope zurückgeben,
-  Tool läuft nie). Es gibt keinen Weg, die **Tool-Argumente zu modifizieren** und das
-  Tool trotzdem laufen zu lassen, und kein sauberes "deny mit Begründung" — man muss
-  einen Fehler-Envelope von Hand basteln. Zum Vergleich: Claude-Code-Hooks haben
-  `allow`/`deny`/`ask` plus `updatedInput` als explizite Entscheidungstypen.
-- `context` kann die Message-Liste ersetzen, aber **first-wins mit `break`**
-  (`core/chat/chat.py`, context-Loop) — zwei Extensions, die beide den Kontext anfassen
-  wollen, schließen sich gegenseitig aus.
+  Tool läuft nie). Kein Weg, **Tool-Argumente zu modifizieren** und das Tool trotzdem
+  laufen zu lassen; kein sauberes "deny mit Begründung". Zum Vergleich: Claude-Code-Hooks
+  haben `allow`/`deny`/`ask` plus `updatedInput` als explizite Entscheidungstypen.
+- `context` kann die Message-Liste ersetzen, aber **first-wins mit `break`** — zwei
+  Extensions, die beide den Kontext anfassen wollen, schließen sich gegenseitig aus.
 - `run_start`/`run_end` sind reine Observer, ohne `run_id` im Context (`HookContext`
   enthält nur `session_id`/`agent_id`).
 
 ### 2. Jede Hook hat eine andere Kompositions-Semantik
 
 `before_agent_start` akkumuliert, `context` first-wins-skip-rest, `tool_call`
-first-valid-wins, `tool_result` jeder-patcht-nacheinander. Das ist historisch gewachsen,
-nicht designt. Ein kohärentes Modell wäre eine Pipeline: jeder Handler bekommt den
-aktuellen Zustand und gibt optional einen modifizierten zurück.
+first-valid-wins, `tool_result` jeder-patcht-nacheinander. Historisch gewachsen, nicht
+designt.
 
-### 3. Dispatch ist fünfmal kopiert und koppelt ans private Dict
+### 3. Dispatch ist sechsmal kopiert und koppelt ans private Dict
 
-`core/chat/` iteriert direkt über `registry._handlers` in fünf fast identischen
-Inline-Loops; `ExtensionRegistry.fire()` ist dead code. Die Spec dokumentiert die
-Dict-Shape sogar als "load-bearing contract" — das ist ein Refactoring-Ziel unabhängig
-von jeder Feature-Richtung.
+`core/chat/` iteriert direkt über `registry._handlers` in sechs fast identischen
+Inline-Loops (vier in `chat.py`, zwei in `tool_dispatch.py`);
+`ExtensionRegistry.fire()` ist dead code. Die Spec dokumentiert die Dict-Shape sogar als
+"load-bearing contract". Außerdem: `core/extensions/` hat **null direkte Tests**
+(kein `tests/core/extensions/`).
 
 ### 4. Keine Identität, keine Sichtbarkeit
 
-Kein Manifest (Name/Version/Beschreibung), keine per-Extension-Config, kein
-enable/disable, kein RPC/CLI/UI-Weg zu sehen, was geladen ist oder was beim Laden
-gefailt hat (Skills haben `invalid_diagnostics()`, Extensions loggen nur). Reihenfolge
-ist alphabetisch, fertig.
+Kein Manifest, keine per-Extension-Config, kein enable/disable, kein RPC/CLI/UI-Weg zu
+sehen, was geladen ist oder was beim Laden gefailt hat (Skills haben
+`invalid_diagnostics()`, Extensions loggen nur). Reihenfolge ist alphabetisch, fertig.
 
 ### 5. Die Oberfläche endet am Chat-Loop
 
-Kein Hook für Channel-Ingest (z.B. Telegram-Nachricht vorverarbeiten, bevor sie zum Run
-wird), nichts bei Compaction, kein startup/shutdown für Extensions, die eigene Ressourcen
-halten (DB-Connection, HTTP-Client). Und — der größte Punkt — **Extensions können keine
-Tools registrieren**, obwohl `ToolRegistry.register()` existiert und das für ein
-Agent-Harness der naheliegendste Extensibility-Wunsch ist.
-
-## Ausbau in drei Stufen
-
-### Stufe 1 — den Hook-Kern reif machen
-
-Adressiert direkt "abfangen, verändern, austauschen":
-
-- **Typed Dispatcher** in `core/extensions/` mit einer Methode pro Event
-  (`hooks.tool_call(ctx, ...)`, `hooks.filter_context(ctx, messages)`), der die Semantik
-  zentral besitzt. Chat ruft eine Methode statt fünf kopierter Loops; die
-  `_handlers`-Kopplung verschwindet.
-- **Decision-Modell für `tool_call`**: Handler geben `continue` (default),
-  `modify(input)`, `deny(reason)` oder `replace(result)` zurück. `deny` wird ein
-  Fehler-Envelope mit der Begründung, sodass das Modell weiß, warum. `modify` wird
-  gechained — jeder Handler sieht den aktuellen Input.
-- **Pipeline statt first-wins** für `context`, einheitlich mit `tool_result`.
-- `HookContext` um `run_id` und ein paar Capabilities erweitern (z.B. `ctx.add_note(...)`
-  für System Reminders, Logger).
-
-### Stufe 2 — Oberfläche erweitern
-
-- `api.register_tool(name, description, parameters, handler)` — Extensions liefern
-  eigene Tools, landen in der normalen `ToolRegistry`, Agent-Allowlists greifen wie
-  gewohnt. Der größte Einzelgewinn: eigene Tools ohne App-Fork, und es passt zur
-  Trennung Skill (Markdown-Playbook) vs. Tool (Code).
-- Neue Events nur wo konkreter Bedarf ist: `message_received` (Channel-Ingest),
-  `startup`/`shutdown`.
-
-### Stufe 3 — "richtiges" Plugin-System
-
-- Manifest pro Extension (Name, Version, Config-Schema), per-Extension-Config-Section in
-  `settings.json`, die in `register()` hereingereicht wird, enable/disable,
-  Load-Diagnostics über RPC → CLI (`vbot extensions list`) und eine kleine WebUI-Seite.
-- Optional später: pip-installierbare Plugins via Entry-Point-Group.
-- **Nicht** machen: Sandboxing, out-of-process Plugins, Marketplace-Gedanken. Extensions
-  teilen bewusst die Trust-Boundary des Kernels — konsistent mit der Projektphilosophie
-  (single-user, maximale Agency), steht so auch in der Spec.
-
-## Empfehlung
-
-Stufe 1 zuerst — sie ist die Grundlage für alles Weitere, räumt nebenbei den Chat-Code
-auf, und genau dort liegt der Abstand zwischen "wir haben Hooks" und "es ist ein
-Agent-Harness-Hook-System". `register_tool` danach als eigenständiger, ziemlich billiger
-Win. Stufe 3 erst, wenn es real mehr als eine Handvoll Extensions gibt.
-
-Sinnvoller Plan-Schnitt: Dispatcher-Refactor → Decision-Modell → `register_tool`.
+Kein startup/shutdown für Extensions mit eigenen Ressourcen, kein Hook für
+Channel-Ingest, nichts bei Compaction. Und — der größte Punkt — **Extensions können
+keine Tools registrieren**, obwohl `ToolRegistry.register()` existiert; auch
+`RecallBackendRegistry` ist für Extensions unerreichbar, obwohl die Recall-Spec
+"extension backends" bereits erwähnt.
