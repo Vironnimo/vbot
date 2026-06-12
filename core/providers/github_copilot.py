@@ -44,11 +44,31 @@ from core.providers.openai_compatible import (
     _read_optional_mapping,
     _read_string,
 )
+from core.providers.reasoning import (
+    REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_FULL_HISTORY,
+    ReasoningReplayPolicy,
+)
 from core.utils.retry import retry_async
 
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     """Routing adapter for GitHub Copilot endpoint families."""
+
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        """Replay persisted reasoning across runs on the verified endpoint families.
+
+        ``/responses`` (reasoning items incl. ``encrypted_content``) and
+        ``/v1/messages`` (signed thinking blocks) both accept cross-run replay —
+        verified against the real Copilot endpoints (2026-06-13). The
+        ``/chat/completions`` fallback wire stays on ``current_run``: replaying
+        ``reasoning_meta`` fields there is unverified, and the conservative
+        endpoint family omits uncertain request shapes by convention.
+        """
+        policy = self._policy_for_model(model_id)
+        if policy.endpoint_path in {RESPONSES_ENDPOINT, MESSAGES_ENDPOINT}:
+            return REASONING_REPLAY_FULL_HISTORY
+        return REASONING_REPLAY_CURRENT_RUN
 
     # ------------------------------------------------------------------
     # Payload / request helpers

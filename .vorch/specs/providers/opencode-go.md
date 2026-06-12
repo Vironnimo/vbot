@@ -1,6 +1,6 @@
 # OpenCode Go Provider
 
-OpenAI-compatible gateway with provider-specific reasoning replay and a small set of Anthropic-routed models.
+OpenAI-compatible gateway with full-history reasoning replay and a small set of Anthropic-routed models.
 
 ## Interfaces
 
@@ -19,12 +19,13 @@ OpenAI-compatible gateway with provider-specific reasoning replay and a small se
 
 ## Reasoning Replay
 
-- Anthropic-routed models apply `_bound_assistant_reasoning_replay()` before request building, send, and stream.
-- That helper strips stale completed-turn `reasoning` and `reasoning_meta` from history, but preserves the active continuation turn: the latest assistant tool-call message followed only by tool results and optional synthetic system-reminder user messages.
-- OpenAI-routed models replay visible assistant reasoning for every historical assistant message because the gateway expects `reasoning_content` round-tripping.
+- `reasoning_replay_policy()` returns `full_history` for every model id — both routes. The chat layer owns history shaping (same-model gate); the adapter no longer strips reasoning from history itself (`_bound_assistant_reasoning_replay` was retired in the Phase-3 rollout, 2026-06-13).
+- Live probe against the real gateway (2026-06-13): the OpenAI route accepted `reasoning_content` on a completed historical assistant message across a run boundary (`deepseek-v4-flash`, 200), and the Anthropic route accepted a replayed signed `thinking` block across a run boundary (`minimax-m2.5`, 200).
+- OpenAI-routed assistant messages with non-empty visible `reasoning` are echoed on the wire as `reasoning_content` (the gateway expects round-tripping); `reasoning_meta` keys (`reasoning_details`, `encrypted_content`) are applied by the shared OpenAI-compatible formatter.
+- Anthropic-routed models render replayed `reasoning_meta.content_blocks` through the inner `AnthropicAdapter`, including its thinking-disabled guard.
 
 ## Constraints & Gotchas
 
-- Keep provider-specific replay behavior in `OpenCodeGoAdapter`; do not add it to the generic OpenAI-compatible adapter.
+- Keep provider-specific reasoning wire behavior (the `reasoning_content` echo) in `OpenCodeGoAdapter`; do not add it to the generic OpenAI-compatible adapter. Do not re-add history-wide reasoning strips here — the chat layer owns history shaping.
 - `normalize_response()` delegates to the Anthropic normalizer only for non-OpenAI-shaped responses.
 - Constructor signature intentionally matches runtime adapter factory injection, including optional `model_lookup` and `debug_recorder`.
