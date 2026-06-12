@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from core.debug import DebugContext, ProviderDebugRecorder
 
 from core.models.models import Model
+from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
 
 JsonObject = dict[str, Any]
 ModelLookup = Callable[[str], "Model | None"]
@@ -87,6 +88,23 @@ class ProviderAdapter(ABC):
         """
         if self._debug_recorder is not None:
             self._debug_recorder.set_context(ctx)
+
+    # ------------------------------------------------------------------
+    # History shaping policy
+    # ------------------------------------------------------------------
+
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        """Return how persisted assistant reasoning replays for ``model_id``.
+
+        The chat layer queries this once per request build and shapes the
+        request history accordingly; adapters must not re-implement
+        history-wide reasoning strips on top of it.  ``model_id`` is part of
+        the contract because one adapter can route different models to
+        different wires.  The default keeps the historical behavior: only the
+        active run's assistant turns carry reasoning fields.
+        """
+        del model_id
+        return REASONING_REPLAY_CURRENT_RUN
 
     @abstractmethod
     async def aclose(self) -> None:

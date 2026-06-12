@@ -1,7 +1,16 @@
 """Tests for shared provider reasoning helpers."""
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers.reasoning import closest_supported_effort, model_reasoning_supported
+from core.providers.reasoning import (
+    REASONING_REPLAY_POLICIES,
+    closest_supported_effort,
+    model_reasoning_supported,
+)
+
+
+def test_reasoning_replay_policy_axis_is_pinned() -> None:
+    """The replay-policy axis is a deliberate three-value contract."""
+    assert REASONING_REPLAY_POLICIES == ("none", "current_run", "full_history")
 
 
 def test_closest_supported_effort_maps_to_nearest_known_level() -> None:
