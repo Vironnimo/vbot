@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
@@ -24,6 +25,7 @@ from core.channels.adapter import (
 )
 from core.chat.commands import CommandAction, CommandDispatcher, CommandHandled
 from core.chat.content_blocks import ContentBlock
+from core.chat.messages import MessageSender
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     RUN_CANCELLED_EVENT,
@@ -82,6 +84,7 @@ class _QueuedInboundMessage:
     reply_plan: ReplyPlanFacts
     message: MessageFacts
     command_checked: bool = False
+    sender: MessageSender | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -98,6 +101,7 @@ class _QueuedInboundMedia:
     # Raw platform messages; conversion to content blocks happens in the per-conversation
     # worker via the transport so the adapter's update pipeline never blocks.
     messages: tuple[Any, ...]
+    sender: MessageSender | None = None
 
 
 _QueuedWork = _QueuedInboundMessage | _QueuedCommandAction | _QueuedInboundMedia
@@ -153,6 +157,7 @@ class ChannelConversationEngine:
                 reply_plan=reply_plan,
                 message=MessageFacts(content=message_text),
                 command_checked=True,
+                sender=self._sender_for(conversation),
             ),
         )
 
@@ -161,11 +166,18 @@ class ChannelConversationEngine:
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
         messages: tuple[Any, ...],
+        *,
+        conversation: ConversationFacts,
     ) -> None:
         """Enqueue inbound media (one message or a buffered album) for worker processing."""
         self._enqueue_chat_work(
             reply_plan.platform_target,
-            _QueuedInboundMedia(route=route, reply_plan=reply_plan, messages=messages),
+            _QueuedInboundMedia(
+                route=route,
+                reply_plan=reply_plan,
+                messages=messages,
+                sender=self._sender_for(conversation),
+            ),
         )
 
     def prepare_inbound_route(
@@ -184,6 +196,15 @@ class ChannelConversationEngine:
     def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure the Session mirroring a conversation exists with channel context."""
         return self._ensure_channel_session(conversation)
+
+    def _sender_for(self, conversation: ConversationFacts) -> MessageSender | None:
+        # Sender identity is group-only in v1; DM turns stay unattributed.
+        if conversation.kind != "group":
+            return None
+        return MessageSender(
+            id=conversation.user_id,
+            display_name=conversation.user_display_name or conversation.user_id,
+        )
 
     # -- Session routing / metadata ---------------------------------------------------
 
@@ -242,6 +263,15 @@ class ChannelConversationEngine:
                 },
             }
         )
+        if conversation.kind == "group":
+            participants = metadata.get("participants")
+            if not isinstance(participants, dict):
+                participants = {}
+            participants[conversation.user_id] = {
+                "display_name": conversation.user_display_name or conversation.user_id,
+                "last_seen_at": datetime.now(UTC).isoformat(),
+            }
+            metadata["participants"] = participants
         self._chat_sessions.set_metadata(route.agent_id, route.session_id, metadata)
 
     # -- Queue / workers --------------------------------------------------------------
@@ -314,7 +344,12 @@ class ChannelConversationEngine:
             ):
                 return
 
-        await self._trigger_and_relay(queued.route, queued.reply_plan, queued.message.content)
+        await self._trigger_and_relay(
+            queued.route,
+            queued.reply_plan,
+            queued.message.content,
+            sender=queued.sender,
+        )
 
     async def _process_queued_media(self, queued: _QueuedInboundMedia) -> None:
         # Per-message handling: one failing album item must not drop its siblings,
@@ -340,7 +375,12 @@ class ChannelConversationEngine:
         if not content_blocks:
             return
 
-        await self._trigger_and_relay(queued.route, queued.reply_plan, content_blocks)
+        await self._trigger_and_relay(
+            queued.route,
+            queued.reply_plan,
+            content_blocks,
+            sender=queued.sender,
+        )
 
     # -- Trigger / relay --------------------------------------------------------------
 
@@ -349,12 +389,15 @@ class ChannelConversationEngine:
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
         content: str | list[ContentBlock],
+        *,
+        sender: MessageSender | None = None,
     ) -> None:
         try:
             run = await self._trigger_service.trigger_run(
                 route.agent_id,
                 content,
                 route.session_id,
+                sender=sender,
             )
         except Exception as error:
             _LOGGER.error(

@@ -79,6 +79,9 @@ from core.chat.messages import (
     InputOrigin as InputOrigin,
 )
 from core.chat.messages import (
+    MessageSender as MessageSender,
+)
+from core.chat.messages import (
     ToolCall as ToolCall,
 )
 from core.chat.messages import (
@@ -204,6 +207,7 @@ class ChatLoop:
         session_id: str,
         internal: bool = False,
         input_origin: InputOrigin | None = None,
+        sender: MessageSender | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers."""
         return await self._start_run(
@@ -213,6 +217,7 @@ class ChatLoop:
             create_missing=False,
             internal=internal,
             input_origin=input_origin,
+            sender=sender,
         )
 
     async def queue_run(
@@ -223,6 +228,7 @@ class ChatLoop:
         session_id: str,
         internal: bool = False,
         input_origin: InputOrigin | None = None,
+        sender: MessageSender | None = None,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle."""
         agent = self._runtime.agents.get(agent_id)
@@ -238,6 +244,7 @@ class ChatLoop:
                 content,
                 internal=internal,
                 input_origin=input_origin,
+                sender=sender,
             ),
             display_content=_display_content_preview(content),
             internal=internal,
@@ -337,6 +344,7 @@ class ChatLoop:
         create_missing: bool,
         internal: bool = False,
         input_origin: InputOrigin | None = None,
+        sender: MessageSender | None = None,
     ) -> Run:
         agent = self._runtime.agents.get(agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
@@ -351,6 +359,7 @@ class ChatLoop:
                 content,
                 internal=internal,
                 input_origin=input_origin,
+                sender=sender,
             ),
         )
 
@@ -362,6 +371,7 @@ class ChatLoop:
         internal: bool = False,
         retry: bool = False,
         input_origin: InputOrigin | None = None,
+        sender: MessageSender | None = None,
     ) -> ChatMessage:
         agent = self._runtime.agents.get(run.agent_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
@@ -405,7 +415,7 @@ class ChatLoop:
                 if content is None:
                     raise ChatError("content is required for non-retry runs")
                 _append_input_origin_note(session, input_origin)
-                user_message = ChatMessage.user(content)
+                user_message = ChatMessage.user(content, sender=sender)
                 session.append(user_message)
                 _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
                 if isinstance(content, str):

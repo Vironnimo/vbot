@@ -19,6 +19,7 @@ from core.chat import (
     ChatMessage,
     ChatSessionError,
     ChatSessionManager,
+    MessageSender,
     ToolCall,
 )
 from core.chat.streaming import StreamingDeltaError
@@ -576,6 +577,61 @@ async def test_internal_start_run_embeds_content_without_visible_user_message(
         "content": f"<system-reminder>\n{content}\n</system-reminder>",
     }
     assert all(message["role"] != "note" for message in request_messages)
+
+
+@pytest.mark.asyncio
+async def test_start_run_persists_sender_and_renders_request_attribution(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello Alice", "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    sender = MessageSender(id="50", display_name="Alice")
+
+    run = await ChatLoop(runtime).start_run(
+        "coder",
+        "Hi",
+        session_id="session-one",
+        sender=sender,
+    )
+    await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    request_messages = adapter.requests[0]["messages"]
+    assert persisted_roles(messages) == ["user", "assistant"]
+    assert messages[0].sender == sender
+    assert messages[0].content == "Hi"
+    assert request_messages[1]["content"] == "[Alice|50]: Hi"
+    assert all("sender" not in message for message in request_messages)
+    persisted_event = next(event for event in run.events if event.type == "user_message_persisted")
+    assert persisted_event.payload["message"]["sender"] == {
+        "id": "50",
+        "display_name": "Alice",
+    }
+
+
+@pytest.mark.asyncio
+async def test_queue_run_persists_sender_on_user_message(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello Alice", "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    sender = MessageSender(id="50", display_name="Alice")
+
+    queued_item = await ChatLoop(runtime).queue_run(
+        "coder",
+        "Hi",
+        session_id="session-one",
+        sender=sender,
+    )
+    run = await queued_item.future
+    await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert persisted_roles(messages) == ["user", "assistant"]
+    assert messages[0].sender == sender
+    assert messages[0].content == "Hi"
 
 
 @pytest.mark.asyncio

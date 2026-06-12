@@ -52,9 +52,16 @@ export const shouldRenderMessage = (message) =>
   Boolean(textFromMessage(message)) ||
   hasReadableReasoning(message);
 
+// Channel group messages carry a platform sender; the display name is data,
+// not a translatable UI string.
+const senderDisplayName = (message) =>
+  trimmedString(message?.sender?.display_name);
+
 export const labelForMessage = (message) => {
   if (message.role === 'user') {
-    return t('chat.role.user', 'You').toUpperCase();
+    return (
+      senderDisplayName(message) || t('chat.role.user', 'You')
+    ).toUpperCase();
   }
   if (message.role === 'assistant') {
     return t('chat.role.assistant', 'Assistant').toUpperCase();
@@ -94,7 +101,8 @@ export const labelForEvent = (event) => {
     return t('chat.event.cancelled', 'Run cancelled');
   }
   if (event.type === 'user_message_persisted') {
-    return t('chat.role.user', 'You').toUpperCase();
+    const displayName = senderDisplayName(messageFromEvent(event));
+    return (displayName || t('chat.role.user', 'You')).toUpperCase();
   }
   return t('common.unknown', 'Unknown').toUpperCase();
 };
