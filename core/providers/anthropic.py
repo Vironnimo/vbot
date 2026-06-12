@@ -39,7 +39,12 @@ from core.providers._http_shared import (
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
-from core.providers.reasoning import model_reasoning_supported, remove_reasoning_kwargs
+from core.providers.reasoning import (
+    REASONING_REPLAY_FULL_HISTORY,
+    ReasoningReplayPolicy,
+    model_reasoning_supported,
+    remove_reasoning_kwargs,
+)
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
 
@@ -129,6 +134,21 @@ class AnthropicAdapter(ProviderAdapter):
         await self.aclose()
 
     # ------------------------------------------------------------------
+    # History shaping policy
+    # ------------------------------------------------------------------
+
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        """Replay persisted thinking blocks across runs, per Anthropic guidance.
+
+        Anthropic expects thinking blocks passed back unchanged for the whole
+        same-model conversation, not just the active tool loop; stripping them
+        risks signature/ordering 400s and breaks provider-side prompt caching.
+        Cross-model entries are stripped by the chat layer's same-model gate.
+        """
+        del model_id
+        return REASONING_REPLAY_FULL_HISTORY
+
+    # ------------------------------------------------------------------
     # Header / payload helpers
     # ------------------------------------------------------------------
 
@@ -192,18 +212,16 @@ class AnthropicAdapter(ProviderAdapter):
             else:
                 conversation_messages.append(message)
 
-        payload: dict[str, Any] = {
-            "model": model_id,
-            "messages": _to_anthropic_messages(conversation_messages),
-        }
+        payload: dict[str, Any] = {"model": model_id}
         system_content = _merge_anthropic_system_parts(system_parts)
         if system_content is not None:
             payload["system"] = system_content
         _apply_anthropic_tools(payload, request_kwargs)
+        reasoning_supported = self._model_reasoning_supported(model_id)
         _apply_anthropic_reasoning(
             payload,
             request_kwargs,
-            reasoning_supported=self._model_reasoning_supported(model_id),
+            reasoning_supported=reasoning_supported,
         )
 
         # Anthropic rejects a sampling temperature when thinking is active
@@ -212,6 +230,19 @@ class AnthropicAdapter(ProviderAdapter):
         thinking_active = _anthropic_thinking_active(payload, request_kwargs)
         if thinking_active:
             request_kwargs.pop("temperature", None)
+
+        # Replayed thinking blocks must not be sent when the outgoing request
+        # explicitly disables thinking or the model cannot reason; with the
+        # thinking parameter merely absent they are kept (Anthropic guidance:
+        # omitting blocks is the risk, the server drops unusable ones).
+        payload["messages"] = _to_anthropic_messages(
+            conversation_messages,
+            include_thinking_blocks=not _anthropic_thinking_disabled(
+                payload,
+                request_kwargs,
+                reasoning_supported=reasoning_supported,
+            ),
+        )
 
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
@@ -648,7 +679,11 @@ def _has_anthropic_stream_tool_calls(
     )
 
 
-def _to_anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _to_anthropic_messages(
+    messages: list[dict[str, Any]],
+    *,
+    include_thinking_blocks: bool = True,
+) -> list[dict[str, Any]]:
     anthropic_messages: list[dict[str, Any]] = []
     pending_tool_results: list[dict[str, Any]] = []
 
@@ -660,7 +695,12 @@ def _to_anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
         if pending_tool_results:
             anthropic_messages.append(_to_anthropic_tool_result_message(pending_tool_results))
             pending_tool_results = []
-        anthropic_messages.append(_to_anthropic_message(message))
+        anthropic_message = _to_anthropic_message(
+            message,
+            include_thinking_blocks=include_thinking_blocks,
+        )
+        if anthropic_message is not None:
+            anthropic_messages.append(anthropic_message)
 
     if pending_tool_results:
         anthropic_messages.append(_to_anthropic_tool_result_message(pending_tool_results))
@@ -689,14 +729,26 @@ def _merge_anthropic_system_parts(
     return blocks
 
 
-def _to_anthropic_message(message: dict[str, Any]) -> dict[str, Any]:
+def _to_anthropic_message(
+    message: dict[str, Any],
+    *,
+    include_thinking_blocks: bool = True,
+) -> dict[str, Any] | None:
     role = message.get("role")
     if role == "tool":
         return _to_anthropic_tool_result_message([_to_anthropic_tool_result_block(message)])
     if role == "assistant":
+        content_blocks = _to_anthropic_assistant_content(
+            message,
+            include_thinking_blocks=include_thinking_blocks,
+        )
+        # The wire rejects empty content arrays — a replayed reasoning-only
+        # turn whose thinking blocks were stripped has nothing left to send.
+        if not content_blocks:
+            return None
         return {
             "role": "assistant",
-            "content": _to_anthropic_assistant_content(message),
+            "content": content_blocks,
         }
     if role == "user":
         return {
@@ -771,12 +823,14 @@ def _text_block(content: Any) -> dict[str, Any]:
     return {"type": "text", "text": "" if content is None else str(content)}
 
 
-def _to_anthropic_assistant_content(message: dict[str, Any]) -> list[dict[str, Any]]:
+def _to_anthropic_assistant_content(
+    message: dict[str, Any],
+    *,
+    include_thinking_blocks: bool = True,
+) -> list[dict[str, Any]]:
     content_blocks: list[dict[str, Any]] = []
-    reasoning_meta = message.get("reasoning_meta")
-    reasoning_blocks = _reasoning_blocks_from_meta(reasoning_meta)
-    if reasoning_blocks:
-        content_blocks.extend(reasoning_blocks)
+    if include_thinking_blocks:
+        content_blocks.extend(_reasoning_blocks_from_meta(message.get("reasoning_meta")))
 
     content = message.get("content")
     if isinstance(content, str) and content:
@@ -859,6 +913,23 @@ def _anthropic_thinking_active(
     """
     thinking = request_kwargs.get("thinking", payload.get("thinking"))
     return isinstance(thinking, dict) and thinking.get("type") in {"adaptive", "enabled"}
+
+
+def _anthropic_thinking_disabled(
+    payload: dict[str, Any],
+    request_kwargs: dict[str, Any],
+    *,
+    reasoning_supported: bool | None,
+) -> bool:
+    """Return True when the outgoing request explicitly rules out thinking.
+
+    Only an explicit ``thinking: {type: disabled}`` or a catalog-known
+    non-reasoning model counts — an absent thinking parameter does not.
+    """
+    if reasoning_supported is False:
+        return True
+    thinking = request_kwargs.get("thinking", payload.get("thinking"))
+    return isinstance(thinking, dict) and thinking.get("type") == "disabled"
 
 
 def _extract_anthropic_text(content_blocks: Any) -> str | None:

@@ -46,9 +46,9 @@ Model data includes: name, capabilities (vision, tools, reasoning, etc.), contex
 **Not:** Chain of Thought. Reasoning is the capability and its configuration; CoT is the opaque output that reasoning produces.
 
 ## Chain of Thought (CoT)
-**Definition:** The opaque output produced during reasoning — both readable text and provider-specific data (signatures, encrypted content) that must be preserved unchanged for round-tripping, especially during tool-use loops where dropping it breaks model continuity. The adapter handles all serialization and round-trip preservation; the chat layer never interprets CoT data.
+**Definition:** The opaque output produced during reasoning — both readable text and provider-specific data (signatures, encrypted content) that must be preserved unchanged for round-tripping. How far persisted CoT replays into later requests is the adapter's per-provider reasoning-replay policy (`none` / `current_run` / `full_history`): within tool-use loops dropping it breaks model continuity, and providers like Anthropic expect it back unchanged across the whole same-model conversation. The adapter handles all serialization and round-trip preservation; the chat layer owns history shaping (which entries keep CoT) but never interprets CoT data.
 **Not:** Reasoning. CoT is the opaque output; reasoning is the capability and its configuration.
-**Example:** Anthropic returns `thinking` blocks with a `signature` field. During a tool-use loop, the adapter must send both fields back unchanged — dropping the signature breaks continuity even though vBot never reads it.
+**Example:** Anthropic returns `thinking` blocks with a `signature` field. Whenever history is replayed — a tool-use loop or, under `full_history`, a later run on the same model — the adapter must send both fields back unchanged; dropping the signature breaks continuity even though vBot never reads it.
 
 ## Session
 **Definition:** A system-owned chat container under `<datadir>/agents/<agent-id>/sessions/`, persisted as one JSONL file per session. A Session belongs to exactly one Agent and owns the persisted message history. At the product/server level, starting a new Session is an explicit action; once it exists, its file and history are created and maintained by the system.
