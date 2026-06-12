@@ -6,6 +6,7 @@ from core.channels.adapter import (
     MessageFacts,
     ReplyPlanFacts,
     RouteFacts,
+    channel_system_reminder,
 )
 from core.channels.channels import (
     ChannelConfig,
@@ -28,4 +29,5 @@ __all__ = [
     "MessageFacts",
     "ReplyPlanFacts",
     "RouteFacts",
+    "channel_system_reminder",
 ]
