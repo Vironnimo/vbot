@@ -22,6 +22,8 @@ class ConversationFacts:
     # The adapter classifies the conversation; the engine derives session ids from it.
     # A group conversation routes to a shared session keyed by chat id, ignoring dm_scope.
     kind: Literal["direct", "group"] = "direct"
+    # Human-readable platform name of the sender; the engine falls back to user_id.
+    user_display_name: str | None = None
 
 
 @dataclass(frozen=True)
