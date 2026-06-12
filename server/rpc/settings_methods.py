@@ -84,6 +84,9 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     should_reload_recall_backend = "recall" in settings_update
     should_reload_skills = "skills" in settings_update
 
+    if should_reload_recall_backend:
+        _validate_recall_backend_known(state.runtime, settings_update["recall"]["backend"])
+
     try:
         storage.update_settings_sections(settings_update)
         if should_reload_skills:
@@ -97,6 +100,30 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         return _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+
+
+def _available_recall_backends(runtime: Any) -> list[str]:
+    """Return selectable recall backend names from the runtime registry.
+
+    The runtime's registry is the source of truth (built-ins + extension
+    backends). Falls back to the first-party set when the runtime predates the
+    accessor (e.g. a test stub), so the Settings Recall panel still populates.
+    """
+    getter = getattr(runtime, "available_recall_backends", None)
+    if callable(getter):
+        return sorted(getter())
+    return sorted(FIRST_PARTY_RECALL_BACKENDS)
+
+
+def _validate_recall_backend_known(runtime: Any, backend: str) -> None:
+    """Reject a ``settings.update`` recall backend the registry does not know."""
+    available = _available_recall_backends(runtime)
+    if backend not in available:
+        allowed = ", ".join(available)
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.recall.backend must be one of: {allowed}",
+        )
 
 
 def _task_model_settings(state: Any, params: JsonObject) -> JsonObject:
@@ -194,7 +221,7 @@ def _settings_response(state: Any) -> JsonObject:
         "compaction": dict(compaction),
         "recall": {
             "backend": recall["backend"],
-            "available_backends": sorted(FIRST_PARTY_RECALL_BACKENDS),
+            "available_backends": _available_recall_backends(runtime),
         },
         "web_search": {
             "provider": web_search["provider"],
