@@ -20,9 +20,13 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from core.recall.recall import RecallBackendRegistry
+    from core.tools.tools import ToolRegistry
 
 _LOGGER = get_logger("extensions")
 _EXTENSION_PARENT_PACKAGE = "vbot_ext"
@@ -122,17 +126,50 @@ class ExtensionManifest:
     display_name: str | None = None
 
 
+@dataclass(frozen=True)
+class ToolDeclaration:
+    """One ``api.register_tool`` declaration, mirroring ``ToolRegistry.register``.
+
+    Collected during ``register`` and applied into the runtime ``ToolRegistry``
+    after the last built-in tool is registered. ``display`` is forwarded
+    untouched (a ``core.tools.ToolDisplay`` or ``None``) so the extensions
+    module needs no dependency on the tools domain.
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    handler: Callable[..., Any]
+    internal: bool = False
+    display: Any = None
+
+
+@dataclass(frozen=True)
+class RecallBackendDeclaration:
+    """One ``api.register_recall_backend`` declaration: name + backend factory.
+
+    The factory is a ``core.recall.RecallBackendFactory``
+    (``RecallBackendContext -> RecallBackend``); kept loosely typed so the
+    extensions module stays decoupled from the recall domain.
+    """
+
+    name: str
+    factory: Callable[..., Any]
+
+
 @dataclass
 class ExtensionDeclarations:
     """What an extension declares through :class:`ExtensionAPI` during ``register``.
 
-    Collected per extension; applied to the dispatch table / fired by the
-    registry only after every extension has registered.
+    Collected per extension; applied to the dispatch table / domain registries
+    or fired by the registry only after every extension has registered.
     """
 
     hooks: dict[str, list[HookHandler]] = field(default_factory=lambda: defaultdict(list))
     startup: list[LifecycleHandler] = field(default_factory=list)
     shutdown: list[LifecycleHandler] = field(default_factory=list)
+    tools: list[ToolDeclaration] = field(default_factory=list)
+    recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
 
 
 @dataclass
@@ -152,6 +189,9 @@ class ExtensionRecord:
     error: str | None = None
     manifest: ExtensionManifest | None = None
     declarations: ExtensionDeclarations = field(default_factory=ExtensionDeclarations)
+    # Non-fatal per-capability diagnostics (e.g. a tool name collision skipped a
+    # single tool). The extension still ``loaded``; only that capability dropped.
+    capability_errors: list[str] = field(default_factory=list)
 
 
 class _ManifestError(Exception):
@@ -183,6 +223,47 @@ class ExtensionAPI:
     def on(self, event: str, handler: HookHandler) -> None:
         """Declare a hook handler for *event*. Called as ``handler(ctx, **payload)``."""
         self._declarations.hooks[event].append(handler)
+
+    def register_tool(
+        self,
+        name: str,
+        description: str,
+        parameters: dict[str, Any],
+        handler: Callable[..., Any],
+        *,
+        internal: bool = False,
+        display: Any = None,
+    ) -> None:
+        """Declare an agent tool, mirroring ``ToolRegistry.register``.
+
+        Only collects the declaration; the runtime applies it into the live
+        ``ToolRegistry`` after the last built-in tool is registered. A name
+        that collides with a built-in or another extension's tool is skipped
+        and diagnosed on this extension's record — extensions never override
+        an existing tool.
+        """
+        self._declarations.tools.append(
+            ToolDeclaration(
+                name=name,
+                description=description,
+                parameters=parameters,
+                handler=handler,
+                internal=internal,
+                display=display,
+            )
+        )
+
+    def register_recall_backend(self, name: str, factory: Callable[..., Any]) -> None:
+        """Declare a session-recall backend (``RecallBackendContext -> RecallBackend``).
+
+        Only collects the declaration; the runtime applies it onto the recall
+        registry before the persisted ``recall.backend`` is resolved. A
+        duplicate or non lowercase-snake_case name is skipped and diagnosed on
+        this extension's record.
+        """
+        self._declarations.recall_backends.append(
+            RecallBackendDeclaration(name=name, factory=factory)
+        )
 
     def on_startup(self, handler: LifecycleHandler) -> None:
         """Declare a startup handler (sync or async, no args) fired post-bootstrap."""
@@ -245,6 +326,98 @@ class ExtensionRegistry:
             for event, handlers in record.declarations.hooks.items():
                 for handler in handlers:
                     self.install_handler(record.name, event, handler)
+
+    def apply_tools(self, tool_registry: ToolRegistry) -> None:
+        """Register every loaded extension's declared tools into *tool_registry*.
+
+        Called by the runtime after the last built-in tool is registered.
+        Collision policy (load order is deterministic, so it must not silently
+        decide behavior): a name already used by a built-in or by an
+        earlier-loaded extension is **skipped** and diagnosed on the record;
+        between two extensions declaring the same name the first-loaded wins and
+        **both** sides are diagnosed. Per-tool registration errors fail open.
+        """
+        loaded = [record for record in self._records if record.status == "loaded"]
+        declarers: dict[str, list[str]] = defaultdict(list)
+        for record in loaded:
+            for declaration in record.declarations.tools:
+                declarers[declaration.name].append(record.name)
+
+        builtin_names = {tool.name for tool in tool_registry.list_tools(include_internal=True)}
+        applied: set[str] = set()
+        for record in loaded:
+            for declaration in record.declarations.tools:
+                self._apply_one_tool(
+                    tool_registry, record, declaration, declarers, builtin_names, applied
+                )
+
+    def _apply_one_tool(
+        self,
+        tool_registry: ToolRegistry,
+        record: ExtensionRecord,
+        declaration: ToolDeclaration,
+        declarers: dict[str, list[str]],
+        builtin_names: set[str],
+        applied: set[str],
+    ) -> None:
+        name = declaration.name
+        other_declarers = [other for other in declarers[name] if other != record.name]
+        if name in builtin_names:
+            self._diagnose_capability(
+                record, f"tool {name!r} skipped: a built-in tool already uses this name"
+            )
+            return
+        if name in applied:
+            winner = repr(other_declarers[0]) if other_declarers else "another extension"
+            self._diagnose_capability(
+                record, f"tool {name!r} skipped: name already declared by extension {winner}"
+            )
+            return
+        try:
+            tool_registry.register(
+                name,
+                declaration.description,
+                declaration.parameters,
+                declaration.handler,
+                internal=declaration.internal,
+                display=declaration.display,
+            )
+        except Exception as exc:
+            self._diagnose_capability(record, f"tool {name!r} registration failed: {exc}")
+            return
+        applied.add(name)
+        if other_declarers:
+            joined = ", ".join(repr(other) for other in other_declarers)
+            self._diagnose_capability(
+                record,
+                f"tool {name!r} registered; also declared by extension(s) {joined} (skipped there)",
+            )
+
+    def apply_recall_backends(self, recall_registry: RecallBackendRegistry) -> None:
+        """Register every loaded extension's recall backends into *recall_registry*.
+
+        Called by the runtime on a ``with_builtins()`` registry before the
+        persisted ``recall.backend`` is resolved (and again on every
+        ``reload_recall_backend``). The registry's own rules hold: a duplicate
+        name (built-ins are registered first) or a non lowercase-snake_case name
+        raises ``ValueError``, which is caught, diagnosed on the record, and the
+        backend skipped.
+        """
+        for record in self._records:
+            if record.status != "loaded":
+                continue
+            for declaration in record.declarations.recall_backends:
+                try:
+                    recall_registry.register(declaration.name, declaration.factory)
+                except ValueError as exc:
+                    self._diagnose_capability(
+                        record, f"recall backend {declaration.name!r} skipped: {exc}"
+                    )
+
+    def _diagnose_capability(self, record: ExtensionRecord, message: str) -> None:
+        """Record a non-fatal capability diagnostic and log it at ``warning``."""
+        record.capability_errors.append(message)
+        _LOGGER.warning("Extension %r %s", record.name, message)
 
     def records(self) -> list[ExtensionRecord]:
         """Return every discovered extension record in load order."""

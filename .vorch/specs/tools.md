@@ -29,6 +29,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - Result-envelope validation failures raise `InvalidToolResultError` (a `ValueError` subclass), distinct from plain `ValueError` argument failures. The chat loop maps the former to an `invalid_tool_result` failure envelope and the latter to `invalid_arguments`, without inspecting error message text.
 - `ToolExecutor.execute_many(tool_calls, config) -> list[dict]` executes sibling tool calls concurrently and returns results in original call order.
 - `core.tools.availability.effective_agent_allowed_tools(...)` applies Agent-level derived availability before runtime dispatch. The `memory` tool is added when `memory_prompt_mode` is not `off` and removed when it is `off`, independent of persisted `allowed_tools`.
+- Extensions register their own tools through `api.register_tool(name, description, parameters, handler, *, internal=False, display=None)` (`.vorch/specs/extensions.md`), which routes into this same `ToolRegistry.register` during runtime bootstrap — applied after the last built-in tool, right before `SystemPromptManager` consumes the registry. Extension tools are **normal tools** afterward: same provider/prompt definitions, allowlist filtering, and dispatch with no special-casing. A name colliding with a built-in or another extension's tool is skipped (the existing tool wins) and diagnosed on the extension's record — extensions never override a registered tool.
 
 ## Specific Specs
 

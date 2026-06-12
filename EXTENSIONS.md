@@ -54,7 +54,7 @@ Festgezurrte Entscheidungen (Details und Begründungen im Plan-Suite-README):
 | 1 | Typed Dispatcher | Dispatch zentral in `core/extensions/`, chat ohne `_handlers`, erste direkte Tests | erledigt |
 | 2 | Decision-Modell | `Deny`/`Modify`/`Replace`, Pipeline-Semantik, `HookContext` + `run_id`/`add_note` | erledigt |
 | 3 | Registrierung | Zweiphasig, Records/Diagnostics, Manifest, enable/disable + Config, startup/shutdown | erledigt |
-| 4 | Capabilities | `register_tool`, `register_recall_backend`, Beispiel-Extensions | offen |
+| 4 | Capabilities | `register_tool`, `register_recall_backend`, Beispiel-Extensions | erledigt |
 | 5 | Sichtbarkeit | `extensions.list` RPC, CLI, WebUI-Panel, Autoren-Doku | offen |
 
 ## Bestandsaufnahme (2026-06-11)
@@ -65,9 +65,11 @@ Festgezurrte Entscheidungen (Details und Begründungen im Plan-Suite-README):
 > `Modify`/`Deny`/`Replace` modifizieren, ablehnen und ersetzen. Punkt 4 (Identität): Plan 3
 > brachte zweiphasige Registrierung, `ExtensionRecord` + `diagnostics()`, optionales
 > `extension.json`-Manifest, enable/disable + per-Extension-Config aus `settings.extensions`
-> und startup/shutdown-Lifecycle — die *Sichtbarkeit* (RPC/CLI/UI) bleibt für Plan 5. Von
-> Punkt 5 fehlt noch die Capability-Oberfläche (Tools/Recall-Backends registrieren, Plan 4).
-> Der Rest ist historischer Kontext.
+> und startup/shutdown-Lifecycle. Plan 4 brachte die Capability-Oberfläche:
+> `api.register_tool` / `api.register_recall_backend` routen in `ToolRegistry` bzw.
+> `RecallBackendRegistry`, mit Kollisions-/Fehler-Diagnostik auf `ExtensionRecord.capability_errors`
+> und Beispiel-Extensions unter `examples/extensions/`. Offen bleibt nur noch die *Sichtbarkeit*
+> (RPC/CLI/UI, Plan 5). Der Rest ist historischer Kontext.
 
 
 Der Loader ist solide und klein: Discovery aus `<data_dir>/extensions/` plus

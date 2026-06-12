@@ -159,6 +159,7 @@ class Runtime:
         self._skills: SkillRegistry | None = None
         self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
+        self._recall_backend_registry: RecallBackendRegistry | None = None
         self._recall_backend: RecallBackend | None = None
         self._chat_run_manager: ChatRunManager | None = None
         self._command_dispatcher: CommandDispatcher | None = None
@@ -288,7 +289,8 @@ class Runtime:
             )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._ensure_bootstrap_agent()
-        recall_registry = RecallBackendRegistry.with_builtins()
+        recall_registry = self._build_recall_backend_registry()
+        self._recall_backend_registry = recall_registry
         self._recall_backend = self._create_recall_backend(recall_registry)
         register_session_search_tool(self._tools, self._recall_backend)
         self._chat_run_manager = ChatRunManager()
@@ -350,6 +352,11 @@ class Runtime:
             self._chat_run_manager,
             self._started_at,
         )
+        # Built-ins are all registered now; apply extension tools last so a
+        # collision with any built-in name is skipped (built-in wins), right
+        # before SystemPromptManager consumes the registry.
+        if self._extensions is not None:
+            self._extensions.apply_tools(self._tools)
         self._system_prompts = SystemPromptManager(
             self._storage,
             self._tools,
@@ -437,6 +444,7 @@ class Runtime:
         self._skills = None
         self._extensions = None
         self._chat_sessions = None
+        self._recall_backend_registry = None
         self._recall_backend = None
         self._channel_service = None
         self._cron_service = None
@@ -666,6 +674,18 @@ class Runtime:
 
         register_channel_send_tool(self._tools, self._channel_service, self._chat_sessions)
 
+    def _build_recall_backend_registry(self) -> RecallBackendRegistry:
+        """Build a builtins registry with extension recall backends applied.
+
+        Extension declarations were collected during extension load, so a fresh
+        ``with_builtins()`` registry plus ``apply_recall_backends`` yields the
+        same backend set on first build and on every ``reload_recall_backend``.
+        """
+        registry = RecallBackendRegistry.with_builtins()
+        if self._extensions is not None:
+            self._extensions.apply_recall_backends(registry)
+        return registry
+
     def _create_recall_backend(self, registry: RecallBackendRegistry) -> RecallBackend:
         if self._storage is None:
             raise RuntimeError("Storage service not available")
@@ -698,13 +718,26 @@ class Runtime:
         self._sync_channel_tool_registration()
 
     def reload_recall_backend(self) -> None:
-        """Reload session_search from the current persisted recall backend setting."""
+        """Reload session_search from the current persisted recall backend setting.
+
+        Rebuilds the registry from ``with_builtins()`` and re-applies extension
+        recall backends, so a live backend switch can still resolve an
+        extension-registered backend.
+        """
         self._ensure_started()
-        recall_registry = RecallBackendRegistry.with_builtins()
+        recall_registry = self._build_recall_backend_registry()
+        self._recall_backend_registry = recall_registry
         self._recall_backend = self._create_recall_backend(recall_registry)
         if self._tools is not None:
             self._tools.unregister("session_search")
             register_session_search_tool(self._tools, self._recall_backend)
+
+    def available_recall_backends(self) -> list[str]:
+        """Return all selectable recall backend names (built-ins + extensions)."""
+        self._ensure_started()
+        if self._recall_backend_registry is None:
+            raise RuntimeError("Recall backend registry not available")
+        return self._recall_backend_registry.names()
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""

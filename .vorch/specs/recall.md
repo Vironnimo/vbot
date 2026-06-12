@@ -25,9 +25,11 @@ Built-in backend names:
 Backend selection:
 
 - Raw config uses `settings.json` `recall.backend`.
-- `settings.get` exposes `{ backend, available_backends }` for the Settings Recall panel; `available_backends` is `sorted(FIRST_PARTY_RECALL_BACKENDS)`, assembled in `server/rpc/settings_methods.py` (source of truth for the panel list).
-- `settings.update({ recall: { backend } })` accepts first-party backend names and calls `Runtime.reload_recall_backend()` so `session_search` uses the new backend without an app restart.
+- The registry is **built-ins plus extension backends**: `Runtime._build_recall_backend_registry` starts from `RecallBackendRegistry.with_builtins()` and applies extension-declared backends (`ExtensionRegistry.apply_recall_backends`) before resolving `recall.backend`. The same helper runs on every `reload_recall_backend`, so extension backends survive a live switch. `Runtime.available_recall_backends()` returns the registry's names (built-ins + extensions).
+- `settings.get` exposes `{ backend, available_backends }` for the Settings Recall panel; `available_backends` comes from `runtime.available_recall_backends()` (registry-driven, so extension backends appear), assembled in `server/rpc/settings_methods.py`. The fixed `FIRST_PARTY_RECALL_BACKENDS` set is now only a fallback for accessors/stubs without the runtime accessor.
+- `settings.update({ recall: { backend } })` validates the backend name in two layers: the `core/settings/` parser checks only the lowercase snake_case shape, and `server/rpc/settings_methods._validate_recall_backend_known` rejects any name not in `runtime.available_recall_backends()` (so an extension backend is accepted). It then calls `Runtime.reload_recall_backend()` so `session_search` uses the new backend without an app restart.
 - If the persisted `recall.backend` name is unknown to the registry, `Runtime._create_recall_backend` logs a warning and falls back to `DEFAULT_RECALL_BACKEND` (`jsonl_scan`) instead of crashing.
+- **Extension backends** register through the extension API (`api.register_recall_backend(name, factory)`); the factory is the same `RecallBackendContext -> RecallBackend` shape as a built-in. The registry's lowercase-snake_case / duplicate rules apply (a `ValueError` is diagnosed on the extension's record and the backend skipped). See `.vorch/specs/extensions.md`.
 
 ## JSONL Backend
 
