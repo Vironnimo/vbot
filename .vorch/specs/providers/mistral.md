@@ -17,6 +17,7 @@ OpenAI-style runtime provider with Mistral-specific reasoning and model catalog 
 - Most models receive `reasoning_effort: "high"` or `"none"`.
 - Models whose id starts with `magistral-medium` use `prompt_mode: "reasoning"` for active reasoning and omit both `prompt_mode` and `reasoning_effort` for `none`.
 - Injected `model_lookup` suppresses both `reasoning_effort` and `prompt_mode` when normalized catalog facts say reasoning is unsupported. Pinned connection suffixes such as `::<connection-local-id>` are stripped before catalog lookup by the shared reasoning helper.
+- Reasoning replay policy: `current_run` (inherited ABC default, deliberately settled in the Phase-3 rollout 2026-06-13 and pinned by a test) — no probe evidence that the Mistral wire wants cross-run reasoning replay.
 
 ## Catalog Normalization
 

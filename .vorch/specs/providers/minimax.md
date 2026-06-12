@@ -33,6 +33,7 @@ MiniMax is wired as an OpenAI-compatible chat-completions provider with provider
 - For `MiniMax-M3`, active vBot efforts map to `thinking: {type: adaptive}` and `none` maps to `thinking: {type: disabled}`.
 - For M2.x models, the adapter suppresses `thinking` while leaving explicit caller-controlled `reasoning_split` alone unless catalog lookup says reasoning is unsupported.
 - Non-streaming responses with `reasoning_details` expose their text as visible `reasoning` while preserving the original details in `reasoning_meta`.
+- Reasoning replay policy: `current_run` (inherited ABC default, deliberately settled in the Phase-3 rollout 2026-06-13 and pinned by a test) — no probe evidence that MiniMax's OpenAI-compatible wire wants cross-run reasoning replay.
 
 ## Constraints & Gotchas
 

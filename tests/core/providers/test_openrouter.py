@@ -199,6 +199,13 @@ async def test_openrouter_stream_requests_usage(openrouter_adapter: OpenRouterAd
     assert request_body["stream_options"] == {"include_usage": True}
 
 
+def test_reasoning_replay_policy_stays_current_run(
+    openrouter_adapter: OpenRouterAdapter,
+) -> None:
+    """Deliberate Phase-3 choice: mixed upstreams + billed reasoning round-trip, no probe."""
+    assert openrouter_adapter.reasoning_replay_policy("anthropic/claude-sonnet-4") == "current_run"
+
+
 def test_normalize_catalog_entry_maps_all_openrouter_fields() -> None:
     model = OpenRouterAdapter.normalize_catalog_entry(raw_openrouter_model(), {"max_tokens": 8192})
 

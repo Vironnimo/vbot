@@ -37,6 +37,7 @@ Endpoint selection uses sanitized model metadata first:
 - `metadata.github_copilot` is the primary runtime source for vendor, family, supported endpoints, reasoning efforts, thinking budget bounds, adaptive thinking, tools, streaming, and structured output.
 - Static fallback facts and exact-model overrides in `github_copilot_policy.py` cover validated quirks only.
 - Unsupported optional features are omitted rather than sent optimistically. For `/responses`, `temperature` is omitted unless policy explicitly proves support.
+- **Reasoning replay:** `reasoning_replay_policy()` follows the endpoint family — `full_history` for `/responses` and `/v1/messages`, `current_run` for the `/chat/completions` fallback. Live probe (2026-06-13): `/responses` accepted replayed reasoning items incl. `encrypted_content` across a run boundary (`gpt-5-mini`, 200); `/v1/messages` accepted a replayed signed `thinking` block across a run boundary (`claude-sonnet-4.6`, 200; `claude-haiku-4.5` returned no thinking blocks at all under `thinking: enabled`, so there was nothing to replay there). The chat-completions wire stays conservative: replaying `reasoning_meta` fields there is unverified.
 
 ## Catalog Normalization
 

@@ -215,6 +215,11 @@ def test_client_timeout_allows_long_generation_reads(openai_adapter):
     assert timeout.pool == 60.0
 
 
+def test_reasoning_replay_policy_stays_current_run(openai_adapter):
+    """Deliberate Phase-3 choice: the generic wire keeps the conservative default."""
+    assert openai_adapter.reasoning_replay_policy("gpt-4o") == "current_run"
+
+
 def _openai_test_model(model_id: str, *, reasoning: bool) -> Model:
     return Model(
         model_id=model_id,

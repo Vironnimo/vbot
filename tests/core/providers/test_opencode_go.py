@@ -75,6 +75,17 @@ def model_with_output_limit(model_id: str, max_output_tokens: int) -> Model:
 
 
 class TestOpenCodeGoAdapter:
+    @pytest.mark.parametrize(
+        "model_id",
+        [*ANTHROPIC_MESSAGES_MODELS, "deepseek-v4-flash", "deepseek/deepseek-v4-flash"],
+    )
+    def test_reasoning_replay_policy_is_full_history_on_both_routes(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+        model_id: str,
+    ) -> None:
+        assert opencode_go_adapter.reasoning_replay_policy(model_id) == "full_history"
+
     def test_format_assistant_message_adds_reasoning_content(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
@@ -422,7 +433,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_minimax_send_replays_reasoning_meta_only_for_active_continuation_assistant(
+    async def test_minimax_send_replays_reasoning_meta_for_all_assistants(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
@@ -497,16 +508,26 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         latest_blocks = assistant_messages[1].get("content", [])
         assert isinstance(older_blocks, list)
         assert isinstance(latest_blocks, list)
-        assert not any(
-            isinstance(block, dict) and block.get("type") == "thinking" for block in older_blocks
-        )
-        assert any(
-            isinstance(block, dict) and block.get("type") == "thinking" for block in latest_blocks
-        )
+        older_thinking = [
+            block
+            for block in older_blocks
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        ]
+        latest_thinking = [
+            block
+            for block in latest_blocks
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        ]
+        assert older_thinking == [
+            {"type": "thinking", "thinking": "old thinking", "signature": "sig-old"}
+        ]
+        assert latest_thinking == [
+            {"type": "thinking", "thinking": "latest thinking", "signature": "sig-latest"}
+        ]
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_minimax_send_drops_stale_reasoning_when_latest_assistant_has_no_reasoning(
+    async def test_minimax_send_passes_assistant_reasoning_through_unchanged(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
@@ -571,7 +592,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         latest_blocks = assistant_messages[1].get("content", [])
         assert isinstance(older_blocks, list)
         assert isinstance(latest_blocks, list)
-        assert not any(
+        assert any(
             isinstance(block, dict) and block.get("type") == "thinking" for block in older_blocks
         )
         assert not any(
@@ -579,160 +600,6 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         )
         assert any(
             isinstance(block, dict) and block.get("type") == "tool_use" for block in latest_blocks
-        )
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_minimax_send_keeps_reasoning_for_tool_continuation_with_synthetic_user_note(
-        self,
-        opencode_go_adapter: OpenCodeGoAdapter,
-    ) -> None:
-        captured_payload: dict[str, Any] = {}
-
-        def _capture_messages_request(request: httpx.Request) -> httpx.Response:
-            captured_payload.update(json.loads(request.content.decode("utf-8")))
-            return httpx.Response(
-                200,
-                json={
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "ok"}],
-                    "stop_reason": "end_turn",
-                },
-            )
-
-        respx.post(OPENCODE_GO_MESSAGES_URL).mock(side_effect=_capture_messages_request)
-
-        await opencode_go_adapter.send(
-            [
-                {"role": "user", "content": "Run tool"},
-                {
-                    "role": "assistant",
-                    "content": "Tool turn assistant",
-                    "reasoning": "active thinking",
-                    "reasoning_meta": {
-                        "content_blocks": [
-                            {
-                                "type": "thinking",
-                                "thinking": "active thinking",
-                                "signature": "sig-active",
-                            }
-                        ]
-                    },
-                    "tool_calls": [{"id": "call_1", "name": "record_note", "arguments": {}}],
-                },
-                {
-                    "role": "tool",
-                    "tool_call_id": "call_1",
-                    "name": "record_note",
-                    "content": json.dumps({"ok": True}),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "<system-reminder>\nTool finished background work\n</system-reminder>"
-                    ),
-                },
-            ],
-            model_id="minimax-m2.7",
-        )
-
-        payload_messages = captured_payload.get("messages", [])
-        assert isinstance(payload_messages, list)
-        assert payload_messages[-1]["role"] == "user"
-        reminder_content = payload_messages[-1].get("content", [])
-        assert isinstance(reminder_content, list)
-        assert any(
-            isinstance(block, dict)
-            and block.get("type") == "text"
-            and block.get("text")
-            == ("<system-reminder>\nTool finished background work\n</system-reminder>")
-            for block in reminder_content
-        )
-
-        assistant_messages = [
-            message
-            for message in payload_messages
-            if isinstance(message, dict) and message.get("role") == "assistant"
-        ]
-        assert len(assistant_messages) == 1
-        assistant_blocks = assistant_messages[0].get("content", [])
-        assert isinstance(assistant_blocks, list)
-        assert any(
-            isinstance(block, dict) and block.get("type") == "thinking"
-            for block in assistant_blocks
-        )
-        assert any(
-            isinstance(block, dict) and block.get("type") == "tool_use"
-            for block in assistant_blocks
-        )
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_minimax_send_drops_stale_reasoning_when_completed_tool_span_is_not_tail(
-        self,
-        opencode_go_adapter: OpenCodeGoAdapter,
-    ) -> None:
-        captured_payload: dict[str, Any] = {}
-
-        def _capture_messages_request(request: httpx.Request) -> httpx.Response:
-            captured_payload.update(json.loads(request.content.decode("utf-8")))
-            return httpx.Response(
-                200,
-                json={
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "ok"}],
-                    "stop_reason": "end_turn",
-                },
-            )
-
-        respx.post(OPENCODE_GO_MESSAGES_URL).mock(side_effect=_capture_messages_request)
-
-        await opencode_go_adapter.send(
-            [
-                {"role": "user", "content": "First"},
-                {
-                    "role": "assistant",
-                    "content": "Older assistant",
-                    "reasoning": "old thinking",
-                    "reasoning_meta": {
-                        "content_blocks": [
-                            {"type": "thinking", "thinking": "old thinking", "signature": "sig-old"}
-                        ]
-                    },
-                    "tool_calls": [{"id": "call_old", "name": "old_tool", "arguments": {}}],
-                },
-                {
-                    "role": "tool",
-                    "tool_call_id": "call_old",
-                    "name": "old_tool",
-                    "content": json.dumps({"ok": True}),
-                },
-                {"role": "user", "content": "Follow-up question after tool turn"},
-            ],
-            model_id="minimax-m2.7",
-        )
-
-        payload_messages = captured_payload.get("messages", [])
-        assert isinstance(payload_messages, list)
-        assert payload_messages[-1]["role"] == "user"
-
-        assistant_messages = [
-            message
-            for message in payload_messages
-            if isinstance(message, dict) and message.get("role") == "assistant"
-        ]
-        assert len(assistant_messages) == 1
-        assistant_blocks = assistant_messages[0].get("content", [])
-        assert isinstance(assistant_blocks, list)
-        assert not any(
-            isinstance(block, dict) and block.get("type") == "thinking"
-            for block in assistant_blocks
-        )
-        assert any(
-            isinstance(block, dict) and block.get("type") == "tool_use"
-            for block in assistant_blocks
         )
 
     @respx.mock
@@ -878,7 +745,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_minimax_stream_replays_reasoning_meta_only_for_active_continuation_assistant(
+    async def test_minimax_stream_replays_reasoning_meta_for_all_assistants(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
@@ -952,7 +819,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         latest_blocks = assistant_messages[1].get("content", [])
         assert isinstance(older_blocks, list)
         assert isinstance(latest_blocks, list)
-        assert not any(
+        assert any(
             isinstance(block, dict) and block.get("type") == "thinking" for block in older_blocks
         )
         assert any(
