@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from core.agents.agents import Agent
 from core.models.models import Model
+from core.providers.accounts import ProviderAccount
 from core.providers.providers import ProviderConfig
 from core.sessions import ChatSession
 from core.skills.skills import SkillMetadata
@@ -103,6 +104,19 @@ class ProviderCredentialResolverProtocol(Protocol):
 
     def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
         """Return the credential value for *provider_id* or *connection_id*."""
+        ...
+
+    def list_accounts(self, provider_id: str, local_connection_id: str) -> list[ProviderAccount]:
+        """Return the connection's accounts, default first then sorted."""
+        ...
+
+    def resolve_account_id(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str | None = None,
+    ) -> str:
+        """Resolve an explicit or implicit account id to a usable account."""
         ...
 
 

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 def parse_bare_model(model: str) -> str:
-    """Return a model string without an optional ``::connection-suffix`` part."""
+    """Return a model string without an optional ``::connection[:account]`` suffix."""
     before, separator, _suffix = model.rpartition("::")
     if not separator:
         return model
@@ -20,7 +20,12 @@ def parse_bare_model(model: str) -> str:
 
 
 def parse_model_with_connection(model: str) -> tuple[str, str, str]:
-    """Parse ``<provider>/<model-id>[::connection-id]`` into provider/model/suffix parts."""
+    """Parse ``<provider>/<model-id>[::connection[:account]]`` into parts.
+
+    The returned suffix is passed through verbatim — it may be a bare
+    connection id or ``connection:account``; account resolution happens
+    downstream in the credential resolver.
+    """
     before, suffix_separator, connection_suffix = model.rpartition("::")
     if suffix_separator and not connection_suffix:
         raise ChatError("agent model connection suffix must not be empty")

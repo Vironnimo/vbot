@@ -158,6 +158,58 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_oauth_token_getter_refresh_saves_under_the_same_account(
+    tmp_path: Path,
+    oauth_config: OAuthConfig,
+) -> None:
+    """A refresh for a named account loads and saves only that account's token."""
+
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        PROVIDER_ID,
+        CONNECTION_ID,
+        OAuthToken(access_token="default-copilot-token"),
+    )
+    token_store.save(
+        PROVIDER_ID,
+        CONNECTION_ID,
+        OAuthToken(
+            access_token="expired-work-token",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+            extra={"github_oauth_token": "github-work-secret"},
+        ),
+        account_id="work",
+    )
+    respx.get(TOKEN_EXCHANGE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "fresh-work-token",
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
+            },
+        )
+    )
+    getter = OAuthTokenGetter(
+        token_store,
+        PROVIDER_ID,
+        CONNECTION_ID,
+        oauth_config,
+        account_id="work",
+    )
+
+    token = await getter()
+
+    assert token == "fresh-work-token"
+    stored_work = token_store.load(PROVIDER_ID, CONNECTION_ID, account_id="work")
+    assert stored_work is not None
+    assert stored_work.access_token == "fresh-work-token"
+    stored_default = token_store.load(PROVIDER_ID, CONNECTION_ID)
+    assert stored_default is not None
+    assert stored_default.access_token == "default-copilot-token"
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_oauth_token_getter_refreshes_expired_openai_codex_token(
     tmp_path: Path,
 ) -> None:

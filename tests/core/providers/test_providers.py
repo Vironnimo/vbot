@@ -722,6 +722,37 @@ class TestProviderRegistryConnectionTypes:
         with pytest.raises(ConfigError, match="requires 'credential_key'"):
             ProviderRegistry.load(tmp_path)
 
+    @pytest.mark.parametrize("local_id", ["api--key", "api:key"])
+    def test_connection_id_with_ambiguous_characters_raises_config_error(
+        self, tmp_path: Path, local_id: str
+    ) -> None:
+        """Connection ids with '--' or ':' would break token filenames and id parsing."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        connection = dict(OPENAI_DATA["connections"][1])
+        connection["id"] = local_id
+        data["connections"] = [connection]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="must not contain '--' or ':'"):
+            ProviderRegistry.load(tmp_path)
+
+    def test_provider_id_with_colon_raises_config_error(self, tmp_path: Path) -> None:
+        """Provider ids with ':' would break the compositional connection id grammar."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        data["id"] = "open:ai"
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="must not contain ':'"):
+            ProviderRegistry.load(tmp_path)
+
     def test_unknown_oauth_flow_raises_config_error(self, tmp_path: Path) -> None:
         """Only Device Flow OAuth configs are accepted in this phase."""
         # Arrange
