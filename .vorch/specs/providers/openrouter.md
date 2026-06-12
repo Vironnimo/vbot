@@ -16,6 +16,7 @@ OpenAI-compatible provider with OpenRouter-specific reasoning and multi-modality
 - vBot `max` maps to `xhigh`.
 - Runtime sends `reasoning: {effort}` plus `include_reasoning: true` when reasoning is active.
 - If injected `model_lookup` says reasoning is unsupported, `reasoning`, `include_reasoning`, and generic `reasoning_effort` controls are stripped.
+- Reasoning replay policy: `current_run` (inherited ABC default, deliberately settled in the Phase-3 rollout 2026-06-13 and pinned by a test). OpenRouter fronts many upstreams and bills replayed `reasoning_details` text; switch only with probe evidence per upstream family.
 
 ## Catalog Normalization
 

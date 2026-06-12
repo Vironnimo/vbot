@@ -48,6 +48,11 @@ def minimax_adapter(minimax_config: ProviderConfig) -> MiniMaxAdapter:
     return MiniMaxAdapter(minimax_config, API_KEY)
 
 
+def test_reasoning_replay_policy_stays_current_run(minimax_adapter: MiniMaxAdapter) -> None:
+    """Deliberate Phase-3 choice: no probe evidence that MiniMax wants cross-run replay."""
+    assert minimax_adapter.reasoning_replay_policy("MiniMax-M3") == "current_run"
+
+
 def test_normalize_catalog_entry_maps_m3_capabilities() -> None:
     model = MiniMaxAdapter.normalize_catalog_entry({"id": "MiniMax-M3"}, {"max_tokens": 8192})
 
