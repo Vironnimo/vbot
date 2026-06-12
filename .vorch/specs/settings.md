@@ -16,7 +16,7 @@ When adding or changing a setting, touch the layer that owns it:
 - Public `settings.update` schema → `core/settings/settings.py` (`SETTINGS_UPDATE_SECTIONS` plus a `_parse_*` helper).
 - Section normalization and defaults → `core/settings/normalizers.py` (stateless `normalize_*` / `coerce_*` per section; raises `StorageError`).
 - Persistence (transactions, atomic write, `load_*` / `update_*` accessors) → `core/storage/storage.py`, which delegates all section knowledge to the normalizers.
-- Live runtime side effect → a reload hook in `server/rpc/settings_methods._update_settings`. Today only `skills` → `runtime.reload_skills()` and `recall` → `runtime.reload_recall_backend()` reload live; every other section takes effect on the next start.
+- Live runtime side effect → a reload hook in `server/rpc/settings_methods._update_settings`. Today only `skills` → `runtime.reload_skills()` and `recall` → `runtime.reload_recall_backend()` reload live; every other section takes effect on the next start. The `extensions` section has no reload hook by design and instead returns `restart_required` (see Supported Update Sections).
 
 ## Interfaces
 
@@ -35,7 +35,7 @@ When adding or changing a setting, touch the layer that owns it:
 
 `core/settings/validation.py` is the source of truth for raw top-level keys accepted in `<data_dir>/settings.json`: port aliases (`PORT`, `SERVER_PORT`, `port`, `server_port`), `appearance`, `skill_directories`, `extension_directories`, `extensions`, upload limits (`attachment_max_size_bytes`, `speech_upload_max_size_bytes`), sub-agent limits (`max_subagent_depth`, `max_subagents_per_turn`, `subagent_timeout_minutes`), `compaction`, `defaults`, `recall`, `web_search`, `model_tasks`, and `debug`. Unknown top-level raw keys are warnings, not errors, but schema errors for known sections are fatal before runtime code consumes them.
 
-Raw-only settings are not public `settings.update` sections. `extension_directories` is loaded only during `Runtime.start()` as extra roots for Python extension discovery; there is no public Settings UI/RPC section that reloads extensions live. The `extensions` section (`{ disabled: string[], config: { <ext>: object } }`) is also read only at `Runtime.start()` — `disabled` extensions are never imported and `config` is passed to each extension's `register()`; both are restart-applied. `attachment_max_size_bytes` is read at runtime startup for `AttachmentStore`, and `speech_upload_max_size_bytes` is read at runtime startup for the server speech upload gate. Port aliases are consumed by server startup, not by the settings update parser.
+`extension_directories` is raw-only (loaded only during `Runtime.start()` as extra roots for Python extension discovery; no public `settings.update` section). The `extensions` section (`{ disabled: string[], config: { <ext>: object } }`) **is** a public `settings.update` section (see Supported Update Sections) but is still read only at `Runtime.start()` — `disabled` extensions are never imported and `config` is passed to each extension's `register()`; both are restart-applied (the update never reloads extensions live, it returns `restart_required`). `attachment_max_size_bytes` is read at runtime startup for `AttachmentStore`, and `speech_upload_max_size_bytes` is read at runtime startup for the server speech upload gate. Port aliases are consumed by server startup, not by the settings update parser.
 
 ## Supported Update Sections
 
@@ -48,6 +48,7 @@ Raw-only settings are not public `settings.update` sections. `extension_director
 - `web_search` — `{ provider: "brave" | "searxng", searxng?: { base_url: string } }`; updates the provider used by the `web_search` tool. `provider` is required in public updates; `searxng.base_url` defaults to `http://localhost:8888` when not persisted.
 - `debug` — `{ enabled?: boolean, trace_limit?: positive integer }`; both fields are optional in public updates. `enabled` defaults to `false`, `trace_limit` defaults to `50` and is rejected above `500` (not silently clamped). Updates merge with existing settings — partial updates preserve unspecified fields.
 - `model_tasks` — `{ <task_type>: { target?, options? } }`; supported task types are owned by `core/model_tasks/`. `target` must be a string when present, `options` must be an object, and an empty target clears that task's persisted binding.
+- `extensions` — `{ disabled?: string[], config?: { <ext>: object } }`; a **full-replace** write (both fields default to empty when omitted, so callers send the complete section). The parser checks shape only; storage's `normalize_extensions_settings` dedupes `disabled` and deep-validates each `config` value as a JSON object. **Restart-applied** (decision #9): there is no live reload hook, so `settings.update` adds `"restart_required": true` to its response whenever the `extensions` section is present, signalling the accessor to offer `vbot server restart`. See `.vorch/specs/extensions.md`.
 
 ## Constraints & Gotchas
 
