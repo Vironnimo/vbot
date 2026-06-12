@@ -4,7 +4,7 @@ In-process Python extension system loaded by the runtime. Owns discovery, two-ph
 
 ## Overview
 
-`core/extensions/` lets power users extend vBot without editing application source. An **extension** is the single unit of discovery, identity, config, and enable/disable; **hooks, tools, and recall backends** are the capability surfaces it uses (see Capability Surfaces). Runtime loads Python modules from `<data_dir>/extensions/` plus optional extra scan roots from `settings.json` `extension_directories`, passing in the disabled set and per-extension config read from the `settings.json` `extensions` section. `examples/extensions/` holds runnable, heavily-commented reference extensions (a `tool_call`-deny hook and a `register_tool` tool).
+`core/extensions/` lets power users extend vBot without editing application source. An **extension** is the single unit of discovery, identity, config, and enable/disable; **hooks, tools, and recall backends** are the capability surfaces it uses (see Capability Surfaces). Runtime loads Python modules from `<data_dir>/extensions/` plus optional extra scan roots from `settings.json` `extension_directories`, passing in the disabled set and per-extension config read from the `settings.json` `extensions` section. `examples/extensions/` holds runnable, heavily-commented reference extensions (a `tool_call`-deny hook and a `register_tool` tool); `docs/extensions.md` is the user-facing author guide.
 
 Loading is **two-phase**:
 
@@ -87,6 +87,15 @@ Hooks are not the only thing an extension declares. `register(api)` also collect
 
 Both apply phases only touch `loaded` records and never abort bootstrap.
 
+## Visibility & Management
+
+The extension records are surfaced through the normal accessor stack (CLI is an accessor — everything goes through server RPC):
+
+- **`extensions.list` RPC** (`server/rpc/extensions_methods.py`) returns one entry per discovered record in load order: `name`, `status`, `disabled` (`status == "disabled"`), `root`/`entry` paths, `error`, `capability_errors`, manifest fields (`version`/`description`/`display_name`/`api_version`), the persisted `config` (merged from `settings.extensions.config`, read via `storage.load_extensions_settings()`), and a `capabilities` summary (`hooks` event→handler-count map, `tools`, `recall_backends`, `startup`/`shutdown` booleans). Empty list when no registry loaded.
+- **CLI `vbot extensions list|enable|disable <name>`** (`cli/extensions_management.py`): `list` formats the RPC payload; `enable`/`disable` reconstruct the full `extensions` section from `extensions.list` and write it via `settings.update`, printing a restart hint when the response is `restart_required`. Unknown names get available-candidate + did-you-mean output; an already-enabled/disabled target is an idempotent no-op.
+- **WebUI Settings → Extensions panel** (`SettingsExtensionsPanel.svelte`): renders the same data, a per-extension enable/disable toggle, a raw-JSON `config` editor, and a sticky restart-required notice after any change.
+- **`settings.update({extensions})`** accepts `{disabled, config}` as a **full-replace** public section (see `.vorch/specs/settings.md`); the response carries `"restart_required": true` because the change only takes effect at the next `Runtime.start()`.
+
 ## Lifecycle (startup/shutdown)
 
 - **Startup** handlers fire once bootstrap is complete and an event loop is running. `Runtime.fire_extension_startup()` (async) delegates to `registry.fire_startup()`; the server calls it from inside its async lifespan after `start()`, so handlers run on the live serving loop and may schedule background tasks there. Accessors that never serve (CLI local commands) do not fire startup.
@@ -109,7 +118,7 @@ Both apply phases only touch `loaded` records and never abort bootstrap.
 
 - Extension modules run arbitrary in-process Python and therefore share the kernel's trust boundary.
 - `_handlers` is private to the registry; only `install_handler` (the apply phase / test seam) writes it. Cross-module code drives hooks through the `dispatch_*` methods; adding a new hook means adding a new event name plus a typed `dispatch_*` method here and a fire-point in `core/chat/`, not iterating `_handlers` elsewhere.
-- Enable/disable and per-extension config are **restart-applied**: the `settings.extensions` section is read only at `Runtime.start()`. There is no live `settings.update` section or hot reload (handlers may be mid-flight); the agent can trigger a restart.
+- Enable/disable and per-extension config are **restart-applied**: the `settings.extensions` section is read only at `Runtime.start()`. The public `settings.update({extensions})` section persists changes but does **not** hot-reload (handlers may be mid-flight) — it returns `restart_required` so an accessor can prompt for `vbot server restart`.
 - `context` hook isolation is shallow-copy only: top-level message dict mutations are isolated per request, but deep nested mutations can still affect shared objects.
 - `tool_call` is a decision pipeline (`Modify`/`Deny`/`Replace`); `tool_result` is a full-replace pipeline. Both validate envelopes through the chat-injected `validator` (tool-result envelope schema + JSON-serializability) and silently drop invalid ones. The `tool_call_started` event is emitted *after* the `tool_call` hook phase so it reflects modified arguments — this is later in the timeline than a pre-hook emission would be, by design.
 - `settings.extension_directories` must be a list of non-empty strings; a non-list value is ignored with a warning, invalid entries are skipped, and paths are `expanduser()`-expanded. The `settings.extensions` section (`disabled` list + `config` map) is validated centrally in `core/settings/validation.py`; the runtime re-parses it defensively and ignores malformed pieces with a warning.
