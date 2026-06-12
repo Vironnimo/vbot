@@ -19,7 +19,7 @@ Supported binding task types are defined by `SUPPORTED_TASK_TYPES` in `core/mode
 
 `settings.json` stores task-model bindings under `model_tasks`, keyed by supported task type. Each persisted binding has a non-empty `target` string and an `options` JSON object. Public settings updates are sparse: sending only `options` updates the existing target when one is already persisted, sending an empty `target` removes that task binding, and `StorageManager` removes the whole `model_tasks` section when no bindings remain.
 
-Provider target IDs use `<provider-id>/<model-id-at-provider>::<connection-local-id>`. The parser also accepts a provider-prefixed connection suffix such as `::openrouter:api-key`, but persisted public IDs use the local connection id form such as `::api-key`.
+Provider target IDs use `<provider-id>/<model-id-at-provider>::<connection-local-id>[:<account-id>]`. The parser also accepts a provider-prefixed connection suffix such as `::openrouter:api-key`, but persisted public IDs use the local connection id form such as `::api-key`. An optional trailing `:account` part pins a credential account (`TaskModelTargetRef.account_id`, empty when not pinned); target listing/expansion stays connection-level — see `providers.md` → Accounts.
 
 Local target IDs use `local/<local-id>`. Local IDs cannot contain `/` or `::`; descriptor validation rejects any advertised task type outside `SUPPORTED_TASK_TYPES`.
 

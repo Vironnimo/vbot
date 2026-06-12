@@ -23,6 +23,14 @@
 
 **Not:** A model, a provider config, or a data format. The adapter is purely the wire protocol translation layer.
 
+## Connection
+**Definition:** One authentication/wire variant of a Provider, declared statically in `resources/providers/<name>.json`: auth type (`api_key`/`oauth`), optional per-connection base URL, wire `mode`, and models endpoint. Addressed as `<provider>:<connection>` (e.g. `openai:api-key`, `openai:subscription`); model catalogs and discovery are connection-scoped.
+**Not:** An Account. The Connection defines *how* vBot talks to the provider; the Account decides *which credential* is used on it. Also not a network/HTTP connection.
+
+## Account
+**Definition:** A named credential slot on a Connection — one of possibly several API keys or OAuth logins for the same Connection, addressed as `<provider>:<connection>[:<account>]` with default slot `default`. When no account is pinned, the first usable one is chosen deterministically (`default` first, then sorted); API-key accounts map to derived env keys (`BASE__<ACCOUNT>`), OAuth accounts to per-account token files.
+**Not:** A Connection, and not a user account in the product sense. Accounts are interchangeable credentials — they never change the wire protocol or the model catalog.
+
 ## Model
 **Definition:** A specific AI model at a specific provider. Models are always provider-specific — the same underlying model (e.g., Claude Sonnet 4) appears as different entries in different provider model lists, with different IDs, capabilities, and context windows. The model ID is the exact string sent in the API request (e.g., `anthropic/claude-sonnet-4` at OpenRouter, `claude-sonnet-4-20250219` at Anthropic). The user selects a model as `<provider>/<model-id>` (e.g., `openrouter/anthropic/claude-sonnet-4`).
 
