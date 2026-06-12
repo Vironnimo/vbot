@@ -3078,6 +3078,36 @@ async def test_settings_update_accepts_vector_recall_backend(
 
 
 @pytest.mark.asyncio
+async def test_settings_get_lists_extension_recall_backend(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.available_recall_backends = lambda: ["jsonl_scan", "my_ext_backend"]
+
+    response = await dispatch_rpc(state, {"method": "settings.get"})
+
+    assert response["ok"] is True, response
+    assert response["result"]["recall"]["available_backends"] == [
+        "jsonl_scan",
+        "my_ext_backend",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_settings_update_accepts_extension_recall_backend(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.available_recall_backends = lambda: ["jsonl_scan", "my_ext_backend"]
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "settings.update", "params": {"recall": {"backend": "my_ext_backend"}}},
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_recall_settings() == {"backend": "my_ext_backend"}
+    assert state.runtime.recall_reload_count == 1
+    assert "my_ext_backend" in response["result"]["recall"]["available_backends"]
+
+
+@pytest.mark.asyncio
 async def test_settings_update_persists_web_search_provider(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 

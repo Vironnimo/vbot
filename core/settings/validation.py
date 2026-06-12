@@ -22,6 +22,7 @@ from core.settings.settings import (
     ALLOWED_THINKING_EFFORTS,
     MAX_TEMPERATURE,
     MIN_TEMPERATURE,
+    RECALL_BACKEND_PATTERN,
     SettingsValidationError,
 )
 
@@ -63,7 +64,6 @@ COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_mode
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
 EXTENSIONS_FIELDS = frozenset({"disabled", "config"})
-RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 WEB_SEARCH_FIELDS = frozenset({"provider", "searxng"})
 WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
 MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})

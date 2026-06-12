@@ -16,7 +16,28 @@ from pathlib import Path
 import pytest
 
 from core.runtime.runtime import Runtime
+from core.tools import ToolContext
 from core.utils.config import Config
+
+_CAPABILITY_EXT_SOURCE = (
+    "from core.tools import tool_success\n"
+    "def _echo(context, arguments):\n"
+    "    return tool_success({'value': arguments.get('value')})\n"
+    "class ExtBackend:\n"
+    "    def __init__(self, context):\n"
+    "        self.context = context\n"
+    "    def browse(self, request):\n"
+    "        return {}\n"
+    "    def overview(self, request):\n"
+    "        return {}\n"
+    "    def search(self, request):\n"
+    "        return {'kind': 'ext-search'}\n"
+    "    def scroll(self, request):\n"
+    "        return {}\n"
+    "def register(api):\n"
+    "    api.register_tool('ext_echo', 'desc', {'type': 'object'}, _echo)\n"
+    "    api.register_recall_backend('ext_recall', ExtBackend)\n"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -119,3 +140,42 @@ def test_startup_and_shutdown_hooks_fire_at_runtime_lifecycle(tmp_path: Path) ->
 
     runtime.stop()
     assert _marker_lines(lifecycle_marker) == ["startup", "shutdown"]
+
+
+def test_extension_tool_and_recall_backend_wired_into_runtime(tmp_path: Path) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_extension(data_dir, "capabilities_ext", _CAPABILITY_EXT_SOURCE)
+    _write_settings(data_dir, {"recall": {"backend": "ext_recall"}})
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        # The extension tool is registered, on the allowlist, and executes
+        # through the runtime's real ToolRegistry dispatch.
+        allowed = [tool.name for tool in runtime.tools.list_tools(allowed_tools=["ext_echo"])]
+        assert "ext_echo" in allowed
+        context = ToolContext(
+            agent_id="a",
+            session_id="s",
+            run_id="r",
+            tool_call_id="c1",
+            tool_name="ext_echo",
+            tool_call_index=0,
+            workspace=data_dir,
+            app_root=data_dir,
+            data_root=data_dir,
+        )
+        result = asyncio.run(runtime.tools.dispatch(context, {"value": "hi"}))
+        assert result["data"] == {"value": "hi"}
+
+        # The extension recall backend is selectable and was resolved from
+        # the persisted recall.backend setting.
+        assert "ext_recall" in runtime.available_recall_backends()
+        assert runtime.recall_backend.__class__.__name__ == "ExtBackend"
+
+        # It survives a live backend switch (registry rebuilt + re-applied).
+        runtime.reload_recall_backend()
+        assert runtime.recall_backend.__class__.__name__ == "ExtBackend"
+    finally:
+        runtime.stop()

@@ -130,8 +130,12 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         ),
         ({"recall": []}, "params.recall must be an object"),
         (
-            {"recall": {"backend": "unknown_backend"}},
-            "params.recall.backend must be one of",
+            {"recall": {"backend": "Bad Backend"}},
+            "params.recall.backend must use lowercase snake_case",
+        ),
+        (
+            {"recall": {"backend": ""}},
+            "params.recall.backend must be a non-empty string",
         ),
         ({"web_search": []}, "params.web_search must be an object"),
         (
