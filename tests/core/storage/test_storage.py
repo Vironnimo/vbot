@@ -174,9 +174,7 @@ def test_remove_data_dir_credential_removes_key_and_preserves_other_lines(
     removed = storage.remove_data_dir_credential("OPENROUTER_API_KEY")
 
     assert removed is True
-    assert (tmp_path / ".env").read_text(encoding="utf-8") == (
-        "# Provider keys\nOTHER_KEY=value\n"
-    )
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == ("# Provider keys\nOTHER_KEY=value\n")
 
 
 def test_remove_data_dir_credential_returns_false_for_missing_key(tmp_path: Path) -> None:
