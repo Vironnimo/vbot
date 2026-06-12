@@ -360,3 +360,23 @@ between that Run's assistant tool-call message and its tool results.
 **Why deferred:** fixing this requires Session-level append coordination across accessors rather
 than another channels-only queue rule. It is the same pre-existing exposure as the note written by
 `session.link_channel`; address both together when Session append serialization is designed.
+
+## 2026-06-13 — Anthropic full_history replay: live probe + live verification not performed
+
+Phase 2 of the reasoning-replay plan (`docs/plans/reasoning-replay-policy.md`) switched
+`AnthropicAdapter` to the `full_history` replay policy and added the thinking-disabled guard.
+The plan's live steps could not run: no Anthropic credentials are configured in this environment
+(`~/.vbot/.env` has an empty `ANTHROPIC_API_KEY=`, no process env var, no Anthropic OAuth token).
+
+Outstanding once credentials exist:
+1. **Probe** — does the Messages API tolerate replayed `thinking`/`redacted_thinking` blocks when
+   the outgoing request (a) explicitly disables thinking, (b) omits the thinking parameter? The
+   shipped guard is the conservative default per plan: strip on explicit disable or
+   reasoning-unsupported model, keep when the parameter is merely absent. If the API tolerates
+   blocks under explicit disable, the guard can be lightened.
+2. **Live verification** — one real multi-run Anthropic session (run with tool calls → run
+   completes → new run in same session) confirming no 4xx and thinking blocks accepted; spot-check
+   a mid-session model switch. Record outcomes in `.vorch/specs/providers/anthropic.md`.
+
+**Why deferred:** blocked on credentials, not on code; unit/integration coverage pins the
+implemented behavior.
