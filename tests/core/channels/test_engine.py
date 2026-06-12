@@ -23,6 +23,7 @@ from core.channels.adapter import (
 )
 from core.channels.channels import ChannelConfig
 from core.channels.engine import ChannelConversationEngine
+from core.chat import MessageSender
 from core.chat.commands import CommandAction, CommandHandled, NotACommand
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
@@ -80,6 +81,7 @@ def make_conversation(
     chat_id: int = 12345,
     user_id: int = 50,
     kind: str = "direct",
+    user_display_name: str | None = None,
 ) -> ConversationFacts:
     return ConversationFacts(
         platform="telegram",
@@ -88,6 +90,7 @@ def make_conversation(
         user_id=str(user_id),
         thread_id=None,
         kind=cast(Any, kind),
+        user_display_name=user_display_name,
     )
 
 
@@ -509,7 +512,7 @@ async def test_block_content_skips_command_dispatch_and_triggers_run(tmp_path: P
     await engine._process_queued_message(queued)
 
     command_dispatcher.dispatch.assert_not_called()
-    trigger_mock.assert_awaited_once_with("assistant", content, SESSION_ID)
+    trigger_mock.assert_awaited_once_with("assistant", content, SESSION_ID, sender=None)
     assert transport.sent == [("12345", "ok")]
     await engine.stop()
 
@@ -543,8 +546,9 @@ async def test_media_failure_isolates_siblings_and_triggers_successful_blocks(
 
     assert transport.sent_texts == [engine_module._MEDIA_FAILED_REPLY, "ok"]
     trigger_mock.assert_awaited_once()
-    blocks = trigger_mock.await_args.args[1]
-    assert blocks == [block]
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    assert await_args.args[1] == [block]
     await engine.stop()
 
 
@@ -582,3 +586,122 @@ async def test_media_duplicate_failure_replies_are_deduped(tmp_path: Path) -> No
 )
 def test_media_failure_reply_mapping(error: Exception, expected: str) -> None:
     assert engine_module._media_failure_reply(error) == expected
+
+
+@pytest.mark.asyncio
+async def test_group_message_triggers_run_with_sender(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", user_display_name="Alice"),
+        "hello",
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once_with(
+        "assistant",
+        "hello",
+        SESSION_ID,
+        sender=MessageSender(id="50", display_name="Alice"),
+    )
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_direct_message_triggers_run_without_sender(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="direct", user_display_name="Alice"),
+        "hello",
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once_with("assistant", "hello", SESSION_ID, sender=None)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_sender_display_name_falls_back_to_user_id(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    await engine.handle_inbound_text(make_conversation(kind="group"), "hello")
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once_with(
+        "assistant",
+        "hello",
+        SESSION_ID,
+        sender=MessageSender(id="50", display_name="50"),
+    )
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_participants_metadata_written_for_groups_only(tmp_path: Path) -> None:
+    engine, chat_sessions, _trigger, _transport = make_engine(tmp_path)
+
+    engine.prepare_inbound_route(make_conversation(kind="direct", user_display_name="Alice"))
+    direct_metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    assert "participants" not in direct_metadata
+
+    engine.prepare_inbound_route(make_conversation(kind="group", user_display_name="Alice"))
+    group_metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    participants = group_metadata["participants"]
+    assert set(participants) == {"50"}
+    assert participants["50"]["display_name"] == "Alice"
+    assert participants["50"]["last_seen_at"].endswith("+00:00")
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_participants_metadata_updated_on_repeat_messages(tmp_path: Path) -> None:
+    engine, chat_sessions, _trigger, _transport = make_engine(tmp_path)
+
+    engine.prepare_inbound_route(
+        make_conversation(kind="group", user_id=50, user_display_name="Alice")
+    )
+    engine.prepare_inbound_route(
+        make_conversation(kind="group", user_id=51, user_display_name="Bob")
+    )
+    engine.prepare_inbound_route(
+        make_conversation(kind="group", user_id=50, user_display_name="Alice Renamed")
+    )
+
+    participants = chat_sessions.get_metadata("assistant", SESSION_ID)["participants"]
+    assert set(participants) == {"50", "51"}
+    assert participants["50"]["display_name"] == "Alice Renamed"
+    assert participants["51"]["display_name"] == "Bob"
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_media_path_carries_group_sender(tmp_path: Path) -> None:
+    block = MediaBlock(
+        type="media", attachment_id="att-1", filename="a.png", media_type="image/png"
+    )
+
+    async def media_builder(_raw_message: Any) -> list[ContentBlock]:
+        return [block]
+
+    transport = FakeTransport(media_builder=media_builder)
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, transport=transport
+    )
+    conversation = make_conversation(kind="group", user_display_name="Alice")
+    route, reply_plan = engine.prepare_inbound_route(conversation)
+
+    engine.enqueue_media(route, reply_plan, ("photo",), conversation=conversation)
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once_with(
+        "assistant",
+        [block],
+        SESSION_ID,
+        sender=MessageSender(id="50", display_name="Alice"),
+    )
+    await engine.stop()

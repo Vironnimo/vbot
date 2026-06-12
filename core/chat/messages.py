@@ -98,6 +98,33 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class MessageSender:
+    """Platform identity of the human who sent a user message.
+
+    Captured from platform metadata (never from message text) so request-time
+    attribution tags cannot be spoofed by typing a look-alike prefix.
+    """
+
+    id: str
+    display_name: str
+
+    def to_dict(self) -> JsonObject:
+        """Return a JSON-serializable sender dictionary."""
+        return {"id": self.id, "display_name": self.display_name}
+
+    @classmethod
+    def from_dict(cls, data: JsonObject) -> MessageSender:
+        """Build a sender from a JSON object."""
+        sender_id = data.get("id")
+        if not isinstance(sender_id, str) or not sender_id:
+            raise ChatMessageValidationError("sender id must be a non-empty string")
+        display_name = data.get("display_name")
+        if not isinstance(display_name, str) or not display_name:
+            raise ChatMessageValidationError("sender display_name must be a non-empty string")
+        return cls(id=sender_id, display_name=display_name)
+
+
+@dataclass(frozen=True)
 class ChatMessage:
     """Canonical message persisted to session JSONL files."""
 
@@ -117,6 +144,7 @@ class ChatMessage:
     tail_boundary_id: str | None = None
     run_id: str | None = None
     status: str | None = None
+    sender: MessageSender | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -134,6 +162,7 @@ class ChatMessage:
         cls,
         content: str | list[ContentBlock],
         *,
+        sender: MessageSender | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a user message."""
@@ -142,6 +171,7 @@ class ChatMessage:
             timestamp=_format_timestamp(timestamp),
             role="user",
             content=content,
+            sender=sender,
         )
 
     @classmethod
@@ -281,6 +311,8 @@ class ChatMessage:
         _add_if_not_none(message, "tail_boundary_id", self.tail_boundary_id)
         _add_if_not_none(message, "run_id", self.run_id)
         _add_if_not_none(message, "status", self.status)
+        if self.sender is not None:
+            message["sender"] = self.sender.to_dict()
         return message
 
     @classmethod
@@ -297,6 +329,9 @@ class ChatMessage:
         timing = data.get("timing")
         if timing is not None and not isinstance(timing, dict):
             raise ChatMessageValidationError("timing must be an object")
+        sender_data = data.get("sender")
+        if sender_data is not None and not isinstance(sender_data, dict):
+            raise ChatMessageValidationError("sender must be an object")
 
         message = cls(
             id=_require_string(data, "id"),
@@ -315,6 +350,7 @@ class ChatMessage:
             tail_boundary_id=_optional_string(data, "tail_boundary_id"),
             run_id=_optional_string(data, "run_id"),
             status=_optional_string(data, "status"),
+            sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
         )
         message.validate()
         return message
@@ -395,7 +431,37 @@ def _message_to_request_dict(message: ChatMessage) -> JsonObject:
         data.pop("reasoning_meta", None)
         data.pop("usage", None)
     data.pop("timing", None)
+    # Sender attribution exists only in the provider request: persisted content stays
+    # clean and the tag cannot be spoofed by typing a look-alike prefix in message text.
+    data.pop("sender", None)
+    if message.role == "user" and message.sender is not None:
+        _apply_sender_attribution(data, message.sender)
     return data
+
+
+# Characters removed from sender tag parts so a display name cannot forge the
+# tag delimiters of another participant.
+_SENDER_TAG_UNSAFE_CHARACTERS = str.maketrans("", "", "[]|\r\n")
+
+
+def _apply_sender_attribution(data: JsonObject, sender: MessageSender) -> None:
+    tag = _sender_attribution_tag(sender)
+    content = data.get("content")
+    if isinstance(content, str):
+        data["content"] = f"{tag}: {content}"
+    elif isinstance(content, list):
+        data["content"] = [{"type": "text", "text": f"{tag}:"}, *content]
+
+
+def _sender_attribution_tag(sender: MessageSender) -> str:
+    display_name = _sanitize_sender_tag_part(sender.display_name)
+    sender_id = _sanitize_sender_tag_part(sender.id)
+    return f"[{display_name}|{sender_id}]"
+
+
+def _sanitize_sender_tag_part(value: str) -> str:
+    sanitized = value.translate(_SENDER_TAG_UNSAFE_CHARACTERS).strip()
+    return sanitized or "unknown"
 
 
 def _assistant_continuation_dict(message: ChatMessage) -> JsonObject:
@@ -821,6 +887,7 @@ def _validate_system_message(message: ChatMessage) -> None:
         "tail_boundary_id",
         "run_id",
         "status",
+        "sender",
     )
 
 
@@ -879,6 +946,7 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         "tail_boundary_id",
         "run_id",
         "status",
+        "sender",
     )
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
@@ -906,6 +974,7 @@ def _validate_tool_message(message: ChatMessage) -> None:
         "tail_boundary_id",
         "run_id",
         "status",
+        "sender",
     )
     _validate_timing_payload(message.timing)
 
@@ -929,6 +998,7 @@ def _validate_note_message(message: ChatMessage) -> None:
         "tail_boundary_id",
         "run_id",
         "status",
+        "sender",
     )
 
 
@@ -952,6 +1022,7 @@ def _validate_error_message(message: ChatMessage) -> None:
         "tail_boundary_id",
         "run_id",
         "status",
+        "sender",
     )
 
 
@@ -990,6 +1061,7 @@ def _validate_compaction_checkpoint_message(message: ChatMessage) -> None:
         "error_kind",
         "run_id",
         "status",
+        "sender",
     )
 
 
@@ -1015,6 +1087,7 @@ def _validate_run_summary_message(message: ChatMessage) -> None:
         "name",
         "error_kind",
         "tail_boundary_id",
+        "sender",
     )
 
 

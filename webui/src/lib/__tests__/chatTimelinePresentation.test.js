@@ -4,6 +4,8 @@ import {
   compactToolValue,
   errorMessagePresentation,
   isRowCancellable,
+  labelForEvent,
+  labelForMessage,
   subAgentDisplayResult,
   subAgentDotStatus,
   subAgentEffectiveRunId,
@@ -621,5 +623,53 @@ describe('errorMessagePresentation', () => {
       summary: '',
       details: '',
     });
+  });
+
+  it('labels a user message with the sender display name when present', () => {
+    const message = {
+      role: 'user',
+      content: 'hello',
+      sender: { id: '50', display_name: 'Alice' },
+    };
+
+    expect(labelForMessage(message)).toBe('ALICE');
+  });
+
+  it('labels a user message without sender as You', () => {
+    expect(labelForMessage({ role: 'user', content: 'hello' })).toBe('YOU');
+  });
+
+  it('falls back to You when the sender display name is blank', () => {
+    const message = {
+      role: 'user',
+      content: 'hello',
+      sender: { id: '50', display_name: '   ' },
+    };
+
+    expect(labelForMessage(message)).toBe('YOU');
+  });
+
+  it('labels a live user_message_persisted event with the sender display name', () => {
+    const event = {
+      type: 'user_message_persisted',
+      payload: {
+        message: {
+          role: 'user',
+          content: 'hello',
+          sender: { id: '50', display_name: 'Alice' },
+        },
+      },
+    };
+
+    expect(labelForEvent(event)).toBe('ALICE');
+  });
+
+  it('labels a live user_message_persisted event without sender as You', () => {
+    const event = {
+      type: 'user_message_persisted',
+      payload: { message: { role: 'user', content: 'hello' } },
+    };
+
+    expect(labelForEvent(event)).toBe('YOU');
   });
 });

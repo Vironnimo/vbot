@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation import TriggerService
+from core.chat import MessageSender
 from core.runs import ActiveRunError, Run
 
 pytestmark = pytest.mark.asyncio
@@ -47,6 +48,7 @@ async def test_trigger_run_creates_new_session_and_starts_run_immediately() -> N
         "coder",
         "Start automated work",
         session_id="new-session",
+        sender=None,
     )
     assert run.id == "run-one"
 
@@ -67,7 +69,9 @@ async def test_trigger_run_starts_existing_idle_session_immediately() -> None:
     run = await trigger_service.trigger_run("coder", "Continue", session_id="existing")
 
     # Assert
-    chat_loop.start_run.assert_awaited_once_with("coder", "Continue", session_id="existing")
+    chat_loop.start_run.assert_awaited_once_with(
+        "coder", "Continue", session_id="existing", sender=None
+    )
     chat_loop.queue_run.assert_not_awaited()
     chat_run_manager.active_run.assert_not_called()
     assert run.id == "run-one"
@@ -100,6 +104,7 @@ async def test_trigger_run_uses_trigger_chat_loop_when_provided() -> None:
         "coder",
         "Continue",
         session_id="existing",
+        sender=None,
     )
     chat_loop.start_run.assert_not_awaited()
     assert run.id == "run-streaming"
@@ -161,11 +166,13 @@ async def test_trigger_run_queues_busy_session_until_active_run_terminal_event()
         "coder",
         "Queued message",
         session_id="session-one",
+        sender=None,
     )
     chat_loop.queue_run.assert_awaited_once_with(
         "coder",
         "Queued message",
         session_id="session-one",
+        sender=None,
     )
 
     queued_item.future.set_result(queued_run)
@@ -237,13 +244,67 @@ async def test_trigger_run_queues_via_chat_run_manager_when_session_is_busy() ->
         "coder",
         "Queued message",
         session_id="session-one",
+        sender=None,
     )
     chat_loop.queue_run.assert_awaited_once_with(
         "coder",
         "Queued message",
         session_id="session-one",
+        sender=None,
     )
     chat_run_manager.active_run.assert_not_called()
+
+
+async def test_trigger_run_forwards_sender_to_start_run() -> None:
+    # Arrange
+    sender = MessageSender(id="50", display_name="Alice")
+    runtime = Mock()
+    chat_loop = SimpleNamespace(
+        start_run=AsyncMock(return_value=make_run("run-one", "coder", "existing")),
+        queue_run=AsyncMock(),
+    )
+    trigger_service = TriggerService(cast(Any, chat_loop), cast(Any, Mock()), cast(Any, runtime))
+
+    # Act
+    run = await trigger_service.trigger_run(
+        "coder", "Group message", session_id="existing", sender=sender
+    )
+
+    # Assert
+    chat_loop.start_run.assert_awaited_once_with(
+        "coder",
+        "Group message",
+        session_id="existing",
+        sender=sender,
+    )
+    chat_loop.queue_run.assert_not_awaited()
+    assert run.id == "run-one"
+
+
+async def test_trigger_run_forwards_sender_when_queued() -> None:
+    # Arrange
+    sender = MessageSender(id="50", display_name="Alice")
+    queued_run = make_run("queued-run")
+    queued_item = make_queued_item(queued_run)
+    chat_loop = SimpleNamespace(
+        start_run=AsyncMock(side_effect=ActiveRunError("active run")),
+        queue_run=AsyncMock(return_value=queued_item),
+    )
+    trigger_service = TriggerService(cast(Any, chat_loop), cast(Any, Mock()), cast(Any, Mock()))
+
+    # Act
+    run = await trigger_service.trigger_run(
+        "coder", "Group message", session_id="session-one", sender=sender
+    )
+
+    # Assert
+    assert run is queued_run
+    chat_loop.queue_run.assert_awaited_once_with(
+        "coder",
+        "Group message",
+        session_id="session-one",
+        sender=sender,
+    )
 
 
 async def test_compact_session_delegates_to_command_chat_loop() -> None:

@@ -77,6 +77,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._album_buffers: dict[str, list[Any]] = {}
         self._album_routes: dict[str, RouteFacts] = {}
         self._album_reply_plans: dict[str, ReplyPlanFacts] = {}
+        self._album_conversations: dict[str, ConversationFacts] = {}
         self._album_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def start(self) -> None:
@@ -426,10 +427,12 @@ class TelegramChannelAdapter(ChannelAdapter):
         route, reply_plan = self._engine.prepare_inbound_route(conversation)
         media_group_id = getattr(message, "media_group_id", None)
         if media_group_id is not None:
-            self._buffer_album_message(str(media_group_id), route, reply_plan, message)
+            self._buffer_album_message(
+                str(media_group_id), route, reply_plan, conversation, message
+            )
             return
 
-        self._engine.enqueue_media(route, reply_plan, (message,))
+        self._engine.enqueue_media(route, reply_plan, (message,), conversation=conversation)
 
     async def _handle_unsupported_message_type(self, update: Any, _context: Any) -> None:
         """Reply to allowed chats that this message type cannot be processed yet."""
@@ -468,6 +471,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         album_id: str,
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
+        conversation: ConversationFacts,
         message: Any,
     ) -> None:
         existing_messages = self._album_buffers.get(album_id)
@@ -477,6 +481,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             self._album_buffers[album_id] = [message]
             self._album_routes[album_id] = route
             self._album_reply_plans[album_id] = reply_plan
+            self._album_conversations[album_id] = conversation
         self._restart_album_flush(album_id)
 
     def _restart_album_flush(self, album_id: str) -> None:
@@ -499,10 +504,11 @@ class TelegramChannelAdapter(ChannelAdapter):
         messages = self._album_buffers.pop(album_id, [])
         route = self._album_routes.pop(album_id, None)
         reply_plan = self._album_reply_plans.pop(album_id, None)
-        if not messages or route is None or reply_plan is None:
+        conversation = self._album_conversations.pop(album_id, None)
+        if not messages or route is None or reply_plan is None or conversation is None:
             return
 
-        self._engine.enqueue_media(route, reply_plan, tuple(messages))
+        self._engine.enqueue_media(route, reply_plan, tuple(messages), conversation=conversation)
 
     def _on_album_task_done(self, album_id: str, task: asyncio.Task[None]) -> None:
         if self._album_tasks.get(album_id) is task:
@@ -547,6 +553,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             thread_id=thread_id,
             # Telegram group chats are identified by negative chat ids.
             kind="group" if chat_id < 0 else "direct",
+            user_display_name=_user_display_name(user),
         )
 
     def _is_chat_allowed(self, chat_id: int) -> bool:
@@ -598,6 +605,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._album_buffers.clear()
         self._album_routes.clear()
         self._album_reply_plans.clear()
+        self._album_conversations.clear()
         for task in album_tasks:
             task.cancel()
 
@@ -652,6 +660,19 @@ def _extract_message_text(update: Any) -> str | None:
     if not text.strip():
         return None
     return text
+
+
+def _user_display_name(user: Any) -> str | None:
+    # full_name is derived from first_name (Bot-API-mandatory) + optional last_name;
+    # username is optional and unset for many accounts.
+    full_name = getattr(user, "full_name", None)
+    if isinstance(full_name, str) and full_name.strip():
+        return full_name.strip()
+
+    username = getattr(user, "username", None)
+    if isinstance(username, str) and username.strip():
+        return username.strip()
+    return None
 
 
 def _extract_caption(message: Any) -> str | None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from core.chat import ChatLoop
+from core.chat import ChatLoop, MessageSender
 from core.chat.content_blocks import ContentBlock
 from core.runs import ActiveRunError, ChatRunManager, Run
 
@@ -35,6 +35,7 @@ class TriggerService:
         session_id: str | None = None,
         *,
         internal: bool = False,
+        sender: MessageSender | None = None,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle."""
         target_session_id = session_id
@@ -53,6 +54,7 @@ class TriggerService:
                 agent_id,
                 message,
                 session_id=target_session_id,
+                sender=sender,
             )
         except ActiveRunError:
             if internal:
@@ -67,6 +69,7 @@ class TriggerService:
                     agent_id,
                     message,
                     session_id=target_session_id,
+                    sender=sender,
                 )
             return await queued_item.future
 

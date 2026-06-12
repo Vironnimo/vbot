@@ -24,6 +24,7 @@ from core.channels.adapter import (
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError
 from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT, TelegramChannelAdapter
+from core.chat import MessageSender
 from core.chat.commands import CommandAction, CommandHandled, NotACommand
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
@@ -62,10 +63,11 @@ def make_photo_update(
     file_unique_id: str,
     caption: str | None = None,
     media_group_id: str | None = None,
+    user_full_name: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         effective_chat=SimpleNamespace(id=chat_id),
-        effective_user=SimpleNamespace(id=user_id),
+        effective_user=SimpleNamespace(id=user_id, full_name=user_full_name),
         effective_message=SimpleNamespace(
             text=None,
             caption=caption,
@@ -218,12 +220,35 @@ def test_conversation_facts_classifies_kind_by_chat_id_sign(
     adapter = TelegramChannelAdapter.__new__(TelegramChannelAdapter)
     adapter._config = make_config(allowed_chat_ids=[chat_id])
 
-    conversation = adapter._conversation_facts(
-        make_update(chat_id=chat_id, user_id=50, text="hi")
-    )
+    conversation = adapter._conversation_facts(make_update(chat_id=chat_id, user_id=50, text="hi"))
 
     assert conversation is not None
     assert conversation.kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("user", "expected"),
+    [
+        (SimpleNamespace(id=50, full_name="Alice Example", username="alice"), "Alice Example"),
+        (SimpleNamespace(id=50, full_name="  ", username="alice"), "alice"),
+        (SimpleNamespace(id=50, username="alice"), "alice"),
+        (SimpleNamespace(id=50, full_name=None, username=None), None),
+        (SimpleNamespace(id=50), None),
+    ],
+)
+def test_conversation_facts_display_name_chain(user: SimpleNamespace, expected: str | None) -> None:
+    adapter = TelegramChannelAdapter.__new__(TelegramChannelAdapter)
+    adapter._config = make_config(allowed_chat_ids=[12345])
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=12345),
+        effective_user=user,
+        effective_message=SimpleNamespace(text="hi", message_thread_id=None),
+    )
+
+    conversation = adapter._conversation_facts(update)
+
+    assert conversation is not None
+    assert conversation.user_display_name == expected
 
 
 @pytest.mark.asyncio
@@ -251,7 +276,12 @@ async def test_negative_chat_id_routes_to_shared_group_session(
 
     # Group chats ignore dm_scope and share one session keyed by the chat id.
     assert chat_sessions.exists("assistant", session_id)
-    trigger_mock.assert_awaited_once_with("assistant", "hello", session_id)
+    trigger_mock.assert_awaited_once_with(
+        "assistant",
+        "hello",
+        session_id,
+        sender=MessageSender(id="50", display_name="50"),
+    )
     await adapter.stop()
 
 
@@ -1503,6 +1533,66 @@ async def test_album_messages_are_buffered_into_single_trigger_run(
     assert len(blocks) == 2
     assert isinstance(blocks[0], MediaBlock)
     assert isinstance(blocks[1], MediaBlock)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_album_carries_sender_into_trigger_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant--10001"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    bot.get_file.side_effect = [
+        SimpleNamespace(
+            download_as_bytearray=AsyncMock(return_value=bytearray(b"\x89PNG\r\n\x1a\nA"))
+        ),
+        SimpleNamespace(
+            download_as_bytearray=AsyncMock(return_value=bytearray(b"\x89PNG\r\n\x1a\nB"))
+        ),
+    ]
+
+    await adapter._handle_inbound_media(
+        make_photo_update(
+            chat_id=-10001,
+            user_id=50,
+            file_id="photo-a",
+            file_unique_id="uniq-a",
+            media_group_id="album-1",
+            user_full_name="Alice Example",
+        ),
+        SimpleNamespace(),
+    )
+    await adapter._handle_inbound_media(
+        make_photo_update(
+            chat_id=-10001,
+            user_id=50,
+            file_id="photo-b",
+            file_unique_id="uniq-b",
+            media_group_id="album-1",
+            user_full_name="Alice Example",
+        ),
+        SimpleNamespace(),
+    )
+
+    await asyncio.sleep(0.6)
+    await drain_chat_queue(adapter, -10001)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    assert await_args.kwargs["sender"] == MessageSender(id="50", display_name="Alice Example")
     await adapter.stop()
 
 

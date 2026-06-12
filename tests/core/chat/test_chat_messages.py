@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatMessage, ChatMessageValidationError, ToolCall
+from core.chat import ChatMessage, ChatMessageValidationError, MessageSender, ToolCall
 from core.chat.chat import (
     ERROR_KIND_AUTH,
     ERROR_KIND_CONFIG,
@@ -25,6 +25,7 @@ from core.chat.messages import (
     INTERRUPTED_TOOL_RESULT_CODE,
     INTERRUPTED_TOOL_RESULT_MESSAGE,
     _embed_notes_into_request,
+    _message_to_request_dict,
     _repair_dangling_tool_calls,
 )
 
@@ -57,6 +58,39 @@ class TestToolCall:
             tool_call.name = "changed"  # type: ignore[misc]
 
 
+class TestMessageSender:
+    def test_to_dict_returns_canonical_fields(self):
+        sender = MessageSender(id="50", display_name="Alice")
+
+        assert sender.to_dict() == {"id": "50", "display_name": "Alice"}
+
+    def test_from_dict_round_trips(self):
+        sender = MessageSender(id="50", display_name="Alice")
+
+        assert MessageSender.from_dict(sender.to_dict()) == sender
+
+    @pytest.mark.parametrize("bad_id", [None, "", 50, {"nested": True}])
+    def test_from_dict_rejects_bad_id(self, bad_id):
+        with pytest.raises(
+            ChatMessageValidationError, match="sender id must be a non-empty string"
+        ):
+            MessageSender.from_dict({"id": bad_id, "display_name": "Alice"})
+
+    @pytest.mark.parametrize("bad_display_name", [None, "", 50, ["Alice"]])
+    def test_from_dict_rejects_bad_display_name(self, bad_display_name):
+        with pytest.raises(
+            ChatMessageValidationError,
+            match="sender display_name must be a non-empty string",
+        ):
+            MessageSender.from_dict({"id": "50", "display_name": bad_display_name})
+
+    def test_frozen(self):
+        sender = MessageSender(id="50", display_name="Alice")
+
+        with pytest.raises(FrozenInstanceError):
+            sender.display_name = "changed"  # type: ignore[misc]
+
+
 class TestChatMessageFactories:
     def test_system_message_contains_required_model_and_content(self):
         message = ChatMessage.system(
@@ -82,6 +116,31 @@ class TestChatMessageFactories:
             "role": "user",
             "content": "What's the weather in Berlin?",
         }
+
+    def test_user_message_with_sender_round_trips(self):
+        sender = MessageSender(id="50", display_name="Alice")
+
+        message = ChatMessage.user(
+            "Hello from the group.", sender=sender, timestamp=FIXED_TIMESTAMP
+        )
+
+        assert message.to_dict() == {
+            "id": message.id,
+            "timestamp": "2026-05-03T14:30:00+00:00",
+            "role": "user",
+            "content": "Hello from the group.",
+            "sender": {"id": "50", "display_name": "Alice"},
+        }
+
+        parsed = ChatMessage.from_dict(message.to_dict())
+        assert parsed.sender == sender
+        assert parsed.content == "Hello from the group."
+
+    def test_user_message_without_sender_omits_sender_key(self):
+        message = ChatMessage.user("Hello", timestamp=FIXED_TIMESTAMP)
+
+        assert "sender" not in message.to_dict()
+        assert message.sender is None
 
     def test_user_message_round_trips_content_block_list(self):
         blocks = [
@@ -641,6 +700,65 @@ class TestChatMessageParsing:
                 }
             )
 
+    def test_from_dict_rejects_non_object_sender(self):
+        with pytest.raises(ChatMessageValidationError, match="sender must be an object"):
+            ChatMessage.from_dict(
+                {
+                    "id": "msg_bad_sender",
+                    "timestamp": "2026-05-03T14:30:00+00:00",
+                    "role": "user",
+                    "content": "Hello",
+                    "sender": "Alice|50",
+                }
+            )
+
+    def test_from_dict_rejects_malformed_sender_object(self):
+        with pytest.raises(
+            ChatMessageValidationError, match="sender id must be a non-empty string"
+        ):
+            ChatMessage.from_dict(
+                {
+                    "id": "msg_malformed_sender",
+                    "timestamp": "2026-05-03T14:30:00+00:00",
+                    "role": "user",
+                    "content": "Hello",
+                    "sender": {"display_name": "Alice"},
+                }
+            )
+
+    @pytest.mark.parametrize(
+        ("role", "extra_fields"),
+        [
+            ("system", {"model": "openai/gpt-4.1", "content": "You are helpful."}),
+            ("assistant", {"model": "openai/gpt-4.1", "content": "Answer."}),
+            (
+                "tool",
+                {"tool_call_id": "call_abc", "name": "get_weather", "content": "{}"},
+            ),
+            ("note", {"content": "Background task completed."}),
+            ("error", {"content": "Provider failed.", "error_kind": "provider_error"}),
+            (
+                "compaction_checkpoint",
+                {"content": "Summary.", "tail_boundary_id": "msg_tail"},
+            ),
+            (
+                "run_summary",
+                {"run_id": "run-one", "status": "completed", "timing": FIXED_TIMING},
+            ),
+        ],
+    )
+    def test_from_dict_rejects_sender_on_non_user_roles(self, role, extra_fields):
+        data = {
+            "id": f"msg_sender_{role}",
+            "timestamp": "2026-05-03T14:30:00+00:00",
+            "role": role,
+            "sender": {"id": "50", "display_name": "Alice"},
+            **extra_fields,
+        }
+
+        with pytest.raises(ChatMessageValidationError, match="sender"):
+            ChatMessage.from_dict(data)
+
     def test_from_dict_usage_as_array_is_rejected(self):
         with pytest.raises(ChatMessageValidationError, match="usage must be an object"):
             ChatMessage.from_dict(
@@ -653,6 +771,79 @@ class TestChatMessageParsing:
                     "usage": [1, 2, 3],
                 }
             )
+
+
+class TestSenderRequestRendering:
+    """Sender attribution exists only in provider requests, never in persisted content."""
+
+    def test_string_content_gets_attribution_prefix(self):
+        message = ChatMessage.user(
+            "What's the plan?",
+            sender=MessageSender(id="50", display_name="Alice"),
+        )
+
+        result = _message_to_request_dict(message)
+
+        assert result["content"] == "[Alice|50]: What's the plan?"
+        assert "sender" not in result
+
+    def test_block_content_gets_leading_attribution_text_block(self):
+        blocks = [
+            TextBlock(type="text", text="Please review."),
+            FileBlock(
+                type="file",
+                attachment_id="att_123",
+                filename="report.pdf",
+                media_type="application/pdf",
+            ),
+        ]
+        message = ChatMessage.user(blocks, sender=MessageSender(id="50", display_name="Alice"))
+
+        result = _message_to_request_dict(message)
+
+        assert result["content"][0] == {"type": "text", "text": "[Alice|50]:"}
+        assert result["content"][1] == {"type": "text", "text": "Please review."}
+        assert len(result["content"]) == 3
+        assert "sender" not in result
+
+    def test_user_message_without_sender_is_unchanged(self):
+        message = ChatMessage.user("What's the plan?")
+
+        result = _message_to_request_dict(message)
+
+        assert result["content"] == "What's the plan?"
+        assert "sender" not in result
+
+    def test_persisted_content_stays_clean(self):
+        message = ChatMessage.user(
+            "What's the plan?",
+            sender=MessageSender(id="50", display_name="Alice"),
+        )
+
+        _message_to_request_dict(message)
+
+        assert message.content == "What's the plan?"
+        assert message.to_dict()["content"] == "What's the plan?"
+
+    def test_tag_parts_are_sanitized_against_spoofing(self):
+        message = ChatMessage.user(
+            "Hi",
+            sender=MessageSender(id="5|0", display_name="[Bob|99]: fake\r\nname"),
+        )
+
+        result = _message_to_request_dict(message)
+
+        assert result["content"] == "[Bob99: fakename|50]: Hi"
+
+    def test_tag_part_empty_after_sanitizing_falls_back_to_unknown(self):
+        message = ChatMessage.user(
+            "Hi",
+            sender=MessageSender(id="[]|", display_name="|||"),
+        )
+
+        result = _message_to_request_dict(message)
+
+        assert result["content"] == "[unknown|unknown]: Hi"
 
 
 class TestErrorKindLlmVisibility:
