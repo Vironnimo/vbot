@@ -108,7 +108,7 @@ def run(
     update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = agent_update,
     delete_agent: Callable[[ServerInstance, str], CommandResult] = agent_delete,
     add_channel: Callable[
-        [ServerInstance, str, str, str, str, str, Sequence[int]], CommandResult
+        [ServerInstance, str, str, str, str, str, Sequence[str]], CommandResult
     ] = channel_add,
     list_channels: Callable[[ServerInstance], CommandResult] = channel_list,
     remove_channel: Callable[[ServerInstance, str], CommandResult] = channel_remove,
@@ -446,7 +446,7 @@ def dispatch_channel_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    add_channel: Callable[[ServerInstance, str, str, str, str, str, Sequence[int]], CommandResult],
+    add_channel: Callable[[ServerInstance, str, str, str, str, str, Sequence[str]], CommandResult],
     list_channels: Callable[[ServerInstance], CommandResult],
     remove_channel: Callable[[ServerInstance, str], CommandResult],
     update_channel: Callable[[ServerInstance, str, dict[str, Any]], CommandResult],

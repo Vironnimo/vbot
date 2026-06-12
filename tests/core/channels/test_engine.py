@@ -88,7 +88,7 @@ def make_config(
         platform="telegram",
         agent_id="assistant",
         dm_scope=dm_scope,
-        allowed_chat_ids=[12345],
+        allowed_chat_ids=["12345"],
         token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
         enabled=True,
         response_mode=response_mode,

@@ -456,7 +456,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if conversation is None:
             return
 
-        if not self._is_chat_allowed(int(conversation.chat_id)):
+        if not self._is_chat_allowed(conversation.chat_id):
             return
 
         message_text = _extract_message_text(update)
@@ -485,7 +485,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if conversation is None:
             return
 
-        if not self._is_chat_allowed(int(conversation.chat_id)):
+        if not self._is_chat_allowed(conversation.chat_id):
             return
 
         message = getattr(update, "effective_message", None)
@@ -505,7 +505,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if conversation is None:
             return
 
-        if not self._is_chat_allowed(int(conversation.chat_id)):
+        if not self._is_chat_allowed(conversation.chat_id):
             return
 
         # Unaddressed group messages are dropped, so an unsupported-type reply would be
@@ -672,7 +672,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         replied_user_id = getattr(replied_user, "id", None)
         return _is_integer(replied_user_id) and replied_user_id == self._bot_id
 
-    def _is_chat_allowed(self, chat_id: int) -> bool:
+    def _is_chat_allowed(self, chat_id: str) -> bool:
         # D8: empty allowed_chat_ids means deny all inbound chats.
         return chat_id in self._allowed_chat_ids
 

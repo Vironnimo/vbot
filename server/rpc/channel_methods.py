@@ -11,16 +11,14 @@ from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
     _optional_bool,
-    _optional_integer_list,
     _optional_string_list,
     _required_bool,
-    _required_integer_list,
     _required_string,
     _required_string_list,
 )
 
 JsonObject = dict[str, Any]
-CHANNEL_PLATFORMS = frozenset(("telegram",))
+CHANNEL_PLATFORMS = frozenset(("discord", "telegram"))
 CHANNEL_DM_SCOPES = frozenset(("per_conversation", "main", "per_peer", "per_account_channel_peer"))
 CHANNEL_RESPONSE_MODES = frozenset(("mention", "all"))
 
@@ -62,7 +60,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         platform=_required_channel_platform(params, "platform"),
         agent_id=_required_string(params, "agent_id"),
         dm_scope=_optional_channel_dm_scope(params, "dm_scope", default="per_conversation"),
-        allowed_chat_ids=_optional_integer_list(params, "allowed_chat_ids", default=[]),
+        allowed_chat_ids=_optional_platform_id_list(params, "allowed_chat_ids", default=[]),
         token_env_var=_required_string(params, "token_env_var"),
         enabled=_optional_bool(params, "enabled", default=True),
         response_mode=_optional_channel_response_mode(params, "response_mode"),
@@ -111,7 +109,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
     if "dm_scope" in params:
         updates["dm_scope"] = _optional_channel_dm_scope(params, "dm_scope", default="")
     if "allowed_chat_ids" in params:
-        updates["allowed_chat_ids"] = _required_integer_list(params, "allowed_chat_ids")
+        updates["allowed_chat_ids"] = _required_platform_id_list(params, "allowed_chat_ids")
     if "token_env_var" in params:
         updates["token_env_var"] = _required_string(params, "token_env_var")
     if "enabled" in params:
@@ -289,6 +287,42 @@ def _required_user_id_list(params: JsonObject, key: str) -> list[str]:
             )
         parsed.append(normalized)
     return parsed
+
+
+def _required_platform_id_list(params: JsonObject, key: str) -> list[str]:
+    value = params.get(key)
+    if not isinstance(value, list):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.{key} must be a list of platform ids",
+        )
+
+    parsed: list[str] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, str)):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.{key} must contain strings or integers only",
+            )
+        normalized = str(item).strip()
+        if not normalized:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.{key} must not contain empty values",
+            )
+        parsed.append(normalized)
+    return parsed
+
+
+def _optional_platform_id_list(
+    params: JsonObject,
+    key: str,
+    *,
+    default: list[str],
+) -> list[str]:
+    if key not in params:
+        return list(default)
+    return _required_platform_id_list(params, key)
 
 
 def _optional_user_id_list(params: JsonObject, key: str, *, default: list[str]) -> list[str]:

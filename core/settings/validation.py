@@ -140,7 +140,7 @@ CHANNEL_FIELDS = frozenset(
         "token_env_var",
     }
 )
-ALLOWED_CHANNEL_PLATFORMS = frozenset({"telegram"})
+ALLOWED_CHANNEL_PLATFORMS = frozenset({"discord", "telegram"})
 ALLOWED_CHANNEL_DM_SCOPES = frozenset(
     {"main", "per_account_channel_peer", "per_conversation", "per_peer"}
 )
@@ -433,7 +433,11 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
         data.get("dm_scope", "per_conversation"),
         ALLOWED_CHANNEL_DM_SCOPES,
     )
-    _validate_integer_list(diagnostics, "$.allowed_chat_ids", data.get("allowed_chat_ids", []))
+    _validate_platform_id_list(
+        diagnostics,
+        "$.allowed_chat_ids",
+        data.get("allowed_chat_ids", []),
+    )
     _validate_non_empty_string(
         diagnostics, "$.token_env_var", data.get("token_env_var"), required=True
     )
@@ -981,6 +985,18 @@ def _validate_user_id_list(diagnostics: list[JsonDiagnostic], path: str, value: 
     for index, item in enumerate(value):
         if isinstance(item, bool) or not isinstance(item, (int, str)):
             _error(diagnostics, f"{path}[{index}]", "must be a string or integer user id")
+            continue
+        if isinstance(item, str) and not item.strip():
+            _error(diagnostics, f"{path}[{index}]", "must not be empty")
+
+
+def _validate_platform_id_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, list):
+        _error(diagnostics, path, "must be a list of platform ids")
+        return
+    for index, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, (int, str)):
+            _error(diagnostics, f"{path}[{index}]", "must be a string or integer id")
             continue
         if isinstance(item, str) and not item.strip():
             _error(diagnostics, f"{path}[{index}]", "must not be empty")

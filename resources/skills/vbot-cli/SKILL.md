@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, manage agents or sessions, list providers models skills or tools, refresh models, connect OAuth providers, bind task models, update prompts or settings, inspect logs or debug traces, schedule cron jobs, or manage Telegram channels.
+description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, manage agents or sessions, list providers models skills or tools, refresh models, connect OAuth providers, bind task models, update prompts or settings, inspect logs or debug traces, schedule cron jobs, or manage Telegram or Discord channels.
 ---
 
 # vBot CLI
@@ -225,7 +225,7 @@ vbot debug clear
 
 `traces`, `trace`, and `probe` need debug mode enabled server-side (`vbot config set debug '{"enabled": true}'`); `status` and `clear` always work.
 
-### Telegram Channels
+### Messaging Channels
 
 Use channel commands to create and operate channel configurations. Pass token environment variable names, not token values:
 
@@ -240,6 +240,15 @@ vbot channel remove tg-main
 ```
 
 Use `channel update` for partial config changes. Omitted fields remain unchanged; `--allow` replaces the full allowlist.
+
+Discord uses the same commands with Discord channel ids:
+
+```bash
+vbot channel add dc-main --platform discord --agent assistant --token-env DISCORD_BOT_TOKEN --allow 123456789012345678
+vbot channel status dc-main
+```
+
+The Discord bot also needs the Message Content Intent enabled in the Developer Portal. `--allow` takes channel or thread ids, not guild ids.
 
 ## Pitfalls
 

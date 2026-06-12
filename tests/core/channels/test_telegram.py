@@ -40,12 +40,12 @@ def make_config(
     owner_user_ids: list[str] | None = None,
     observe_unaddressed: bool = False,
 ) -> ChannelConfig:
-    return ChannelConfig(
+    config = ChannelConfig(
         id="tg-assistant",
         platform="telegram",
         agent_id="assistant",
         dm_scope=dm_scope,
-        allowed_chat_ids=list(allowed_chat_ids or []),
+        allowed_chat_ids=cast(Any, list(allowed_chat_ids or [])),
         token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
         enabled=True,
         response_mode=response_mode,
@@ -53,6 +53,8 @@ def make_config(
         owner_user_ids=list(owner_user_ids or []),
         observe_unaddressed=observe_unaddressed,
     )
+    config.validate()
+    return config
 
 
 def make_update(*, chat_id: int, user_id: int, text: str) -> SimpleNamespace:
