@@ -38,6 +38,7 @@ def make_config(
     response_mode: str = "mention",
     mention_patterns: list[str] | None = None,
     owner_user_ids: list[str] | None = None,
+    observe_unaddressed: bool = False,
 ) -> ChannelConfig:
     return ChannelConfig(
         id="tg-assistant",
@@ -50,6 +51,7 @@ def make_config(
         response_mode=response_mode,
         mention_patterns=list(mention_patterns or []),
         owner_user_ids=list(owner_user_ids or []),
+        observe_unaddressed=observe_unaddressed,
     )
 
 
@@ -144,6 +146,7 @@ def make_adapter(
     response_mode: str = "mention",
     mention_patterns: list[str] | None = None,
     owner_user_ids: list[str] | None = None,
+    observe_unaddressed: bool = False,
     bot_username: str | None = None,
     bot_id: int | None = None,
     trigger_run: AsyncMock | None = None,
@@ -175,6 +178,7 @@ def make_adapter(
             response_mode=response_mode,
             mention_patterns=mention_patterns,
             owner_user_ids=owner_user_ids,
+            observe_unaddressed=observe_unaddressed,
         ),
         cast(Any, trigger_service),
         cast(Any, chat_sessions),
@@ -1884,6 +1888,38 @@ async def test_command_addressed_to_other_bot_is_not_stripped(
     await drain_chat_queue(adapter, 12345)
 
     command_dispatcher.dispatch.assert_called_once_with("assistant", session_id, "/stop@OtherBot")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_message_without_mention_is_observed_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant--10001"
+    adapter, chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        bot_username="MyBot",
+        bot_id=999,
+        observe_unaddressed=True,
+    )
+
+    await adapter._handle_inbound_message(
+        make_group_update(text="just chatting"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    notes = [
+        message.content
+        for message in chat_sessions.get("assistant", session_id).load()
+        if message.role == "note"
+    ]
+    assert notes[-1] == "[channel-message] 50 (50): just chatting"
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
     await adapter.stop()
 
 
