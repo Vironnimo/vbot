@@ -133,6 +133,7 @@ CHANNEL_FIELDS = frozenset(
         "enabled",
         "id",
         "mention_patterns",
+        "observe_unaddressed",
         "owner_user_ids",
         "platform",
         "response_mode",
@@ -438,6 +439,8 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
     )
     if "enabled" in data and not isinstance(data["enabled"], bool):
         _error(diagnostics, "$.enabled", "must be a boolean")
+    if "observe_unaddressed" in data and not isinstance(data["observe_unaddressed"], bool):
+        _error(diagnostics, "$.observe_unaddressed", "must be a boolean")
     _validate_allowed_string(
         diagnostics,
         "$.response_mode",
