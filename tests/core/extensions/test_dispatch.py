@@ -2,9 +2,10 @@
 
 These pin the composition semantics each event relies on (observer, accumulator,
 context pipeline, tool_call decision pipeline, tool_result replace pipeline) so
-the chat call sites can delegate without behavior drift. Handlers are registered
-through the public ``HooksAPI`` facade, mixing sync and async callables and
-exercising per-handler exception isolation and load-order preservation.
+the chat call sites can delegate without behavior drift. Handlers are seeded into
+the dispatch table through ``install_handler`` (the loader's apply-phase seam),
+mixing sync and async callables and exercising per-handler exception isolation
+and load-order preservation.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from core.extensions import (
     Deny,
     ExtensionRegistry,
     HookContext,
-    HooksAPI,
     Modify,
     Replace,
 )
@@ -30,7 +30,8 @@ def _ctx(add_note: Any = None) -> HookContext:
 
 
 def _register(registry: ExtensionRegistry, extension_name: str, event: str, handler: Any) -> None:
-    HooksAPI(registry, extension_name).on(event, handler)
+    """Seed a handler into the dispatch table (the loader's apply-phase seam)."""
+    registry.install_handler(extension_name, event, handler)
 
 
 def _make_validator() -> tuple[Any, list[tuple[str, dict[str, Any]]]]:

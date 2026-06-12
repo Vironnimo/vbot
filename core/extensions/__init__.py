@@ -1,10 +1,13 @@
 """core.extensions public API."""
 
 from core.extensions.extensions import (
+    API_VERSION,
     Deny,
+    ExtensionAPI,
+    ExtensionManifest,
+    ExtensionRecord,
     ExtensionRegistry,
     HookContext,
-    HooksAPI,
     Modify,
     Replace,
     ToolCallDecision,
@@ -12,10 +15,13 @@ from core.extensions.extensions import (
 )
 
 __all__ = [
+    "API_VERSION",
     "Deny",
+    "ExtensionAPI",
+    "ExtensionManifest",
+    "ExtensionRecord",
     "ExtensionRegistry",
     "HookContext",
-    "HooksAPI",
     "Modify",
     "Replace",
     "ToolCallDecision",

@@ -112,6 +112,7 @@ def create_app(
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
         _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
+        await _fire_extension_startup(app_runtime)
         server_logger = logging.getLogger("vbot.server.app")
         server_logger.info(
             "Server application ready on %s:%s",
@@ -551,6 +552,12 @@ async def _shutdown_log_viewer(log_viewer: LogViewer, logger: logging.Logger) ->
         await asyncio.wait_for(log_viewer.aclose(), timeout=1)
     except TimeoutError:
         logger.warning("Timed out while shutting down log viewer")
+
+
+async def _fire_extension_startup(runtime: Any) -> None:
+    fire = getattr(runtime, "fire_extension_startup", None)
+    if callable(fire):
+        await fire()
 
 
 async def _shutdown_runtime(runtime: Any) -> None:
