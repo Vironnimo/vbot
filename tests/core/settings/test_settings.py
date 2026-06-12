@@ -404,9 +404,7 @@ def test_validate_settings_file_reports_invalid_extensions_fields(tmp_path: Path
 
 def test_validate_settings_file_rejects_non_list_disabled_extensions(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"extensions": {"disabled": "solo"}}), encoding="utf-8"
-    )
+    settings_path.write_text(json.dumps({"extensions": {"disabled": "solo"}}), encoding="utf-8")
 
     report = validate_settings_file(settings_path)
 
