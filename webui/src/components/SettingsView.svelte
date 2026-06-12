@@ -7,6 +7,7 @@
   import SettingsCompactionPanel from './settings/SettingsCompactionPanel.svelte';
   import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
   import SettingsDefaultsPanel from './settings/SettingsDefaultsPanel.svelte';
+  import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
   import SettingsProvidersPanel from './settings/SettingsProvidersPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
@@ -152,6 +153,17 @@
         t(
           'settings.channels.subtitle',
           'Manage channel routing and runtime status.',
+        ),
+    },
+    {
+      id: 'extensions',
+      labelKey: 'settings.extensions.title',
+      labelFallback: 'Extensions',
+      label: () => t('settings.extensions.title', 'Extensions'),
+      subtitle: () =>
+        t(
+          'settings.extensions.subtitle',
+          'Loaded extensions and their capabilities. Toggles apply after restart.',
         ),
     },
     ...(desktopCapabilities?.wakeword
@@ -379,6 +391,8 @@
           />
         {:else if activePanelId === 'channels'}
           <SettingsChannelsPanel />
+        {:else if activePanelId === 'extensions'}
+          <SettingsExtensionsPanel {onToast} />
         {:else if activePanelId === 'voice'}
           <WakewordVoiceSettings {agents} {onToast} />
         {:else if activePanelId === 'appearance'}
