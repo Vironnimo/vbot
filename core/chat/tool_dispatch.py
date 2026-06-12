@@ -454,15 +454,37 @@ def _triggered_skill_names(content: str) -> list[str]:
     return names
 
 
+def _is_skill_context_message(message: JsonObject) -> bool:
+    content = message.get("content")
+    return (
+        message.get("role") == "user"
+        and isinstance(content, str)
+        and content.startswith("<skill_content ")
+    )
+
+
+def _skill_context_insert_index(messages: list[JsonObject]) -> int:
+    """Position right after a leading system message and any existing skill contexts.
+
+    Mirrors the build-time layout (`[system?] [skill_context...] [history...]`) so
+    mid-run activations land at the front of the skill-context block — at index 0 when
+    no system message exists — and keep their activation order instead of reversing.
+    """
+    index = 0
+    if index < len(messages) and messages[index].get("role") == "system":
+        index += 1
+    while index < len(messages) and _is_skill_context_message(messages[index]):
+        index += 1
+    return index
+
+
 def _sync_skill_context_messages(messages: list[JsonObject], session: ChatSession) -> None:
     existing = {
-        message.get("content")
-        for message in messages
-        if message.get("role") == "user"
-        and isinstance(message.get("content"), str)
-        and str(message.get("content", "")).startswith("<skill_content ")
+        message.get("content") for message in messages if _is_skill_context_message(message)
     }
+    insert_index = _skill_context_insert_index(messages)
     for skill_message in session.skill_context_messages():
         if skill_message["content"] not in existing:
-            messages.insert(1, skill_message)
+            messages.insert(insert_index, skill_message)
             existing.add(skill_message["content"])
+            insert_index += 1
