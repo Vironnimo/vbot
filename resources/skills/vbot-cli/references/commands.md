@@ -63,13 +63,16 @@ vbot doctor config
 ```bash
 vbot provider list
 vbot provider status <provider-id> [--connection <provider:connection-id>]
-vbot provider set-key <provider-id> <api-key> [--connection <provider:connection-id>] [--refresh-models]
-vbot provider connect <provider-id> --connection <provider:connection-id>
-vbot provider connect-status <provider-id> --connection <provider:connection-id>
-vbot provider disconnect <provider-id> --connection <provider:connection-id>
+vbot provider set-key <provider-id> <api-key> [--connection <provider:connection-id>] [--account <account-id>] [--refresh-models]
+vbot provider unset-key <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
+vbot provider connect <provider-id> --connection <provider:connection-id> [--account <account-id>]
+vbot provider connect-status <provider-id> --connection <provider:connection-id> [--account <account-id>]
+vbot provider disconnect <provider-id> --connection <provider:connection-id> [--account <account-id>]
 ```
 
-Use `provider list` before model or agent configuration work to see configured provider connections and whether they are usable. Use `provider status` for one provider or connection. Use `provider set-key` to activate an API-key provider through the server: vBot resolves the configured provider credential key, writes it to the target data-dir `.env`, reloads provider credentials, and prints only the provider connection and credential key name. Add `--refresh-models` to refresh that provider's model catalog immediately after setting the key.
+Use `provider list` before model or agent configuration work to see configured provider connections and whether they are usable. Use `provider status` for one provider or connection. Use `provider set-key` to activate an API-key provider through the server: vBot resolves the configured provider credential key, writes it to the target data-dir `.env`, reloads provider credentials, and prints only the provider connection and credential key name. Add `--refresh-models` to refresh that provider's model catalog immediately after setting the key. `provider unset-key` removes the key from the data-dir `.env`; credentials coming from the process environment are out of its reach and stay usable.
+
+A connection can hold multiple credential **accounts** (named slots; the default slot is `default`). `--account <account-id>` targets a named slot on all five credential commands; account ids are 1-32 characters of lowercase letters, digits, or underscores. Named API-key accounts persist under the derived env key `<BASE>__<ACCOUNT>` (for example `OPENAI_API_KEY__WORK`). `provider list` and `provider status` print each connection's accounts with usable state and source.
 
 Examples:
 
@@ -77,16 +80,19 @@ Examples:
 vbot provider status openrouter
 vbot provider set-key openrouter <api-key> --refresh-models
 vbot provider set-key openai <api-key> --connection openai:api-key
+vbot provider set-key openai <api-key> --account work
+vbot provider unset-key openai --account work
 vbot provider list
 vbot model refresh openrouter
 ```
 
-OAuth/subscription connections use the device flow instead of `set-key`:
+OAuth/subscription connections use the device flow instead of `set-key`; add `--account <account-id>` for an additional login on the same connection:
 
 ```bash
 vbot provider connect openai --connection openai:subscription
 vbot provider connect-status openai --connection openai:subscription
 vbot provider disconnect openai --connection openai:subscription
+vbot provider connect openai --connection openai:subscription --account personal
 ```
 
 `connect` starts the flow and prints `user_code`, the verification URL, and the expiry. Relay the code and URL to the user; the server polls for completion in the background. Use `connect-status` to check `connected=` and `flow_active=` afterwards. `set-key` rejects OAuth connections, and `connect` rejects API-key connections.
@@ -126,7 +132,7 @@ xhigh
 max
 ```
 
-`--clear-temperature` and `--clear-thinking-effort` send JSON `null` so the agent inherits current defaults. `--thinking-effort none` is the literal no-reasoning value, not a clear operation. `--allowed-tools` and `--allowed-skills` replace the full allowlist; pass the flag with no values to set an empty list. `--memory-prompt-mode` controls which workspace memory files become prompt-visible; `--custom-system-prompt` toggles the agent's own editable prompt fragments.
+`--model` and `--fallback-model` accept plain `<provider>/<model-id>` values or pinned forms with `::<connection>[:<account>]` (for example `openai/gpt-5.2::api-key:work`) to bind the agent to a specific connection and credential account. `--clear-temperature` and `--clear-thinking-effort` send JSON `null` so the agent inherits current defaults. `--thinking-effort none` is the literal no-reasoning value, not a clear operation. `--allowed-tools` and `--allowed-skills` replace the full allowlist; pass the flag with no values to set an empty list. `--memory-prompt-mode` controls which workspace memory files become prompt-visible; `--custom-system-prompt` toggles the agent's own editable prompt fragments.
 
 ## Sessions
 
@@ -184,7 +190,7 @@ text_to_speech
 video_generation
 ```
 
-Target ids are `<provider>/<model>::<connection>` or `local/<id>`; read them from `task-model targets <task-type>` instead of constructing them by hand.
+Target ids are `<provider>/<model>::<connection>` or `local/<id>`; read them from `task-model targets <task-type>` instead of constructing them by hand. An optional trailing `:<account-id>` pins a credential account (`openai/gpt-4o-mini-tts::api-key:work`); `task-model targets` lists targets connection-level, so append the account part yourself when needed.
 
 Examples:
 
