@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.channels.channels import ChannelConfig
     from core.runs import Run, RunEvent
-    from core.sessions import ChatSessionManager
+    from core.sessions import ChatSession, ChatSessionManager
 
 _LOGGER = get_logger("channels.engine")
 
@@ -55,6 +55,8 @@ _SYSTEM_REMINDER_TEMPLATE = (
     "(channel: {channel_id}, chat: {chat_id}).\n"
     "Respond in a style appropriate for {platform} messaging."
 )
+_OBSERVED_MESSAGE_PREFIX = "[channel-message]"
+_SENDER_TAG_UNSAFE_CHARACTERS = str.maketrans("", "", "[]|\r\n")
 
 
 class ConversationTransport(Protocol):
@@ -115,7 +117,15 @@ class _QueuedInboundMedia:
     sender: MessageSender | None = None
 
 
-_QueuedWork = _QueuedInboundMessage | _QueuedCommandAction | _QueuedInboundMedia
+@dataclass(slots=True, frozen=True)
+class _QueuedObservedMessage:
+    conversation: ConversationFacts
+    note: str
+
+
+_QueuedWork = (
+    _QueuedInboundMessage | _QueuedCommandAction | _QueuedInboundMedia | _QueuedObservedMessage
+)
 
 
 class ChannelConversationEngine:
@@ -164,6 +174,17 @@ class ChannelConversationEngine:
                 )
                 return
         elif not self.should_respond(conversation, (message_text,)):
+            if self._config.observe_unaddressed and conversation.kind == "group":
+                self._enqueue_observed_message(
+                    conversation,
+                    _format_observed_message(conversation, message_text),
+                )
+                _LOGGER.debug(
+                    "Channel group message not addressed; observed (channel=%s chat=%s)",
+                    self._config.id,
+                    conversation.chat_id,
+                )
+                return
             _LOGGER.debug(
                 "Channel group message not addressed; dropped (channel=%s chat=%s)",
                 self._config.id,
@@ -205,6 +226,24 @@ class ChannelConversationEngine:
         """Gate, route, and enqueue inbound media (one message or a buffered album)."""
         gating_texts = tuple(self._transport.caption_text(message) for message in raw_messages)
         if not self.should_respond(conversation, gating_texts):
+            if self._config.observe_unaddressed and conversation.kind == "group":
+                for caption in gating_texts:
+                    body = (
+                        f"[media] {caption}"
+                        if caption is not None and caption != ""
+                        else "[media message]"
+                    )
+                    self._enqueue_observed_message(
+                        conversation,
+                        _format_observed_message(conversation, body),
+                    )
+                _LOGGER.debug(
+                    "Channel group media not addressed; observed (channel=%s chat=%s count=%s)",
+                    self._config.id,
+                    conversation.chat_id,
+                    len(raw_messages),
+                )
+                return
             _LOGGER.debug(
                 "Channel group media not addressed; dropped (channel=%s chat=%s)",
                 self._config.id,
@@ -228,7 +267,7 @@ class ChannelConversationEngine:
         conversation: ConversationFacts,
     ) -> tuple[RouteFacts, ReplyPlanFacts]:
         """Ensure the routed Session exists and refresh its channel metadata."""
-        route = self._ensure_channel_session(conversation)
+        route, _session = self._ensure_channel_session(conversation)
         reply_plan = ReplyPlanFacts(
             channel_id=self._config.id,
             platform_target=conversation.chat_id,
@@ -241,7 +280,8 @@ class ChannelConversationEngine:
 
     def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure the Session mirroring a conversation exists with channel context."""
-        return self._ensure_channel_session(conversation)
+        route, _session = self._ensure_channel_session(conversation)
+        return route
 
     # -- Gating -------------------------------------------------------------------------
 
@@ -294,7 +334,10 @@ class ChannelConversationEngine:
 
     # -- Session routing / metadata ---------------------------------------------------
 
-    def _ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
+    def _ensure_channel_session(
+        self,
+        conversation: ConversationFacts,
+    ) -> tuple[RouteFacts, ChatSession]:
         route = self._route_facts(conversation)
         is_new_session = not self._session_exists(route)
         session = self._chat_sessions.get_or_create(route.agent_id, route.session_id)
@@ -306,7 +349,7 @@ class ChannelConversationEngine:
                     chat_id=conversation.chat_id,
                 )
             )
-        return route
+        return route, session
 
     def _route_facts(self, conversation: ConversationFacts) -> RouteFacts:
         return RouteFacts(
@@ -362,6 +405,12 @@ class ChannelConversationEngine:
 
     # -- Queue / workers --------------------------------------------------------------
 
+    def _enqueue_observed_message(self, conversation: ConversationFacts, note: str) -> None:
+        self._enqueue_chat_work(
+            conversation.chat_id,
+            _QueuedObservedMessage(conversation=conversation, note=note),
+        )
+
     def _enqueue_chat_work(self, platform_target: str, queued: _QueuedWork) -> None:
         queue = self._chat_queues.get(platform_target)
         if queue is None:
@@ -406,6 +455,9 @@ class ChannelConversationEngine:
                 self._chat_workers.pop(platform_target, None)
 
     async def _process_queued_work(self, queued: _QueuedWork) -> None:
+        if isinstance(queued, _QueuedObservedMessage):
+            self._process_queued_observed_message(queued)
+            return
         if isinstance(queued, _QueuedCommandAction):
             await self._handle_command_action(queued.action, queued.route, queued.reply_plan)
             return
@@ -413,6 +465,15 @@ class ChannelConversationEngine:
             await self._process_queued_media(queued)
             return
         await self._process_queued_message(queued)
+
+    def _process_queued_observed_message(self, queued: _QueuedObservedMessage) -> None:
+        route, session = self._ensure_channel_session(queued.conversation)
+        reply_plan = ReplyPlanFacts(
+            channel_id=self._config.id,
+            platform_target=queued.conversation.chat_id,
+        )
+        self._update_session_metadata(route, queued.conversation, reply_plan)
+        session.add_note(queued.note)
 
     async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
         command_text = _command_text_from_content(queued.message.content)
@@ -646,6 +707,17 @@ def _command_text_from_content(content: str | list[ContentBlock]) -> str | None:
     if isinstance(content, str):
         return content
     return None
+
+
+def _format_observed_message(conversation: ConversationFacts, text: str) -> str:
+    display_name = _sanitize_sender_tag_part(conversation.user_display_name or conversation.user_id)
+    sender_id = _sanitize_sender_tag_part(conversation.user_id)
+    return f"{_OBSERVED_MESSAGE_PREFIX} {display_name} ({sender_id}): {text}"
+
+
+def _sanitize_sender_tag_part(value: str) -> str:
+    sanitized = value.translate(_SENDER_TAG_UNSAFE_CHARACTERS).strip()
+    return sanitized or "unknown"
 
 
 def _extract_assistant_output(event: RunEvent) -> str | None:
