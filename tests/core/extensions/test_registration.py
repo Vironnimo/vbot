@@ -230,9 +230,7 @@ def test_failed_extension_does_not_block_others(tmp_path: Path) -> None:
 
 def test_register_failure_records_diagnostic(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
-    _write_single_file(
-        root, "bad_register", "def register(api):\n    raise ValueError('nope')\n"
-    )
+    _write_single_file(root, "bad_register", "def register(api):\n    raise ValueError('nope')\n")
 
     registry = ExtensionRegistry.load(root)
 
