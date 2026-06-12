@@ -130,6 +130,128 @@ async def test_get_adapter_github_copilot_returns_wired_adapter(runtime: Runtime
     assert await adapter._token_getter() == "copilot-test-token"  # type: ignore[attr-defined]
 
 
+@pytest.mark.asyncio
+async def test_get_adapter_resolves_api_key_account_credential(runtime: Runtime) -> None:
+    """Runtime.get_adapter() resolves provider:connection:account to the derived key."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="openai",
+        name="OpenAI",
+        adapter="openai_compatible",
+        base_url="https://api.openai.com/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OPENAI_API_KEY",
+                ),
+            )
+        ],
+    )
+    registry = ProviderRegistry({"openai": provider_config})
+    runtime._providers = registry  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        registry,
+        process_env={
+            "OPENAI_API_KEY": "sk-default",
+            "OPENAI_API_KEY__WORK": "sk-work",
+        },
+    )
+
+    # Act
+    adapter = runtime.get_adapter("openai", "openai:api-key:work")
+
+    # Assert
+    assert await adapter._token_getter() == "sk-work"  # type: ignore[attr-defined]
+
+
+def test_get_adapter_unknown_api_key_account_raises_config_error(
+    runtime_with_openai_key: Runtime,
+) -> None:
+    """Runtime.get_adapter() rejects an account without a configured credential."""
+    # Act / Assert
+    with pytest.raises(ConfigError, match="account 'missing'"):
+        runtime_with_openai_key.get_adapter("openai", "openai:api-key:missing")
+
+
+@pytest.mark.asyncio
+async def test_get_adapter_oauth_explicit_account_uses_that_account(runtime: Runtime) -> None:
+    """An explicitly pinned OAuth account binds the token getter to that account."""
+    # Arrange
+    runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(access_token="default-token"),
+    )
+    runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(access_token="work-token"),
+        account_id="work",
+    )
+
+    # Act
+    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth:work")
+
+    # Assert
+    assert await adapter._token_getter() == "work-token"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_get_adapter_oauth_without_account_resolves_first_usable(
+    runtime: Runtime,
+) -> None:
+    """Without an account part, the OAuth token getter binds the first usable account."""
+    # Arrange — only a named account is stored, so it is the first usable one.
+    runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(access_token="work-token"),
+        account_id="work",
+    )
+
+    # Act
+    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth")
+
+    # Assert
+    assert await adapter._token_getter() == "work-token"  # type: ignore[attr-defined]
+
+
+def test_get_adapter_oauth_without_any_usable_account_raises_config_error(
+    runtime: Runtime,
+) -> None:
+    """Without an account and without any stored token, adapter creation fails."""
+    # Act / Assert
+    with pytest.raises(ConfigError, match="No usable account"):
+        runtime.get_adapter("github-copilot", "github-copilot:oauth")
+
+
+@pytest.mark.asyncio
+async def test_get_adapter_oauth_explicit_account_without_token_still_builds_adapter(
+    runtime: Runtime,
+) -> None:
+    """An explicitly pinned OAuth account is used as-is so mid-flight logins work."""
+    # Arrange — another account has a token, the pinned one does not.
+    runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(access_token="default-token"),
+    )
+
+    # Act
+    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth:pending")
+
+    # Assert — adapter exists, the missing token surfaces at call time.
+    from core.providers.errors import ProviderAuthError
+
+    with pytest.raises(ProviderAuthError):
+        await adapter._token_getter()  # type: ignore[attr-defined]
+
+
 def test_get_adapter_connection_base_url_override_uses_override(
     runtime: Runtime,
 ) -> None:

@@ -13,7 +13,8 @@ from core.model_tasks.local_targets import (
 )
 from core.model_tasks.options import TaskModelOptionSchema, option_schema_for
 from core.models import ModelQuery
-from core.utils.errors import VBotError
+from core.providers.accounts import compose_connection_id, validate_account_id
+from core.utils.errors import ConfigError, VBotError
 
 JsonObject = dict[str, Any]
 TaskModelTargetKind = Literal["provider", "local"]
@@ -52,6 +53,7 @@ class TaskModelTargetRef:
     model_id: str = ""
     connection_id: str = ""
     local_connection_id: str = ""
+    account_id: str = ""
     local_id: str = ""
 
 
@@ -95,7 +97,11 @@ def validate_task_type(task_type: str) -> str:
 
 
 def parse_task_model_target_id(target: str) -> TaskModelTargetRef:
-    """Parse a provider or local task-model target id."""
+    """Parse a provider or local task-model target id.
+
+    Provider targets use ``provider/model::connection[:account]``; the
+    connection part may also carry a redundant ``provider:`` prefix.
+    """
 
     if not isinstance(target, str) or not target.strip():
         raise TaskModelValidationError("Task model target must be a non-empty string")
@@ -125,13 +131,27 @@ def parse_task_model_target_id(target: str) -> TaskModelTargetRef:
     if not local_connection_id:
         raise TaskModelValidationError(f"Invalid provider task model target: {target}")
 
+    account_id = ""
+    bare_connection_id, account_separator, account_part = local_connection_id.partition(":")
+    if account_separator:
+        if not bare_connection_id:
+            raise TaskModelValidationError(f"Invalid provider task model target: {target}")
+        try:
+            account_id = validate_account_id(account_part)
+        except ConfigError as error:
+            raise TaskModelValidationError(
+                f"Invalid account id in task model target '{target}': {error}"
+            ) from error
+        local_connection_id = bare_connection_id
+
     return TaskModelTargetRef(
         kind="provider",
         target=normalized_target,
         provider_id=provider_id,
         model_id=model_id,
-        connection_id=f"{provider_id}:{local_connection_id}",
+        connection_id=compose_connection_id(provider_id, local_connection_id, account_id or None),
         local_connection_id=local_connection_id,
+        account_id=account_id,
     )
 
 
