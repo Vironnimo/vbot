@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import replace
 from functools import partial
 from importlib import import_module
@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("channels.telegram")
 
 TELEGRAM_MESSAGE_LIMIT = 4096
+# File captions are capped far below the text limit. Both limits count UTF-16 code units.
+TELEGRAM_CAPTION_LIMIT = 1024
 # Album items arrive as separate updates; the flush window restarts with each new item.
 _ALBUM_FLUSH_SECONDS = 0.5
 # Telegram chat actions expire after ~5 s, so the indicator is refreshed on a shorter cycle.
@@ -174,14 +176,36 @@ class TelegramChannelAdapter(ChannelAdapter):
         normalized_files = list(files or [])
 
         if normalized_files:
-            await self._send_files(bot, chat_id, normalized_files, caption=normalized_message)
+            with _telegram_error_boundary(self._config.id):
+                await self._send_with_files(bot, chat_id, normalized_message, normalized_files)
             return
 
         if normalized_message is None:
             raise ChannelConfigError("at least one of message or files must be provided")
 
-        for chunk in split_telegram_message(normalized_message, TELEGRAM_MESSAGE_LIMIT):
+        with _telegram_error_boundary(self._config.id):
+            await self._send_text_chunks(bot, chat_id, normalized_message)
+
+    async def _send_text_chunks(self, bot: Any, chat_id: int, message: str) -> None:
+        for chunk in split_telegram_message(message, TELEGRAM_MESSAGE_LIMIT):
             await bot.send_message(chat_id=chat_id, text=chunk)
+
+    async def _send_with_files(
+        self,
+        bot: Any,
+        chat_id: int,
+        message: str | None,
+        files: list[FileData],
+    ) -> None:
+        # Telegram caps file captions at TELEGRAM_CAPTION_LIMIT UTF-16 units, far below the
+        # 4096 text limit. A caption that fits rides along on the first file; a longer message
+        # is delivered as standalone text first (so nothing is dropped) and the files go out
+        # uncaptioned.
+        if message is not None and _utf16_length(message) > TELEGRAM_CAPTION_LIMIT:
+            await self._send_text_chunks(bot, chat_id, message)
+            await self._send_files(bot, chat_id, files, caption=None)
+            return
+        await self._send_files(bot, chat_id, files, caption=message)
 
     async def _send_files(
         self,
@@ -302,16 +326,17 @@ class TelegramChannelAdapter(ChannelAdapter):
         if normalized_message is None:
             raise ChannelConfigError("at least one of message or files must be provided")
 
-        # Only the first chunk references the replied-to message.
-        for index, chunk in enumerate(
-            split_telegram_message(normalized_message, TELEGRAM_MESSAGE_LIMIT)
-        ):
-            if index == 0:
-                await bot.send_message(
-                    chat_id=chat_id, text=chunk, reply_parameters=reply_parameters
-                )
-            else:
-                await bot.send_message(chat_id=chat_id, text=chunk)
+        with _telegram_error_boundary(self._config.id):
+            # Only the first chunk references the replied-to message.
+            for index, chunk in enumerate(
+                split_telegram_message(normalized_message, TELEGRAM_MESSAGE_LIMIT)
+            ):
+                if index == 0:
+                    await bot.send_message(
+                        chat_id=chat_id, text=chunk, reply_parameters=reply_parameters
+                    )
+                else:
+                    await bot.send_message(chat_id=chat_id, text=chunk)
 
     def _build_reply_parameters(self, reply_to_message_id: str | None) -> Any | None:
         if reply_to_message_id is None:
@@ -750,12 +775,40 @@ class TelegramChannelAdapter(ChannelAdapter):
 
 
 def split_telegram_message(message: str, max_chars: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
-    """Split one message into Telegram-size chunks."""
+    """Split one message into Telegram-size chunks measured in UTF-16 code units.
+
+    Telegram counts its length limits in UTF-16 code units, not Unicode code points, so an
+    astral-plane character (most emoji) counts as two. Splitting on Python's code-point
+    slicing would let an emoji-heavy chunk exceed the wire limit and fail with BadRequest,
+    so chunk boundaries are placed by UTF-16 length and never inside a character.
+    """
     if max_chars <= 0:
         raise ValueError("max_chars must be positive")
     if not message:
         return []
-    return [message[start : start + max_chars] for start in range(0, len(message), max_chars)]
+
+    chunks: list[str] = []
+    chunk_start = 0
+    chunk_units = 0
+    for index, character in enumerate(message):
+        units = _utf16_units(character)
+        if chunk_units + units > max_chars and index > chunk_start:
+            chunks.append(message[chunk_start:index])
+            chunk_start = index
+            chunk_units = 0
+        chunk_units += units
+    chunks.append(message[chunk_start:])
+    return chunks
+
+
+def _utf16_units(character: str) -> int:
+    # Astral-plane characters encode as a UTF-16 surrogate pair (2 units); everything in
+    # the Basic Multilingual Plane is a single unit. Telegram counts in these units.
+    return 2 if ord(character) > 0xFFFF else 1
+
+
+def _utf16_length(text: str) -> int:
+    return sum(_utf16_units(character) for character in text)
 
 
 def _normalize_optional_message(message: str | None) -> str | None:
@@ -871,8 +924,38 @@ def _load_telegram() -> Any:
         ) from error
 
 
+def _load_telegram_error() -> Any:
+    try:
+        return import_module("telegram.error")
+    except ModuleNotFoundError as error:
+        raise ChannelError(
+            "python-telegram-bot is required for Telegram channels; install server dependencies"
+        ) from error
+
+
+@contextlib.contextmanager
+def _telegram_error_boundary(channel_id: str) -> Iterator[None]:
+    """Translate python-telegram-bot send errors into ChannelError at the adapter boundary.
+
+    PTB raises ``telegram.error.TelegramError`` (e.g. ``BadRequest``) when the Bot API rejects
+    a send. Callers such as the ``channel_send`` tool and the engine relay only handle the
+    ChannelError family, so an unwrapped PTB error would surface as an unexpected exception
+    instead of a clean failure.
+    """
+    telegram_error = _load_telegram_error()
+    try:
+        yield
+    except telegram_error.TelegramError as error:
+        raise ChannelError(f"Telegram send failed (channel={channel_id}): {error}") from error
+
+
 def _is_integer(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-__all__ = ["TELEGRAM_MESSAGE_LIMIT", "TelegramChannelAdapter", "split_telegram_message"]
+__all__ = [
+    "TELEGRAM_CAPTION_LIMIT",
+    "TELEGRAM_MESSAGE_LIMIT",
+    "TelegramChannelAdapter",
+    "split_telegram_message",
+]
