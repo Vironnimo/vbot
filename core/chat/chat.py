@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -384,24 +383,11 @@ class ChatLoop:
             extension_registry = self._runtime.extensions
             if extension_registry is not None:
                 extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
-                for extension_name, handler in extension_registry._handlers.get(
-                    "run_start",
-                    [],
-                ):
-                    try:
-                        hook_result = handler(
-                            extension_ctx,
-                            session_id=run.session_id,
-                            agent_id=run.agent_id,
-                        )
-                        if inspect.isawaitable(hook_result):
-                            await hook_result
-                    except Exception as exc:
-                        _LOGGER.warning(
-                            "Extension %r run_start handler raised: %s",
-                            extension_name,
-                            exc,
-                        )
+                await extension_registry.dispatch_run_start(
+                    extension_ctx,
+                    session_id=run.session_id,
+                    agent_id=run.agent_id,
+                )
 
             run.raise_if_cancelled()
             if retry:
@@ -426,34 +412,13 @@ class ChatLoop:
             extension_registry = self._runtime.extensions
             if extension_registry is not None:
                 extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
-                prompt_appends: list[str] = []
-                for extension_name, handler in extension_registry._handlers.get(
-                    "before_agent_start",
-                    [],
-                ):
-                    try:
-                        hook_result = handler(
-                            extension_ctx,
-                            agent=agent,
-                            session=session,
-                            messages=messages,
-                            run=run,
-                        )
-                        if inspect.isawaitable(hook_result):
-                            hook_result = await hook_result
-                    except Exception as exc:
-                        _LOGGER.warning(
-                            "Extension %r before_agent_start handler raised: %s",
-                            extension_name,
-                            exc,
-                        )
-                        continue
-                    if isinstance(hook_result, dict) and isinstance(
-                        hook_result.get("system_prompt_append"),
-                        str,
-                    ):
-                        prompt_appends.append(hook_result["system_prompt_append"])
-
+                prompt_appends = await extension_registry.dispatch_before_agent_start(
+                    extension_ctx,
+                    agent=agent,
+                    session=session,
+                    messages=messages,
+                    run=run,
+                )
                 if prompt_appends and messages:
                     system_content = messages[0].get("content")
                     if isinstance(system_content, str):
@@ -557,25 +522,12 @@ class ChatLoop:
             extension_registry = self._runtime.extensions
             if extension_registry is not None:
                 extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
-                for extension_name, handler in extension_registry._handlers.get(
-                    "run_end",
-                    [],
-                ):
-                    try:
-                        hook_result = handler(
-                            extension_ctx,
-                            session_id=run.session_id,
-                            agent_id=run.agent_id,
-                            outcome=outcome,
-                        )
-                        if inspect.isawaitable(hook_result):
-                            await hook_result
-                    except Exception as exc:
-                        _LOGGER.warning(
-                            "Extension %r run_end handler raised: %s",
-                            extension_name,
-                            exc,
-                        )
+                await extension_registry.dispatch_run_end(
+                    extension_ctx,
+                    session_id=run.session_id,
+                    agent_id=run.agent_id,
+                    outcome=outcome,
+                )
 
             await _close_adapter(adapter)
 
@@ -687,24 +639,12 @@ class ChatLoop:
             messages_for_request = [dict(message) for message in messages]
             if extension_registry is not None:
                 extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
-                for extension_name, handler in extension_registry._handlers.get(
-                    "context",
-                    [],
-                ):
-                    try:
-                        hook_result = handler(extension_ctx, messages=messages_for_request)
-                        if inspect.isawaitable(hook_result):
-                            hook_result = await hook_result
-                    except Exception as exc:
-                        _LOGGER.warning(
-                            "Extension %r context handler raised: %s",
-                            extension_name,
-                            exc,
-                        )
-                        continue
-                    if isinstance(hook_result, list):
-                        messages_for_request = hook_result
-                        break
+                replaced_messages = await extension_registry.dispatch_context(
+                    extension_ctx,
+                    messages=messages_for_request,
+                )
+                if replaced_messages is not None:
+                    messages_for_request = replaced_messages
 
             if hasattr(adapter, "set_debug_context"):
                 adapter.set_debug_context(
@@ -751,7 +691,7 @@ class ChatLoop:
 
             if tool_iteration_count >= self._max_tool_iterations:
                 raise ToolIterationLimitError("maximum tool iterations exceeded")
-            tool_iteration_count += 1
+            tool_iteration_count += 1  # noqa: SIM113 - paired with iteration_number; enumerate would obscure the pre-increment limit check.
             iteration_number += 1
 
             session.begin_defer_notes()
