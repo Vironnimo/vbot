@@ -272,10 +272,20 @@ class Runtime:
             )
         register_skill_tool(self._tools, self._skills)
         extension_dirs = self._extra_extension_directories(settings)
+        disabled_extensions, extension_config = self._extension_load_options(settings)
         self._extensions = ExtensionRegistry.load(
             self._storage.data_dir / "extensions",
             extra_dirs=extension_dirs,
+            disabled=disabled_extensions,
+            config=extension_config,
         )
+        failed_extension_count = len(self._extensions.diagnostics())
+        if failed_extension_count > 0:
+            self.logger.warning(
+                "Loaded extensions with %s failed extensions; "
+                "see vbot.extensions errors for details",
+                failed_extension_count,
+            )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._ensure_bootstrap_agent()
         recall_registry = RecallBackendRegistry.with_builtins()
@@ -355,6 +365,16 @@ class Runtime:
         self._started = True
         self.logger.info("Runtime started")
 
+    async def fire_extension_startup(self) -> None:
+        """Fire extension startup handlers once bootstrap is complete and serving.
+
+        Called by the server from inside its async lifespan, so startup handlers
+        run on the live serving loop (they may schedule background tasks there).
+        No-op before ``start()`` / after shutdown.
+        """
+        if self._extensions is not None:
+            await self._extensions.fire_startup()
+
     def stop(self) -> None:
         """Gracefully shut down the runtime.
 
@@ -362,6 +382,9 @@ class Runtime:
         """
         self._log_shutdown()
         self._started = False
+
+        if self._extensions is not None:
+            self._extensions.fire_shutdown_blocking()
 
         if self._channel_service is not None:
             self._channel_service.stop()
@@ -377,6 +400,9 @@ class Runtime:
         """Gracefully shut down the runtime and await async service cleanup."""
         self._log_shutdown()
         self._started = False
+
+        if self._extensions is not None:
+            await self._extensions.fire_shutdown()
 
         if self._channel_service is not None:
             await self._channel_service.aclose()
@@ -534,6 +560,49 @@ class Runtime:
                 continue
             directories.append(Path(raw_directory).expanduser())
         return directories
+
+    def _extension_load_options(
+        self, settings: dict[str, object]
+    ) -> tuple[set[str], dict[str, dict[str, object]]]:
+        """Read the disabled set and per-extension config from ``settings.extensions``.
+
+        Settings are validated before runtime reads them, so this defensive
+        parse mirrors ``_extra_extension_directories`` and normalizes shape
+        without re-validating: malformed pieces are ignored with a warning.
+        """
+        raw = settings.get("extensions")
+        if raw is None:
+            return set(), {}
+        if not isinstance(raw, dict):
+            if self.logger is not None:
+                cast(Any, self.logger).warning(
+                    "settings.extensions must be an object; ignoring value"
+                )
+            return set(), {}
+
+        disabled: set[str] = set()
+        raw_disabled = raw.get("disabled", [])
+        if isinstance(raw_disabled, list):
+            for item in raw_disabled:
+                if isinstance(item, str) and item.strip():
+                    disabled.add(item)
+        elif self.logger is not None:
+            cast(Any, self.logger).warning(
+                "settings.extensions.disabled must be a list; ignoring value"
+            )
+
+        config: dict[str, dict[str, object]] = {}
+        raw_config = raw.get("config", {})
+        if isinstance(raw_config, dict):
+            for name, value in raw_config.items():
+                if isinstance(name, str) and isinstance(value, dict):
+                    config[name] = value
+        elif self.logger is not None:
+            cast(Any, self.logger).warning(
+                "settings.extensions.config must be an object; ignoring value"
+            )
+
+        return disabled, config
 
     def _start_process_manager(self) -> None:
         if self._process_manager is None:

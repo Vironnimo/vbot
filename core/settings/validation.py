@@ -39,6 +39,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "debug",
         "defaults",
         "extension_directories",
+        "extensions",
         "max_subagent_depth",
         "max_subagents_per_turn",
         "model_tasks",
@@ -61,6 +62,7 @@ APPEARANCE_FIELDS = frozenset({"language"})
 COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_model"})
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
+EXTENSIONS_FIELDS = frozenset({"disabled", "config"})
 RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 WEB_SEARCH_FIELDS = frozenset({"provider", "searxng"})
 WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
@@ -304,6 +306,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_compaction(diagnostics, data.get("compaction"))
     _validate_defaults(diagnostics, data.get("defaults"))
     _validate_recall(diagnostics, data.get("recall"))
+    _validate_extensions(diagnostics, data.get("extensions"))
     _validate_web_search(diagnostics, data.get("web_search"))
     _validate_model_tasks(diagnostics, data.get("model_tasks"))
     _validate_debug(diagnostics, data.get("debug"))
@@ -676,6 +679,43 @@ def _validate_recall(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         return
     if RECALL_BACKEND_PATTERN.fullmatch(backend.strip()) is None:
         _error(diagnostics, "$.recall.backend", "must use lowercase snake_case")
+
+
+def _validate_extensions(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.extensions", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.extensions", value, EXTENSIONS_FIELDS, "extensions field")
+
+    disabled = value.get("disabled")
+    if disabled is not None:
+        if not isinstance(disabled, list):
+            _error(diagnostics, "$.extensions.disabled", "must be a list")
+        else:
+            for index, item in enumerate(disabled):
+                if not isinstance(item, str) or not item.strip():
+                    _error(
+                        diagnostics,
+                        f"$.extensions.disabled[{index}]",
+                        "must be a non-empty string",
+                    )
+
+    config = value.get("config")
+    if config is None:
+        return
+    if not isinstance(config, Mapping):
+        _error(diagnostics, "$.extensions.config", "must be an object")
+        return
+    for key, item in config.items():
+        if not isinstance(item, Mapping):
+            _error(
+                diagnostics,
+                _child_path("$.extensions.config", str(key)),
+                "must be an object",
+            )
 
 
 def _validate_web_search(diagnostics: list[JsonDiagnostic], value: Any) -> None:

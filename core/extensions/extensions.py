@@ -1,29 +1,46 @@
-"""Extension hooks registry and loader for local Python extensions."""
+"""Extension hooks registry and loader for local Python extensions.
+
+Loading is two-phase: ``register(api)`` only *collects declarations* into a
+per-extension :class:`ExtensionRecord`; the loader applies hook declarations to
+the dispatch table after **all** extensions have finished registering (async
+``register()`` coroutines are awaited deterministically first). Extensions never
+touch the live dispatch table directly.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import importlib.util
 import inspect
+import json
 import sys
+import threading
 import types
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("extensions")
 _EXTENSION_PARENT_PACKAGE = "vbot_ext"
+_MANIFEST_FILENAME = "extension.json"
+
+# Public extension API version. Bumped when the extension contract changes in a
+# way third-party extensions can detect via their manifest ``api_version``.
+API_VERSION = 1
 
 HookHandler = Callable[..., Any]
+LifecycleHandler = Callable[[], Any]
 RegisteredHandler = tuple[str, HookHandler]
 # Injected by chat so tool-result-envelope schema knowledge stays in the chat
 # domain: given (extension_name, candidate dict) it returns the validated
 # envelope or ``None`` when the candidate is rejected.
 ToolResultValidator = Callable[[str, dict[str, Any]], "dict[str, Any] | None"]
+
+ExtensionStatus = Literal["loaded", "failed", "disabled"]
 
 # Sentinel distinguishing "handler raised and was skipped" from a handler that
 # legitimately returned ``None``.
@@ -90,30 +107,188 @@ class ToolCallDecision:
     replacement: dict[str, Any] | None = None
 
 
-class HooksAPI:
-    def __init__(self, registry: ExtensionRegistry, extension_name: str) -> None:
-        self._registry = registry
+@dataclass(frozen=True)
+class ExtensionManifest:
+    """Optional ``extension.json`` enrichment for a directory-form extension.
+
+    Identity stays the filesystem name; ``display_name`` (the manifest ``name``
+    field) is display-only. ``api_version`` greater than :data:`API_VERSION`
+    fails the extension at load time.
+    """
+
+    version: str | None = None
+    description: str | None = None
+    api_version: int | None = None
+    display_name: str | None = None
+
+
+@dataclass
+class ExtensionDeclarations:
+    """What an extension declares through :class:`ExtensionAPI` during ``register``.
+
+    Collected per extension; applied to the dispatch table / fired by the
+    registry only after every extension has registered.
+    """
+
+    hooks: dict[str, list[HookHandler]] = field(default_factory=lambda: defaultdict(list))
+    startup: list[LifecycleHandler] = field(default_factory=list)
+    shutdown: list[LifecycleHandler] = field(default_factory=list)
+
+
+@dataclass
+class ExtensionRecord:
+    """One discovered extension and the outcome of loading it.
+
+    ``name`` is the identity (directory or file name). ``status`` is ``loaded``
+    (importable and registered), ``failed`` (import/register/manifest error —
+    ``error`` carries the detail), or ``disabled`` (listed disabled, never
+    imported). ``declarations`` are only meaningful for ``loaded`` records.
+    """
+
+    name: str
+    root_path: Path
+    entry_path: Path
+    status: ExtensionStatus
+    error: str | None = None
+    manifest: ExtensionManifest | None = None
+    declarations: ExtensionDeclarations = field(default_factory=ExtensionDeclarations)
+
+
+class _ManifestError(Exception):
+    """Raised when an ``extension.json`` manifest is missing required shape."""
+
+
+class ExtensionAPI:
+    """Registration facade passed into an extension's ``register(api)``.
+
+    Every call only *collects a declaration* onto the extension's record;
+    nothing goes live until the loader's apply phase runs after all extensions
+    have registered. ``config`` is the per-extension settings object (empty dict
+    by default) and ``logger`` is a ``vbot.extensions.<name>`` logger.
+    """
+
+    def __init__(
+        self,
+        extension_name: str,
+        declarations: ExtensionDeclarations,
+        *,
+        config: dict[str, Any],
+        logger: Any,
+    ) -> None:
         self._extension_name = extension_name
+        self._declarations = declarations
+        self.config = config
+        self.logger = logger
 
     def on(self, event: str, handler: HookHandler) -> None:
-        self._registry._handlers[event].append((self._extension_name, handler))
+        """Declare a hook handler for *event*. Called as ``handler(ctx, **payload)``."""
+        self._declarations.hooks[event].append(handler)
+
+    def on_startup(self, handler: LifecycleHandler) -> None:
+        """Declare a startup handler (sync or async, no args) fired post-bootstrap."""
+        self._declarations.startup.append(handler)
+
+    def on_shutdown(self, handler: LifecycleHandler) -> None:
+        """Declare a shutdown handler (sync or async, no args) fired on runtime stop."""
+        self._declarations.shutdown.append(handler)
 
 
 class ExtensionRegistry:
     def __init__(self) -> None:
         self._handlers: dict[str, list[RegisteredHandler]] = defaultdict(list)
+        self._records: list[ExtensionRecord] = []
 
     @classmethod
     def load(
         cls,
         extensions_dir: Path,
         extra_dirs: list[Path] | None = None,
+        *,
+        disabled: set[str] | None = None,
+        config: dict[str, dict[str, Any]] | None = None,
     ) -> ExtensionRegistry:
+        """Discover, import, register, and apply extensions in two phases.
+
+        Scans immediate children of each root in order (``extensions_dir``
+        first). Extensions named in *disabled* are recorded as ``disabled`` and
+        never imported. *config* maps extension name → its ``api.config`` object.
+        Async ``register()`` coroutines are awaited to completion before hook
+        declarations are applied to the dispatch table.
+        """
         registry = cls()
+        disabled_names = set(disabled or ())
+        config_map = dict(config or {})
+        pending: list[tuple[ExtensionRecord, Any]] = []
         scan_roots = [extensions_dir, *(extra_dirs or [])]
         for root in scan_roots:
-            _load_extension_root(root, registry)
+            for discovered in _discover_extension_paths(root):
+                record = _register_extension(discovered, disabled_names, config_map, pending)
+                registry._records.append(record)
+        _await_pending_registers(pending)
+        registry._apply_declarations()
         return registry
+
+    def install_handler(self, extension_name: str, event: str, handler: HookHandler) -> None:
+        """Add one hook handler to the live dispatch table under *extension_name*.
+
+        The apply phase's primitive: it threads each loaded extension's hook
+        declarations into ``_handlers`` in load order. Tests build a dispatch
+        table through this seam without the full filesystem load path.
+        """
+        self._handlers[event].append((extension_name, handler))
+
+    def _apply_declarations(self) -> None:
+        """Install hook declarations from every loaded record in load order."""
+        for record in self._records:
+            if record.status != "loaded":
+                continue
+            for event, handlers in record.declarations.hooks.items():
+                for handler in handlers:
+                    self.install_handler(record.name, event, handler)
+
+    def records(self) -> list[ExtensionRecord]:
+        """Return every discovered extension record in load order."""
+        return list(self._records)
+
+    def diagnostics(self) -> list[ExtensionRecord]:
+        """Return only the records that failed to load (mirrors skills diagnostics)."""
+        return [record for record in self._records if record.status == "failed"]
+
+    async def fire_startup(self) -> None:
+        """Fire every loaded extension's startup handlers in load order, fail-open."""
+        for record in self._records:
+            if record.status != "loaded":
+                continue
+            for handler in record.declarations.startup:
+                await self._invoke_lifecycle("startup", record.name, handler)
+
+    async def fire_shutdown(self) -> None:
+        """Fire every loaded extension's shutdown handlers in load order, fail-open."""
+        for record in self._records:
+            if record.status != "loaded":
+                continue
+            for handler in record.declarations.shutdown:
+                await self._invoke_lifecycle("shutdown", record.name, handler)
+
+    def fire_shutdown_blocking(self) -> None:
+        """Run :meth:`fire_shutdown` to completion from synchronous shutdown paths."""
+        _run_coroutine_to_completion(self.fire_shutdown())
+
+    async def _invoke_lifecycle(
+        self, phase: str, extension_name: str, handler: LifecycleHandler
+    ) -> None:
+        """Call one lifecycle handler with fail-open isolation (logs at ``error``)."""
+        try:
+            result = handler()
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:
+            _LOGGER.error(
+                "Extension %r %s handler raised: %s",
+                extension_name,
+                phase,
+                exc,
+            )
 
     async def _invoke(
         self,
@@ -286,14 +461,23 @@ class ExtensionRegistry:
         return current
 
 
-def _discover_extension_paths(extensions_dir: Path) -> list[tuple[str, Path]]:
+@dataclass(frozen=True)
+class _DiscoveredExtension:
+    """One discovered entry point: identity plus on-disk paths."""
+
+    name: str
+    root_path: Path
+    entry_path: Path
+
+
+def _discover_extension_paths(extensions_dir: Path) -> list[_DiscoveredExtension]:
     if not extensions_dir.is_dir():
         return []
 
-    discovered: list[tuple[str, Path]] = []
+    discovered: list[_DiscoveredExtension] = []
     for entry in extensions_dir.iterdir():
         if entry.is_file() and entry.suffix == ".py" and entry.stem != "__init__":
-            discovered.append((entry.stem, entry))
+            discovered.append(_DiscoveredExtension(entry.stem, entry, entry))
             continue
 
         if not entry.is_dir():
@@ -301,14 +485,185 @@ def _discover_extension_paths(extensions_dir: Path) -> list[tuple[str, Path]]:
 
         init_entry = entry / "__init__.py"
         if init_entry.is_file():
-            discovered.append((entry.name, init_entry))
+            discovered.append(_DiscoveredExtension(entry.name, entry, init_entry))
             continue
 
         extension_entry = entry / "extension.py"
         if extension_entry.is_file():
-            discovered.append((entry.name, extension_entry))
+            discovered.append(_DiscoveredExtension(entry.name, entry, extension_entry))
 
-    return sorted(discovered, key=lambda item: item[0])
+    return sorted(discovered, key=lambda item: item.name)
+
+
+def _register_extension(
+    discovered: _DiscoveredExtension,
+    disabled_names: set[str],
+    config_map: dict[str, dict[str, Any]],
+    pending: list[tuple[ExtensionRecord, Any]],
+) -> ExtensionRecord:
+    """Load one discovered extension into a record (collecting declarations).
+
+    Disabled extensions are never imported. Manifest/import/``register()``
+    failures produce a ``failed`` record with detail and never abort the others.
+    Async ``register()`` coroutines are appended to *pending* for the loader to
+    await before applying declarations.
+    """
+    name = discovered.name
+    if name in disabled_names:
+        return ExtensionRecord(
+            name=name,
+            root_path=discovered.root_path,
+            entry_path=discovered.entry_path,
+            status="disabled",
+        )
+
+    manifest: ExtensionManifest | None = None
+    if discovered.root_path.is_dir():
+        try:
+            manifest = _load_manifest(discovered.root_path)
+        except _ManifestError as exc:
+            _LOGGER.error("Extension %r manifest invalid: %s", name, exc)
+            return _failed_record(discovered, str(exc))
+        if (
+            manifest is not None
+            and manifest.api_version is not None
+            and manifest.api_version > API_VERSION
+        ):
+            message = (
+                f"manifest api_version {manifest.api_version} is newer than supported "
+                f"API_VERSION {API_VERSION}"
+            )
+            _LOGGER.error("Extension %r %s", name, message)
+            return _failed_record(discovered, message, manifest=manifest)
+
+    try:
+        module = _import_extension_module(name, discovered.entry_path)
+    except Exception as exc:
+        _LOGGER.error("Failed to load extension %r from %s: %s", name, discovered.entry_path, exc)
+        return _failed_record(discovered, f"import failed: {exc}", manifest=manifest)
+
+    record = ExtensionRecord(
+        name=name,
+        root_path=discovered.root_path,
+        entry_path=discovered.entry_path,
+        status="loaded",
+        manifest=manifest,
+    )
+
+    register_fn = getattr(module, "register", None)
+    if register_fn is None:
+        return record
+
+    api = ExtensionAPI(
+        name,
+        record.declarations,
+        config=config_map.get(name, {}),
+        logger=get_logger(f"extensions.{name}"),
+    )
+    try:
+        result = register_fn(api)
+    except Exception as exc:
+        _LOGGER.error("Extension %r register() raised: %s", name, exc)
+        record.status = "failed"
+        record.error = f"register() raised: {exc}"
+        return record
+
+    if inspect.iscoroutine(result):
+        pending.append((record, result))
+    return record
+
+
+def _failed_record(
+    discovered: _DiscoveredExtension,
+    error: str,
+    *,
+    manifest: ExtensionManifest | None = None,
+) -> ExtensionRecord:
+    return ExtensionRecord(
+        name=discovered.name,
+        root_path=discovered.root_path,
+        entry_path=discovered.entry_path,
+        status="failed",
+        error=error,
+        manifest=manifest,
+    )
+
+
+def _await_pending_registers(pending: list[tuple[ExtensionRecord, Any]]) -> None:
+    """Drive every async ``register()`` coroutine to completion, fail-open."""
+    for record, coro in pending:
+        try:
+            _run_coroutine_to_completion(coro)
+        except Exception as exc:
+            _LOGGER.error("Extension %r async register() raised: %s", record.name, exc)
+            record.status = "failed"
+            record.error = f"async register() raised: {exc}"
+
+
+def _run_coroutine_to_completion(coro: Any) -> None:
+    """Run *coro* to completion whether or not a loop runs in this thread.
+
+    With no running loop we drive it directly. Inside a running loop (e.g.
+    ``Runtime.start()`` called from the server's async lifespan) we cannot block
+    on the loop, so we run the coroutine on a private loop in a worker thread and
+    join — keeping load/shutdown deterministic in both situations.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(coro)
+        return
+
+    error: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            asyncio.run(coro)
+        except BaseException as exc:  # surfaced to the caller's thread
+            error.append(exc)
+
+    thread = threading.Thread(target=_runner, name="vbot-extension-async")
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+
+
+def _load_manifest(directory: Path) -> ExtensionManifest | None:
+    """Parse an optional ``extension.json``; raise ``_ManifestError`` if malformed."""
+    manifest_path = directory / _MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        return None
+
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise _ManifestError(f"invalid JSON in {_MANIFEST_FILENAME}: {exc.msg}") from exc
+    except OSError as exc:
+        raise _ManifestError(f"cannot read {_MANIFEST_FILENAME}: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise _ManifestError(f"{_MANIFEST_FILENAME} must be a JSON object")
+
+    api_version = raw.get("api_version")
+    if api_version is not None and (
+        isinstance(api_version, bool) or not isinstance(api_version, int)
+    ):
+        raise _ManifestError("api_version must be an integer")
+
+    return ExtensionManifest(
+        version=_manifest_optional_str(raw, "version"),
+        description=_manifest_optional_str(raw, "description"),
+        api_version=api_version,
+        display_name=_manifest_optional_str(raw, "name"),
+    )
+
+
+def _manifest_optional_str(raw: dict[str, Any], key: str) -> str | None:
+    value = raw.get(key)
+    if value is not None and not isinstance(value, str):
+        raise _ManifestError(f"{key} must be a string")
+    return value
 
 
 def _ensure_extension_parent_package() -> None:
@@ -335,80 +690,40 @@ def _extension_spec(module_name: str, entry_path: Path) -> Any:
     return importlib.util.spec_from_file_location(module_name, entry_path)
 
 
-def _log_async_register_task_result(extension_name: str, task: asyncio.Task[Any]) -> None:
-    if task.cancelled():
-        _LOGGER.warning("Extension %r async register() was cancelled", extension_name)
-        return
+def _import_extension_module(name: str, entry_path: Path) -> types.ModuleType:
+    """Import one extension entry point under the synthetic ``vbot_ext`` namespace."""
+    module_name = f"{_EXTENSION_PARENT_PACKAGE}.{name}"
+    spec = _extension_spec(module_name, entry_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"No loader for extension entry point: {entry_path}")
 
-    exc = task.exception()
-    if exc is not None:
-        _LOGGER.error("Extension %r async register() raised: %s", extension_name, exc)
+    _ensure_extension_parent_package()
+    module = importlib.util.module_from_spec(spec)
+    previous_module = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        if previous_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous_module
+        raise
 
-
-def _async_register_done_callback(
-    extension_name: str,
-) -> Callable[[asyncio.Task[Any]], None]:
-    def _done_callback(task: asyncio.Task[Any]) -> None:
-        _log_async_register_task_result(extension_name, task)
-
-    return _done_callback
-
-
-def _load_extension_root(root: Path, registry: ExtensionRegistry) -> None:
-    for name, entry_path in _discover_extension_paths(root):
-        module_name = f"{_EXTENSION_PARENT_PACKAGE}.{name}"
-        try:
-            spec = _extension_spec(module_name, entry_path)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"No loader for extension entry point: {entry_path}")
-            _ensure_extension_parent_package()
-            module = importlib.util.module_from_spec(spec)
-            previous_module = sys.modules.get(module_name)
-            sys.modules[module_name] = module
-            try:
-                spec.loader.exec_module(module)
-            except Exception:
-                if previous_module is None:
-                    sys.modules.pop(module_name, None)
-                else:
-                    sys.modules[module_name] = previous_module
-                raise
-
-            parent_module = sys.modules.get(_EXTENSION_PARENT_PACKAGE)
-            if parent_module is not None:
-                setattr(parent_module, name, module)
-        except Exception as exc:
-            _LOGGER.error("Failed to load extension %r from %s: %s", name, entry_path, exc)
-            continue
-
-        register_fn = getattr(module, "register", None)
-        if register_fn is None:
-            continue
-
-        api = HooksAPI(registry, name)
-        try:
-            result = register_fn(api)
-        except Exception as exc:
-            _LOGGER.error("Extension %r register() raised: %s", name, exc)
-            continue
-
-        if inspect.iscoroutine(result):
-            try:
-                loop = asyncio.get_running_loop()
-                task = loop.create_task(result)
-                task.add_done_callback(_async_register_done_callback(name))
-            except RuntimeError:
-                try:
-                    asyncio.run(result)
-                except Exception as exc:
-                    _LOGGER.error("Extension %r async register() raised: %s", name, exc)
+    parent_module = sys.modules.get(_EXTENSION_PARENT_PACKAGE)
+    if parent_module is not None:
+        setattr(parent_module, name, module)
+    return module
 
 
 __all__ = [
+    "API_VERSION",
     "Deny",
+    "ExtensionAPI",
+    "ExtensionManifest",
+    "ExtensionRecord",
     "ExtensionRegistry",
     "HookContext",
-    "HooksAPI",
     "Modify",
     "Replace",
     "ToolCallDecision",
