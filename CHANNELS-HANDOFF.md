@@ -1,7 +1,7 @@
 # Channels Handoff — Multi-User / Group-Chat Support
 
-**Status:** steps 0–3 done, step 4 next · **Owner:** Julian · **Created:** 2026-06-12
-**Next action:** plan step 4 (Discord adapter).
+**Status:** steps 0–4 done · **Owner:** Julian · **Created:** 2026-06-12
+**Next action:** roadmap complete.
 
 This document is self-contained: a fresh session should be able to continue from it alone.
 It is the roadmap; each step gets its own file-scoped plan (saved under `docs/plans/`) when it
@@ -146,22 +146,22 @@ Original design notes:
   filtered); revisit if it hurts.
 - Specs: `channels.md`, `channels/telegram.md`, `chat.md` (note conventions).
 
-### Step 4 — Discord adapter
+### Step 4 — Discord adapter — ✅ DONE
 
-- New adapter on the engine (this is where step 0 pays off — platform I/O only).
-  Library: `discord.py` (gateway; requires the **message-content intent**, enabled in the
-  Discord developer portal). New optional dependency — verify current docs before planning.
-- IDs are snowflakes — strings end-to-end in engine/config; `allowed_chat_ids` holds channel
-  ids; `ConversationFacts.kind`: DM channel ⇒ direct, guild channel ⇒ group.
-- Context: **history backfill on trigger** instead of passive observation — on mention, fetch
-  messages since the bot's last message in that channel (cap ~50), convert into the same
-  observed-note form as step 3. `observe_unaddressed` can stay off for Discord.
-- Outbound: 2000-char message limit (split like Telegram), typing indicator via
-  `channel.typing()`, replies via message reference.
-- **Open decision:** thread routing — own Session per thread (thread id as conversation id,
-  conversationally cleaner) vs. routing to the parent channel Session. Default leaning: own
-  Session per thread. Settle when planning.
-- Specs: new `channels/discord.md` + index entry in `channels.md`.
+Landed as designed in `core/channels/discord.py` on `discord.py>=2.7,<3`: async Gateway lifecycle
+with Message Content Intent, DMs/guild channels/thread classification, sender/mention/reply facts,
+attachment ingestion, typing, 2000-character text splitting, ten-file outbound batches, and
+first-chunk reply references. `ChannelService`, RPC, config validation, and CLI platform choices
+now accept Discord; channel ids normalize to strings end-to-end.
+
+Addressed group triggers in mention mode backfill up to 50 messages before the trigger, stop at
+the bot's latest message, reverse to chronological order, and enqueue the shared observed-note
+representation before the real user turn. Missing history permission degrades to the trigger
+without context. Live `observe_unaddressed` disables backfill to prevent duplicate context.
+
+**Settled thread decision:** each Discord thread owns its own Session, keyed by thread id. An
+allowlisted parent channel permits its threads, while explicitly allowlisted thread ids also work.
+Specs added/updated: `channels/discord.md`, `channels.md`, `cli.md`, and the PROJECT specs index.
 
 ## 3. Out of scope for this roadmap (known, deliberately not addressed)
 

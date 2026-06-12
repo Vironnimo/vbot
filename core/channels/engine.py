@@ -262,6 +262,21 @@ class ChannelConversationEngine:
             ),
         )
 
+    def observe_inbound_text(
+        self,
+        conversation: ConversationFacts,
+        message_text: str,
+    ) -> None:
+        """Queue platform-acquired context without starting a Run.
+
+        Discord uses this for bounded history backfill before an addressed group
+        message. Passive live observation still flows through ``handle_inbound_text``.
+        """
+        self._enqueue_observed_message(
+            conversation,
+            _format_observed_message(conversation, message_text),
+        )
+
     def prepare_inbound_route(
         self,
         conversation: ConversationFacts,
