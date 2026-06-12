@@ -109,9 +109,7 @@ class TestListAccounts:
         assert accounts["work"].source == "process_env"
         assert accounts["team"].source == "data_dir"
 
-    def test_empty_process_env_value_shadows_data_dir_and_is_unusable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_empty_process_env_value_shadows_data_dir_and_is_unusable(self, tmp_path: Path) -> None:
         """An empty process-env value shadows the data-dir credential."""
         # Arrange
         resolver = ProviderCredentialResolver(
@@ -140,9 +138,7 @@ class TestListAccounts:
             OAuthToken(access_token="work-secret"),
             account_id="work",
         )
-        resolver = ProviderCredentialResolver(
-            _registry(), process_env={}, token_store=token_store
-        )
+        resolver = ProviderCredentialResolver(_registry(), process_env={}, token_store=token_store)
 
         # Act
         accounts = resolver.list_accounts("openai", "subscription")
@@ -181,9 +177,7 @@ class TestHasCredentialsWithAccounts:
         assert resolver.has_credentials("openai", "openai:api-key:other") is False
         assert resolver.has_credentials("openai", "openai:api-key:default") is False
 
-    def test_connection_id_without_account_accepts_any_usable_account(
-        self, tmp_path: Path
-    ) -> None:
+    def test_connection_id_without_account_accepts_any_usable_account(self, tmp_path: Path) -> None:
         """A bare connection id is usable when any account has a credential."""
         # Arrange
         resolver = ProviderCredentialResolver(
@@ -269,16 +263,12 @@ class TestGetCredentialsWithAccounts:
             OAuthToken(access_token="work-token"),
             account_id="work",
         )
-        resolver = ProviderCredentialResolver(
-            _registry(), process_env={}, token_store=token_store
-        )
+        resolver = ProviderCredentialResolver(_registry(), process_env={}, token_store=token_store)
 
         # Act / Assert
         assert resolver.get_credentials("openai", "openai:subscription:work") == "work-token"
 
-    def test_oauth_missing_account_raises_config_error_naming_account(
-        self, tmp_path: Path
-    ) -> None:
+    def test_oauth_missing_account_raises_config_error_naming_account(self, tmp_path: Path) -> None:
         """A missing OAuth account token raises ConfigError naming the account."""
         # Arrange
         resolver = ProviderCredentialResolver(
@@ -318,9 +308,7 @@ class TestResolveAccountId:
         # Act / Assert
         assert resolver.resolve_account_id("openai", "api-key", "work") == "work"
 
-    def test_explicit_account_without_credential_raises_config_error(
-        self, tmp_path: Path
-    ) -> None:
+    def test_explicit_account_without_credential_raises_config_error(self, tmp_path: Path) -> None:
         """An explicit account with no credential raises ConfigError."""
         # Arrange
         resolver = ProviderCredentialResolver(
@@ -354,9 +342,7 @@ class TestResolveAccountId:
             OAuthToken(access_token="work-token"),
             account_id="work",
         )
-        resolver = ProviderCredentialResolver(
-            _registry(), process_env={}, token_store=token_store
-        )
+        resolver = ProviderCredentialResolver(_registry(), process_env={}, token_store=token_store)
 
         # Act / Assert
         assert resolver.resolve_account_id("openai", "subscription") == "work"
