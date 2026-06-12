@@ -10,6 +10,13 @@ from typing import Any
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.models.query import ModelQuery
+from core.providers.accounts import (
+    DEFAULT_ACCOUNT_ID,
+    compose_connection_id,
+    derive_credential_key,
+    split_connection_id,
+    validate_account_id,
+)
 from core.utils.errors import ConfigError
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -93,8 +100,47 @@ def _list_connections(state: Any, params: JsonObject) -> JsonObject:
     return {"connections": connections}
 
 
+def _account_param(params: JsonObject) -> str | None:
+    """Return the validated optional ``account`` param, or ``None`` when absent."""
+
+    if params.get("account") is None:
+        return None
+    account = _required_string(params, "account")
+    try:
+        return validate_account_id(account)
+    except ConfigError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+
+def _effective_account_id(
+    provider_id: str,
+    connection_id: str | None,
+    account: str | None,
+) -> str:
+    """Combine the ``account`` param with an account-carrying connection id.
+
+    An account embedded in the compositional connection id and an explicit
+    ``account`` param must agree; either alone wins over the default.
+    """
+
+    embedded_account_id = None
+    if connection_id is not None:
+        _local_connection_id, embedded_account_id = split_connection_id(provider_id, connection_id)
+    if account is not None and embedded_account_id is not None and account != embedded_account_id:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.account '{account}' conflicts with account "
+            f"'{embedded_account_id}' in params.connection_id",
+        )
+    if account is not None:
+        return account
+    if embedded_account_id is not None:
+        return embedded_account_id
+    return DEFAULT_ACCOUNT_ID
+
+
 def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "value"})
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "value", "account"})
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -107,12 +153,14 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
     connection_id = (
         _required_string(params, "connection_id") if raw_connection_id is not None else None
     )
+    account = _account_param(params)
 
     try:
         runtime = state.runtime
         connection = _api_key_connection(runtime, provider_id, connection_id)
-        public_connection_id = f"{provider_id}:{connection.id}"
-        credential_key = connection.auth.credential_key
+        account_id = _effective_account_id(provider_id, connection_id, account)
+        public_connection_id = compose_connection_id(provider_id, connection.id)
+        credential_key = derive_credential_key(connection.auth.credential_key, account_id)
         runtime.storage.set_data_dir_credential(credential_key, value)
         runtime.reload_provider_credentials()
     except Exception as exc:
@@ -121,13 +169,14 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
     return {
         "provider_id": provider_id,
         "connection_id": public_connection_id,
+        "account": account_id,
         "credential_key": credential_key,
         "configured": True,
     }
 
 
 def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id"})
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "account"})
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -139,21 +188,27 @@ def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
     connection_id = (
         _required_string(params, "connection_id") if raw_connection_id is not None else None
     )
+    account = _account_param(params)
 
     try:
         runtime = state.runtime
         connection = _api_key_connection(runtime, provider_id, connection_id)
-        public_connection_id = f"{provider_id}:{connection.id}"
-        credential_key = connection.auth.credential_key
+        account_id = _effective_account_id(provider_id, connection_id, account)
+        public_connection_id = compose_connection_id(provider_id, connection.id)
+        credential_key = derive_credential_key(connection.auth.credential_key, account_id)
         removed = bool(runtime.storage.remove_data_dir_credential(credential_key))
         runtime.reload_provider_credentials()
-        configured = runtime.provider_credentials.has_credentials(provider_id, public_connection_id)
+        configured = runtime.provider_credentials.has_credentials(
+            provider_id,
+            compose_connection_id(provider_id, connection.id, account_id),
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
     return {
         "provider_id": provider_id,
         "connection_id": public_connection_id,
+        "account": account_id,
         "credential_key": credential_key,
         "removed": removed,
         "configured": configured,
@@ -182,7 +237,7 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id"})
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "account"})
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -191,18 +246,27 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
 
     provider_id = _required_string(params, "provider_id")
     connection_id = _required_string(params, "connection_id")
+    account = _account_param(params)
 
     try:
         connection = _oauth_device_connection(state.runtime, provider_id, connection_id)
+        account_id = _effective_account_id(provider_id, connection_id, account)
+        public_connection_id = compose_connection_id(provider_id, connection.id)
         engine = _device_flow_engine(state)
         oauth_config = connection.oauth
-        session = await engine.start_device_flow(provider_id, connection.id, oauth_config)
+        session = await engine.start_device_flow(
+            provider_id,
+            connection.id,
+            oauth_config,
+            account_id=account_id,
+        )
 
         async def on_complete(*, success: bool) -> None:
             _publish_provider_auth_completed_event(
                 state,
                 provider_id=provider_id,
-                connection_id=connection_id,
+                connection_id=public_connection_id,
+                account=account_id,
                 success=success,
             )
 
@@ -216,6 +280,7 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
                 session.expires_in,
                 on_complete,
                 user_code=session.user_code,
+                account_id=account_id,
             )
         )
         poll_task.add_done_callback(_on_device_flow_poll_done)
@@ -226,6 +291,7 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
         "user_code": session.user_code,
         "verification_uri": session.verification_uri,
         "expires_in": session.expires_in,
+        "account": account_id,
     }
 
 
@@ -239,7 +305,7 @@ def _on_device_flow_poll_done(task: asyncio.Task[None]) -> None:
 
 
 def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id"})
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "account"})
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -248,21 +314,30 @@ def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
 
     provider_id = _required_string(params, "provider_id")
     connection_id = _required_string(params, "connection_id")
+    account = _account_param(params)
 
     try:
         connection = _oauth_connection(state.runtime, provider_id, connection_id)
-        _runtime_token_store(state.runtime).delete(provider_id, connection.id)
+        account_id = _effective_account_id(provider_id, connection_id, account)
+        _runtime_token_store(state.runtime).delete(
+            provider_id, connection.id, account_id=account_id
+        )
         engine = getattr(state, "device_flow_engine", None)
         if engine is not None:
-            engine.cancel_flow(provider_id, connection.id)
+            engine.cancel_flow(provider_id, connection.id, account_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    return {"provider_id": provider_id, "connection_id": connection_id, "status": "disconnected"}
+    return {
+        "provider_id": provider_id,
+        "connection_id": compose_connection_id(provider_id, connection.id),
+        "account": account_id,
+        "status": "disconnected",
+    }
 
 
 def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id"})
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "account"})
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -271,19 +346,22 @@ def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
 
     provider_id = _required_string(params, "provider_id")
     connection_id = _required_string(params, "connection_id")
+    account = _account_param(params)
 
     try:
         connection = _oauth_connection(state.runtime, provider_id, connection_id)
+        account_id = _effective_account_id(provider_id, connection_id, account)
         token_store = _runtime_token_store(state.runtime)
         engine = getattr(state, "device_flow_engine", None)
-        connected = token_store.has_valid_token(provider_id, connection.id)
-        flow_active = _device_flow_active(engine, provider_id, connection.id)
+        connected = token_store.has_valid_token(provider_id, connection.id, account_id=account_id)
+        flow_active = _device_flow_active(engine, provider_id, connection.id, account_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
     return {
         "provider_id": provider_id,
-        "connection_id": connection_id,
+        "connection_id": compose_connection_id(provider_id, connection.id),
+        "account": account_id,
         "connected": connected,
         "flow_active": flow_active,
     }

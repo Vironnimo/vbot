@@ -25,6 +25,13 @@ from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
+from core.providers.accounts import (
+    DEFAULT_ACCOUNT_ID,
+    ProviderAccount,
+    account_id_from_credential_key,
+    derive_credential_key,
+    split_connection_id,
+)
 from core.runs import ChatRunManager, Run
 from core.settings import AGENT_DEFAULT_FIELDS
 from core.storage import StorageError
@@ -998,20 +1005,55 @@ class StubRuntime:
             return os.environ[key]
         return self.storage.load_environment().get(key, "")
 
+    def _connection(self, provider_id: str, local_connection_id: str) -> Any:
+        provider = cast(Any, self.providers.get(provider_id))
+        return next(
+            connection
+            for connection in provider.connections
+            if connection.id == local_connection_id
+        )
+
     @property
     def provider_credentials(self) -> Any:
         runtime = self
 
         class CredentialResolver:
+            def list_accounts(
+                self, provider_id: str, local_connection_id: str
+            ) -> list[ProviderAccount]:
+                connection = runtime._connection(provider_id, local_connection_id)
+                if getattr(connection, "oauth", None) is not None:
+                    return []
+                base_key = connection.auth.credential_key
+                accounts: dict[str, ProviderAccount] = {}
+                sources: list[tuple[str, dict[str, str]]] = [
+                    ("process_env", dict(os.environ)),
+                    ("data_dir", runtime.storage.load_environment()),
+                ]
+                for source, mapping in sources:
+                    for env_key, value in mapping.items():
+                        account_id = account_id_from_credential_key(base_key, env_key)
+                        if account_id is None or account_id in accounts:
+                            continue
+                        accounts[account_id] = ProviderAccount(
+                            id=account_id,
+                            usable=bool(value),
+                            source=source,
+                            credential_key=derive_credential_key(base_key, account_id),
+                        )
+                return sorted(
+                    accounts.values(),
+                    key=lambda account: (account.id != DEFAULT_ACCOUNT_ID, account.id),
+                )
+
             def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
-                provider = cast(Any, runtime.providers.get(provider_id))
                 if connection_id is None:
                     return runtime.has_provider_credentials(provider_id)
-                local_id = connection_id.removeprefix(f"{provider_id}:")
-                connection = next(
-                    connection for connection in provider.connections if connection.id == local_id
-                )
-                return bool(runtime._credential_value(connection.auth.credential_key))
+                local_id, account_id = split_connection_id(provider_id, connection_id)
+                accounts = self.list_accounts(provider_id, local_id)
+                if account_id is None:
+                    return any(account.usable for account in accounts)
+                return any(account.id == account_id and account.usable for account in accounts)
 
             def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
                 provider = cast(Any, runtime.providers.get(provider_id))
@@ -1023,13 +1065,13 @@ class StubRuntime:
                     raise ConfigError(
                         f"Provider credentials not found for provider '{provider_id}'"
                     )
-                local_id = connection_id.removeprefix(f"{provider_id}:")
-                connection = next(
-                    connection for connection in provider.connections if connection.id == local_id
-                )
-                credential = runtime._credential_value(connection.auth.credential_key)
-                if credential:
-                    return credential
+                local_id, account_id = split_connection_id(provider_id, connection_id)
+                accounts = self.list_accounts(provider_id, local_id)
+                if account_id is not None:
+                    accounts = [account for account in accounts if account.id == account_id]
+                for account in accounts:
+                    if account.usable:
+                        return runtime._credential_value(account.credential_key)
                 raise ConfigError(f"Provider credentials not found for provider '{provider_id}'")
 
         return CredentialResolver()
@@ -1108,6 +1150,8 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-live-secret")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     state = make_state(tmp_path, StubAdapter())
     state.server_bind = {
         "listen_host": "0.0.0.0",
@@ -1140,6 +1184,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "api_key",
                             "label": "API Key",
                             "configured": False,
+                            "accounts": [],
                             "credential_key": "ANTHROPIC_API_KEY",
                         }
                     ],
@@ -1160,6 +1205,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "api_key",
                             "label": "API Key",
                             "configured": False,
+                            "accounts": [],
                             "credential_key": "OLLAMA_API_KEY",
                         }
                     ],
@@ -1180,6 +1226,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "oauth",
                             "label": "OAuth",
                             "configured": False,
+                            "accounts": [],
                             "connectable": False,
                         },
                         {
@@ -1187,6 +1234,14 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "api_key",
                             "label": "API Key",
                             "configured": True,
+                            "accounts": [
+                                {
+                                    "id": "default",
+                                    "usable": True,
+                                    "source": "process_env",
+                                    "credential_key": "OPENAI_API_KEY",
+                                }
+                            ],
                             "credential_key": "OPENAI_API_KEY",
                         },
                     ],
@@ -1273,6 +1328,7 @@ async def test_settings_get_marks_device_flow_oauth_connections_connectable(
             "type": "oauth",
             "label": "Sign in with GitHub",
             "configured": False,
+            "accounts": [],
             "connectable": True,
         }
     ]
@@ -1593,6 +1649,7 @@ async def test_connection_list_returns_connections_with_usability(
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     state = make_state(tmp_path, StubAdapter())
 
@@ -1608,6 +1665,14 @@ async def test_connection_list_returns_connections_with_usability(
                     "type": "api_key",
                     "label": "API Key",
                     "usable": False,
+                    "accounts": [
+                        {
+                            "id": "default",
+                            "usable": False,
+                            "source": "process_env",
+                            "credential_key": "ANTHROPIC_API_KEY",
+                        }
+                    ],
                 },
                 {
                     "id": "ollama:api-key",
@@ -1615,6 +1680,7 @@ async def test_connection_list_returns_connections_with_usability(
                     "type": "api_key",
                     "label": "API Key",
                     "usable": False,
+                    "accounts": [],
                 },
                 {
                     "id": "openai:oauth",
@@ -1622,6 +1688,7 @@ async def test_connection_list_returns_connections_with_usability(
                     "type": "oauth",
                     "label": "OAuth",
                     "usable": False,
+                    "accounts": [],
                 },
                 {
                     "id": "openai:api-key",
@@ -1629,10 +1696,48 @@ async def test_connection_list_returns_connections_with_usability(
                     "type": "api_key",
                     "label": "API Key",
                     "usable": True,
+                    "accounts": [
+                        {
+                            "id": "default",
+                            "usable": True,
+                            "source": "process_env",
+                            "credential_key": "OPENAI_API_KEY",
+                        }
+                    ],
                 },
             ]
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_connection_list_includes_named_accounts_from_data_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY__WORK", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY__WORK", "sk-or-work")
+
+    response = await dispatch_rpc(state, {"method": "connection.list", "params": {}})
+
+    assert response["ok"] is True
+    openrouter = next(
+        connection
+        for connection in response["result"]["connections"]
+        if connection["id"] == "openrouter:api-key"
+    )
+    assert openrouter["usable"] is True
+    assert openrouter["accounts"] == [
+        {
+            "id": "work",
+            "usable": True,
+            "source": "data_dir",
+            "credential_key": "OPENROUTER_API_KEY__WORK",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -1667,12 +1772,90 @@ async def test_provider_set_key_writes_api_key_credential_and_reloads(
         "result": {
             "provider_id": "openrouter",
             "connection_id": "openrouter:api-key",
+            "account": "default",
             "credential_key": "OPENROUTER_API_KEY",
             "configured": True,
         },
     }
     assert state.runtime.storage.load_environment() == {"OPENROUTER_API_KEY": "sk-or-test"}
     assert state.runtime.provider_credentials.has_credentials("openrouter", "openrouter:api-key")
+
+
+@pytest.mark.asyncio
+async def test_provider_set_key_with_account_writes_derived_credential_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY__WORK", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.set_key",
+            "params": {"provider_id": "openrouter", "value": "sk-or-work", "account": "work"},
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "provider_id": "openrouter",
+            "connection_id": "openrouter:api-key",
+            "account": "work",
+            "credential_key": "OPENROUTER_API_KEY__WORK",
+            "configured": True,
+        },
+    }
+    assert state.runtime.storage.load_environment() == {"OPENROUTER_API_KEY__WORK": "sk-or-work"}
+    assert state.runtime.provider_credentials.has_credentials(
+        "openrouter", "openrouter:api-key:work"
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_set_key_rejects_invalid_account_id(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.set_key",
+            "params": {"provider_id": "openrouter", "value": "secret", "account": "Not-Valid"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "Invalid account id 'Not-Valid'" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_provider_set_key_rejects_conflicting_account_and_connection_id(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.set_key",
+            "params": {
+                "provider_id": "openrouter",
+                "connection_id": "openrouter:api-key:work",
+                "value": "secret",
+                "account": "personal",
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "conflicts with account 'work'" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -1747,12 +1930,65 @@ async def test_provider_unset_key_removes_data_dir_credential(
         "result": {
             "provider_id": "openrouter",
             "connection_id": "openrouter:api-key",
+            "account": "default",
             "credential_key": "OPENROUTER_API_KEY",
             "removed": True,
             "configured": False,
         },
     }
     assert state.runtime.storage.load_environment() == {}
+
+
+@pytest.mark.asyncio
+async def test_provider_unset_key_with_account_removes_derived_credential_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY__WORK", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY", "sk-or-default")
+    state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY__WORK", "sk-or-work")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.unset_key",
+            "params": {"provider_id": "openrouter", "account": "work"},
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "provider_id": "openrouter",
+            "connection_id": "openrouter:api-key",
+            "account": "work",
+            "credential_key": "OPENROUTER_API_KEY__WORK",
+            "removed": True,
+            "configured": False,
+        },
+    }
+    assert state.runtime.storage.load_environment() == {"OPENROUTER_API_KEY": "sk-or-default"}
+
+
+@pytest.mark.asyncio
+async def test_provider_unset_key_rejects_invalid_account_id(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.unset_key",
+            "params": {"provider_id": "openrouter", "account": "UPPER"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "Invalid account id 'UPPER'" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

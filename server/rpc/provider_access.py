@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
+from core.providers.accounts import split_connection_id
 from core.providers.auth_flow import DeviceFlowEngine
 from core.providers.token_getter import OAuthTokenGetter
 from core.utils.errors import ConfigError
@@ -97,13 +98,10 @@ def _api_key_connection(runtime: Any, provider_id: str, connection_id: str | Non
 
 
 def _provider_connection(runtime: Any, provider_id: str, connection_id: str) -> Any:
+    """Resolve a compositional ``provider:connection[:account]`` id to its connection."""
+
     provider = runtime.providers.get(provider_id)
-    expected_prefix = f"{provider_id}:"
-    if not connection_id.startswith(expected_prefix):
-        raise ConfigError(
-            f"Connection id '{connection_id}' does not belong to provider '{provider_id}'"
-        )
-    local_connection_id = connection_id.removeprefix(expected_prefix)
+    local_connection_id, _account_id = split_connection_id(provider_id, connection_id)
     get_connection = getattr(provider, "get_connection", None)
     if callable(get_connection):
         return get_connection(local_connection_id)
@@ -129,12 +127,36 @@ def _device_flow_engine(state: Any) -> DeviceFlowEngine:
     return engine
 
 
-def _device_flow_active(engine: Any, provider_id: str, local_connection_id: str) -> bool:
+def _device_flow_active(
+    engine: Any,
+    provider_id: str,
+    local_connection_id: str,
+    account_id: str,
+) -> bool:
     if engine is None:
         return False
     active_flows = getattr(engine, "_active_flows", {})
-    task = active_flows.get((provider_id, local_connection_id))
+    task = active_flows.get((provider_id, local_connection_id, account_id))
     return bool(task is not None and not task.done())
+
+
+def _connection_accounts_response(
+    runtime: Any,
+    provider_id: str,
+    connection: Any,
+) -> list[JsonObject]:
+    """Return the connection's account list as public payload entries."""
+
+    accounts = runtime.provider_credentials.list_accounts(provider_id, connection.id)
+    return [
+        {
+            "id": account.id,
+            "usable": account.usable,
+            "source": account.source,
+            "credential_key": account.credential_key,
+        }
+        for account in accounts
+    ]
 
 
 def _connection_response(runtime: Any, provider_id: str, connection: Any) -> JsonObject:
@@ -145,6 +167,7 @@ def _connection_response(runtime: Any, provider_id: str, connection: Any) -> Jso
         "type": connection.type,
         "label": connection.label,
         "usable": _connection_has_credentials(runtime, provider_id, connection_id),
+        "accounts": _connection_accounts_response(runtime, provider_id, connection),
     }
 
 
@@ -155,6 +178,7 @@ def _provider_settings_connection(runtime: Any, provider_id: str, connection: An
         "type": connection.type,
         "label": connection.label,
         "configured": _connection_has_credentials(runtime, provider_id, connection_id),
+        "accounts": _connection_accounts_response(runtime, provider_id, connection),
     }
     if getattr(connection, "type", "") == "api_key":
         response["credential_key"] = connection.auth.credential_key
