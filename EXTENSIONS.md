@@ -51,7 +51,7 @@ Festgezurrte Entscheidungen (Details und Begründungen im Plan-Suite-README):
 
 | # | Plan | Liefert | Status |
 |---|---|---|---|
-| 1 | Typed Dispatcher | Dispatch zentral in `core/extensions/`, chat ohne `_handlers`, erste direkte Tests | offen |
+| 1 | Typed Dispatcher | Dispatch zentral in `core/extensions/`, chat ohne `_handlers`, erste direkte Tests | erledigt |
 | 2 | Decision-Modell | `Deny`/`Modify`/`Replace`, Pipeline-Semantik, `HookContext` + `run_id`/`add_note` | offen |
 | 3 | Registrierung | Zweiphasig, Records/Diagnostics, Manifest, enable/disable + Config, startup/shutdown | offen |
 | 4 | Capabilities | `register_tool`, `register_recall_backend`, Beispiel-Extensions | offen |
