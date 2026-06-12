@@ -203,6 +203,7 @@ def test_channel_config_gating_defaults() -> None:
     assert config.response_mode == "mention"
     assert config.mention_patterns == []
     assert config.owner_user_ids == []
+    assert config.observe_unaddressed is False
 
 
 def test_channel_config_rejects_unknown_response_mode() -> None:
@@ -231,12 +232,18 @@ def test_channel_config_rejects_boolean_owner_user_id() -> None:
         ChannelConfig.from_dict(make_config_payload(owner_user_ids=[True]))
 
 
+def test_channel_config_rejects_non_boolean_observe_unaddressed() -> None:
+    with pytest.raises(ChannelConfigError, match="observe_unaddressed must be a boolean"):
+        ChannelConfig.from_dict(make_config_payload(observe_unaddressed="true"))
+
+
 def test_channel_config_round_trips_gating_fields() -> None:
     config = ChannelConfig.from_dict(
         make_config_payload(
             response_mode="all",
             mention_patterns=["vbot", r"hey\s+bot"],
             owner_user_ids=["50"],
+            observe_unaddressed=True,
         )
     )
 
@@ -245,6 +252,7 @@ def test_channel_config_round_trips_gating_fields() -> None:
     assert restored.response_mode == "all"
     assert restored.mention_patterns == ["vbot", r"hey\s+bot"]
     assert restored.owner_user_ids == ["50"]
+    assert restored.observe_unaddressed is True
 
 
 def test_channel_storage_crud_round_trip(tmp_path: Path) -> None:

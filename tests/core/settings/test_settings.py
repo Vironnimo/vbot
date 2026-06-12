@@ -12,6 +12,7 @@ from core.settings import (
     SettingsValidationReport,
     parse_settings_update,
     validate_agent_data,
+    validate_channel_data,
     validate_settings_file,
 )
 
@@ -410,6 +411,26 @@ def test_validate_settings_file_rejects_non_list_disabled_extensions(tmp_path: P
 
     assert report.ok is False
     assert diagnostics_as_tuples(report) == [("error", "$.extensions.disabled", "must be a list")]
+
+
+def test_validate_channel_data_rejects_non_boolean_observe_unaddressed() -> None:
+    diagnostics = validate_channel_data(
+        {
+            "id": "tg-assistant",
+            "platform": "telegram",
+            "agent_id": "assistant",
+            "token_env_var": "TELEGRAM_BOT_TOKEN",
+            "observe_unaddressed": "true",
+        }
+    )
+
+    assert diagnostics_as_tuples(
+        SettingsValidationReport(
+            file_path=Path("channel.json"),
+            exists=True,
+            diagnostics=tuple(diagnostics),
+        )
+    ) == [("error", "$.observe_unaddressed", "must be a boolean")]
 
 
 def _valid_agent_data() -> dict[str, object]:
