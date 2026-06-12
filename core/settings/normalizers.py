@@ -468,6 +468,57 @@ def _normalize_json_value(value: Any, path: str) -> Any:
     raise StorageError(f"Unsupported JSON value at {path}")
 
 
+# --- extensions ---------------------------------------------------------------
+
+
+def normalize_extensions_settings(extensions: Any) -> dict[str, Any]:
+    """Return the normalized ``extensions`` section (disabled list + config map).
+
+    Restart-applied: the runtime reads this at ``Runtime.start()``. ``disabled``
+    is a deduplicated list of non-empty names (order preserved); ``config`` maps
+    each extension name to a deep-validated JSON object passed to its
+    ``register()``.
+    """
+    section = _coerce_extensions_section(extensions)
+
+    disabled_value = section.get("disabled", [])
+    if disabled_value is None:
+        disabled_value = []
+    if not isinstance(disabled_value, list):
+        raise StorageError("Expected settings.extensions.disabled to be a list")
+    disabled: list[str] = []
+    for name in disabled_value:
+        if not isinstance(name, str) or not name.strip():
+            raise StorageError("settings.extensions.disabled entries must be non-empty strings")
+        normalized_name = name.strip()
+        if normalized_name not in disabled:
+            disabled.append(normalized_name)
+
+    config_value = section.get("config", {})
+    if config_value is None:
+        config_value = {}
+    if not isinstance(config_value, Mapping):
+        raise StorageError("Expected settings.extensions.config to be an object")
+    config: dict[str, Any] = {}
+    for name, value in config_value.items():
+        if not isinstance(name, str) or not name.strip():
+            raise StorageError("settings.extensions.config keys must be non-empty strings")
+        config[name.strip()] = normalize_json_object(value, f"settings.extensions.config.{name}")
+
+    return {"disabled": disabled, "config": config}
+
+
+def _coerce_extensions_section(extensions: Any) -> dict[str, Any]:
+    if extensions is None:
+        return {}
+    if not isinstance(extensions, Mapping):
+        raise StorageError("Expected settings.extensions to be an object")
+    unsupported_fields = sorted(set(extensions) - {"disabled", "config"})
+    if unsupported_fields:
+        raise StorageError(f"Unsupported extensions settings: {', '.join(unsupported_fields)}")
+    return dict(extensions)
+
+
 # --- shared path helper -------------------------------------------------------
 
 

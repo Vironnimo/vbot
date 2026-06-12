@@ -431,6 +431,45 @@ def test_update_recall_settings_rejects_unsupported_fields(tmp_path: Path) -> No
         storage.update_recall_settings({"backend": "sqlite_fts", "unknown": True})
 
 
+def test_load_extensions_settings_defaults_to_empty(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    assert storage.load_extensions_settings() == {"disabled": [], "config": {}}
+
+
+def test_update_settings_sections_persists_extensions(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"server_port": 8500})
+
+    updated = storage.update_settings_sections(
+        {
+            "extensions": {
+                "disabled": [" legacy ", "legacy", "old"],
+                "config": {"guard_bash": {"deny": ["rm -rf"]}},
+            }
+        }
+    )
+
+    assert updated["extensions"] == {
+        "disabled": ["legacy", "old"],
+        "config": {"guard_bash": {"deny": ["rm -rf"]}},
+    }
+    assert storage.load_extensions_settings() == {
+        "disabled": ["legacy", "old"],
+        "config": {"guard_bash": {"deny": ["rm -rf"]}},
+    }
+    assert storage.load_settings()["server_port"] == 8500
+
+
+def test_update_settings_sections_rejects_non_object_extension_config(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError, match="settings.extensions.config.guard_bash"):
+        storage.update_settings_sections(
+            {"extensions": {"config": {"guard_bash": {"bad": {1, 2}}}}}
+        )
+
+
 def test_load_web_search_settings_defaults_to_brave(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 
