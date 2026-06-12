@@ -36,6 +36,7 @@ AREA_HELP = {
     "model": "Inspect and refresh model catalogs",
     "task-model": "Inspect and manage specialized task-model bindings",
     "skill": "Inspect skill availability and diagnostics",
+    "extensions": "Inspect and toggle loaded extensions",
     "cron": "Inspect and manage scheduled cron jobs",
     "config": "Inspect and update raw settings",
     "debug": "Inspect debug mode state and stored traces",
@@ -123,6 +124,11 @@ DOCTOR_HELP = {
 }
 TOOL_HELP = {"list": "List public registered tools"}
 SKILL_HELP = {"list": "List skills and diagnostics"}
+EXTENSIONS_HELP = {
+    "list": "List loaded, failed, and disabled extensions",
+    "enable": "Enable a disabled extension (restart-applied)",
+    "disable": "Disable an extension (restart-applied)",
+}
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -141,6 +147,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_model_parsers(subparsers)
     _add_task_model_parsers(subparsers)
     _add_skill_parsers(subparsers)
+    _add_extensions_parsers(subparsers)
     _add_cron_parsers(subparsers)
     _add_config_parsers(subparsers)
     _add_debug_parsers(subparsers)
@@ -391,6 +398,31 @@ def _add_tool_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     tool_subparsers = tool_parser.add_subparsers(dest="command", required=True)
     _add_command_parser(tool_subparsers, "list", TOOL_HELP["list"], example="tool list")
+
+
+def _add_extensions_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    extensions_parser = subparsers.add_parser(
+        "extensions",
+        help=AREA_HELP["extensions"],
+        description=AREA_HELP["extensions"],
+    )
+    extensions_subparsers = extensions_parser.add_subparsers(dest="command", required=True)
+    _add_command_parser(
+        extensions_subparsers, "list", EXTENSIONS_HELP["list"], example="extensions list"
+    )
+
+    for command in ("enable", "disable"):
+        command_parser = _add_command_parser(
+            extensions_subparsers,
+            command,
+            EXTENSIONS_HELP[command],
+            example=f"extensions {command} guard_bash",
+        )
+        command_parser.add_argument(
+            "name", metavar="<extension-name>", help=f"Extension name to {command}"
+        )
 
 
 def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
