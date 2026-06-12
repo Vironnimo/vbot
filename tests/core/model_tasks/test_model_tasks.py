@@ -39,6 +39,41 @@ def test_parse_provider_target_requires_connection_suffix() -> None:
         parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe")
 
 
+def test_parse_target_with_account_suffix() -> None:
+    ref = parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::api-key:work")
+
+    assert ref.provider_id == "openrouter"
+    assert ref.model_id == "openai/gpt-4o-transcribe"
+    assert ref.connection_id == "openrouter:api-key:work"
+    assert ref.local_connection_id == "api-key"
+    assert ref.account_id == "work"
+
+
+def test_parse_target_with_provider_prefixed_connection_and_account() -> None:
+    ref = parse_task_model_target_id("openai/gpt-4o::openai:api-key:work")
+
+    assert ref.connection_id == "openai:api-key:work"
+    assert ref.local_connection_id == "api-key"
+    assert ref.account_id == "work"
+
+
+def test_parse_target_without_account_leaves_account_empty() -> None:
+    ref = parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::api-key")
+
+    assert ref.account_id == ""
+    assert ref.connection_id == "openrouter:api-key"
+
+
+def test_parse_target_rejects_invalid_account_id() -> None:
+    with pytest.raises(TaskModelValidationError, match="account id"):
+        parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::api-key:Work-Acct")
+
+
+def test_parse_target_rejects_empty_connection_before_account() -> None:
+    with pytest.raises(TaskModelValidationError, match="Invalid provider task model target"):
+        parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::openrouter::work")
+
+
 def test_list_targets_filters_by_task_type_and_credentials() -> None:
     providers = _Providers()
     models = _Models(

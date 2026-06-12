@@ -517,6 +517,94 @@ async def test_cancel_flow_cancels_in_flight_polling_task(tmp_path: Path) -> Non
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_poll_loop_saves_token_under_named_account(tmp_path: Path) -> None:
+    """A poll loop for a named account stores its token under that account only."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    on_complete = AsyncMock()
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"access_token": "work-access-secret"})
+    )
+
+    # Act
+    await engine._poll_for_token(
+        "github-copilot",
+        "oauth",
+        _oauth_config(),
+        "device-code",
+        1,
+        900,
+        on_complete,
+        account_id="work",
+    )
+
+    # Assert
+    work_token = token_store.load("github-copilot", "oauth", account_id="work")
+    assert work_token is not None
+    assert work_token.access_token == "work-access-secret"
+    assert token_store.load("github-copilot", "oauth") is None
+    on_complete.assert_awaited_once_with(success=True)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_cancel_flow_is_account_scoped(tmp_path: Path) -> None:
+    """Cancelling one account's flow leaves another account's flow running."""
+    # Arrange
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"error": "authorization_pending"})
+    )
+    sleeps_started: asyncio.Queue[None] = asyncio.Queue()
+    release_sleep = asyncio.Event()
+
+    async def sleep_until_released(_interval: int) -> None:
+        sleeps_started.put_nowait(None)
+        await release_sleep.wait()
+
+    work_task = asyncio.create_task(
+        engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            1,
+            900,
+            AsyncMock(),
+            account_id="work",
+        )
+    )
+    default_task = asyncio.create_task(
+        engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            1,
+            900,
+            AsyncMock(),
+        )
+    )
+
+    # Act
+    with patch("core.providers.auth_flow.asyncio.sleep", side_effect=sleep_until_released):
+        await sleeps_started.get()
+        await sleeps_started.get()
+        engine.cancel_flow("github-copilot", "oauth", "work")
+
+        with pytest.raises(asyncio.CancelledError):
+            await work_task
+
+        # Assert
+        assert work_task.cancelled()
+        assert not default_task.done()
+        assert ("github-copilot", "oauth", "default") in engine._active_flows
+        await engine.aclose()
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_aclose_cancels_active_polling_tasks(tmp_path: Path) -> None:
     """Closing the engine cancels and awaits active polling tasks."""
     engine = DeviceFlowEngine(TokenStore(tmp_path))

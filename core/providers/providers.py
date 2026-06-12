@@ -241,9 +241,12 @@ class ProviderRegistry:
         Returns:
             A fully-constructed ``ProviderConfig``.
         """
+        provider_id = data["id"]
+        if ":" in provider_id:
+            raise ConfigError(f"Provider id '{provider_id}' must not contain ':'")
         connections = ProviderRegistry._parse_connections(data)
         return ProviderConfig(
-            id=data["id"],
+            id=provider_id,
             name=data["name"],
             adapter=data["adapter"],
             base_url=data["base_url"],
@@ -264,6 +267,11 @@ class ProviderRegistry:
 
         for connection_data in data["connections"]:
             local_id = connection_data["id"]
+            if "--" in local_id or ":" in local_id:
+                raise ConfigError(
+                    f"Provider '{provider_id}' connection id '{local_id}' must not "
+                    "contain '--' or ':'"
+                )
             if local_id in seen_ids:
                 raise KeyError(f"Duplicate connection id '{local_id}' for provider '{provider_id}'")
             seen_ids.add(local_id)

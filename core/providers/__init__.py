@@ -1,5 +1,13 @@
 """core.providers — provider configuration, registry, adapters, and error classes."""
 
+from core.providers.accounts import (
+    DEFAULT_ACCOUNT_ID,
+    ProviderAccount,
+    compose_connection_id,
+    derive_credential_key,
+    split_connection_id,
+    validate_account_id,
+)
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
@@ -25,6 +33,7 @@ from core.providers.providers import (
 )
 
 __all__ = [
+    "DEFAULT_ACCOUNT_ID",
     "AnthropicAdapter",
     "AuthConfig",
     "ConnectionConfig",
@@ -35,6 +44,7 @@ __all__ = [
     "OpenAICompatibleAdapter",
     "OpenCodeGoAdapter",
     "OpenRouterAdapter",
+    "ProviderAccount",
     "ProviderCredentialResolver",
     "ProviderAdapter",
     "ProviderAuthError",
@@ -44,4 +54,8 @@ __all__ = [
     "ProviderRegistry",
     "ProviderStreamingUnsupportedError",
     "ProviderTimeoutError",
+    "compose_connection_id",
+    "derive_credential_key",
+    "split_connection_id",
+    "validate_account_id",
 ]

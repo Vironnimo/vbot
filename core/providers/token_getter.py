@@ -9,6 +9,7 @@ from typing import Protocol
 import httpx
 
 from core.providers._http_shared import wrap_network_error
+from core.providers.accounts import DEFAULT_ACCOUNT_ID
 from core.providers.errors import ProviderAuthError, ProviderError, ProviderRateLimitError
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
 from core.providers.providers import OPENAI_CODEX_DEVICE_FLOW, OAuthConfig
@@ -51,11 +52,14 @@ class OAuthTokenGetter:
         local_connection_id: str,
         oauth_config: OAuthConfig,
         client: httpx.AsyncClient | None = None,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
         self._token_store = token_store
         self._provider_id = provider_id
         self._local_connection_id = local_connection_id
         self._oauth_config = oauth_config
+        self._account_id = account_id
         self._client = client
         self._owns_client = client is None
         self._lock = asyncio.Lock()
@@ -77,7 +81,11 @@ class OAuthTokenGetter:
         """Return a valid OAuth-backed API token, refreshing when needed."""
 
         async with self._lock:
-            token = self._token_store.load(self._provider_id, self._local_connection_id)
+            token = self._token_store.load(
+                self._provider_id,
+                self._local_connection_id,
+                account_id=self._account_id,
+            )
             if token is None:
                 raise ProviderAuthError("No OAuth token — please connect this provider first")
             if not _is_expiring(token):
@@ -112,7 +120,12 @@ class OAuthTokenGetter:
             expires_at=_parse_exchange_expiry(response_data.get("expires_at"), now),
             extra={**token.extra, GITHUB_OAUTH_TOKEN_EXTRA_KEY: github_oauth_token},
         )
-        self._token_store.save(self._provider_id, self._local_connection_id, refreshed_token)
+        self._token_store.save(
+            self._provider_id,
+            self._local_connection_id,
+            refreshed_token,
+            account_id=self._account_id,
+        )
         return refreshed_token.access_token
 
     async def _refresh_oauth_token(self, token: OAuthToken) -> str:
@@ -131,7 +144,12 @@ class OAuthTokenGetter:
             expires_at=_parse_oauth_expiry(response_data, now),
             extra=extra,
         )
-        self._token_store.save(self._provider_id, self._local_connection_id, refreshed_token)
+        self._token_store.save(
+            self._provider_id,
+            self._local_connection_id,
+            refreshed_token,
+            account_id=self._account_id,
+        )
         return refreshed_token.access_token
 
     async def _exchange_token(
