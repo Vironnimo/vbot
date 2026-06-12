@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from 'svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -38,10 +39,12 @@
     return null;
   }
 
-  let selectedProvider = $state(scopedProvider ?? null);
+  // Seeded once from the props at mount (untrack avoids a reactive read that
+  // would only capture the initial value anyway — the modal is recreated per open).
+  let selectedProvider = $state(untrack(() => scopedProvider) ?? null);
   let selectedConnection = $state(initialConnection());
   let apiKeyValue = $state('');
-  let accountValue = $state(scopedAccount ?? '');
+  let accountValue = $state(untrack(() => scopedAccount) ?? '');
   let saving = $state(false);
   let errorMessage = $state('');
   let oauthData = $state(null);
@@ -439,21 +442,22 @@
           </p>
           <div class="provider-pick-list" role="list">
             {#each providers as provider (provider.id)}
-              <button
-                type="button"
-                class="provider-pick-item"
-                role="listitem"
-                onclick={() => chooseProvider(provider)}
-              >
-                <span class="provider-pick-item__name">
-                  {providerName(provider)}
-                </span>
-                {#if provider.base_url}
-                  <span class="provider-pick-item__detail">
-                    {provider.base_url}
+              <div role="listitem">
+                <button
+                  type="button"
+                  class="provider-pick-item"
+                  onclick={() => chooseProvider(provider)}
+                >
+                  <span class="provider-pick-item__name">
+                    {providerName(provider)}
                   </span>
-                {/if}
-              </button>
+                  {#if provider.base_url}
+                    <span class="provider-pick-item__detail">
+                      {provider.base_url}
+                    </span>
+                  {/if}
+                </button>
+              </div>
             {/each}
           </div>
         {/if}
@@ -467,22 +471,23 @@
         </p>
         <div class="provider-pick-list" role="list">
           {#each methodOptions as connection (connection.id)}
-            <button
-              type="button"
-              class="provider-pick-item"
-              role="listitem"
-              onclick={() => chooseConnection(connection)}
-            >
-              <span class="provider-pick-item__name">
-                {connectionMethodLabel(connection)}
-                <span class="provider-pick-item__connection">
-                  {connection.label ?? connection.id}
+            <div role="listitem">
+              <button
+                type="button"
+                class="provider-pick-item"
+                onclick={() => chooseConnection(connection)}
+              >
+                <span class="provider-pick-item__name">
+                  {connectionMethodLabel(connection)}
+                  <span class="provider-pick-item__connection">
+                    {connection.label ?? connection.id}
+                  </span>
                 </span>
-              </span>
-              <span class="provider-pick-item__detail">
-                {connectionMethodDescription(connection)}
-              </span>
-            </button>
+                <span class="provider-pick-item__detail">
+                  {connectionMethodDescription(connection)}
+                </span>
+              </button>
+            </div>
           {/each}
         </div>
       {:else if step === 'api-key'}
