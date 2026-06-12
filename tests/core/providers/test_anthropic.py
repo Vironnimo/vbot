@@ -1879,6 +1879,45 @@ class TestBuildPayloadNoneKwargs:
         assert request_body["stream"] is True  # stream() still adds stream=true
 
 
+class _RotatingTokenGetter:
+    """Async token getter that yields a fresh token on each call."""
+
+    def __init__(self, tokens: list[str]) -> None:
+        self._tokens = tokens
+        self.calls = 0
+
+    async def __call__(self) -> str:
+        token = self._tokens[min(self.calls, len(self._tokens) - 1)]
+        self.calls += 1
+        return token
+
+
+class TestStreamConnectRetryRebuildsHeaders:
+    """stream() must re-consult the token getter on each connect attempt."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_rebuilds_auth_header_per_connect_attempt(self) -> None:
+        """A retried stream connect uses a token refreshed during the backoff."""
+        token_getter = _RotatingTokenGetter(["stale-token", "fresh-token"])
+        adapter = AnthropicAdapter(ANTHROPIC_CONFIG, token_getter)
+        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+        route = respx.post(ANTHROPIC_URL).mock(
+            side_effect=[
+                httpx.Response(503, text="Service Unavailable"),
+                httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"}),
+            ]
+        )
+
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+            async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"):
+                pass
+
+        assert route.call_count == 2
+        assert route.calls[0].request.headers.get("x-api-key") == "stale-token"
+        assert route.calls[1].request.headers.get("x-api-key") == "fresh-token"
+
+
 # ---------------------------------------------------------------------------
 # stream() — SSE parsing
 # ---------------------------------------------------------------------------

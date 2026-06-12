@@ -357,11 +357,13 @@ class AnthropicAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors and in-band stream/provider
                 error payloads.
         """
-        headers = await self._build_headers()
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
 
         async def _connect_stream() -> httpx.Response:
+            # Rebuild headers per attempt: an OAuth token may refresh during a
+            # retry backoff, and the getter must be re-consulted each time.
+            headers = await self._build_headers()
             request = self._client.build_request(
                 "POST",
                 MESSAGES_ENDPOINT,

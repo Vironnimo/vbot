@@ -1375,6 +1375,51 @@ class TestSendRetry:
         assert route.call_count == 4  # 3 retries + 1 initial = 4 total
 
 
+class _RotatingTokenGetter:
+    """Async token getter that yields a fresh token on each call."""
+
+    def __init__(self, tokens: list[str]) -> None:
+        self._tokens = tokens
+        self.calls = 0
+
+    async def __call__(self) -> str:
+        token = self._tokens[min(self.calls, len(self._tokens) - 1)]
+        self.calls += 1
+        return token
+
+
+class TestStreamConnectRetryRebuildsHeaders:
+    """stream() must re-consult the token getter on each connect attempt."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_rebuilds_auth_header_per_connect_attempt(self) -> None:
+        """A retried stream connect uses a token refreshed during the backoff."""
+        # Arrange — token rotates between the failed attempt and the retry,
+        # mimicking an OAuth refresh inside the 503 backoff window.
+        token_getter = _RotatingTokenGetter(["stale-token", "fresh-token"])
+        adapter = OpenAICompatibleAdapter(OPENAI_CONFIG, token_getter)
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
+        )
+        route = respx.post(OPENAI_URL).mock(
+            side_effect=[
+                httpx.Response(503, text="Service Unavailable"),
+                httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"}),
+            ]
+        )
+
+        # Act
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+            async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+
+        # Assert — first attempt used the stale token, retry used the fresh one.
+        assert route.call_count == 2
+        assert route.calls[0].request.headers.get("authorization") == "Bearer stale-token"
+        assert route.calls[1].request.headers.get("authorization") == "Bearer fresh-token"
+
+
 # ---------------------------------------------------------------------------
 # send() — provider config integration
 # ---------------------------------------------------------------------------

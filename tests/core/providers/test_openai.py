@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -76,6 +77,19 @@ def _subscription_config(*, include_mode: bool = True) -> ProviderConfig:
         ],
         defaults={"max_tokens": 8192},
     )
+
+
+class _RotatingTokenGetter:
+    """Async token getter that yields a fresh token on each call."""
+
+    def __init__(self, tokens: list[str]) -> None:
+        self._tokens = tokens
+        self.calls = 0
+
+    async def __call__(self) -> str:
+        token = self._tokens[min(self.calls, len(self._tokens) - 1)]
+        self.calls += 1
+        return token
 
 
 def _jwt_with_account(account_id: str = "acct_vbot") -> str:
@@ -294,6 +308,42 @@ async def test_codex_stream_yields_normalized_responses_deltas() -> None:
         {"type": "usage", "input_tokens": 1, "output_tokens": 2},
         {"type": "finish", "reason": "stop"},
     ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_codex_stream_rebuilds_headers_per_connect_attempt() -> None:
+    """A retried Codex stream connect re-consults the token getter (OAuth refresh)."""
+
+    token_getter = _RotatingTokenGetter(
+        [_jwt_with_account("acct-stale"), _jwt_with_account("acct-fresh")]
+    )
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        token_getter,
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    sse_body = (
+        "event: response.output_text.delta\n"
+        'data: {"type":"response.output_text.delta","delta":"Hi"}\n\n'
+        "event: response.completed\n"
+        'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}\n\n'
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        side_effect=[
+            httpx.Response(503, text="Service Unavailable"),
+            httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"}),
+        ]
+    )
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-codex"):
+            pass
+
+    # The retry rebuilds headers, so the refreshed token's account id is used.
+    assert route.call_count == 2
+    assert route.calls[0].request.headers.get("chatgpt-account-id") == "acct-stale"
+    assert route.calls[1].request.headers.get("chatgpt-account-id") == "acct-fresh"
 
 
 def test_codex_discovery_headers_merge_extra_headers() -> None:
