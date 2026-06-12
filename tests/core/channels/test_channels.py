@@ -23,6 +23,7 @@ from core.channels import (
     ChannelStorage,
 )
 from core.channels.adapter import FileData, RouteFacts
+from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
 from core.chat.commands import NotACommand
 
@@ -58,15 +59,21 @@ def make_config(
     channel_id: str = "tg-assistant",
     *,
     enabled: bool = True,
-    allowed_chat_ids: list[int] | None = None,
+    allowed_chat_ids: list[int | str] | None = None,
+    platform: str = "telegram",
 ) -> ChannelConfig:
+    token_env_var = (
+        "DISCORD_BOT_TOKEN_DC_ASSISTANT"
+        if platform == "discord"
+        else "TELEGRAM_BOT_TOKEN_TG_ASSISTANT"
+    )
     return ChannelConfig(
         id=channel_id,
-        platform="telegram",
+        platform=platform,
         agent_id="assistant",
         dm_scope="per_conversation",
-        allowed_chat_ids=list(allowed_chat_ids or []),
-        token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
+        allowed_chat_ids=cast(Any, list(allowed_chat_ids or [])),
+        token_env_var=token_env_var,
         enabled=enabled,
     )
 
@@ -255,11 +262,17 @@ def test_channel_config_round_trips_gating_fields() -> None:
     assert restored.observe_unaddressed is True
 
 
+def test_channel_config_normalizes_allowed_chat_ids_to_strings() -> None:
+    config = ChannelConfig.from_dict(make_config_payload(allowed_chat_ids=[12345, " 67890 "]))
+
+    assert config.allowed_chat_ids == ["12345", "67890"]
+
+
 def test_channel_storage_crud_round_trip(tmp_path: Path) -> None:
     # Arrange
     storage = ChannelStorage(tmp_path)
     initial = make_config(allowed_chat_ids=[])
-    updated = replace(initial, allowed_chat_ids=[12345], enabled=False)
+    updated = replace(initial, allowed_chat_ids=["12345"], enabled=False)
 
     # Act
     storage.save(initial)
@@ -272,7 +285,7 @@ def test_channel_storage_crud_round_trip(tmp_path: Path) -> None:
     # Assert
     assert loaded.to_dict() == initial.to_dict()
     assert [item.id for item in listed] == [initial.id]
-    assert reloaded.allowed_chat_ids == [12345]
+    assert reloaded.allowed_chat_ids == ["12345"]
     assert reloaded.enabled is False
     with pytest.raises(ChannelNotFoundError, match=initial.id):
         storage.get(initial.id)
@@ -344,6 +357,23 @@ def test_channel_service_adapter_factory_builds_telegram_adapter(
     adapter = service._create_adapter(make_config())
 
     assert isinstance(adapter, TelegramChannelAdapter)
+
+
+def test_channel_service_adapter_factory_builds_discord_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISCORD_BOT_TOKEN_DC_ASSISTANT", "token")
+    service = make_service(tmp_path)
+
+    adapter = service._create_adapter(
+        make_config(
+            "dc-assistant",
+            platform="discord",
+        )
+    )
+
+    assert isinstance(adapter, DiscordChannelAdapter)
 
 
 def test_channel_service_adapter_factory_injects_attachment_store(

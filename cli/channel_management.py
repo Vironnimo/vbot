@@ -26,7 +26,7 @@ def channel_add(
     agent_id: str,
     token_env: str,
     dm_scope: str,
-    allowed_chat_ids: Sequence[int],
+    allowed_chat_ids: Sequence[str],
 ) -> CommandResult:
     """Create a channel configuration via `channel.create` RPC."""
 

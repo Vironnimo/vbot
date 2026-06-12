@@ -15,7 +15,7 @@ from server.main import DEFAULT_HOST
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
 THINKING_EFFORTS = ("", "none", "minimal", "low", "medium", "high", "xhigh", "max")
-CHANNEL_PLATFORMS = ("telegram",)
+CHANNEL_PLATFORMS = ("discord", "telegram")
 CHANNEL_DM_SCOPES = (
     "per_conversation",
     "main",
@@ -346,7 +346,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     add_parser.add_argument("--dm-scope", default="per_conversation", choices=CHANNEL_DM_SCOPES)
     add_parser.add_argument(
         "--allow",
-        type=int,
+        type=str,
         nargs="*",
         default=[],
         metavar="<chat-id>",
@@ -373,7 +373,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     update_parser.add_argument("--dm-scope", choices=CHANNEL_DM_SCOPES)
     update_parser.add_argument(
         "--allow",
-        type=int,
+        type=str,
         nargs="*",
         metavar="<chat-id>",
         help="Replace the full allowed chat-id list",

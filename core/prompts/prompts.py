@@ -235,7 +235,7 @@ class ChannelPromptMetadata(Protocol):
         ...
 
     @property
-    def allowed_chat_ids(self) -> list[int]:
+    def allowed_chat_ids(self) -> list[str]:
         """Allowed platform chat identifiers."""
         ...
 

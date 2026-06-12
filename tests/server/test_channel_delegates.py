@@ -111,7 +111,7 @@ async def test_channel_update_happy_path_calls_service_and_reload() -> None:
     channel_service.update_channel.assert_called_once_with(
         "tg-assistant",
         dm_scope="main",
-        allowed_chat_ids=[12345, -100],
+        allowed_chat_ids=["12345", "-100"],
         enabled=False,
         observe_unaddressed=True,
     )
@@ -482,6 +482,28 @@ async def test_channel_status_unknown_channel_returns_channel_not_found() -> Non
 
 
 @pytest.mark.asyncio
+async def test_channel_create_accepts_discord_platform() -> None:
+    state = _state(channel_service=Mock())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.create",
+            "params": {
+                "id": "dc-assistant",
+                "platform": "discord",
+                "agent_id": "assistant",
+                "token_env_var": "DISCORD_BOT_TOKEN_DC_ASSISTANT",
+            },
+        },
+    )
+
+    assert response == {"ok": True, "result": {"id": "dc-assistant"}}
+    created_config = state.runtime.channel_service.create_channel.call_args.args[0]
+    assert created_config.platform == "discord"
+
+
+@pytest.mark.asyncio
 async def test_channel_create_rejects_invalid_platform() -> None:
     state = _state(channel_service=Mock())
 
@@ -490,10 +512,10 @@ async def test_channel_create_rejects_invalid_platform() -> None:
         {
             "method": "channel.create",
             "params": {
-                "id": "tg-assistant",
-                "platform": "discord",
+                "id": "matrix-assistant",
+                "platform": "matrix",
                 "agent_id": "assistant",
-                "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
+                "token_env_var": "MATRIX_BOT_TOKEN",
             },
         },
     )

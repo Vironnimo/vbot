@@ -272,11 +272,11 @@ vbot log read 2026-05-11.log
 
 `log list` shows daily log files newest-first. `log read` takes a file name exactly as listed (`<date>.log`) and returns parsed entries and a cursor for live-tail handoff.
 
-## Telegram Channels
+## Messaging Channels
 
 ```bash
-vbot channel add <channel-id> --platform telegram --agent <agent-id> --token-env <ENV_VAR> [--dm-scope <scope>] [--allow <chat-id> ...]
-vbot channel update <channel-id> [--platform telegram] [--agent <agent-id>] [--token-env <ENV_VAR>] [--dm-scope <scope>] [--allow <chat-id> ...] [--enabled true|false]
+vbot channel add <channel-id> --platform telegram|discord --agent <agent-id> --token-env <ENV_VAR> [--dm-scope <scope>] [--allow <platform-chat-id> ...]
+vbot channel update <channel-id> [--platform telegram|discord] [--agent <agent-id>] [--token-env <ENV_VAR>] [--dm-scope <scope>] [--allow <platform-chat-id> ...] [--enabled true|false]
 vbot channel list
 vbot channel status <channel-id>
 vbot channel enable <channel-id>
@@ -289,12 +289,15 @@ Examples:
 ```bash
 vbot channel add tg-main --platform telegram --agent assistant --token-env TELEGRAM_BOT_TOKEN --allow 12345
 vbot channel add tg-work --platform telegram --agent assistant --token-env TELEGRAM_WORK_BOT_TOKEN --dm-scope per_peer --allow 12345 67890
+vbot channel add dc-main --platform discord --agent assistant --token-env DISCORD_BOT_TOKEN --allow 123456789012345678
 vbot channel update tg-work --agent coder --allow 12345 67890 24680
 vbot channel enable tg-main
 vbot channel status tg-main
 ```
 
 `channel update` is a partial update: omitted fields remain unchanged. Passing `--allow` replaces the full allowed chat-id list. Use `--enabled true` or `--enabled false` for config-level enabled state; use `channel enable` and `channel disable` for the common on/off operation.
+
+Telegram allowlist entries are chat ids. Discord entries are channel/thread ids, not guild ids; enable the Message Content Intent in the Discord Developer Portal before starting the channel.
 
 Supported `--dm-scope` values:
 

@@ -32,7 +32,7 @@ _DEFAULT_DM_SCOPE = "per_conversation"
 _ALLOWED_DM_SCOPES = frozenset(("per_conversation", "main", "per_peer", "per_account_channel_peer"))
 _DEFAULT_RESPONSE_MODE = "mention"
 _ALLOWED_RESPONSE_MODES = frozenset(("mention", "all"))
-_ALLOWED_PLATFORMS = frozenset(("telegram",))
+_ALLOWED_PLATFORMS = frozenset(("discord", "telegram"))
 _CHANNEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ADAPTER_RESTART_INITIAL_DELAY_SECONDS = 1.0
 _ADAPTER_RESTART_MAX_DELAY_SECONDS = 30.0
@@ -73,7 +73,7 @@ class ChannelConfig:
     platform: str
     agent_id: str
     dm_scope: str = _DEFAULT_DM_SCOPE
-    allowed_chat_ids: list[int] = field(default_factory=list)
+    allowed_chat_ids: list[str] = field(default_factory=list)
     token_env_var: str = ""
     enabled: bool = True
     response_mode: str = _DEFAULT_RESPONSE_MODE
@@ -139,12 +139,15 @@ class ChannelConfig:
             raise ChannelConfigError(f"dm_scope must be one of: {scopes}")
 
         if not isinstance(self.allowed_chat_ids, list):
-            raise ChannelConfigError("allowed_chat_ids must be a list of integers")
-        normalized_chat_ids: list[int] = []
+            raise ChannelConfigError("allowed_chat_ids must be a list of platform ids")
+        normalized_chat_ids: list[str] = []
         for chat_id in self.allowed_chat_ids:
-            if not isinstance(chat_id, int) or isinstance(chat_id, bool):
-                raise ChannelConfigError("allowed_chat_ids must contain integers only")
-            normalized_chat_ids.append(chat_id)
+            if isinstance(chat_id, bool) or not isinstance(chat_id, (int, str)):
+                raise ChannelConfigError("allowed_chat_ids must contain strings or integers only")
+            normalized_chat_id = str(chat_id).strip()
+            if not normalized_chat_id:
+                raise ChannelConfigError("allowed_chat_ids must not contain empty values")
+            normalized_chat_ids.append(normalized_chat_id)
         self.allowed_chat_ids = normalized_chat_ids
 
         if not isinstance(self.token_env_var, str) or not self.token_env_var.strip():
@@ -629,6 +632,18 @@ class ChannelService:
         self._notify_tool_registration_changed()
 
     def _create_adapter(self, config: ChannelConfig) -> ChannelAdapter:
+        if config.platform == "discord":
+            from core.channels.discord import DiscordChannelAdapter
+
+            return DiscordChannelAdapter(
+                config,
+                self._trigger_service,
+                self._chat_sessions,
+                self._credential_resolver,
+                attachment_store=self._attachment_store,
+                command_dispatcher=self._command_dispatcher,
+            )
+
         if config.platform == "telegram":
             from core.channels.telegram import TelegramChannelAdapter
 
