@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.chat import ChatLoop, ChatSessionManager, CommandDispatcher
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.query import ModelQuery
+from core.providers.accounts import ProviderAccount
 from core.runs import ChatRunManager
 from core.tools import ToolContext, ToolRegistry, tool_success
 from server.app import create_app
@@ -336,6 +337,28 @@ class IntegrationRuntime:
             def has_credentials(self, provider_id: str, _connection_id: str | None = None) -> bool:
                 return runtime.has_provider_credentials(provider_id)
 
+            def list_accounts(
+                self, provider_id: str, local_connection_id: str
+            ) -> list[ProviderAccount]:
+                if not runtime.has_provider_credentials(provider_id):
+                    return []
+                provider = cast(Any, runtime.providers.get(provider_id))
+                connection = next(
+                    connection
+                    for connection in provider.connections
+                    if connection.id == local_connection_id
+                )
+                if connection.type == "oauth":
+                    return [ProviderAccount(id="default", usable=True, source="oauth")]
+                return [
+                    ProviderAccount(
+                        id="default",
+                        usable=True,
+                        source="process_env",
+                        credential_key=connection.auth.credential_key,
+                    )
+                ]
+
         return CredentialResolver()
 
 
@@ -402,6 +425,8 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                                 "type": "api_key",
                                 "label": "API Key",
                                 "configured": False,
+                                "accounts": [],
+                                "credential_key": "ANTHROPIC_API_KEY",
                             }
                         ],
                         "credentials_configured": False,
@@ -421,12 +446,29 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                                 "type": "api_key",
                                 "label": "API Key",
                                 "configured": True,
+                                "accounts": [
+                                    {
+                                        "id": "default",
+                                        "usable": True,
+                                        "source": "process_env",
+                                        "credential_key": "OPENAI_API_KEY",
+                                    }
+                                ],
+                                "credential_key": "OPENAI_API_KEY",
                             },
                             {
                                 "id": "openai:subscription",
                                 "type": "oauth",
                                 "label": "ChatGPT Plus/Pro",
                                 "configured": True,
+                                "accounts": [
+                                    {
+                                        "id": "default",
+                                        "usable": True,
+                                        "source": "oauth",
+                                        "credential_key": "",
+                                    }
+                                ],
                                 "connectable": False,
                             },
                         ],
