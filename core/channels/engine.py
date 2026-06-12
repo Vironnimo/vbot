@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
@@ -66,8 +68,14 @@ class ConversationTransport(Protocol):
     def platform_display_name(self) -> str:
         """Human-facing platform name used verbatim in reply and reminder text."""
 
-    async def send_text(self, platform_target: str, text: str) -> None:
-        """Deliver one outbound text reply to a platform target."""
+    async def send_text(
+        self,
+        platform_target: str,
+        text: str,
+        *,
+        reply_to_message_id: str | None = None,
+    ) -> None:
+        """Deliver one outbound text reply, optionally referencing a platform message."""
 
     def activity_indicator(
         self, platform_target: str
@@ -76,6 +84,9 @@ class ConversationTransport(Protocol):
 
     async def build_media_blocks(self, raw_message: Any) -> list[ContentBlock]:
         """Convert one raw platform message into canonical content blocks."""
+
+    def caption_text(self, raw_message: Any) -> str | None:
+        """Extract caption text from one raw platform message for gating checks."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -124,6 +135,11 @@ class ChannelConversationEngine:
         self._chat_sessions = chat_sessions
         self._transport = transport
         self._command_dispatcher = command_dispatcher
+        self._owner_user_ids = frozenset(config.owner_user_ids)
+        # Config validation guarantees the patterns compile.
+        self._mention_patterns = tuple(
+            re.compile(pattern, re.IGNORECASE) for pattern in config.mention_patterns
+        )
         self._chat_queues: dict[str, asyncio.Queue[_QueuedWork]] = {}
         self._chat_workers: dict[str, asyncio.Task[None]] = {}
 
@@ -134,7 +150,27 @@ class ChannelConversationEngine:
         conversation: ConversationFacts,
         message_text: str,
     ) -> None:
-        """Route, eagerly command-dispatch, and enqueue one inbound text message."""
+        """Gate, route, eagerly command-dispatch, and enqueue one inbound text message."""
+        if conversation.kind == "group" and self._command_dispatcher.recognizes(message_text):
+            # Commands are inherently addressed; they are gated by sender authorization
+            # instead of response mode. The check must run before dispatch() because
+            # dispatch executes handler side effects (e.g. /stop cancels a Run).
+            if not self._command_sender_authorized(conversation):
+                _LOGGER.info(
+                    "Channel command denied for non-owner (channel=%s chat=%s user=%s)",
+                    self._config.id,
+                    conversation.chat_id,
+                    conversation.user_id,
+                )
+                return
+        elif not self.should_respond(conversation, (message_text,)):
+            _LOGGER.debug(
+                "Channel group message not addressed; dropped (channel=%s chat=%s)",
+                self._config.id,
+                conversation.chat_id,
+            )
+            return
+
         route, reply_plan = self.prepare_inbound_route(conversation)
 
         command_result = self._command_dispatcher.dispatch(
@@ -161,21 +197,28 @@ class ChannelConversationEngine:
             ),
         )
 
-    def enqueue_media(
+    async def handle_inbound_media(
         self,
-        route: RouteFacts,
-        reply_plan: ReplyPlanFacts,
-        messages: tuple[Any, ...],
-        *,
         conversation: ConversationFacts,
+        raw_messages: tuple[Any, ...],
     ) -> None:
-        """Enqueue inbound media (one message or a buffered album) for worker processing."""
+        """Gate, route, and enqueue inbound media (one message or a buffered album)."""
+        gating_texts = tuple(self._transport.caption_text(message) for message in raw_messages)
+        if not self.should_respond(conversation, gating_texts):
+            _LOGGER.debug(
+                "Channel group media not addressed; dropped (channel=%s chat=%s)",
+                self._config.id,
+                conversation.chat_id,
+            )
+            return
+
+        route, reply_plan = self.prepare_inbound_route(conversation)
         self._enqueue_chat_work(
             reply_plan.platform_target,
             _QueuedInboundMedia(
                 route=route,
                 reply_plan=reply_plan,
-                messages=messages,
+                messages=tuple(raw_messages),
                 sender=self._sender_for(conversation),
             ),
         )
@@ -189,6 +232,9 @@ class ChannelConversationEngine:
         reply_plan = ReplyPlanFacts(
             channel_id=self._config.id,
             platform_target=conversation.chat_id,
+            # Group replies reference the triggering message so it is clear which
+            # message the bot answers; DM replies stay plain.
+            reply_to_message_id=(conversation.message_id if conversation.kind == "group" else None),
         )
         self._update_session_metadata(route, conversation, reply_plan)
         return route, reply_plan
@@ -196,6 +242,46 @@ class ChannelConversationEngine:
     def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure the Session mirroring a conversation exists with channel context."""
         return self._ensure_channel_session(conversation)
+
+    # -- Gating -------------------------------------------------------------------------
+
+    def should_respond(
+        self,
+        conversation: ConversationFacts,
+        gating_texts: Sequence[str | None] = (),
+    ) -> bool:
+        """Decide whether one inbound non-command message may trigger a Run.
+
+        Direct conversations always respond. Group conversations respond in
+        ``response_mode: "all"``, or in ``"mention"`` mode when the message is addressed:
+        platform bot mention, reply to a bot message, or a ``mention_patterns`` wake-word
+        match against the supplied texts (message text or media captions).
+        """
+        if conversation.kind != "group":
+            return True
+        if self._config.response_mode == "all":
+            return True
+        if conversation.mentioned_bot or conversation.is_reply_to_bot:
+            return True
+        return self._matches_mention_patterns(gating_texts)
+
+    def _matches_mention_patterns(self, gating_texts: Sequence[str | None]) -> bool:
+        for text in gating_texts:
+            if not isinstance(text, str):
+                continue
+            for pattern in self._mention_patterns:
+                if pattern.search(text):
+                    return True
+        return False
+
+    def _command_sender_authorized(self, conversation: ConversationFacts) -> bool:
+        # DM commands are always authorized: the chat allowlist already identifies the
+        # sender, and commands act on that sender's own session. Owner gating protects
+        # the shared group session; an empty owner list denies all group commands
+        # (consistent with allowed_chat_ids deny-all semantics).
+        if conversation.kind != "group":
+            return True
+        return conversation.user_id in self._owner_user_ids
 
     def _sender_for(self, conversation: ConversationFacts) -> MessageSender | None:
         # Sender identity is group-only in v1; DM turns stay unattributed.
@@ -370,7 +456,7 @@ class ChannelConversationEngine:
                 failure_replies.append(_media_failure_reply(error))
 
         for reply in dict.fromkeys(failure_replies):
-            await self._transport.send_text(queued.reply_plan.platform_target, reply)
+            await self._send_reply(queued.reply_plan, reply)
 
         if not content_blocks:
             return
@@ -409,16 +495,16 @@ class ChannelConversationEngine:
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
-            await self._transport.send_text(reply_plan.platform_target, _FAILED_REPLY)
+            await self._send_reply(reply_plan, _FAILED_REPLY)
             return
 
-        await self._relay_run_events(run, reply_plan.platform_target)
+        await self._relay_run_events(run, reply_plan)
 
-    async def _relay_run_events(self, run: Run, platform_target: str) -> None:
+    async def _relay_run_events(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
         assistant_text: str | None = None
         reply: str | None = None
 
-        async with self._transport.activity_indicator(platform_target):
+        async with self._transport.activity_indicator(reply_plan.platform_target):
             async for event in run.subscribe():
                 if event.type == ASSISTANT_OUTPUT_EVENT:
                     extracted = _extract_assistant_output(event)
@@ -439,7 +525,14 @@ class ChannelConversationEngine:
                     break
 
         if reply is not None:
-            await self._transport.send_text(platform_target, reply)
+            await self._send_reply(reply_plan, reply)
+
+    async def _send_reply(self, reply_plan: ReplyPlanFacts, text: str) -> None:
+        await self._transport.send_text(
+            reply_plan.platform_target,
+            text,
+            reply_to_message_id=reply_plan.reply_to_message_id,
+        )
 
     # -- Command actions --------------------------------------------------------------
 
@@ -454,7 +547,7 @@ class ChannelConversationEngine:
         if isinstance(dispatch_result, CommandHandled):
             reply = dispatch_result.reply
             if isinstance(reply, str) and reply.strip():
-                await self._transport.send_text(reply_plan.platform_target, reply)
+                await self._send_reply(reply_plan, reply)
             return True
 
         if isinstance(dispatch_result, CommandAction):
@@ -492,10 +585,10 @@ class ChannelConversationEngine:
                 except Exception as error:
                     self._log_command_action_failure(command_action.name, route, reply_plan, error)
                     reply = _FAILED_REPLY
-                await self._transport.send_text(reply_plan.platform_target, reply)
+                await self._send_reply(reply_plan, reply)
             case "new_session":
-                await self._transport.send_text(
-                    reply_plan.platform_target,
+                await self._send_reply(
+                    reply_plan,
                     f"Starting a new session is not available from {platform} channels yet.",
                 )
             case "retry_last_turn":
@@ -506,14 +599,14 @@ class ChannelConversationEngine:
                     )
                 except Exception as error:
                     self._log_command_action_failure(command_action.name, route, reply_plan, error)
-                    await self._transport.send_text(reply_plan.platform_target, _FAILED_REPLY)
+                    await self._send_reply(reply_plan, _FAILED_REPLY)
                     return
-                await self._relay_run_events(run, reply_plan.platform_target)
+                await self._relay_run_events(run, reply_plan)
             case _:
                 # Recognized commands without a channel implementation (e.g. /handoff)
                 # must reply instead of silently swallowing the message.
-                await self._transport.send_text(
-                    reply_plan.platform_target,
+                await self._send_reply(
+                    reply_plan,
                     f"This command is not available from {platform} channels yet.",
                 )
 

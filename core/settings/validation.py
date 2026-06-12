@@ -126,12 +126,24 @@ ALLOWED_CRON_SCHEDULE_TYPES = frozenset({"cron", "once"})
 ALLOWED_CRON_STATUSES = frozenset({"active", "paused", "completed"})
 
 CHANNEL_FIELDS = frozenset(
-    {"agent_id", "allowed_chat_ids", "dm_scope", "enabled", "id", "platform", "token_env_var"}
+    {
+        "agent_id",
+        "allowed_chat_ids",
+        "dm_scope",
+        "enabled",
+        "id",
+        "mention_patterns",
+        "owner_user_ids",
+        "platform",
+        "response_mode",
+        "token_env_var",
+    }
 )
 ALLOWED_CHANNEL_PLATFORMS = frozenset({"telegram"})
 ALLOWED_CHANNEL_DM_SCOPES = frozenset(
     {"main", "per_account_channel_peer", "per_conversation", "per_peer"}
 )
+ALLOWED_CHANNEL_RESPONSE_MODES = frozenset({"all", "mention"})
 
 
 @dataclass(frozen=True)
@@ -426,6 +438,14 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
     )
     if "enabled" in data and not isinstance(data["enabled"], bool):
         _error(diagnostics, "$.enabled", "must be a boolean")
+    _validate_allowed_string(
+        diagnostics,
+        "$.response_mode",
+        data.get("response_mode", "mention"),
+        ALLOWED_CHANNEL_RESPONSE_MODES,
+    )
+    _validate_regex_list(diagnostics, "$.mention_patterns", data.get("mention_patterns", []))
+    _validate_user_id_list(diagnostics, "$.owner_user_ids", data.get("owner_user_ids", []))
     return diagnostics
 
 
@@ -935,6 +955,32 @@ def _validate_integer_list(diagnostics: list[JsonDiagnostic], path: str, value: 
     for index, item in enumerate(value):
         if isinstance(item, bool) or not isinstance(item, int):
             _error(diagnostics, f"{path}[{index}]", "must be an integer")
+
+
+def _validate_regex_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, list):
+        _error(diagnostics, path, "must be a list of regex strings")
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            _error(diagnostics, f"{path}[{index}]", "must be a non-empty string")
+            continue
+        try:
+            re.compile(item)
+        except re.error as error:
+            _error(diagnostics, f"{path}[{index}]", f"must be a valid regex: {error}")
+
+
+def _validate_user_id_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, list):
+        _error(diagnostics, path, "must be a list of platform user ids")
+        return
+    for index, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, (int, str)):
+            _error(diagnostics, f"{path}[{index}]", "must be a string or integer user id")
+            continue
+        if isinstance(item, str) and not item.strip():
+            _error(diagnostics, f"{path}[{index}]", "must not be empty")
 
 
 def _child_path(parent_path: str, key: str) -> str:

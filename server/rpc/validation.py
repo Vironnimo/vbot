@@ -90,6 +90,30 @@ def _optional_integer_list(params: JsonObject, key: str, *, default: list[int]) 
     return _required_integer_list(params, key)
 
 
+def _required_string_list(params: JsonObject, key: str) -> list[str]:
+    value = params.get(key)
+    if not isinstance(value, list):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a list of non-empty strings"
+        )
+
+    parsed: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.{key} must be a list of non-empty strings",
+            )
+        parsed.append(item)
+    return parsed
+
+
+def _optional_string_list(params: JsonObject, key: str, *, default: list[str]) -> list[str]:
+    if key not in params:
+        return list(default)
+    return _required_string_list(params, key)
+
+
 def _optional_string(params: JsonObject, key: str) -> str | None:
     value = params.get(key)
     if value is None:

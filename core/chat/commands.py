@@ -112,21 +112,34 @@ class CommandDispatcher:
 
     def dispatch(self, agent_id: str, session_id: str, message_text: str) -> DispatchResult:
         """Dispatch one message as a built-in slash command when recognized."""
+        handler = self._resolve_command(message_text)
+        if handler is None:
+            return NotACommand()
+        return handler(agent_id, session_id)
+
+    def recognizes(self, message_text: str) -> bool:
+        """Return whether dispatching this message would handle it as a command.
+
+        Lets accessors gate command authorization before ``dispatch()`` runs handler
+        side effects (e.g. ``/stop`` cancelling a Run).
+        """
+        return self._resolve_command(message_text) is not None
+
+    def _resolve_command(self, message_text: str) -> CommandHandler | None:
         stripped_text = message_text.strip()
         first_token, _, remainder = stripped_text.partition(" ")
         if first_token.lower() == "/handoff":
             trailing = remainder.strip()
-            if trailing:
-                tokens = trailing.split()
-                if len(tokens) != 1:
-                    return NotACommand()
-                return CommandAction(name="handoff", argument=tokens[0])
-            return CommandAction(name="handoff", argument=None)
-        normalized_text = stripped_text.lower()
-        handler = self._commands.get(normalized_text)
-        if handler is None:
-            return NotACommand()
-        return handler(agent_id, session_id)
+            if not trailing:
+                return lambda _agent_id, _session_id: CommandAction(name="handoff", argument=None)
+            tokens = trailing.split()
+            if len(tokens) != 1:
+                return None
+            target_agent_id = tokens[0]
+            return lambda _agent_id, _session_id: CommandAction(
+                name="handoff", argument=target_agent_id
+            )
+        return self._commands.get(stripped_text.lower())
 
     def _handle_compact(self, agent_id: str, session_id: str) -> CommandAction:
         return CommandAction(name="compact")
