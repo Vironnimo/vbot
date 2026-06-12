@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from core.chat.content_blocks import ContentBlock
@@ -19,6 +19,9 @@ class ConversationFacts:
     chat_id: str
     user_id: str
     thread_id: str | None = None
+    # The adapter classifies the conversation; the engine derives session ids from it.
+    # A group conversation routes to a shared session keyed by chat id, ignoring dm_scope.
+    kind: Literal["direct", "group"] = "direct"
 
 
 @dataclass(frozen=True)
