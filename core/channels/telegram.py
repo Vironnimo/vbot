@@ -5,38 +5,26 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
 from functools import partial
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
-from core.attachments import (
-    AttachmentStore,
-    AttachmentTooLargeError,
-    AttachmentTypeNotAllowedError,
-)
+from core.attachments import AttachmentStore
 from core.channels.adapter import (
     ChannelAdapter,
     ConversationFacts,
     FileData,
-    MessageFacts,
     ReplyPlanFacts,
     RouteFacts,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
-from core.chat.commands import CommandAction, CommandDispatcher, CommandHandled
+from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock, TextBlock
-from core.runs import (
-    ASSISTANT_OUTPUT_EVENT,
-    RUN_CANCELLED_EVENT,
-    RUN_COMPLETED_EVENT,
-    RUN_FAILED_EVENT,
-)
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
-    from core.runs import Run, RunEvent
+    from core.chat.commands import CommandDispatcher
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels.telegram")
@@ -47,52 +35,14 @@ _ALBUM_FLUSH_SECONDS = 0.5
 # Telegram chat actions expire after ~5 s, so the indicator is refreshed on a shorter cycle.
 _TYPING_ACTION = "typing"
 _TYPING_REFRESH_SECONDS = 4.0
-_FAILED_REPLY = "Sorry, I couldn't complete that request. Please try again."
-_CANCELLED_REPLY = "Sorry, this request was cancelled before completion."
-_EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text was produced."
-_UNSUPPORTED_COMMAND_REPLY = "This command is not available from Telegram channels yet."
-_UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
-_FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
-_MEDIA_FAILED_REPLY = "Sorry, I couldn't process the attached file. Please try again."
 _UNSUPPORTED_MESSAGE_TYPE_REPLY = "Sorry, this message type isn't supported yet."
-_SYSTEM_REMINDER_TEMPLATE = (
-    "This session is receiving messages via Telegram "
-    "(channel: {channel_id}, chat: {chat_id}).\n"
-    "Respond in a style appropriate for Telegram messaging."
-)
-
-
-@dataclass(slots=True, frozen=True)
-class _QueuedInboundMessage:
-    route: RouteFacts
-    reply_plan: ReplyPlanFacts
-    message: MessageFacts
-    command_checked: bool = False
-
-
-@dataclass(slots=True, frozen=True)
-class _QueuedCommandAction:
-    route: RouteFacts
-    reply_plan: ReplyPlanFacts
-    action: CommandAction
-
-
-@dataclass(slots=True, frozen=True)
-class _QueuedInboundMedia:
-    route: RouteFacts
-    reply_plan: ReplyPlanFacts
-    # Raw Telegram messages; file download happens in the per-chat worker so the
-    # PTB update handler never blocks the adapter-wide update pipeline.
-    messages: tuple[Any, ...]
-
-
-_QueuedWork = _QueuedInboundMessage | _QueuedCommandAction | _QueuedInboundMedia
 
 
 class TelegramChannelAdapter(ChannelAdapter):
     """Telegram long-polling adapter for bidirectional channel messaging."""
 
     platform = "telegram"
+    platform_display_name = "Telegram"
 
     def __init__(
         self,
@@ -105,10 +55,14 @@ class TelegramChannelAdapter(ChannelAdapter):
         command_dispatcher: CommandDispatcher,
     ) -> None:
         self._config = config
-        self._trigger_service = trigger_service
-        self._chat_sessions = chat_sessions
         self._attachment_store = attachment_store
-        self._command_dispatcher = command_dispatcher
+        self._engine = ChannelConversationEngine(
+            config,
+            trigger_service,
+            chat_sessions,
+            self,
+            command_dispatcher=command_dispatcher,
+        )
 
         token = credential_resolver(config.token_env_var)
         if not isinstance(token, str) or not token.strip():
@@ -120,8 +74,6 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._application: Any | None = None
         self._stop_event = asyncio.Event()
         self._allowed_chat_ids = frozenset(config.allowed_chat_ids)
-        self._chat_queues: dict[str, asyncio.Queue[_QueuedWork]] = {}
-        self._chat_workers: dict[str, asyncio.Task[None]] = {}
         self._album_buffers: dict[str, list[Any]] = {}
         self._album_routes: dict[str, RouteFacts] = {}
         self._album_reply_plans: dict[str, ReplyPlanFacts] = {}
@@ -186,9 +138,9 @@ class TelegramChannelAdapter(ChannelAdapter):
         ]
 
     async def stop(self) -> None:
-        """Stop polling, cancel per-chat workers, and release Telegram resources."""
+        """Stop polling, cancel engine workers and album tasks, and release resources."""
         self._stop_event.set()
-        await self._stop_chat_workers()
+        await self._stop_workers()
 
         application = self._application
         self._application = None
@@ -322,138 +274,27 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         await bot.send_media_group(chat_id=chat_id, media=media_items)
 
-    async def _handle_inbound_message(
-        self,
-        update: Any,
-        _context: Any,
-    ) -> None:
-        conversation = self._conversation_facts(update)
-        if conversation is None:
-            return
+    # -- ConversationTransport ------------------------------------------------------------
 
-        chat_id = int(conversation.chat_id)
-        if not self._is_chat_allowed(chat_id):
-            return
+    async def send_text(self, platform_target: str, text: str) -> None:
+        """Deliver one outbound text reply (engine transport callback)."""
+        await self.send(text, platform_target)
 
-        message_text = _extract_message_text(update)
-        if message_text is None:
-            return
+    def activity_indicator(
+        self, platform_target: str
+    ) -> contextlib.AbstractAsyncContextManager[None]:
+        """Telegram typing indicator as the engine's activity-indicator callback."""
+        return self._typing_indicator(platform_target)
 
-        route, reply_plan = self._prepare_inbound_route(conversation)
-
-        command_result = self._command_dispatcher.dispatch(
-            route.agent_id,
-            route.session_id,
-            message_text,
-        )
-        if await self._handle_dispatch_result(
-            command_result,
-            route,
-            reply_plan,
-            defer_actions=True,
-        ):
-            return
-
-        self._enqueue_chat_work(
-            conversation.chat_id,
-            _QueuedInboundMessage(
-                route=route,
-                reply_plan=reply_plan,
-                message=MessageFacts(content=message_text),
-                command_checked=True,
-            ),
-        )
-
-    async def _handle_inbound_media(self, update: Any, _context: Any) -> None:
-        conversation = self._conversation_facts(update)
-        if conversation is None:
-            return
-
-        chat_id = int(conversation.chat_id)
-        if not self._is_chat_allowed(chat_id):
-            return
-
-        message = getattr(update, "effective_message", None)
-        if message is None:
-            return
-
-        route, reply_plan = self._prepare_inbound_route(conversation)
-        media_group_id = getattr(message, "media_group_id", None)
-        if media_group_id is not None:
-            self._buffer_album_message(
-                str(media_group_id),
-                conversation.chat_id,
-                route,
-                reply_plan,
-                message,
-            )
-            return
-
-        self._enqueue_chat_work(
-            conversation.chat_id,
-            _QueuedInboundMedia(route=route, reply_plan=reply_plan, messages=(message,)),
-        )
-
-    async def _handle_unsupported_message_type(self, update: Any, _context: Any) -> None:
-        """Reply to allowed chats that this message type cannot be processed yet."""
-        conversation = self._conversation_facts(update)
-        if conversation is None:
-            return
-
-        if not self._is_chat_allowed(int(conversation.chat_id)):
-            return
-
-        await self.send(_UNSUPPORTED_MESSAGE_TYPE_REPLY, conversation.chat_id)
-
-    def _prepare_inbound_route(
-        self,
-        conversation: ConversationFacts,
-    ) -> tuple[RouteFacts, ReplyPlanFacts]:
-        route = self._ensure_channel_session(conversation)
-        reply_plan = ReplyPlanFacts(
-            channel_id=self._config.id,
-            platform_target=conversation.chat_id,
-        )
-        self._update_session_metadata(route, conversation, reply_plan)
-        return route, reply_plan
-
-    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
-        """Ensure the Session mirroring an outbound Telegram chat exists with channel context."""
-        return self._ensure_channel_session(self._conversation_facts_for_target(platform_target))
-
-    def _ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
-        route = self._route_facts(conversation)
-        is_new_session = not self._session_exists(route)
-        session = self._chat_sessions.get_or_create(route.agent_id, route.session_id)
-        if is_new_session:
-            session.add_note(
-                _SYSTEM_REMINDER_TEMPLATE.format(
-                    channel_id=self._config.id,
-                    chat_id=conversation.chat_id,
-                )
-            )
-        return route
-
-    def _conversation_facts_for_target(self, platform_target: str) -> ConversationFacts:
-        chat_id = _parse_platform_target(platform_target)
-        # Telegram private chats use chat_id == user_id, and group chats (negative ids) ignore
-        # dm_scope, so the chat id alone determines the routed session for a proactive send.
-        return ConversationFacts(
-            platform=self.platform,
-            channel_id=self._config.id,
-            chat_id=str(chat_id),
-            user_id=str(chat_id),
-            thread_id=None,
-        )
-
-    async def _build_media_message_blocks(self, message: Any) -> list[ContentBlock]:
+    async def build_media_blocks(self, raw_message: Any) -> list[ContentBlock]:
+        """Convert one raw Telegram message into canonical content blocks."""
         blocks: list[ContentBlock] = []
 
-        caption = _extract_caption(message)
+        caption = _extract_caption(raw_message)
         if caption is not None:
             blocks.append(TextBlock(type="text", text=caption))
 
-        photo_items = getattr(message, "photo", None)
+        photo_items = getattr(raw_message, "photo", None)
         if isinstance(photo_items, (list, tuple)) and photo_items:
             largest_photo = photo_items[-1]
             file_id = getattr(largest_photo, "file_id", None)
@@ -473,12 +314,12 @@ class TelegramChannelAdapter(ChannelAdapter):
             )
             return blocks
 
-        audio_video_block = await self._build_audio_video_block(message)
+        audio_video_block = await self._build_audio_video_block(raw_message)
         if audio_video_block is not None:
             blocks.append(audio_video_block)
             return blocks
 
-        document = getattr(message, "document", None)
+        document = getattr(raw_message, "document", None)
         if document is None:
             return blocks
 
@@ -550,10 +391,81 @@ class TelegramChannelAdapter(ChannelAdapter):
         payload = await telegram_file.download_as_bytearray()
         return attachment_store.store(filename, bytes(payload))
 
+    # -- Inbound handlers -----------------------------------------------------------------
+
+    async def _handle_inbound_message(
+        self,
+        update: Any,
+        _context: Any,
+    ) -> None:
+        conversation = self._conversation_facts(update)
+        if conversation is None:
+            return
+
+        if not self._is_chat_allowed(int(conversation.chat_id)):
+            return
+
+        message_text = _extract_message_text(update)
+        if message_text is None:
+            return
+
+        await self._engine.handle_inbound_text(conversation, message_text)
+
+    async def _handle_inbound_media(self, update: Any, _context: Any) -> None:
+        conversation = self._conversation_facts(update)
+        if conversation is None:
+            return
+
+        if not self._is_chat_allowed(int(conversation.chat_id)):
+            return
+
+        message = getattr(update, "effective_message", None)
+        if message is None:
+            return
+
+        route, reply_plan = self._engine.prepare_inbound_route(conversation)
+        media_group_id = getattr(message, "media_group_id", None)
+        if media_group_id is not None:
+            self._buffer_album_message(str(media_group_id), route, reply_plan, message)
+            return
+
+        self._engine.enqueue_media(route, reply_plan, (message,))
+
+    async def _handle_unsupported_message_type(self, update: Any, _context: Any) -> None:
+        """Reply to allowed chats that this message type cannot be processed yet."""
+        conversation = self._conversation_facts(update)
+        if conversation is None:
+            return
+
+        if not self._is_chat_allowed(int(conversation.chat_id)):
+            return
+
+        await self.send(_UNSUPPORTED_MESSAGE_TYPE_REPLY, conversation.chat_id)
+
+    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+        """Ensure the Session mirroring an outbound Telegram chat exists with channel context."""
+        return self._engine.ensure_channel_session(
+            self._conversation_facts_for_target(platform_target)
+        )
+
+    def _conversation_facts_for_target(self, platform_target: str) -> ConversationFacts:
+        chat_id = _parse_platform_target(platform_target)
+        # Telegram private chats use chat_id == user_id, and group chats (negative ids) ignore
+        # dm_scope, so the chat id alone determines the routed session for a proactive send.
+        return ConversationFacts(
+            platform=self.platform,
+            channel_id=self._config.id,
+            chat_id=str(chat_id),
+            user_id=str(chat_id),
+            thread_id=None,
+            kind="group" if chat_id < 0 else "direct",
+        )
+
+    # -- Album buffering ------------------------------------------------------------------
+
     def _buffer_album_message(
         self,
         album_id: str,
-        chat_id: str,
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
         message: Any,
@@ -565,9 +477,9 @@ class TelegramChannelAdapter(ChannelAdapter):
             self._album_buffers[album_id] = [message]
             self._album_routes[album_id] = route
             self._album_reply_plans[album_id] = reply_plan
-        self._restart_album_flush(album_id, chat_id)
+        self._restart_album_flush(album_id)
 
-    def _restart_album_flush(self, album_id: str, chat_id: str) -> None:
+    def _restart_album_flush(self, album_id: str) -> None:
         # The flush window counts from the last buffered item, so slow album delivery
         # does not split one album into multiple Runs.
         existing_task = self._album_tasks.get(album_id)
@@ -575,13 +487,13 @@ class TelegramChannelAdapter(ChannelAdapter):
             existing_task.cancel()
 
         task = asyncio.create_task(
-            self._flush_album(album_id, chat_id),
+            self._flush_album(album_id),
             name=f"telegram:{self._config.id}:album:{album_id}",
         )
         self._album_tasks[album_id] = task
         task.add_done_callback(partial(self._on_album_task_done, album_id))
 
-    async def _flush_album(self, album_id: str, chat_id: str) -> None:
+    async def _flush_album(self, album_id: str) -> None:
         await asyncio.sleep(_ALBUM_FLUSH_SECONDS)
 
         messages = self._album_buffers.pop(album_id, [])
@@ -590,14 +502,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if not messages or route is None or reply_plan is None:
             return
 
-        self._enqueue_chat_work(
-            chat_id,
-            _QueuedInboundMedia(
-                route=route,
-                reply_plan=reply_plan,
-                messages=tuple(messages),
-            ),
-        )
+        self._engine.enqueue_media(route, reply_plan, tuple(messages))
 
     def _on_album_task_done(self, album_id: str, task: asyncio.Task[None]) -> None:
         if self._album_tasks.get(album_id) is task:
@@ -617,6 +522,8 @@ class TelegramChannelAdapter(ChannelAdapter):
             error,
         )
 
+    # -- Update parsing -------------------------------------------------------------------
+
     def _conversation_facts(self, update: Any) -> ConversationFacts | None:
         message = getattr(update, "effective_message", None)
         chat = getattr(update, "effective_chat", None)
@@ -626,7 +533,7 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         chat_id = getattr(chat, "id", None)
         user_id = getattr(user, "id", None)
-        if not _is_integer(chat_id) or not _is_integer(user_id):
+        if not (_is_integer(chat_id) and _is_integer(user_id)):
             return None
 
         thread_id_raw = getattr(message, "message_thread_id", None)
@@ -638,293 +545,15 @@ class TelegramChannelAdapter(ChannelAdapter):
             chat_id=str(chat_id),
             user_id=str(user_id),
             thread_id=thread_id,
+            # Telegram group chats are identified by negative chat ids.
+            kind="group" if chat_id < 0 else "direct",
         )
-
-    def _route_facts(self, conversation: ConversationFacts) -> RouteFacts:
-        return RouteFacts(
-            agent_id=self._config.agent_id,
-            session_id=self._derive_session_id(conversation),
-        )
-
-    def _derive_session_id(self, conversation: ConversationFacts) -> str:
-        chat_id = int(conversation.chat_id)
-        if chat_id < 0:
-            return f"ch-{self._config.id}-{conversation.chat_id}"
-
-        scope = self._config.dm_scope
-        if scope == "main":
-            return f"ch-{self._config.id}-main"
-        if scope == "per_peer":
-            return f"ch-{self._config.id}-u{conversation.user_id}"
-        if scope == "per_account_channel_peer":
-            return f"ch-{self._config.id}-{conversation.chat_id}-u{conversation.user_id}"
-        return f"ch-{self._config.id}-{conversation.chat_id}"
 
     def _is_chat_allowed(self, chat_id: int) -> bool:
         # D8: empty allowed_chat_ids means deny all inbound chats.
         return chat_id in self._allowed_chat_ids
 
-    def _session_exists(self, route: RouteFacts) -> bool:
-        return self._chat_sessions.exists(route.agent_id, route.session_id)
-
-    def _update_session_metadata(
-        self,
-        route: RouteFacts,
-        conversation: ConversationFacts,
-        reply_plan: ReplyPlanFacts,
-    ) -> None:
-        metadata = self._chat_sessions.get_metadata(route.agent_id, route.session_id)
-        metadata.update(
-            {
-                "source_channel_id": self._config.id,
-                "platform": self.platform,
-                "platform_conv_id": conversation.chat_id,
-                "last_reply_target": {
-                    "channel_id": reply_plan.channel_id,
-                    "platform_target": reply_plan.platform_target,
-                },
-            }
-        )
-        self._chat_sessions.set_metadata(route.agent_id, route.session_id, metadata)
-
-    def _enqueue_chat_work(self, chat_id: str, queued: _QueuedWork) -> None:
-        queue = self._chat_queues.get(chat_id)
-        if queue is None:
-            queue = asyncio.Queue()
-            self._chat_queues[chat_id] = queue
-
-        queue.put_nowait(queued)
-
-        worker = self._chat_workers.get(chat_id)
-        if worker is None or worker.done():
-            worker = asyncio.create_task(
-                self._run_chat_queue(chat_id, queue),
-                name=f"telegram:{self._config.id}:{chat_id}",
-            )
-            self._chat_workers[chat_id] = worker
-
-    async def _run_chat_queue(
-        self,
-        chat_id: str,
-        queue: asyncio.Queue[_QueuedWork],
-    ) -> None:
-        try:
-            while True:
-                queued = await queue.get()
-                try:
-                    await self._process_queued_work(queued)
-                except Exception as error:
-                    _LOGGER.error(
-                        "Telegram inbound processing failed (channel=%s chat=%s): %s",
-                        self._config.id,
-                        chat_id,
-                        error,
-                        exc_info=(type(error), error, error.__traceback__),
-                    )
-                finally:
-                    queue.task_done()
-        except asyncio.CancelledError:
-            raise
-        finally:
-            current = self._chat_workers.get(chat_id)
-            if current is asyncio.current_task():
-                self._chat_workers.pop(chat_id, None)
-
-    async def _process_queued_work(self, queued: _QueuedWork) -> None:
-        if isinstance(queued, _QueuedCommandAction):
-            await self._handle_command_action(queued.action, queued.route, queued.reply_plan)
-            return
-        if isinstance(queued, _QueuedInboundMedia):
-            await self._process_queued_media(queued)
-            return
-        await self._process_queued_message(queued)
-
-    async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
-        command_text = _command_text_from_content(queued.message.content)
-        if command_text is not None and not queued.command_checked:
-            dispatch_result = self._command_dispatcher.dispatch(
-                queued.route.agent_id,
-                queued.route.session_id,
-                command_text,
-            )
-            if await self._handle_dispatch_result(
-                dispatch_result,
-                queued.route,
-                queued.reply_plan,
-                defer_actions=False,
-            ):
-                return
-
-        await self._trigger_and_relay(queued.route, queued.reply_plan, queued.message.content)
-
-    async def _process_queued_media(self, queued: _QueuedInboundMedia) -> None:
-        # Per-message handling: one failing album item must not drop its siblings,
-        # and every failure produces user-visible feedback instead of silence.
-        content_blocks: list[ContentBlock] = []
-        failure_replies: list[str] = []
-        for message in queued.messages:
-            try:
-                content_blocks.extend(await self._build_media_message_blocks(message))
-            except Exception as error:
-                _LOGGER.warning(
-                    "Telegram inbound media processing failed (channel=%s target=%s): %s",
-                    self._config.id,
-                    queued.reply_plan.platform_target,
-                    error,
-                    exc_info=(type(error), error, error.__traceback__),
-                )
-                failure_replies.append(_media_failure_reply(error))
-
-        for reply in dict.fromkeys(failure_replies):
-            await self.send(reply, queued.reply_plan.platform_target)
-
-        if not content_blocks:
-            return
-
-        await self._trigger_and_relay(queued.route, queued.reply_plan, content_blocks)
-
-    async def _trigger_and_relay(
-        self,
-        route: RouteFacts,
-        reply_plan: ReplyPlanFacts,
-        content: str | list[ContentBlock],
-    ) -> None:
-        try:
-            run = await self._trigger_service.trigger_run(
-                route.agent_id,
-                content,
-                route.session_id,
-            )
-        except Exception as error:
-            _LOGGER.error(
-                "Telegram trigger run failed (channel=%s agent=%s session=%s target=%s): %s",
-                reply_plan.channel_id,
-                route.agent_id,
-                route.session_id,
-                reply_plan.platform_target,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-            await self.send(_format_failed_reply(), reply_plan.platform_target)
-            return
-
-        await self._relay_run_events(run, reply_plan.platform_target)
-
-    async def _handle_dispatch_result(
-        self,
-        dispatch_result: object,
-        route: RouteFacts,
-        reply_plan: ReplyPlanFacts,
-        *,
-        defer_actions: bool,
-    ) -> bool:
-        if isinstance(dispatch_result, CommandHandled):
-            reply = dispatch_result.reply
-            if isinstance(reply, str) and reply.strip():
-                await self.send(reply, reply_plan.platform_target)
-            return True
-
-        if isinstance(dispatch_result, CommandAction):
-            if defer_actions:
-                # Command actions can run long (compact = model call, retry = full Run
-                # relay). PTB feeds this adapter's updates sequentially, so they must not
-                # be awaited in the update handler; the per-chat worker owns slow work.
-                self._enqueue_chat_work(
-                    reply_plan.platform_target,
-                    _QueuedCommandAction(
-                        route=route, reply_plan=reply_plan, action=dispatch_result
-                    ),
-                )
-            else:
-                await self._handle_command_action(dispatch_result, route, reply_plan)
-            return True
-
-        return False
-
-    async def _handle_command_action(
-        self,
-        command_action: CommandAction,
-        route: RouteFacts,
-        reply_plan: ReplyPlanFacts,
-    ) -> None:
-        match command_action.name:
-            case "compact":
-                try:
-                    async with self._typing_indicator(reply_plan.platform_target):
-                        reply = await self._trigger_service.compact_session(
-                            route.agent_id,
-                            route.session_id,
-                        )
-                except Exception as error:
-                    self._log_command_action_failure(command_action.name, route, reply_plan, error)
-                    reply = _format_failed_reply()
-                await self.send(reply, reply_plan.platform_target)
-            case "new_session":
-                await self.send(
-                    "Starting a new session is not available from Telegram channels yet.",
-                    reply_plan.platform_target,
-                )
-            case "retry_last_turn":
-                try:
-                    run = await self._trigger_service.retry_run(
-                        route.agent_id,
-                        route.session_id,
-                    )
-                except Exception as error:
-                    self._log_command_action_failure(command_action.name, route, reply_plan, error)
-                    await self.send(_format_failed_reply(), reply_plan.platform_target)
-                    return
-                await self._relay_run_events(run, reply_plan.platform_target)
-            case _:
-                # Recognized commands without a channel implementation (e.g. /handoff)
-                # must reply instead of silently swallowing the message.
-                await self.send(_UNSUPPORTED_COMMAND_REPLY, reply_plan.platform_target)
-
-    def _log_command_action_failure(
-        self,
-        action_name: str,
-        route: RouteFacts,
-        reply_plan: ReplyPlanFacts,
-        error: Exception,
-    ) -> None:
-        _LOGGER.error(
-            "Telegram command action failed (action=%s channel=%s agent=%s session=%s "
-            "target=%s): %s",
-            action_name,
-            reply_plan.channel_id,
-            route.agent_id,
-            route.session_id,
-            reply_plan.platform_target,
-            error,
-            exc_info=(type(error), error, error.__traceback__),
-        )
-
-    async def _relay_run_events(self, run: Run, platform_target: str) -> None:
-        assistant_text: str | None = None
-        reply: str | None = None
-
-        async with self._typing_indicator(platform_target):
-            async for event in run.subscribe():
-                if event.type == ASSISTANT_OUTPUT_EVENT:
-                    extracted = _extract_assistant_output(event)
-                    if extracted is not None:
-                        assistant_text = extracted
-                    continue
-
-                if event.type == RUN_COMPLETED_EVENT:
-                    reply = assistant_text or _EMPTY_ASSISTANT_REPLY
-                    break
-
-                if event.type == RUN_FAILED_EVENT:
-                    reply = _format_failed_reply()
-                    break
-
-                if event.type == RUN_CANCELLED_EVENT:
-                    reply = _CANCELLED_REPLY
-                    break
-
-        if reply is not None:
-            await self.send(reply, platform_target)
+    # -- Typing indicator -----------------------------------------------------------------
 
     @contextlib.asynccontextmanager
     async def _typing_indicator(self, platform_target: str) -> AsyncIterator[None]:
@@ -961,23 +590,21 @@ class TelegramChannelAdapter(ChannelAdapter):
                 return
             await asyncio.sleep(_TYPING_REFRESH_SECONDS)
 
-    async def _stop_chat_workers(self) -> None:
-        workers = list(self._chat_workers.values())
+    # -- Lifecycle helpers ----------------------------------------------------------------
+
+    async def _stop_workers(self) -> None:
         album_tasks = list(self._album_tasks.values())
-        self._chat_workers.clear()
-        self._chat_queues.clear()
         self._album_tasks.clear()
         self._album_buffers.clear()
         self._album_routes.clear()
         self._album_reply_plans.clear()
-        for worker in workers:
-            worker.cancel()
         for task in album_tasks:
             task.cancel()
 
-        pending = [*workers, *album_tasks]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        await self._engine.stop()
+
+        if album_tasks:
+            await asyncio.gather(*album_tasks, return_exceptions=True)
 
     async def _run_lifecycle_step(self, operation: Any, label: str) -> None:
         try:
@@ -1025,12 +652,6 @@ def _extract_message_text(update: Any) -> str | None:
     if not text.strip():
         return None
     return text
-
-
-def _command_text_from_content(content: str | list[ContentBlock]) -> str | None:
-    if isinstance(content, str):
-        return content
-    return None
 
 
 def _extract_caption(message: Any) -> str | None:
@@ -1089,36 +710,6 @@ def _is_image_media_type(media_type: str) -> bool:
     return isinstance(media_type, str) and media_type.startswith("image/")
 
 
-def _extract_assistant_output(event: RunEvent) -> str | None:
-    payload = event.payload
-    if not isinstance(payload, dict):
-        return None
-
-    message = payload.get("message")
-    if not isinstance(message, dict):
-        return None
-
-    content = message.get("content")
-    if not isinstance(content, str):
-        return None
-
-    content = content.strip()
-    return content or None
-
-
-def _format_failed_reply() -> str:
-    return _FAILED_REPLY
-
-
-def _media_failure_reply(error: Exception) -> str:
-    """Map a media-ingest failure to user-facing reply text without leaking internals."""
-    if isinstance(error, AttachmentTypeNotAllowedError):
-        return _UNSUPPORTED_FILE_REPLY
-    if isinstance(error, AttachmentTooLargeError):
-        return _FILE_TOO_LARGE_REPLY
-    return _MEDIA_FAILED_REPLY
-
-
 def _parse_platform_target(platform_target: str) -> int:
     try:
         chat_id = int(platform_target)
@@ -1145,7 +736,7 @@ def _load_telegram() -> Any:
         ) from error
 
 
-def _is_integer(value: object) -> bool:
+def _is_integer(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
