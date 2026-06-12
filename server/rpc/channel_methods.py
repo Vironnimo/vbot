@@ -12,14 +12,17 @@ from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
     _optional_bool,
     _optional_integer_list,
+    _optional_string_list,
     _required_bool,
     _required_integer_list,
     _required_string,
+    _required_string_list,
 )
 
 JsonObject = dict[str, Any]
 CHANNEL_PLATFORMS = frozenset(("telegram",))
 CHANNEL_DM_SCOPES = frozenset(("per_conversation", "main", "per_peer", "per_account_channel_peer"))
+CHANNEL_RESPONSE_MODES = frozenset(("mention", "all"))
 
 
 def _list_channels(state: Any, params: JsonObject) -> JsonObject:
@@ -42,6 +45,9 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         "allowed_chat_ids",
         "token_env_var",
         "enabled",
+        "response_mode",
+        "mention_patterns",
+        "owner_user_ids",
     }
     unsupported_fields = sorted(set(params) - supported_fields)
     if unsupported_fields:
@@ -58,6 +64,9 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         allowed_chat_ids=_optional_integer_list(params, "allowed_chat_ids", default=[]),
         token_env_var=_required_string(params, "token_env_var"),
         enabled=_optional_bool(params, "enabled", default=True),
+        response_mode=_optional_channel_response_mode(params, "response_mode"),
+        mention_patterns=_optional_string_list(params, "mention_patterns", default=[]),
+        owner_user_ids=_optional_user_id_list(params, "owner_user_ids", default=[]),
     )
 
     try:
@@ -79,6 +88,9 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         "allowed_chat_ids",
         "token_env_var",
         "enabled",
+        "response_mode",
+        "mention_patterns",
+        "owner_user_ids",
     }
     unsupported_fields = sorted(set(params) - supported_fields)
     if unsupported_fields:
@@ -101,6 +113,12 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         updates["token_env_var"] = _required_string(params, "token_env_var")
     if "enabled" in params:
         updates["enabled"] = _required_bool(params, "enabled")
+    if "response_mode" in params:
+        updates["response_mode"] = _optional_channel_response_mode(params, "response_mode")
+    if "mention_patterns" in params:
+        updates["mention_patterns"] = _required_string_list(params, "mention_patterns")
+    if "owner_user_ids" in params:
+        updates["owner_user_ids"] = _required_user_id_list(params, "owner_user_ids")
 
     if "agent_id" in updates:
         try:
@@ -227,6 +245,51 @@ def _optional_channel_dm_scope(params: JsonObject, key: str, *, default: str) ->
             f"params.{key} must be one of: {options}",
         )
     return dm_scope
+
+
+def _optional_channel_response_mode(params: JsonObject, key: str) -> str:
+    if key not in params:
+        return "mention"
+
+    response_mode = _required_string(params, key)
+    if response_mode not in CHANNEL_RESPONSE_MODES:
+        options = ", ".join(sorted(CHANNEL_RESPONSE_MODES))
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.{key} must be one of: {options}",
+        )
+    return response_mode
+
+
+def _required_user_id_list(params: JsonObject, key: str) -> list[str]:
+    value = params.get(key)
+    if not isinstance(value, list):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.{key} must be a list of platform user ids",
+        )
+
+    parsed: list[str] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, str)):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.{key} must contain strings or integers only",
+            )
+        normalized = str(item).strip()
+        if not normalized:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.{key} must not contain empty values",
+            )
+        parsed.append(normalized)
+    return parsed
+
+
+def _optional_user_id_list(params: JsonObject, key: str, *, default: list[str]) -> list[str]:
+    if key not in params:
+        return list(default)
+    return _required_user_id_list(params, key)
 
 
 def _channel_config_by_id(channel_service: Any, channel_id: str) -> ChannelConfig:

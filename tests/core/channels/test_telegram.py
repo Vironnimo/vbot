@@ -35,6 +35,9 @@ def make_config(
     *,
     dm_scope: str = "per_conversation",
     allowed_chat_ids: list[int] | None = None,
+    response_mode: str = "mention",
+    mention_patterns: list[str] | None = None,
+    owner_user_ids: list[str] | None = None,
 ) -> ChannelConfig:
     return ChannelConfig(
         id="tg-assistant",
@@ -44,6 +47,9 @@ def make_config(
         allowed_chat_ids=list(allowed_chat_ids or []),
         token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
         enabled=True,
+        response_mode=response_mode,
+        mention_patterns=list(mention_patterns or []),
+        owner_user_ids=list(owner_user_ids or []),
     )
 
 
@@ -121,7 +127,12 @@ def make_failed_run(*, session_id: str, message: str) -> Run:
 
 def make_command_dispatcher(*, result: object | None = None) -> SimpleNamespace:
     dispatch_result = NotACommand() if result is None else result
-    return SimpleNamespace(dispatch=Mock(return_value=dispatch_result))
+    return SimpleNamespace(
+        dispatch=Mock(return_value=dispatch_result),
+        # Mirrors the real dispatcher closely enough for adapter tests: slash-prefixed
+        # text counts as a recognized command.
+        recognizes=Mock(side_effect=lambda text: text.strip().startswith("/")),
+    )
 
 
 def make_adapter(
@@ -130,6 +141,11 @@ def make_adapter(
     *,
     dm_scope: str = "per_conversation",
     allowed_chat_ids: list[int] | None = None,
+    response_mode: str = "mention",
+    mention_patterns: list[str] | None = None,
+    owner_user_ids: list[str] | None = None,
+    bot_username: str | None = None,
+    bot_id: int | None = None,
     trigger_run: AsyncMock | None = None,
     retry_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
@@ -153,13 +169,21 @@ def make_adapter(
     resolved_command_dispatcher = command_dispatcher or make_command_dispatcher()
 
     adapter = TelegramChannelAdapter(
-        make_config(dm_scope=dm_scope, allowed_chat_ids=allowed_chat_ids),
+        make_config(
+            dm_scope=dm_scope,
+            allowed_chat_ids=allowed_chat_ids,
+            response_mode=response_mode,
+            mention_patterns=mention_patterns,
+            owner_user_ids=owner_user_ids,
+        ),
         cast(Any, trigger_service),
         cast(Any, chat_sessions),
         credential_resolver or (lambda key: os.environ.get(key, "")),
         attachment_store=attachment_store,
         command_dispatcher=cast(Any, resolved_command_dispatcher),
     )
+    if bot_username is not None or bot_id is not None:
+        adapter._set_bot_identity(SimpleNamespace(id=bot_id, username=bot_username))
 
     bot = SimpleNamespace(
         send_message=AsyncMock(),
@@ -202,10 +226,16 @@ def install_fake_telegram_media(monkeypatch: pytest.MonkeyPatch) -> None:
             self.media = media
             self.caption = caption
 
+    class FakeReplyParameters:
+        def __init__(self, message_id: int, *, allow_sending_without_reply: bool = False) -> None:
+            self.message_id = message_id
+            self.allow_sending_without_reply = allow_sending_without_reply
+
     fake_telegram = SimpleNamespace(
         InputFile=FakeInputFile,
         InputMediaPhoto=FakeInputMediaPhoto,
         InputMediaDocument=FakeInputMediaDocument,
+        ReplyParameters=FakeReplyParameters,
     )
     monkeypatch.setattr(telegram_module, "_load_telegram", lambda: fake_telegram)
 
@@ -219,6 +249,9 @@ def test_conversation_facts_classifies_kind_by_chat_id_sign(
 ) -> None:
     adapter = TelegramChannelAdapter.__new__(TelegramChannelAdapter)
     adapter._config = make_config(allowed_chat_ids=[chat_id])
+    adapter._bot_id = None
+    adapter._bot_username = None
+    adapter._bot_mention_pattern = None
 
     conversation = adapter._conversation_facts(make_update(chat_id=chat_id, user_id=50, text="hi"))
 
@@ -239,6 +272,9 @@ def test_conversation_facts_classifies_kind_by_chat_id_sign(
 def test_conversation_facts_display_name_chain(user: SimpleNamespace, expected: str | None) -> None:
     adapter = TelegramChannelAdapter.__new__(TelegramChannelAdapter)
     adapter._config = make_config(allowed_chat_ids=[12345])
+    adapter._bot_id = None
+    adapter._bot_username = None
+    adapter._bot_mention_pattern = None
     update = SimpleNamespace(
         effective_chat=SimpleNamespace(id=12345),
         effective_user=user,
@@ -265,6 +301,7 @@ async def test_negative_chat_id_routes_to_shared_group_session(
         monkeypatch,
         dm_scope="main",
         allowed_chat_ids=[-10001],
+        response_mode="all",
         trigger_run=trigger_mock,
     )
 
@@ -1550,6 +1587,7 @@ async def test_group_album_carries_sender_into_trigger_run(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[-10001],
+        response_mode="all",
         trigger_run=trigger_mock,
         attachment_store=attachment_store,
     )
@@ -1734,4 +1772,323 @@ async def test_retry_command_exception_is_logged_with_context(
     assert log_records[0].exc_info is not None
     assert "action=retry_last_turn" in log_records[0].message
     assert "ch-tg-assistant-12345" in log_records[0].message
+    await adapter.stop()
+
+
+def make_group_update(
+    *,
+    chat_id: int = -10001,
+    user_id: int = 50,
+    text: str | None = "hello",
+    message_id: int | None = None,
+    reply_to_user_id: int | None = None,
+) -> SimpleNamespace:
+    reply_to_message = None
+    if reply_to_user_id is not None:
+        reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=reply_to_user_id))
+    return SimpleNamespace(
+        effective_chat=SimpleNamespace(id=chat_id),
+        effective_user=SimpleNamespace(id=user_id),
+        effective_message=SimpleNamespace(
+            text=text,
+            message_thread_id=None,
+            message_id=message_id,
+            reply_to_message=reply_to_message,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("/stop@MyBot", "/stop"),
+        ("/stop@mybot", "/stop"),
+        ("/handoff@MyBot coder", "/handoff coder"),
+        ("/stop@OtherBot", "/stop@OtherBot"),
+        ("/stop", "/stop"),
+        ("hello @MyBot", "hello @MyBot"),
+    ],
+)
+async def test_strip_bot_command_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+    expected: str,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        bot_username="MyBot",
+        bot_id=999,
+    )
+
+    assert adapter._strip_bot_command_suffix(text) == expected
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_dm_command_with_own_bot_suffix_is_dispatched_stripped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        command_dispatcher=command_dispatcher,
+        bot_username="MyBot",
+        bot_id=999,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/stop@MyBot"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    command_dispatcher.dispatch.assert_called_once_with(
+        "assistant", "ch-tg-assistant-12345", "/stop"
+    )
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once_with(chat_id=12345, text="Run cancelled.")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_command_addressed_to_other_bot_is_not_stripped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant-12345"
+    command_dispatcher = make_command_dispatcher()
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        command_dispatcher=command_dispatcher,
+        bot_username="MyBot",
+        bot_id=999,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/stop@OtherBot"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    command_dispatcher.dispatch.assert_called_once_with("assistant", session_id, "/stop@OtherBot")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_message_without_mention_is_dropped_in_mention_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        bot_username="MyBot",
+        bot_id=999,
+    )
+
+    await adapter._handle_inbound_message(
+        make_group_update(text="just chatting"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    assert not chat_sessions.exists("assistant", "ch-tg-assistant--10001")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_message_with_bot_mention_triggers_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant--10001"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        trigger_run=trigger_mock,
+        bot_username="MyBot",
+        bot_id=999,
+    )
+
+    await adapter._handle_inbound_message(
+        make_group_update(text="hi @MyBot, are you there?"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    trigger_mock.assert_awaited_once()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_reply_to_bot_message_triggers_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant--10001"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        trigger_run=trigger_mock,
+        bot_username="MyBot",
+        bot_id=999,
+    )
+
+    await adapter._handle_inbound_message(
+        make_group_update(text="what did you mean?", reply_to_user_id=999),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    trigger_mock.assert_awaited_once()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_mentions_bot_checks_caption_too(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        bot_username="MyBot",
+        bot_id=999,
+    )
+
+    assert adapter._mentions_bot(SimpleNamespace(text=None, caption="@MyBot look at this"))
+    assert not adapter._mentions_bot(SimpleNamespace(text=None, caption="@MyBotty look"))
+    assert not adapter._mentions_bot(SimpleNamespace(text=None, caption=None))
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_reply_uses_reply_parameters_on_first_chunk_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    session_id = "ch-tg-assistant--10001"
+    long_reply = "x" * (TELEGRAM_MESSAGE_LIMIT + 5)
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text=long_reply)
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        response_mode="all",
+        trigger_run=trigger_mock,
+    )
+
+    await adapter._handle_inbound_message(
+        make_group_update(text="hello", message_id=777),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    assert bot.send_message.await_count == 2
+    first_call = bot.send_message.await_args_list[0]
+    second_call = bot.send_message.await_args_list[1]
+    assert first_call.kwargs["reply_parameters"].message_id == 777
+    assert first_call.kwargs["reply_parameters"].allow_sending_without_reply is True
+    assert "reply_parameters" not in second_call.kwargs
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_dm_reply_is_sent_without_reply_parameters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+    )
+
+    update = make_update(chat_id=12345, user_id=50, text="hello")
+    update.effective_message.message_id = 555
+    await adapter._handle_inbound_message(update, SimpleNamespace())
+    await drain_chat_queue(adapter, 12345)
+
+    bot.send_message.assert_awaited_once_with(chat_id=12345, text="ok")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_unsupported_message_type_in_group_is_silent_when_not_addressed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        bot_username="MyBot",
+        bot_id=999,
+    )
+
+    await adapter._handle_unsupported_message_type(
+        make_group_update(text=None),
+        SimpleNamespace(),
+    )
+
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_unsupported_message_type_in_group_replies_when_addressed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        bot_username="MyBot",
+        bot_id=999,
+    )
+
+    await adapter._handle_unsupported_message_type(
+        make_group_update(text=None, reply_to_user_id=999),
+        SimpleNamespace(),
+    )
+
+    bot.send_message.assert_awaited_once_with(
+        chat_id=-10001,
+        text="Sorry, this message type isn't supported yet.",
+    )
     await adapter.stop()

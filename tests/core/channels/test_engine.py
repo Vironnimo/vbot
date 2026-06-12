@@ -43,11 +43,19 @@ class FakeTransport:
         media_builder: Callable[[Any], Awaitable[list[ContentBlock]]] | None = None,
     ) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.sent_reply_targets: list[str | None] = []
         self.activity_targets: list[str] = []
         self._media_builder = media_builder
 
-    async def send_text(self, platform_target: str, text: str) -> None:
+    async def send_text(
+        self,
+        platform_target: str,
+        text: str,
+        *,
+        reply_to_message_id: str | None = None,
+    ) -> None:
         self.sent.append((platform_target, text))
+        self.sent_reply_targets.append(reply_to_message_id)
 
     @contextlib.asynccontextmanager
     async def activity_indicator(self, platform_target: str) -> AsyncIterator[None]:
@@ -59,12 +67,21 @@ class FakeTransport:
             raise AssertionError("media builder not configured for this test")
         return await self._media_builder(raw_message)
 
+    def caption_text(self, raw_message: Any) -> str | None:
+        return getattr(raw_message, "caption", None)
+
     @property
     def sent_texts(self) -> list[str]:
         return [text for _target, text in self.sent]
 
 
-def make_config(*, dm_scope: str = "per_conversation") -> ChannelConfig:
+def make_config(
+    *,
+    dm_scope: str = "per_conversation",
+    response_mode: str = "mention",
+    mention_patterns: list[str] | None = None,
+    owner_user_ids: list[str] | None = None,
+) -> ChannelConfig:
     return ChannelConfig(
         id="tg-assistant",
         platform="telegram",
@@ -73,6 +90,9 @@ def make_config(*, dm_scope: str = "per_conversation") -> ChannelConfig:
         allowed_chat_ids=[12345],
         token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
         enabled=True,
+        response_mode=response_mode,
+        mention_patterns=list(mention_patterns or []),
+        owner_user_ids=list(owner_user_ids or []),
     )
 
 
@@ -82,6 +102,9 @@ def make_conversation(
     user_id: int = 50,
     kind: str = "direct",
     user_display_name: str | None = None,
+    message_id: str | None = None,
+    mentioned_bot: bool = False,
+    is_reply_to_bot: bool = False,
 ) -> ConversationFacts:
     return ConversationFacts(
         platform="telegram",
@@ -91,12 +114,20 @@ def make_conversation(
         thread_id=None,
         kind=cast(Any, kind),
         user_display_name=user_display_name,
+        message_id=message_id,
+        mentioned_bot=mentioned_bot,
+        is_reply_to_bot=is_reply_to_bot,
     )
 
 
 def make_command_dispatcher(*, result: object | None = None) -> SimpleNamespace:
     dispatch_result = NotACommand() if result is None else result
-    return SimpleNamespace(dispatch=Mock(return_value=dispatch_result))
+    return SimpleNamespace(
+        dispatch=Mock(return_value=dispatch_result),
+        # Mirrors the real dispatcher closely enough for engine tests: slash-prefixed
+        # text counts as a recognized command.
+        recognizes=Mock(side_effect=lambda text: text.strip().startswith("/")),
+    )
 
 
 def make_completed_run(*, output_text: str, session_id: str = SESSION_ID) -> Run:
@@ -128,6 +159,9 @@ def make_engine(
     tmp_path: Path,
     *,
     dm_scope: str = "per_conversation",
+    response_mode: str = "mention",
+    mention_patterns: list[str] | None = None,
+    owner_user_ids: list[str] | None = None,
     trigger_run: AsyncMock | None = None,
     retry_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
@@ -143,7 +177,12 @@ def make_engine(
     )
     resolved_transport = transport or FakeTransport()
     engine = ChannelConversationEngine(
-        make_config(dm_scope=dm_scope),
+        make_config(
+            dm_scope=dm_scope,
+            response_mode=response_mode,
+            mention_patterns=mention_patterns,
+            owner_user_ids=owner_user_ids,
+        ),
         cast(Any, trigger_service),
         cast(Any, chat_sessions),
         cast(Any, resolved_transport),
@@ -591,7 +630,9 @@ def test_media_failure_reply_mapping(error: Exception, expected: str) -> None:
 @pytest.mark.asyncio
 async def test_group_message_triggers_run_with_sender(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, response_mode="all"
+    )
 
     await engine.handle_inbound_text(
         make_conversation(kind="group", user_display_name="Alice"),
@@ -626,7 +667,9 @@ async def test_direct_message_triggers_run_without_sender(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_group_sender_display_name_falls_back_to_user_id(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, response_mode="all"
+    )
 
     await engine.handle_inbound_text(make_conversation(kind="group"), "hello")
     await drain(engine, 12345)
@@ -690,12 +733,11 @@ async def test_media_path_carries_group_sender(tmp_path: Path) -> None:
     transport = FakeTransport(media_builder=media_builder)
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
     engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path, trigger_run=trigger_mock, transport=transport
+        tmp_path, trigger_run=trigger_mock, transport=transport, response_mode="all"
     )
     conversation = make_conversation(kind="group", user_display_name="Alice")
-    route, reply_plan = engine.prepare_inbound_route(conversation)
 
-    engine.enqueue_media(route, reply_plan, ("photo",), conversation=conversation)
+    await engine.handle_inbound_media(conversation, ("photo",))
     await drain(engine, 12345)
 
     trigger_mock.assert_awaited_once_with(
@@ -704,4 +746,235 @@ async def test_media_path_carries_group_sender(tmp_path: Path) -> None:
         SESSION_ID,
         sender=MessageSender(id="50", display_name="Alice"),
     )
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_unaddressed_text_is_dropped_in_mention_mode(tmp_path: Path) -> None:
+    command_dispatcher = make_command_dispatcher()
+    engine, chat_sessions, trigger_mock, transport = make_engine(
+        tmp_path, command_dispatcher=command_dispatcher
+    )
+
+    await engine.handle_inbound_text(make_conversation(kind="group"), "hello everyone")
+    await drain(engine, 12345)
+
+    trigger_mock.assert_not_awaited()
+    command_dispatcher.dispatch.assert_not_called()
+    assert transport.sent == []
+    # Dropped messages must not create a Session either.
+    assert not chat_sessions.exists("assistant", SESSION_ID)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mentioned_bot", "is_reply_to_bot"),
+    [(True, False), (False, True)],
+)
+async def test_group_addressed_text_triggers_in_mention_mode(
+    tmp_path: Path,
+    mentioned_bot: bool,
+    is_reply_to_bot: bool,
+) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    await engine.handle_inbound_text(
+        make_conversation(
+            kind="group", mentioned_bot=mentioned_bot, is_reply_to_bot=is_reply_to_bot
+        ),
+        "hello bot",
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_wake_word_pattern_matches_case_insensitively(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, mention_patterns=[r"\bvbot\b"]
+    )
+
+    await engine.handle_inbound_text(make_conversation(kind="group"), "Hey VBOT, status?")
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_direct_message_always_triggers_in_mention_mode(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    await engine.handle_inbound_text(make_conversation(kind="direct"), "hello")
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_command_from_owner_is_dispatched(tmp_path: Path) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    engine, _sessions, trigger_mock, transport = make_engine(
+        tmp_path, command_dispatcher=command_dispatcher, owner_user_ids=["50"]
+    )
+
+    await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
+    await drain(engine, 12345)
+
+    command_dispatcher.dispatch.assert_called_once_with("assistant", SESSION_ID, "/stop")
+    trigger_mock.assert_not_awaited()
+    assert transport.sent_texts == ["Run cancelled."]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_command_from_non_owner_is_denied_without_dispatch(tmp_path: Path) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    engine, chat_sessions, trigger_mock, transport = make_engine(
+        tmp_path, command_dispatcher=command_dispatcher, owner_user_ids=["99"]
+    )
+
+    await engine.handle_inbound_text(make_conversation(kind="group", user_id=50), "/stop")
+    await drain(engine, 12345)
+
+    command_dispatcher.dispatch.assert_not_called()
+    trigger_mock.assert_not_awaited()
+    assert transport.sent == []
+    assert not chat_sessions.exists("assistant", SESSION_ID)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_command_denied_for_everyone_when_owner_list_is_empty(
+    tmp_path: Path,
+) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path, command_dispatcher=command_dispatcher
+    )
+
+    await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
+    await drain(engine, 12345)
+
+    command_dispatcher.dispatch.assert_not_called()
+    assert transport.sent == []
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_command_auth_applies_in_all_response_mode(tmp_path: Path) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path, command_dispatcher=command_dispatcher, response_mode="all"
+    )
+
+    await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
+    await drain(engine, 12345)
+
+    command_dispatcher.dispatch.assert_not_called()
+    assert transport.sent == []
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_dm_command_is_authorized_without_owner_list(tmp_path: Path) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path, command_dispatcher=command_dispatcher
+    )
+
+    await engine.handle_inbound_text(make_conversation(kind="direct"), "/stop")
+    await drain(engine, 12345)
+
+    command_dispatcher.dispatch.assert_called_once_with("assistant", SESSION_ID, "/stop")
+    assert transport.sent_texts == ["Run cancelled."]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_reply_references_triggering_message(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, response_mode="all"
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", message_id="777"),
+        "hello",
+    )
+    await drain(engine, 12345)
+
+    assert transport.sent == [("12345", "ok")]
+    assert transport.sent_reply_targets == ["777"]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_direct_reply_does_not_reference_message(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="direct", message_id="777"),
+        "hello",
+    )
+    await drain(engine, 12345)
+
+    assert transport.sent == [("12345", "ok")]
+    assert transport.sent_reply_targets == [None]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_media_without_addressing_is_dropped(tmp_path: Path) -> None:
+    transport = FakeTransport()
+    trigger_mock = AsyncMock()
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, transport=transport
+    )
+
+    await engine.handle_inbound_media(
+        make_conversation(kind="group"),
+        (SimpleNamespace(caption=None),),
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_not_awaited()
+    assert transport.sent == []
+    assert not chat_sessions.exists("assistant", SESSION_ID)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_media_caption_wake_word_triggers(tmp_path: Path) -> None:
+    block = MediaBlock(
+        type="media", attachment_id="att-1", filename="a.png", media_type="image/png"
+    )
+
+    async def media_builder(_raw_message: Any) -> list[ContentBlock]:
+        return [block]
+
+    transport = FakeTransport(media_builder=media_builder)
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        transport=transport,
+        mention_patterns=[r"\bvbot\b"],
+    )
+
+    await engine.handle_inbound_media(
+        make_conversation(kind="group"),
+        (SimpleNamespace(caption=None), SimpleNamespace(caption="vbot look at this")),
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once()
     await engine.stop()

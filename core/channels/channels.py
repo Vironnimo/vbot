@@ -30,6 +30,8 @@ _LOGGER = get_logger("channels")
 _CHANNEL_CONFIG_FILENAME = "channel.json"
 _DEFAULT_DM_SCOPE = "per_conversation"
 _ALLOWED_DM_SCOPES = frozenset(("per_conversation", "main", "per_peer", "per_account_channel_peer"))
+_DEFAULT_RESPONSE_MODE = "mention"
+_ALLOWED_RESPONSE_MODES = frozenset(("mention", "all"))
 _ALLOWED_PLATFORMS = frozenset(("telegram",))
 _CHANNEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ADAPTER_RESTART_INITIAL_DELAY_SECONDS = 1.0
@@ -43,6 +45,9 @@ _MUTABLE_FIELDS = frozenset(
         "allowed_chat_ids",
         "token_env_var",
         "enabled",
+        "response_mode",
+        "mention_patterns",
+        "owner_user_ids",
     )
 )
 
@@ -70,6 +75,9 @@ class ChannelConfig:
     allowed_chat_ids: list[int] = field(default_factory=list)
     token_env_var: str = ""
     enabled: bool = True
+    response_mode: str = _DEFAULT_RESPONSE_MODE
+    mention_patterns: list[str] = field(default_factory=list)
+    owner_user_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one channel config to JSON-compatible data."""
@@ -81,6 +89,9 @@ class ChannelConfig:
             "allowed_chat_ids": list(self.allowed_chat_ids),
             "token_env_var": self.token_env_var,
             "enabled": self.enabled,
+            "response_mode": self.response_mode,
+            "mention_patterns": list(self.mention_patterns),
+            "owner_user_ids": list(self.owner_user_ids),
         }
 
     @classmethod
@@ -94,6 +105,9 @@ class ChannelConfig:
             allowed_chat_ids=list(payload.get("allowed_chat_ids") or []),
             token_env_var=payload.get("token_env_var", ""),
             enabled=payload.get("enabled", True),
+            response_mode=payload.get("response_mode", _DEFAULT_RESPONSE_MODE),
+            mention_patterns=list(payload.get("mention_patterns") or []),
+            owner_user_ids=list(payload.get("owner_user_ids") or []),
         )
         config.validate()
         return config
@@ -135,6 +149,41 @@ class ChannelConfig:
 
         if not isinstance(self.enabled, bool):
             raise ChannelConfigError("enabled must be a boolean")
+
+        if not isinstance(self.response_mode, str) or self.response_mode not in (
+            _ALLOWED_RESPONSE_MODES
+        ):
+            modes = ", ".join(sorted(_ALLOWED_RESPONSE_MODES))
+            raise ChannelConfigError(f"response_mode must be one of: {modes}")
+
+        if not isinstance(self.mention_patterns, list):
+            raise ChannelConfigError("mention_patterns must be a list of regex strings")
+        normalized_patterns: list[str] = []
+        for pattern in self.mention_patterns:
+            if not isinstance(pattern, str) or not pattern.strip():
+                raise ChannelConfigError("mention_patterns must contain non-empty strings only")
+            try:
+                re.compile(pattern)
+            except re.error as error:
+                raise ChannelConfigError(
+                    f"mention_patterns contains an invalid regex {pattern!r}: {error}"
+                ) from error
+            normalized_patterns.append(pattern)
+        self.mention_patterns = normalized_patterns
+
+        # Platform user ids are strings end-to-end (Telegram ids are numeric, Discord
+        # snowflakes are not); integers are accepted and normalized for convenience.
+        if not isinstance(self.owner_user_ids, list):
+            raise ChannelConfigError("owner_user_ids must be a list of platform user ids")
+        normalized_owner_ids: list[str] = []
+        for owner_user_id in self.owner_user_ids:
+            if isinstance(owner_user_id, bool) or not isinstance(owner_user_id, (int, str)):
+                raise ChannelConfigError("owner_user_ids must contain strings or integers only")
+            normalized_owner_id = str(owner_user_id).strip()
+            if not normalized_owner_id:
+                raise ChannelConfigError("owner_user_ids must not contain empty values")
+            normalized_owner_ids.append(normalized_owner_id)
+        self.owner_user_ids = normalized_owner_ids
 
 
 class ChannelStorage:
