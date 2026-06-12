@@ -378,9 +378,7 @@ class TestExtensionDecisionWiring:
         assert executed == []
 
     @pytest.mark.asyncio
-    async def test_modified_input_reaches_handler_and_started_event(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_modified_input_reaches_handler_and_started_event(self, tmp_path: Path) -> None:
         def echo_handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
             return tool_success({"echo": arguments})
 
@@ -444,9 +442,7 @@ class TestExtensionDecisionWiring:
         runtime, agent = _build_runtime_and_agent(tmp_path, tools)
         registry = ExtensionRegistry()
         replacement = tool_success({"patched": True})
-        registry.install_handler(
-            "patcher", "tool_result", lambda ctx, **payload: replacement
-        )
+        registry.install_handler("patcher", "tool_result", lambda ctx, **payload: replacement)
         runtime.extensions = registry
         session = _build_session(tmp_path)
         run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
