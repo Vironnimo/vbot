@@ -20,6 +20,14 @@ _EXTENSION_PARENT_PACKAGE = "vbot_ext"
 
 HookHandler = Callable[..., Any]
 RegisteredHandler = tuple[str, HookHandler]
+# Injected by chat so tool-result-envelope schema knowledge stays in the chat
+# domain: given (extension_name, candidate dict) it returns the validated
+# envelope or ``None`` when the candidate is rejected.
+ToolResultValidator = Callable[[str, dict[str, Any]], "dict[str, Any] | None"]
+
+# Sentinel distinguishing "handler raised and was skipped" from a handler that
+# legitimately returned ``None``.
+_HANDLER_FAILED = object()
 
 
 @dataclass(frozen=True)
@@ -53,26 +61,141 @@ class ExtensionRegistry:
             _load_extension_root(root, registry)
         return registry
 
-    async def fire(self, event: str, ctx: HookContext, **payload: Any) -> list[Any]:
-        results: list[Any] = []
-        for extension_name, handler in self._handlers.get(event, []):
-            try:
-                result = handler(ctx, **payload)
-                if inspect.isawaitable(result):
-                    result = await result
-            except Exception as exc:
-                _LOGGER.warning(
-                    "Extension %r %s handler raised: %s",
-                    extension_name,
-                    event,
-                    exc,
-                )
+    async def _invoke(
+        self,
+        event: str,
+        extension_name: str,
+        handler: HookHandler,
+        ctx: HookContext,
+        payload: dict[str, Any],
+    ) -> Any:
+        """Call one handler with per-handler exception isolation.
+
+        Awaits async handlers. On failure logs at ``warning`` and returns the
+        ``_HANDLER_FAILED`` sentinel so callers can skip the handler without
+        confusing a raised handler with one that returned ``None``.
+        """
+        try:
+            result = handler(ctx, **payload)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+        except Exception as exc:
+            _LOGGER.warning(
+                "Extension %r %s handler raised: %s",
+                extension_name,
+                event,
+                exc,
+            )
+            return _HANDLER_FAILED
+
+    async def dispatch_run_start(self, ctx: HookContext, *, session_id: str, agent_id: str) -> None:
+        """Observer event: run all ``run_start`` handlers; ignore return values."""
+        payload = {"session_id": session_id, "agent_id": agent_id}
+        for extension_name, handler in self._handlers.get("run_start", []):
+            await self._invoke("run_start", extension_name, handler, ctx, payload)
+
+    async def dispatch_run_end(
+        self, ctx: HookContext, *, session_id: str, agent_id: str, outcome: str
+    ) -> None:
+        """Observer event: run all ``run_end`` handlers; ignore return values."""
+        payload = {"session_id": session_id, "agent_id": agent_id, "outcome": outcome}
+        for extension_name, handler in self._handlers.get("run_end", []):
+            await self._invoke("run_end", extension_name, handler, ctx, payload)
+
+    async def dispatch_before_agent_start(
+        self, ctx: HookContext, *, agent: Any, session: Any, messages: Any, run: Any
+    ) -> list[str]:
+        """Accumulator event: collect every handler's ``system_prompt_append``.
+
+        Returns the appends in load order; applying them to the system message
+        stays in chat (domain knowledge about message shape).
+        """
+        payload = {"agent": agent, "session": session, "messages": messages, "run": run}
+        appends: list[str] = []
+        for extension_name, handler in self._handlers.get("before_agent_start", []):
+            result = await self._invoke("before_agent_start", extension_name, handler, ctx, payload)
+            if result is _HANDLER_FAILED:
                 continue
+            if isinstance(result, dict) and isinstance(result.get("system_prompt_append"), str):
+                appends.append(result["system_prompt_append"])
+        return appends
 
-            if result is not None:
-                results.append(result)
+    async def dispatch_context(self, ctx: HookContext, *, messages: list) -> list | None:
+        """Pipeline event: first handler returning a list wins, the rest are skipped.
 
-        return results
+        Returns the replacement message list, or ``None`` when no handler
+        replaced the messages (chat then keeps its own list).
+        """
+        payload = {"messages": messages}
+        for extension_name, handler in self._handlers.get("context", []):
+            result = await self._invoke("context", extension_name, handler, ctx, payload)
+            if result is _HANDLER_FAILED:
+                continue
+            if isinstance(result, list):
+                return result
+        return None
+
+    async def dispatch_tool_call(
+        self,
+        ctx: HookContext,
+        *,
+        tool_name: str,
+        tool_call_id: str,
+        input: dict[str, Any],
+        validator: ToolResultValidator,
+    ) -> dict[str, Any] | None:
+        """Pipeline event: first valid result envelope short-circuits the tool.
+
+        Each handler dict is run through ``validator``; the first that passes
+        wins and is returned. Returns ``None`` when nothing short-circuits.
+        """
+        payload = {"tool_name": tool_name, "tool_call_id": tool_call_id, "input": input}
+        for extension_name, handler in self._handlers.get("tool_call", []):
+            result = await self._invoke("tool_call", extension_name, handler, ctx, payload)
+            if result is _HANDLER_FAILED:
+                continue
+            if isinstance(result, dict):
+                validated = validator(extension_name, result)
+                if validated is None:
+                    continue
+                return validated
+        return None
+
+    async def dispatch_tool_result(
+        self,
+        ctx: HookContext,
+        *,
+        tool_name: str,
+        tool_call_id: str,
+        input: dict[str, Any],
+        result: dict[str, Any],
+        validator: ToolResultValidator,
+    ) -> dict[str, Any]:
+        """Pipeline event: every handler shallow-merge-patches the envelope in turn.
+
+        Each handler's dict is shallow-merged onto the current envelope and
+        re-validated; valid patches replace the running result, invalid ones are
+        dropped. Returns the final (possibly unchanged) envelope.
+        """
+        current = result
+        for extension_name, handler in self._handlers.get("tool_result", []):
+            payload = {
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "input": input,
+                "result": current,
+            }
+            hook_result = await self._invoke("tool_result", extension_name, handler, ctx, payload)
+            if hook_result is _HANDLER_FAILED:
+                continue
+            if isinstance(hook_result, dict):
+                patched = dict(current)
+                patched.update(hook_result)
+                validated = validator(extension_name, patched)
+                if validated is not None:
+                    current = validated
+        return current
 
 
 def _discover_extension_paths(extensions_dir: Path) -> list[tuple[str, Path]]:
@@ -193,4 +316,4 @@ def _load_extension_root(root: Path, registry: ExtensionRegistry) -> None:
                     _LOGGER.error("Extension %r async register() raised: %s", name, exc)
 
 
-__all__ = ["ExtensionRegistry", "HookContext", "HooksAPI"]
+__all__ = ["ExtensionRegistry", "HookContext", "HooksAPI", "ToolResultValidator"]
