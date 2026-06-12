@@ -48,6 +48,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         "response_mode",
         "mention_patterns",
         "owner_user_ids",
+        "observe_unaddressed",
     }
     unsupported_fields = sorted(set(params) - supported_fields)
     if unsupported_fields:
@@ -67,6 +68,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         response_mode=_optional_channel_response_mode(params, "response_mode"),
         mention_patterns=_optional_string_list(params, "mention_patterns", default=[]),
         owner_user_ids=_optional_user_id_list(params, "owner_user_ids", default=[]),
+        observe_unaddressed=_optional_bool(params, "observe_unaddressed", default=False),
     )
 
     try:
@@ -91,6 +93,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         "response_mode",
         "mention_patterns",
         "owner_user_ids",
+        "observe_unaddressed",
     }
     unsupported_fields = sorted(set(params) - supported_fields)
     if unsupported_fields:
@@ -119,6 +122,8 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         updates["mention_patterns"] = _required_string_list(params, "mention_patterns")
     if "owner_user_ids" in params:
         updates["owner_user_ids"] = _required_user_id_list(params, "owner_user_ids")
+    if "observe_unaddressed" in params:
+        updates["observe_unaddressed"] = _required_bool(params, "observe_unaddressed")
 
     if "agent_id" in updates:
         try:
