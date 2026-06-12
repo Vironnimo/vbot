@@ -72,6 +72,7 @@ describe('SettingsView OAuth providers', () => {
     expect(rpcMock).toHaveBeenCalledWith('provider.connect', {
       provider_id: 'github-copilot',
       connection_id: 'github-copilot:oauth',
+      account: 'default',
     });
     expect(document.body.textContent).toContain('Connect GitHub Copilot');
     expect(document.body.textContent).toContain(
@@ -106,6 +107,7 @@ describe('SettingsView OAuth providers', () => {
       payload: {
         provider_id: 'github-copilot',
         connection_id: 'github-copilot:oauth',
+        account: 'default',
         success: true,
       },
     });
@@ -138,6 +140,7 @@ describe('SettingsView OAuth providers', () => {
       payload: {
         provider_id: 'github-copilot',
         connection_id: 'github-copilot:oauth',
+        account: 'default',
         success: false,
       },
     });
@@ -161,6 +164,7 @@ describe('SettingsView OAuth providers', () => {
     expect(rpcMock).toHaveBeenCalledWith('provider.disconnect', {
       provider_id: 'github-copilot',
       connection_id: 'github-copilot:oauth',
+      account: 'default',
     });
     expect(modalRoot()).toBeUndefined();
   });
@@ -181,10 +185,105 @@ describe('SettingsView OAuth providers', () => {
     expect(rpcMock).toHaveBeenCalledWith('provider.disconnect', {
       provider_id: 'github-copilot',
       connection_id: 'github-copilot:oauth',
+      account: 'default',
     });
     expect(
       rpcMock.mock.calls.filter((call) => call[0] === 'settings.get'),
     ).toHaveLength(2);
+  });
+
+  it('starts an add-account device flow with the entered account name', async () => {
+    currentSettings = settingsPayload({ oauthConfigured: true });
+    mountedComponent = mountSettingsView();
+    await openProvidersPanel();
+
+    buttonByText('Add account…').click();
+    flushSync();
+
+    await waitForCondition(() => buttonByText('Connect'));
+    setInputValue('.provider-connect-modal input[type="text"]', 'work');
+    buttonByText('Connect').click();
+    await waitForCondition(() =>
+      document.body.textContent.includes('ABCD-1234'),
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('provider.connect', {
+      provider_id: 'github-copilot',
+      connection_id: 'github-copilot:oauth',
+      account: 'work',
+    });
+  });
+
+  it('matches auth completion events on the account that started the flow', async () => {
+    currentSettings = settingsPayload({ oauthConfigured: true });
+    mountedComponent = mountSettingsView();
+    await openProvidersPanel();
+
+    buttonByText('Add account…').click();
+    flushSync();
+    await waitForCondition(() => buttonByText('Connect'));
+    setInputValue('.provider-connect-modal input[type="text"]', 'work');
+    buttonByText('Connect').click();
+    await waitForCondition(() =>
+      document.body.textContent.includes('ABCD-1234'),
+    );
+
+    mountedComponent.handleProviderAuthCompleted({
+      type: 'provider_auth_completed',
+      payload: {
+        provider_id: 'github-copilot',
+        connection_id: 'github-copilot:oauth',
+        account: 'default',
+        success: true,
+      },
+    });
+    flushSync();
+
+    // The event for another account must not complete this flow.
+    expect(document.body.textContent).toContain('ABCD-1234');
+    expect(
+      toastMock.mock.calls.some(
+        (call) => call[0]?.title === 'GitHub Copilot connected successfully',
+      ),
+    ).toBe(false);
+
+    mountedComponent.handleProviderAuthCompleted({
+      type: 'provider_auth_completed',
+      payload: {
+        provider_id: 'github-copilot',
+        connection_id: 'github-copilot:oauth',
+        account: 'work',
+        success: true,
+      },
+    });
+    await waitForCondition(() =>
+      toastMock.mock.calls.some(
+        (call) => call[0]?.title === 'GitHub Copilot connected successfully',
+      ),
+    );
+    await waitForCondition(
+      () => !document.body.textContent.includes('ABCD-1234'),
+    );
+  });
+
+  it('rejects an invalid account name inline before starting the flow', async () => {
+    currentSettings = settingsPayload({ oauthConfigured: true });
+    mountedComponent = mountSettingsView();
+    await openProvidersPanel();
+
+    buttonByText('Add account…').click();
+    flushSync();
+    await waitForCondition(() => buttonByText('Connect'));
+
+    setInputValue('.provider-connect-modal input[type="text"]', 'Not Valid');
+
+    expect(document.body.textContent).toContain(
+      'Account names use 1–32 lowercase letters, digits, or underscores',
+    );
+    expect(buttonByText('Connect').disabled).toBe(true);
+    expect(
+      rpcMock.mock.calls.some((call) => call[0] === 'provider.connect'),
+    ).toBe(false);
   });
 });
 
@@ -246,6 +345,14 @@ function buttonContaining(label) {
   return button;
 }
 
+function setInputValue(selector, value) {
+  const input = document.body.querySelector(selector);
+  expect(input).toBeTruthy();
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
+}
+
 function createSettingsRpcMock(getSettings) {
   return async (method, params) => {
     if (method === 'settings.get') {
@@ -253,15 +360,11 @@ function createSettingsRpcMock(getSettings) {
     }
 
     if (method === 'provider.connect') {
-      expect(params).toEqual({
-        provider_id: 'github-copilot',
-        connection_id: 'github-copilot:oauth',
-      });
-
       return {
         user_code: 'ABCD-1234',
         verification_uri: 'https://github.com/login/device',
         expires_in: 900,
+        account: params.account,
       };
     }
 
@@ -269,6 +372,7 @@ function createSettingsRpcMock(getSettings) {
       return {
         provider_id: params.provider_id,
         connection_id: params.connection_id,
+        account: params.account,
         status: 'disconnected',
       };
     }
@@ -303,6 +407,16 @@ function settingsPayload({ oauthConfigured, extraProviders = [] }) {
               label: 'Sign in with GitHub',
               configured: oauthConfigured,
               connectable: true,
+              accounts: oauthConfigured
+                ? [
+                    {
+                      id: 'default',
+                      usable: true,
+                      source: 'oauth',
+                      credential_key: '',
+                    },
+                  ]
+                : [],
             },
           ],
         },
@@ -321,6 +435,14 @@ function settingsPayload({ oauthConfigured, extraProviders = [] }) {
               label: 'API Key',
               configured: true,
               credential_key: 'OPENROUTER_API_KEY',
+              accounts: [
+                {
+                  id: 'default',
+                  usable: true,
+                  source: 'data_dir',
+                  credential_key: 'OPENROUTER_API_KEY',
+                },
+              ],
             },
           ],
         },

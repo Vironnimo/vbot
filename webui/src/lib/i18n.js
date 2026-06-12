@@ -555,6 +555,19 @@ export const englishCatalog = Object.freeze({
   'settings.providers.device_flow.error_toast':
     'Authorization failed or timed out',
   'settings.providers.replaceKey': 'Replace key…',
+  'settings.providers.accounts.defaultLabel': 'Default',
+  'settings.providers.accounts.notUsable': 'Not usable',
+  'settings.providers.accounts.source.processEnv': 'Process env',
+  'settings.providers.accounts.source.dataDir': '.env file',
+  'settings.providers.accounts.source.oauth': 'OAuth',
+  'settings.providers.accounts.addButton': 'Add account…',
+  'settings.providers.accounts.nameLabel': 'Account',
+  'settings.providers.accounts.nameHint':
+    'Optional name for this credential slot. Leave empty for the default account.',
+  'settings.providers.accounts.invalidId':
+    'Account names use 1–32 lowercase letters, digits, or underscores and start with a letter or digit.',
+  'settings.providers.accounts.removeEnvHint':
+    'This credential comes from the process environment and cannot be removed here.',
   'settings.providers.removeKeySuccess': 'API key removed.',
   'settings.providers.removeKeyError': 'API key could not be removed.',
   'settings.providers.removeKeyStillEnv':

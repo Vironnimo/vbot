@@ -3,15 +3,22 @@
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
+    accountDisplayName,
+    connectionSupportsAddAccount,
+    describeAccountSource,
     describeProvider,
     getAddProviderCandidates,
     getAddableConnections,
     getConfiguredConnections,
     getConnectedProviderItems,
+    getConnectionAccounts,
     getProviderItems,
     getPublicConnectionId,
+    isAccountUsable,
+    isOAuthAccount,
     isOAuthConnection,
     isOAuthDeviceFlowConnection,
+    isProcessEnvAccount,
   } from '$lib/settingsView.js';
 
   const noop = () => {};
@@ -99,15 +106,19 @@
   }
 
   function openAddProviderModal() {
-    modalScope = { provider: null, connection: null };
+    modalScope = { provider: null, connection: null, account: null };
   }
 
   function openAddConnectionModal(provider) {
-    modalScope = { provider, connection: null };
+    modalScope = { provider, connection: null, account: null };
   }
 
-  function openReplaceKeyModal(provider, connection) {
-    modalScope = { provider, connection };
+  function openAddAccountModal(provider, connection) {
+    modalScope = { provider, connection, account: null };
+  }
+
+  function openReplaceKeyModal(provider, connection, account) {
+    modalScope = { provider, connection, account: account.id };
   }
 
   function closeModal() {
@@ -118,13 +129,14 @@
     await onReloadSettings();
   }
 
-  async function disconnectOAuthConnection(provider, connection) {
+  async function disconnectOAuthAccount(provider, connection, account) {
     onError('');
 
     try {
       await callDisconnectProvider(
         provider.id,
         getPublicConnectionId(connection),
+        account.id,
       );
       await onReloadSettings();
     } catch (error) {
@@ -134,13 +146,14 @@
     }
   }
 
-  async function removeApiKey(provider, connection) {
+  async function removeApiKey(provider, connection, account) {
     onError('');
 
     try {
       const result = await rpc('provider.unset_key', {
         provider_id: provider.id,
         connection_id: getPublicConnectionId(connection),
+        account: account.id,
       });
 
       if (result?.configured === true) {
@@ -166,14 +179,15 @@
     }
   }
 
-  async function callDisconnectProvider(providerId, connectionId) {
+  async function callDisconnectProvider(providerId, connectionId, account) {
     if (typeof disconnectProvider === 'function') {
-      return disconnectProvider(providerId, connectionId, { rpc });
+      return disconnectProvider(providerId, connectionId, account, { rpc });
     }
 
     return rpc('provider.disconnect', {
       provider_id: providerId,
       connection_id: connectionId,
+      account,
     });
   }
 
@@ -304,47 +318,118 @@
         <div class="s-provider-connections">
           {#each getConfiguredConnections(provider) as connection (connection.id)}
             <div class="s-provider-connection-row">
-              <div class="s-row-info">
-                <div class="s-provider-connection-label">
-                  {connection.label ?? connection.id}
+              <div class="s-provider-connection-head">
+                <div class="s-row-info">
+                  <div class="s-provider-connection-label">
+                    {connection.label ?? connection.id}
+                  </div>
+                  <div class="s-row-desc">
+                    {connectionDescription(connection)}
+                  </div>
                 </div>
-                <div class="s-row-desc">
-                  {connectionDescription(connection)}
-                </div>
-              </div>
 
-              <div class="s-row-control">
                 <div class="s-row-actions s-row-actions--provider">
-                  <span class="chip chip-green">
-                    {t('settings.providers.connected', 'Connected')}
-                  </span>
-                  {#if isOAuthDeviceFlowConnection(connection)}
+                  {#if getConnectionAccounts(connection).length === 0}
+                    <span class="chip chip-green">
+                      {t('settings.providers.connected', 'Connected')}
+                    </span>
+                  {/if}
+                  {#if connectionSupportsAddAccount(connection)}
                     <button
                       class="btn-outline"
                       type="button"
-                      onclick={() =>
-                        disconnectOAuthConnection(provider, connection)}
+                      onclick={() => openAddAccountModal(provider, connection)}
                     >
-                      {t('settings.providers.disconnect', 'Disconnect')}
-                    </button>
-                  {:else if !isOAuthConnection(connection)}
-                    <button
-                      class="btn-outline"
-                      type="button"
-                      onclick={() => openReplaceKeyModal(provider, connection)}
-                    >
-                      {t('settings.providers.replaceKey', 'Replace key…')}
-                    </button>
-                    <button
-                      class="btn-outline danger"
-                      type="button"
-                      onclick={() => removeApiKey(provider, connection)}
-                    >
-                      {t('common.remove', 'Remove')}
+                      {t(
+                        'settings.providers.accounts.addButton',
+                        'Add account…',
+                      )}
                     </button>
                   {/if}
                 </div>
               </div>
+
+              {#if getConnectionAccounts(connection).length > 0}
+                <ul class="s-connection-accounts">
+                  {#each getConnectionAccounts(connection) as account (account.id)}
+                    <li class="s-connection-account-row">
+                      <span class="s-connection-account-id">
+                        {accountDisplayName(account, t)}
+                      </span>
+                      <span
+                        class="chip {isAccountUsable(account)
+                          ? 'chip-green'
+                          : 'chip-amber'}"
+                      >
+                        {isAccountUsable(account)
+                          ? t('settings.providers.connected', 'Connected')
+                          : t(
+                              'settings.providers.accounts.notUsable',
+                              'Not usable',
+                            )}
+                      </span>
+                      <span class="s-connection-account-source">
+                        {describeAccountSource(account, t)}
+                      </span>
+                      <div class="s-connection-account-actions">
+                        {#if isOAuthDeviceFlowConnection(connection) && isOAuthAccount(account)}
+                          <button
+                            class="btn-outline"
+                            type="button"
+                            onclick={() =>
+                              disconnectOAuthAccount(
+                                provider,
+                                connection,
+                                account,
+                              )}
+                          >
+                            {t('settings.providers.disconnect', 'Disconnect')}
+                          </button>
+                        {:else if !isOAuthConnection(connection)}
+                          <button
+                            class="btn-outline"
+                            type="button"
+                            onclick={() =>
+                              openReplaceKeyModal(
+                                provider,
+                                connection,
+                                account,
+                              )}
+                          >
+                            {t('settings.providers.replaceKey', 'Replace key…')}
+                          </button>
+                          {#if isProcessEnvAccount(account)}
+                            <span
+                              class="s-connection-account-locked"
+                              title={t(
+                                'settings.providers.accounts.removeEnvHint',
+                                'This credential comes from the process environment and cannot be removed here.',
+                              )}
+                            >
+                              <button
+                                class="btn-outline danger"
+                                type="button"
+                                disabled
+                              >
+                                {t('common.remove', 'Remove')}
+                              </button>
+                            </span>
+                          {:else}
+                            <button
+                              class="btn-outline danger"
+                              type="button"
+                              onclick={() =>
+                                removeApiKey(provider, connection, account)}
+                            >
+                              {t('common.remove', 'Remove')}
+                            </button>
+                          {/if}
+                        {/if}
+                      </div>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
             </div>
           {/each}
 
@@ -393,6 +478,7 @@
       providers={addProviderCandidates}
       scopedProvider={modalScope.provider}
       scopedConnection={modalScope.connection}
+      scopedAccount={modalScope.account ?? null}
       providerAuthEvent={forwardedAuthEvent}
       {connectProvider}
       {disconnectProvider}

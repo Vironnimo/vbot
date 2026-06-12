@@ -340,19 +340,68 @@
 
 .s-provider-connection-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: rgba(255, 255, 255, 0.015);
 }
 
+.s-provider-connection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
 .s-provider-connection-label {
   color: var(--text-med);
   font-size: 12.5px;
   font-weight: 500;
+}
+
+.s-connection-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.s-connection-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.s-connection-account-id {
+  min-width: 0;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.s-connection-account-source {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.s-connection-account-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.s-connection-account-locked {
+  display: inline-flex;
 }
 
 .s-inline-waiting {
@@ -859,10 +908,19 @@
     max-width: none;
   }
 
-  .s-provider-connection-row,
+  .s-provider-connection-head,
   .s-row-actions--provider {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .s-connection-account-row {
+    flex-wrap: wrap;
+  }
+
+  .s-connection-account-actions {
+    width: 100%;
+    margin-left: 0;
   }
 
   .s-provider-connections {

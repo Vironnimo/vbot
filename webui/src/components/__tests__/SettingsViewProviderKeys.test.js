@@ -37,6 +37,7 @@ describe('SettingsView provider API keys', () => {
     unsetKeyResult = {
       provider_id: 'openrouter',
       connection_id: 'openrouter:api-key',
+      account: 'default',
       credential_key: 'OPENROUTER_API_KEY',
       removed: true,
       configured: false,
@@ -90,6 +91,7 @@ describe('SettingsView provider API keys', () => {
     expect(rpcMock).toHaveBeenCalledWith('provider.set_key', {
       provider_id: 'anthropic',
       connection_id: 'anthropic:api-key',
+      account: 'default',
       value: 'sk-ant-test',
     });
     await waitForCondition(() =>
@@ -114,6 +116,13 @@ describe('SettingsView provider API keys', () => {
     expect(modalRoot().textContent).toContain('Connect OpenRouter');
 
     setInputValue('.provider-connect-modal input', 'sk-or-replacement');
+
+    const accountInput = document.body.querySelector(
+      '.provider-connect-modal input[type="text"]',
+    );
+    expect(accountInput.value).toBe('default');
+    expect(accountInput.disabled).toBe(true);
+
     buttonByText('Save key').click();
     await waitForCondition(() =>
       rpcMock.mock.calls.some((call) => call[0] === 'provider.set_key'),
@@ -122,6 +131,7 @@ describe('SettingsView provider API keys', () => {
     expect(rpcMock).toHaveBeenCalledWith('provider.set_key', {
       provider_id: 'openrouter',
       connection_id: 'openrouter:api-key',
+      account: 'default',
       value: 'sk-or-replacement',
     });
   });
@@ -142,6 +152,7 @@ describe('SettingsView provider API keys', () => {
     expect(rpcMock).toHaveBeenCalledWith('provider.unset_key', {
       provider_id: 'openrouter',
       connection_id: 'openrouter:api-key',
+      account: 'default',
     });
     await waitForCondition(() =>
       toastMock.mock.calls.some(
@@ -172,6 +183,132 @@ describe('SettingsView provider API keys', () => {
     );
   });
 
+  it('renders multiple accounts with per-account status, source, and actions', async () => {
+    currentSettings = settingsPayload({
+      openrouterAccounts: [
+        {
+          id: 'default',
+          usable: true,
+          source: 'process_env',
+          credential_key: 'OPENROUTER_API_KEY',
+        },
+        {
+          id: 'work',
+          usable: false,
+          source: 'data_dir',
+          credential_key: 'OPENROUTER_API_KEY__WORK',
+        },
+      ],
+    });
+    mountedComponent = mountSettingsView();
+    await openProvidersPanel();
+
+    const row = providerRow('OpenRouter');
+    const accountRows = Array.from(
+      row.querySelectorAll('.s-connection-account-row'),
+    );
+    expect(accountRows).toHaveLength(2);
+
+    expect(accountRows[0].textContent).toContain('Default');
+    expect(accountRows[0].textContent).toContain('Connected');
+    expect(accountRows[0].textContent).toContain('Process env');
+    expect(accountRows[1].textContent).toContain('work');
+    expect(accountRows[1].textContent).toContain('Not usable');
+    expect(accountRows[1].textContent).toContain('.env file');
+
+    // The process-env account cannot be removed; the data-dir one can.
+    expect(removeButton(accountRows[0]).disabled).toBe(true);
+    expect(removeButton(accountRows[1]).disabled).toBe(false);
+
+    expect(row.textContent).toContain('Add account…');
+  });
+
+  it('removes a named account with the account in the unset payload', async () => {
+    currentSettings = settingsPayload({
+      openrouterAccounts: [
+        {
+          id: 'default',
+          usable: true,
+          source: 'data_dir',
+          credential_key: 'OPENROUTER_API_KEY',
+        },
+        {
+          id: 'work',
+          usable: true,
+          source: 'data_dir',
+          credential_key: 'OPENROUTER_API_KEY__WORK',
+        },
+      ],
+    });
+    unsetKeyResult = {
+      ...unsetKeyResult,
+      account: 'work',
+    };
+    mountedComponent = mountSettingsView();
+    await openProvidersPanel();
+
+    const row = providerRow('OpenRouter');
+    const accountRows = Array.from(
+      row.querySelectorAll('.s-connection-account-row'),
+    );
+    removeButton(accountRows[1]).click();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some((call) => call[0] === 'provider.unset_key'),
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('provider.unset_key', {
+      provider_id: 'openrouter',
+      connection_id: 'openrouter:api-key',
+      account: 'work',
+    });
+  });
+
+  it('adds a named account through the connection-scoped modal', async () => {
+    mountedComponent = mountSettingsView();
+    await openProvidersPanel();
+
+    buttonByText('Add account…').click();
+    flushSync();
+
+    expect(modalRoot()).toBeTruthy();
+    setInputValue(
+      '.provider-connect-modal input[type="password"]',
+      'sk-or-second',
+    );
+    setInputValue('.provider-connect-modal input[type="text"]', 'work');
+
+    // The stored-key hint previews the account-derived credential key.
+    expect(modalRoot().textContent).toContain('OPENROUTER_API_KEY__WORK');
+
+    buttonByText('Save key').click();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some((call) => call[0] === 'provider.set_key'),
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('provider.set_key', {
+      provider_id: 'openrouter',
+      connection_id: 'openrouter:api-key',
+      account: 'work',
+      value: 'sk-or-second',
+    });
+  });
+
+  it('blocks an invalid account name in the key form with an inline error', async () => {
+    mountedComponent = mountSettingsView();
+    await openProvidersPanel();
+
+    buttonByText('Add account…').click();
+    flushSync();
+
+    setInputValue('.provider-connect-modal input[type="password"]', 'sk-x');
+    setInputValue('.provider-connect-modal input[type="text"]', 'Not Valid');
+
+    expect(modalRoot().textContent).toContain(
+      'Account names use 1–32 lowercase letters, digits, or underscores',
+    );
+    expect(buttonByText('Save key').disabled).toBe(true);
+  });
+
   function createRpcMock() {
     return async (method, params) => {
       if (method === 'settings.get') {
@@ -182,6 +319,7 @@ describe('SettingsView provider API keys', () => {
         return {
           provider_id: params.provider_id,
           connection_id: params.connection_id,
+          account: params.account,
           credential_key: 'KEY',
           configured: true,
         };
@@ -237,6 +375,14 @@ function buttonContaining(label) {
   return button;
 }
 
+function removeButton(scope) {
+  const button = Array.from(scope.querySelectorAll('button')).find(
+    (candidate) => candidate.textContent.trim() === 'Remove',
+  );
+  expect(button).toBeTruthy();
+  return button;
+}
+
 function setInputValue(selector, value) {
   const input = document.body.querySelector(selector);
   expect(input).toBeTruthy();
@@ -248,7 +394,21 @@ function setInputValue(selector, value) {
 function settingsPayload({
   anthropicConfigured = false,
   openrouterConfigured = true,
+  openrouterAccounts = null,
 } = {}) {
+  const resolvedOpenrouterAccounts =
+    openrouterAccounts ??
+    (openrouterConfigured
+      ? [
+          {
+            id: 'default',
+            usable: true,
+            source: 'data_dir',
+            credential_key: 'OPENROUTER_API_KEY',
+          },
+        ]
+      : []);
+
   return {
     general: {
       server: {
@@ -274,6 +434,16 @@ function settingsPayload({
               label: 'API Key',
               configured: anthropicConfigured,
               credential_key: 'ANTHROPIC_API_KEY',
+              accounts: anthropicConfigured
+                ? [
+                    {
+                      id: 'default',
+                      usable: true,
+                      source: 'data_dir',
+                      credential_key: 'ANTHROPIC_API_KEY',
+                    },
+                  ]
+                : [],
             },
           ],
         },
@@ -292,6 +462,7 @@ function settingsPayload({
               label: 'API Key',
               configured: openrouterConfigured,
               credential_key: 'OPENROUTER_API_KEY',
+              accounts: resolvedOpenrouterAccounts,
             },
           ],
         },
