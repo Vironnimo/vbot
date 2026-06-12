@@ -66,12 +66,15 @@ def provider_set_key(
     value: str,
     connection_id: str | None = None,
     refresh_models: bool = False,
+    account: str | None = None,
 ) -> CommandResult:
     """Set an API-key provider credential via `provider.set_key` RPC."""
 
     params: dict[str, Any] = {"provider_id": provider_id, "value": value}
     if connection_id is not None:
         params["connection_id"] = connection_id
+    if account is not None:
+        params["account"] = account
 
     payload = _rpc_call(instance, "provider.set_key", params)
     if not payload.ok:
@@ -79,7 +82,10 @@ def provider_set_key(
 
     resolved_connection_id = _string_or_default(payload.data.get("connection_id"), "?")
     credential_key = _string_or_default(payload.data.get("credential_key"), "?")
-    message = f"set {resolved_connection_id} credential {credential_key}"
+    resolved_account = _string_or_default(payload.data.get("account"), "default")
+    message = (
+        f"set {resolved_connection_id} credential {credential_key} (account: {resolved_account})"
+    )
 
     if refresh_models:
         refresh_payload = _rpc_call(instance, "model.refresh_db", {"provider_id": provider_id})
@@ -102,12 +108,15 @@ def provider_unset_key(
     instance: ServerInstance,
     provider_id: str,
     connection_id: str | None = None,
+    account: str | None = None,
 ) -> CommandResult:
     """Remove an API-key provider credential via `provider.unset_key` RPC."""
 
     params: dict[str, Any] = {"provider_id": provider_id}
     if connection_id is not None:
         params["connection_id"] = connection_id
+    if account is not None:
+        params["account"] = account
 
     payload = _rpc_call(instance, "provider.unset_key", params)
     if not payload.ok:
@@ -115,10 +124,17 @@ def provider_unset_key(
 
     resolved_connection_id = _string_or_default(payload.data.get("connection_id"), "?")
     credential_key = _string_or_default(payload.data.get("credential_key"), "?")
+    resolved_account = _string_or_default(payload.data.get("account"), "default")
     if not payload.data.get("removed"):
-        message = f"no stored credential {credential_key} for {resolved_connection_id}"
+        message = (
+            f"no stored credential {credential_key} for {resolved_connection_id} "
+            f"(account: {resolved_account})"
+        )
     else:
-        message = f"removed {resolved_connection_id} credential {credential_key}"
+        message = (
+            f"removed {resolved_connection_id} credential {credential_key} "
+            f"(account: {resolved_account})"
+        )
     if payload.data.get("configured"):
         message = (
             f"{message}\nstill configured from the process environment; "
@@ -131,10 +147,13 @@ def provider_connect(
     instance: ServerInstance,
     provider_id: str,
     connection_id: str,
+    account: str | None = None,
 ) -> CommandResult:
     """Start the OAuth device flow via `provider.connect` RPC."""
 
-    params = {"provider_id": provider_id, "connection_id": connection_id}
+    params: dict[str, Any] = {"provider_id": provider_id, "connection_id": connection_id}
+    if account is not None:
+        params["account"] = account
     payload = _rpc_call(instance, "provider.connect", params)
     if not payload.ok:
         return payload.to_command_result()
@@ -143,17 +162,20 @@ def provider_connect(
     verification_uri = _string_or_default(payload.data.get("verification_uri"), "?")
     expires_in = payload.data.get("expires_in")
     expires_text = str(expires_in) if isinstance(expires_in, int) else "?"
+    resolved_account = _string_or_default(payload.data.get("account"), "default")
+    follow_up_command = f"provider connect-status {provider_id} --connection {connection_id}"
+    if resolved_account != "default":
+        follow_up_command = f"{follow_up_command} --account {resolved_account}"
     return CommandResult(
         ok=True,
         message="\n".join(
             [
-                f"device flow started for {connection_id}",
+                f"device flow started for {connection_id} (account: {resolved_account})",
                 f"user_code: {user_code}",
                 f"verification_uri: {verification_uri}",
                 f"expires_in_seconds: {expires_text}",
                 "enter the user code at the verification URI in a browser; then check "
-                f"progress with: provider connect-status {provider_id} "
-                f"--connection {connection_id}",
+                f"progress with: {follow_up_command}",
             ]
         ),
         instance=instance,
@@ -164,32 +186,47 @@ def provider_disconnect(
     instance: ServerInstance,
     provider_id: str,
     connection_id: str,
+    account: str | None = None,
 ) -> CommandResult:
     """Remove a stored OAuth token via `provider.disconnect` RPC."""
 
-    params = {"provider_id": provider_id, "connection_id": connection_id}
+    params: dict[str, Any] = {"provider_id": provider_id, "connection_id": connection_id}
+    if account is not None:
+        params["account"] = account
     payload = _rpc_call(instance, "provider.disconnect", params)
     if not payload.ok:
         return payload.to_command_result()
-    return CommandResult(ok=True, message=f"disconnected {connection_id}", instance=instance)
+    resolved_account = _string_or_default(payload.data.get("account"), "default")
+    return CommandResult(
+        ok=True,
+        message=f"disconnected {connection_id} (account: {resolved_account})",
+        instance=instance,
+    )
 
 
 def provider_connect_status(
     instance: ServerInstance,
     provider_id: str,
     connection_id: str,
+    account: str | None = None,
 ) -> CommandResult:
     """Show OAuth connection state via `provider.connection_status` RPC."""
 
-    params = {"provider_id": provider_id, "connection_id": connection_id}
+    params: dict[str, Any] = {"provider_id": provider_id, "connection_id": connection_id}
+    if account is not None:
+        params["account"] = account
     payload = _rpc_call(instance, "provider.connection_status", params)
     if not payload.ok:
         return payload.to_command_result()
     connected = "yes" if payload.data.get("connected") else "no"
     flow_active = "yes" if payload.data.get("flow_active") else "no"
+    resolved_account = _string_or_default(payload.data.get("account"), "default")
     return CommandResult(
         ok=True,
-        message=f"{connection_id}: connected={connected} flow_active={flow_active}",
+        message=(
+            f"{connection_id}: account={resolved_account} "
+            f"connected={connected} flow_active={flow_active}"
+        ),
         instance=instance,
     )
 
@@ -270,13 +307,30 @@ def _format_connection_row(connection: object) -> str:
     connection_type = _string_or_default(connection.get("type"), "?")
     label = _string_or_default(connection.get("label"), "?")
     usable = "yes" if connection.get("usable") else "no"
-    return (
+    header = (
         f"- id: {connection_id}"
         f"  provider_id: {provider_id}"
         f"  type: {connection_type}"
         f"  label: {label}"
         f"  usable: {usable}"
     )
+    return "\n".join([header, _format_account_rows(connection.get("accounts"))])
+
+
+def _format_account_rows(accounts: object) -> str:
+    if not isinstance(accounts, list) or not accounts:
+        return "  accounts: none"
+
+    lines = ["  accounts:"]
+    for account in accounts:
+        if not isinstance(account, dict):
+            lines.append("  - invalid account entry")
+            continue
+        account_id = _string_or_default(account.get("id"), "?")
+        usable = "yes" if account.get("usable") else "no"
+        source = _string_or_default(account.get("source"), "?")
+        lines.append(f"  - id: {account_id}  usable: {usable}  source: {source}")
+    return "\n".join(lines)
 
 
 def _string_or_default(value: object, default: str) -> str:

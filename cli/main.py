@@ -127,7 +127,7 @@ def run(
         [ServerInstance, str, str | None], CommandResult
     ] = provider_status,
     set_provider_key: Callable[
-        [ServerInstance, str, str, str | None, bool], CommandResult
+        [ServerInstance, str, str, str | None, bool, str | None], CommandResult
     ] = provider_set_key,
     list_models_fn: Callable[[ServerInstance], CommandResult] = model_list,
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
@@ -489,16 +489,20 @@ def dispatch_provider_command(
     *,
     list_providers: Callable[[ServerInstance], CommandResult],
     provider_status_fn: Callable[[ServerInstance, str, str | None], CommandResult],
-    set_provider_key: Callable[[ServerInstance, str, str, str | None, bool], CommandResult],
+    set_provider_key: Callable[
+        [ServerInstance, str, str, str | None, bool, str | None], CommandResult
+    ],
     unset_provider_key_fn: Callable[
-        [ServerInstance, str, str | None], CommandResult
+        [ServerInstance, str, str | None, str | None], CommandResult
     ] = provider_unset_key,
-    connect_provider_fn: Callable[[ServerInstance, str, str], CommandResult] = provider_connect,
+    connect_provider_fn: Callable[
+        [ServerInstance, str, str, str | None], CommandResult
+    ] = provider_connect,
     disconnect_provider_fn: Callable[
-        [ServerInstance, str, str], CommandResult
+        [ServerInstance, str, str, str | None], CommandResult
     ] = provider_disconnect,
     connect_status_fn: Callable[
-        [ServerInstance, str, str], CommandResult
+        [ServerInstance, str, str, str | None], CommandResult
     ] = provider_connect_status,
 ) -> CommandResult:
     """Dispatch one parsed provider command against the server RPC client."""
@@ -514,15 +518,16 @@ def dispatch_provider_command(
             args.value,
             args.connection,
             args.refresh_models,
+            args.account,
         )
     if args.command == "unset-key":
-        return unset_provider_key_fn(instance, args.provider, args.connection)
+        return unset_provider_key_fn(instance, args.provider, args.connection, args.account)
     if args.command == "connect":
-        return connect_provider_fn(instance, args.provider, args.connection)
+        return connect_provider_fn(instance, args.provider, args.connection, args.account)
     if args.command == "disconnect":
-        return disconnect_provider_fn(instance, args.provider, args.connection)
+        return disconnect_provider_fn(instance, args.provider, args.connection, args.account)
     if args.command == "connect-status":
-        return connect_status_fn(instance, args.provider, args.connection)
+        return connect_status_fn(instance, args.provider, args.connection, args.account)
     raise ValueError(f"Unsupported provider command: {args.command}")
 
 
