@@ -25,6 +25,7 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
 
 - `AttachmentStore(data_dir: Path, *, max_size_bytes: int = 20_971_520)` — rejects a non-positive `max_size_bytes` with `AttachmentError`
 - `AttachmentStore.max_size_bytes` exposes the configured upload limit so transport layers can reject oversized payloads before materializing the full request body.
+- `sniff_media_type(data: bytes, filename: str) -> str` — public, side-effect-free wrapper over the internal magic-bytes sniffer (`_sniff_mime`). Classifies bytes as image/audio/video/text/etc. **without** touching disk or the allowlist, so callers can decide how to handle a file before storing it. The `read` tool uses it to branch on media type.
 - `store(filename: str, data: bytes) -> AttachmentRecord` — checks size, sniffs MIME, validates the allowlist, writes blob and sidecar, extracts `text_content` for `text/*`
 - `get(attachment_id: str) -> AttachmentRecord` — loads one attachment record from its sidecar
 - `set_transcription(attachment_id: str, transcription: str) -> AttachmentRecord` — persists a cached transcription into the sidecar (rejects empty text with `AttachmentError`)
@@ -57,4 +58,4 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
 - `ContentBlockResolver.resolve_messages()` is async (transcription is a provider call); runtime injects the `SpeechService` as the resolver's transcriber.
 - Text files never become `FileBlock`s: `text_content` is persisted in the sidecar and echoed by `POST /api/upload`, so clients build a `TextBlock` directly from it without re-fetching the blob. Other non-image files stay `FileBlock`s.
 - `file_path` is intentionally surfaced to the chat layer in the `FileBlock` note (`[File: <name> (<type>) — Path: <file_path>]`) so agents can open the blob with the existing `read` tool. This is by design, not a leak.
-- Cleanup of orphaned or deleted-session attachments is explicitly out of scope: there is no index, GC, or reference counting.
+- Cleanup of orphaned or deleted-session attachments is explicitly out of scope: there is no index, GC, or reference counting. The `read` tool also promotes disk image files to attachments via `store()` (so an image read grows the blob store), but this stays within the same no-GC policy — see `tools/read.md`.
