@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs
 
 import httpx
@@ -424,3 +426,105 @@ async def test_oauth_token_getter_aclose_closes_owned_created_client(
     assert token == "fresh-copilot-token"
     assert len(clients) == 1
     assert clients[0].closed is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_oauth_token_getter_logs_info_on_successful_refresh(
+    tmp_path: Path,
+    oauth_config: OAuthConfig,
+    caplog: Any,
+) -> None:
+    """A successful token refresh logs at info with non-secret identifiers only."""
+
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        PROVIDER_ID,
+        CONNECTION_ID,
+        OAuthToken(
+            access_token="expired-copilot-token",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+            extra={"github_oauth_token": "github-oauth-secret"},
+        ),
+    )
+    respx.get(TOKEN_EXCHANGE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "fresh-copilot-token",
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
+            },
+        )
+    )
+    getter = OAuthTokenGetter(token_store, PROVIDER_ID, CONNECTION_ID, oauth_config)
+
+    with caplog.at_level(logging.INFO, logger="vbot.providers.token_getter"):
+        token = await getter()
+
+    assert token == "fresh-copilot-token"
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert any("Refreshed OAuth token" in r.getMessage() for r in info_records)
+    log_text = caplog.text
+    assert PROVIDER_ID in log_text
+    assert CONNECTION_ID in log_text
+    # No secrets leak into the logs.
+    assert "fresh-copilot-token" not in log_text
+    assert "github-oauth-secret" not in log_text
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_oauth_token_getter_logs_warning_on_refresh_request_failure(
+    tmp_path: Path,
+    oauth_config: OAuthConfig,
+    caplog: Any,
+) -> None:
+    """A failed refresh request logs at warning (no traceback) before raising."""
+
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        PROVIDER_ID,
+        CONNECTION_ID,
+        OAuthToken(
+            access_token="expired-copilot-token",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+            extra={"github_oauth_token": "github-oauth-secret"},
+        ),
+    )
+    respx.get(TOKEN_EXCHANGE_URL).mock(return_value=httpx.Response(401, text="unauthorized"))
+    getter = OAuthTokenGetter(token_store, PROVIDER_ID, CONNECTION_ID, oauth_config)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
+        pytest.raises(ProviderAuthError),
+    ):
+        await getter()
+
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warning_records, "expected a warning log for the failed refresh"
+    failure_record = next(
+        r for r in warning_records if "OAuth token refresh failed" in r.getMessage()
+    )
+    assert failure_record.exc_info is None
+    assert PROVIDER_ID in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_getter_logs_warning_when_no_token(
+    tmp_path: Path,
+    oauth_config: OAuthConfig,
+    caplog: Any,
+) -> None:
+    """A missing stored token logs at warning before requiring a reconnect."""
+
+    getter = OAuthTokenGetter(TokenStore(tmp_path), PROVIDER_ID, CONNECTION_ID, oauth_config)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
+        pytest.raises(ProviderAuthError, match="No OAuth token"),
+    ):
+        await getter()
+
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("No usable OAuth token" in r.getMessage() for r in warning_records)
+    assert all(r.exc_info is None for r in warning_records)

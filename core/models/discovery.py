@@ -188,6 +188,11 @@ async def refresh_models(
             json.dumps(output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
     except (httpx.HTTPError, json.JSONDecodeError, OSError, ValueError) as exc:
+        _LOGGER.warning(
+            "Model catalog refresh failed for provider %s: %s",
+            provider_config.id,
+            exc,
+        )
         raise ModelDiscoveryError(
             f"Model discovery failed for provider '{provider_config.id}': {exc}"
         ) from exc

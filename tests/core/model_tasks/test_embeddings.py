@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -216,6 +217,34 @@ async def test_embed_maps_provider_auth_error_to_execution_error() -> None:
         pytest.raises(EmbeddingExecutionError, match="Unauthorized"),
     ):
         await service.embed(["alpha"])
+
+
+@pytest.mark.asyncio
+async def test_embed_logs_provider_error_at_warning_without_traceback(caplog: Any) -> None:
+    """An expected :class:`VBotError` provider failure logs at warning, no traceback."""
+
+    from core.providers.errors import ProviderAuthError
+
+    fake_client = _FakeProviderClient(embed_exception=ProviderAuthError("Unauthorized"))
+    service = EmbeddingService(
+        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
+        _RuntimeStub(),
+    )
+
+    with (
+        patch(
+            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
+            return_value=fake_client,
+        ),
+        caplog.at_level(logging.WARNING, logger="vbot.embeddings"),
+        pytest.raises(EmbeddingExecutionError),
+    ):
+        await service.embed(["alpha"])
+
+    relevant = [r for r in caplog.records if "Embedding request failed" in r.getMessage()]
+    assert relevant, "expected a log record for the failed embedding request"
+    assert all(r.levelno == logging.WARNING for r in relevant)
+    assert all(r.exc_info is None for r in relevant)
 
 
 @pytest.mark.asyncio
