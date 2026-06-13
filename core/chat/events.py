@@ -78,12 +78,18 @@ def _is_streaming_fallback_error(error: Exception) -> bool:
 def _is_stream_restartable_error(error: Exception) -> bool:
     """Whether a streaming failure may be replayed as a fresh stream.
 
-    True only for retryable transport/timeout failures (``NetworkError``,
-    ``ProviderTimeoutError``, retryable ``ProviderError``). The chat loop
-    restarts the stream from scratch only when *nothing visible* has been
-    emitted yet, so the replay cannot duplicate output the user already saw —
-    this is the streaming analogue of the streaming→non-streaming fallback.
+    True for retryable transport/timeout failures (``NetworkError``,
+    ``ProviderTimeoutError``, retryable ``ProviderError``) and for a mid-stream
+    chunk stall (``StreamingChunkTimeoutError``) — the provider went silent
+    after the connect succeeded, which is exactly the transient "not yet
+    visible" case the restart was built for (it carries no ``retryable``
+    attribute, so it is matched by type). The chat loop restarts the stream from
+    scratch only when *nothing visible* has been emitted yet, so the replay
+    cannot duplicate output the user already saw — this is the streaming
+    analogue of the streaming→non-streaming fallback.
     """
+    if isinstance(error, StreamingChunkTimeoutError):
+        return True
     return bool(getattr(error, "retryable", False))
 
 
