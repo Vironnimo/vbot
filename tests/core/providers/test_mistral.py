@@ -106,9 +106,10 @@ def raw_mistral_model(
     return raw
 
 
-def test_reasoning_replay_policy_stays_current_run(mistral_adapter: MistralAdapter) -> None:
-    """Deliberate Phase-3 choice: no probe evidence that Mistral wants cross-run replay."""
-    assert mistral_adapter.reasoning_replay_policy("magistral-medium-latest") == "current_run"
+def test_reasoning_replay_policy_is_full_history(mistral_adapter: MistralAdapter) -> None:
+    """Mistral docs require cross-turn replay; verified accepted against the live API."""
+    assert mistral_adapter.reasoning_replay_policy("mistral-medium-3-5") == "full_history"
+    assert mistral_adapter.reasoning_replay_policy("magistral-medium-latest") == "full_history"
 
 
 def test_normalize_catalog_entry_maps_chat_model_capabilities() -> None:
@@ -435,6 +436,60 @@ def test_normalize_response_typed_list_extracts_text_and_reasoning(
 
     assert normalized["content"] == "AnswerA"
     assert normalized["reasoning"] == "ThinkA"
+
+
+def test_normalize_response_nested_thinking_chunks_flatten_to_reasoning(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    """Current reasoning models nest ``thinking`` as a list of text chunks (live shape)."""
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": [
+                                {"type": "text", "text": "Step one. "},
+                                {"type": "text", "text": "Step two."},
+                            ],
+                            "closed": True,
+                        },
+                        {"type": "text", "text": "391"},
+                    ],
+                }
+            }
+        ]
+    }
+
+    normalized = mistral_adapter.normalize_response(response)
+
+    assert normalized["content"] == "391"
+    assert normalized["reasoning"] == "Step one. Step two."
+
+
+def test_format_assistant_message_replays_reasoning_as_think_chunk(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    """Replayed reasoning renders back into Mistral's content chunk-list shape."""
+    wire = mistral_adapter._format_assistant_message(
+        {"role": "assistant", "content": "391", "reasoning": "17*23 = 391"}
+    )
+
+    assert wire["content"] == [
+        {"type": "thinking", "thinking": [{"type": "text", "text": "17*23 = 391"}]},
+        {"type": "text", "text": "391"},
+    ]
+
+
+def test_format_assistant_message_without_reasoning_keeps_plain_content(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    """No reasoning → generic plain-string content is kept unchanged."""
+    wire = mistral_adapter._format_assistant_message({"role": "assistant", "content": "plain"})
+
+    assert wire["content"] == "plain"
 
 
 def test_normalize_response_typed_list_multiple_text_blocks_concatenated(

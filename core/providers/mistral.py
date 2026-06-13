@@ -19,10 +19,34 @@ from core.providers.openai_compatible import (
     _read_optional_non_empty_string,
     _read_string,
 )
-from core.providers.reasoning import closest_supported_effort
+from core.providers.reasoning import (
+    REASONING_REPLAY_FULL_HISTORY,
+    ReasoningReplayPolicy,
+    closest_supported_effort,
+)
 
 MISTRAL_REASONING_EFFORTS = {"none", "high"}
 MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES = ("magistral-medium",)
+
+
+def _flatten_thinking(value: Any) -> str:
+    """Flatten a Mistral ThinkChunk ``thinking`` payload to plain text.
+
+    Current reasoning models (``mistral-medium-3-5``, ``mistral-small-latest``,
+    …) return ``thinking`` as a list of ``{"type": "text", "text": ...}`` chunks;
+    older magistral models returned a plain string. Both shapes flatten here.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(
+            chunk["text"]
+            for chunk in value
+            if isinstance(chunk, dict)
+            and chunk.get("type") == "text"
+            and isinstance(chunk.get("text"), str)
+        )
+    return ""
 
 
 class MistralAdapter(OpenAICompatibleAdapter):
@@ -116,6 +140,43 @@ class MistralAdapter(OpenAICompatibleAdapter):
 
         return payload
 
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        """Replay reasoning across runs — Mistral requires it and the API accepts it.
+
+        Mistral's guidance is explicit and cross-turn: always replay the full
+        assistant message including the thinking trace; dropping it degrades
+        output quality. Verified against the live API (2026-06-13): replaying a
+        reconstructed ThinkChunk on a same-model follow-up returns 200, including
+        when the new request sets ``reasoning_effort: "none"`` — so no
+        thinking-disabled guard is needed. The chat layer's same-model gate
+        strips cross-model entries.
+        """
+        del model_id
+        return REASONING_REPLAY_FULL_HISTORY
+
+    def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Render replayed reasoning as a Mistral ThinkChunk ahead of the answer.
+
+        Mistral emits reasoning as a ``content`` chunk list
+        (``[{"type": "thinking", "thinking": [TextChunk]}, {"type": "text", …}]``)
+        and expects the same shape replayed back. The chat layer keeps the
+        visible ``reasoning`` text on replayed (and in-run) assistant turns, so
+        the trace is reconstructed here from that text. When no reasoning is
+        present the generic plain-string content is kept unchanged.
+        """
+        wire = super()._format_assistant_message(message)
+        reasoning = message.get("reasoning")
+        if not isinstance(reasoning, str) or not reasoning:
+            return wire
+        content_chunks: list[dict[str, Any]] = [
+            {"type": "thinking", "thinking": [{"type": "text", "text": reasoning}]}
+        ]
+        visible = wire.get("content")
+        if isinstance(visible, str) and visible:
+            content_chunks.append({"type": "text", "text": visible})
+        wire["content"] = content_chunks
+        return wire
+
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         message = _first_choice_message(response)
         content = message.get("content")
@@ -133,8 +194,8 @@ class MistralAdapter(OpenAICompatibleAdapter):
                 if isinstance(text, str):
                     content_parts.append(text)
             elif item_type == "thinking":
-                thinking = item.get("thinking")
-                if isinstance(thinking, str):
+                thinking = _flatten_thinking(item.get("thinking"))
+                if thinking:
                     reasoning_parts.append(thinking)
 
         normalized: dict[str, Any] = {
@@ -178,8 +239,8 @@ class MistralAdapter(OpenAICompatibleAdapter):
                             continue
                         item_type = item.get("type")
                         if item_type == "thinking":
-                            thinking = item.get("thinking")
-                            if isinstance(thinking, str) and thinking:
+                            thinking = _flatten_thinking(item.get("thinking"))
+                            if thinking:
                                 normalized_deltas.append(
                                     {"type": "reasoning_delta", "text": thinking}
                                 )
