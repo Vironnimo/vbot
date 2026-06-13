@@ -13,7 +13,7 @@ from core.model_tasks.speech_providers import ProviderSpeechClient
 from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.task_client import TaskClientRuntime
-from core.utils.errors import TaskError
+from core.utils.errors import TaskError, VBotError
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -116,6 +116,15 @@ class SpeechService:
             )
         except SpeechError:
             raise
+        except VBotError as exc:
+            # ProviderError / NetworkError / ProviderAuthError / … are
+            # expected provider failures, not crashes.
+            _LOGGER.warning(
+                "Speech transcription failed for target=%s: %s",
+                target_ref.target,
+                exc,
+            )
+            raise SpeechExecutionError(str(exc)) from exc
         except Exception as exc:
             _LOGGER.error("Speech transcription failed", exc_info=True)
             raise SpeechExecutionError(str(exc)) from exc
@@ -144,6 +153,15 @@ class SpeechService:
             return await provider_client.synthesize(normalized_text, options=options)
         except SpeechError:
             raise
+        except VBotError as exc:
+            # ProviderError / NetworkError / ProviderAuthError / … are
+            # expected provider failures, not crashes.
+            _LOGGER.warning(
+                "Speech synthesis failed for target=%s: %s",
+                target_ref.target,
+                exc,
+            )
+            raise SpeechExecutionError(str(exc)) from exc
         except Exception as exc:
             _LOGGER.error("Speech synthesis failed", exc_info=True)
             raise SpeechExecutionError(str(exc)) from exc

@@ -14,7 +14,10 @@ from core.providers.errors import ProviderAuthError, ProviderError, ProviderRate
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
 from core.providers.providers import OPENAI_CODEX_DEVICE_FLOW, OAuthConfig
 from core.providers.token_store import OAuthToken, TokenStore
+from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+
+_LOGGER = get_logger("providers.token_getter")
 
 TOKEN_EXPIRY_BUFFER_SECONDS = 30
 TOKEN_EXCHANGE_FALLBACK_MINUTES = 25
@@ -87,6 +90,13 @@ class OAuthTokenGetter:
                 account_id=self._account_id,
             )
             if token is None:
+                _LOGGER.warning(
+                    "No usable OAuth token for provider=%s connection=%s account=%s — "
+                    "reconnect required",
+                    self._provider_id,
+                    self._local_connection_id,
+                    self._account_id,
+                )
                 raise ProviderAuthError("No OAuth token — please connect this provider first")
             if not _is_expiring(token):
                 return token.access_token
@@ -99,6 +109,13 @@ class OAuthTokenGetter:
             return await self._refresh_token_exchange(token, token_exchange_url, github_oauth_token)
         if token.refresh_token:
             return await self._refresh_oauth_token(token)
+        _LOGGER.warning(
+            "OAuth token expired with no refresh path for provider=%s connection=%s account=%s — "
+            "reconnect required",
+            self._provider_id,
+            self._local_connection_id,
+            self._account_id,
+        )
         raise ProviderAuthError("OAuth token expired — please reconnect")
 
     async def _refresh_token_exchange(
@@ -108,11 +125,15 @@ class OAuthTokenGetter:
         github_oauth_token: str,
     ) -> str:
         now = datetime.now(UTC)
-        response_data = await retry_async(
-            self._exchange_token,
-            token_exchange_url,
-            github_oauth_token,
-        )
+        try:
+            response_data = await retry_async(
+                self._exchange_token,
+                token_exchange_url,
+                github_oauth_token,
+            )
+        except ProviderError as exc:
+            self._log_refresh_failure(exc)
+            raise
         access_token = _required_token_string(response_data.get("token"))
         refreshed_token = OAuthToken(
             access_token=access_token,
@@ -126,13 +147,25 @@ class OAuthTokenGetter:
             refreshed_token,
             account_id=self._account_id,
         )
+        self._log_refresh_success()
         return refreshed_token.access_token
 
     async def _refresh_oauth_token(self, token: OAuthToken) -> str:
         if not token.refresh_token:
+            _LOGGER.warning(
+                "OAuth refresh requested without a refresh token for provider=%s "
+                "connection=%s account=%s — reconnect required",
+                self._provider_id,
+                self._local_connection_id,
+                self._account_id,
+            )
             raise ProviderAuthError("OAuth token expired — please reconnect")
         now = datetime.now(UTC)
-        response_data = await retry_async(self._post_refresh_token, token.refresh_token)
+        try:
+            response_data = await retry_async(self._post_refresh_token, token.refresh_token)
+        except ProviderError as exc:
+            self._log_refresh_failure(exc)
+            raise
         access_token = _required_token_string(response_data.get("access_token"))
         refresh_token = response_data.get("refresh_token")
         extra = dict(token.extra)
@@ -150,7 +183,25 @@ class OAuthTokenGetter:
             refreshed_token,
             account_id=self._account_id,
         )
+        self._log_refresh_success()
         return refreshed_token.access_token
+
+    def _log_refresh_success(self) -> None:
+        _LOGGER.info(
+            "Refreshed OAuth token for provider=%s connection=%s account=%s",
+            self._provider_id,
+            self._local_connection_id,
+            self._account_id,
+        )
+
+    def _log_refresh_failure(self, exc: Exception) -> None:
+        _LOGGER.warning(
+            "OAuth token refresh failed for provider=%s connection=%s account=%s: %s",
+            self._provider_id,
+            self._local_connection_id,
+            self._account_id,
+            exc,
+        )
 
     async def _exchange_token(
         self, token_exchange_url: str, github_oauth_token: str
