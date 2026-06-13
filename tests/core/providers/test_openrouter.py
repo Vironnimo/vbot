@@ -202,8 +202,44 @@ async def test_openrouter_stream_requests_usage(openrouter_adapter: OpenRouterAd
 def test_reasoning_replay_policy_stays_current_run(
     openrouter_adapter: OpenRouterAdapter,
 ) -> None:
-    """Deliberate Phase-3 choice: mixed upstreams + billed reasoning round-trip, no probe."""
+    """current_run is the genuinely correct target, not a placeholder.
+
+    OpenRouter's docs frame reasoning preservation as in-run ("useful for tool
+    calling"); cross-run replay is undocumented. The in-run hard requirements
+    (e.g. Gemini thought signatures) are satisfied because current_run keeps
+    reasoning_meta within the run — pinned by the round-trip test below.
+    """
     assert openrouter_adapter.reasoning_replay_policy("anthropic/claude-sonnet-4") == "current_run"
+    assert openrouter_adapter.reasoning_replay_policy("google/gemini-2.5-pro") == "current_run"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_in_run_round_trips_reasoning_details(
+    openrouter_adapter: OpenRouterAdapter,
+) -> None:
+    """In-run replay must echo reasoning_details unchanged (Gemini upstreams 400 without it)."""
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+    reasoning_details = [
+        {"type": "reasoning.encrypted", "data": "enc-signature-blob"},
+        {"type": "reasoning.text", "text": "step one", "signature": "sig-1"},
+    ]
+    history = [
+        {"role": "user", "content": "Use the tool"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "name": "lookup", "arguments": {"q": "x"}}],
+            "reasoning_meta": {"reasoning_details": reasoning_details},
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+    ]
+
+    await openrouter_adapter.send(history, model_id="google/gemini-2.5-pro")
+
+    request_body = json.loads(route.calls.last.request.content)
+    assistant_message = request_body["messages"][1]
+    assert assistant_message["reasoning_details"] == reasoning_details
 
 
 def test_normalize_catalog_entry_maps_all_openrouter_fields() -> None:
