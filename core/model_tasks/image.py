@@ -11,7 +11,7 @@ from core.model_tasks.image_providers import ProviderImageClient
 from core.model_tasks.image_types import ImageArtifact, ImageGenerationResult, JsonObject
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.task_client import TaskClientRuntime
-from core.utils.errors import TaskError
+from core.utils.errors import TaskError, VBotError
 from core.utils.logging import get_logger
 
 JsonObject = JsonObject
@@ -70,6 +70,15 @@ class ImageService:
             return await provider_client.generate(normalized_prompt, options=options)
         except ImageError:
             raise
+        except VBotError as exc:
+            # ProviderError / NetworkError / ProviderAuthError / … are
+            # expected provider failures, not crashes.
+            _LOGGER.warning(
+                "Image generation failed for target=%s: %s",
+                target_ref.target,
+                exc,
+            )
+            raise ImageExecutionError(str(exc)) from exc
         except Exception as exc:
             _LOGGER.error("Image generation failed", exc_info=True)
             raise ImageExecutionError(str(exc)) from exc

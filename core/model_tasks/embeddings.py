@@ -127,12 +127,12 @@ class EmbeddingService:
             raise
         except VBotError as exc:
             # ProviderError / NetworkError / ProviderAuthError / …
-            # are domain errors and surface as execution failures.
-            _LOGGER.error(
-                "Embedding request failed for provider=%s model=%s",
+            # are expected provider failures and surface as execution failures.
+            _LOGGER.warning(
+                "Embedding request failed for provider=%s model=%s: %s",
                 target_ref.provider_id,
                 target_ref.model_id,
-                exc_info=True,
+                exc,
             )
             raise EmbeddingExecutionError(str(exc)) from exc
         except Exception as exc:
