@@ -226,9 +226,16 @@
     if (!(image instanceof HTMLImageElement)) {
       return;
     }
-    // Only rendered Markdown images open the lightbox; user attachment
-    // thumbnails keep their existing open-in-new-tab link behavior.
-    if (!image.closest('.msg-markdown')) {
+    // Both rendered Markdown images and user attachment thumbnails open the
+    // lightbox. Modifier clicks fall through so the attachment link can still
+    // open the raw image in a new tab.
+    if (
+      !image.closest('.msg-markdown') &&
+      !image.closest('.inline-attachment')
+    ) {
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
       return;
     }
     event.preventDefault();

@@ -1031,6 +1031,7 @@ textarea::placeholder {
   align-items: center;
   justify-content: center;
   padding: 32px;
+  overflow: auto;
   background: rgba(0, 0, 0, 0.82);
   backdrop-filter: blur(2px);
   cursor: zoom-out;
@@ -1044,6 +1045,20 @@ textarea::placeholder {
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
   object-fit: contain;
   cursor: default;
+}
+
+.image-lightbox__image.zoomable {
+  cursor: zoom-in;
+}
+
+/* Actual-size view: show the image at its natural dimensions and let the
+   overlay scroll. `margin: auto` keeps it centered when it fits and avoids the
+   flex-centering overflow clip when it does not. */
+.image-lightbox--zoomed .image-lightbox__image {
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  cursor: zoom-out;
 }
 
 .image-lightbox__close {
