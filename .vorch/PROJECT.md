@@ -77,7 +77,7 @@ Each domain has a spec in `.vorch/specs/`, named after its module. A **domain** 
 
 **Dependency injection:** Constructor injection via `__init__`. Interfaces via `typing.Protocol`. No service locator, no global singletons, no `getattr` tricks.
 
-**Error handling:** Base classes in `core/utils/errors.py`, domain-specific extensions per module. Expected errors → handle locally, log `warn`. Unexpected errors → rethrow, log `error`. Transient HTTP errors → max 3 retries, exponential backoff + jitter, honoring a server `Retry-After` hint as a floor (capped). Provider errors classified as `retryable` vs `fatal`. No silent `except Exception: pass`.
+**Error handling:** Base classes in `core/utils/errors.py`, domain-specific extensions per module. Expected errors → handle locally, log `warn`. Unexpected errors → rethrow, log `error`. Transient HTTP errors → max 3 retries, exponential backoff + jitter, honoring a server `Retry-After` hint as a floor (capped). Which HTTP statuses are retryable is defined once in `core/utils/http_status.py` (`is_retryable_status`, idempotency-aware), shared by providers and HTTP tools. Provider errors classified as `retryable` vs `fatal`. No silent `except Exception: pass`.
 
 **Logging:** Structured logging via `LogManager` from `core/utils/logging`. All application logs go through that pipeline and use per-module `vbot.<domain>` loggers. Required format: `timestamp [LEVEL] name - message`. Logs live under `<data_dir>/logs/`; `LogManager` handles the file layout. No `print()`, no `logging.basicConfig()`, and no ad-hoc formatting.
 
