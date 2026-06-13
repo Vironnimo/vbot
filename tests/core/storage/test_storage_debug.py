@@ -277,7 +277,7 @@ class TestUpdateSettingsSectionsWithDebug:
 
         assert save_count == 1
         assert updated == {
-            "appearance": {"language": "en"},
+            "appearance": {"language": "en", "chat_width": "comfortable"},
             "debug": {"enabled": True, "trace_limit": 200},
         }
         assert storage.load_debug_settings() == {"enabled": True, "trace_limit": 200}

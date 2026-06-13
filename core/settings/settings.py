@@ -24,6 +24,11 @@ ALLOWED_THINKING_EFFORTS = frozenset(
 AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thinking_effort"})
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
+# Appearance chat-width preference (the WebUI chat reading-column width). The
+# constant lives here, not in normalizers.py, so the public update parser can
+# validate membership without a circular import (normalizers imports settings).
+DEFAULT_APPEARANCE_CHAT_WIDTH = "comfortable"
+SUPPORTED_APPEARANCE_CHAT_WIDTHS = frozenset({"comfortable", "wide", "full"})
 SETTINGS_UPDATE_SECTIONS = frozenset(
     {
         "appearance",
@@ -295,17 +300,32 @@ def _parse_appearance_update(appearance: Any) -> JsonObject:
     if not isinstance(appearance, dict):
         raise SettingsValidationError("params.appearance must be an object")
 
-    unsupported_fields = sorted(set(appearance) - {"language"})
+    unsupported_fields = sorted(set(appearance) - {"language", "chat_width"})
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported appearance settings: {', '.join(unsupported_fields)}"
         )
 
+    # `language` stays required so a partial update never resets it: the
+    # appearance section is normalized as a whole (full replace), so callers
+    # send the complete section. `chat_width` is optional and validated when
+    # present; a missing value normalizes to the comfortable default.
     language = appearance.get("language")
     if not isinstance(language, str) or not language:
         raise SettingsValidationError("params.appearance.language must be a non-empty string")
 
-    return {"language": language}
+    parsed: JsonObject = {"language": language}
+
+    if "chat_width" in appearance:
+        chat_width = appearance.get("chat_width")
+        if chat_width not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
+            supported = ", ".join(sorted(SUPPORTED_APPEARANCE_CHAT_WIDTHS))
+            raise SettingsValidationError(
+                f"params.appearance.chat_width must be one of: {supported}"
+            )
+        parsed["chat_width"] = chat_width
+
+    return parsed
 
 
 def _parse_skills_update(skills: Any) -> JsonObject:
