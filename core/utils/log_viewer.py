@@ -15,10 +15,13 @@ from watchfiles import awatch
 
 from core.utils.logging import (
     extract_websocket_path_from_message,
+    get_logger,
     is_routine_websocket_lifecycle_message,
 )
 
 JsonObject = dict[str, Any]
+
+_LOGGER = get_logger("log_viewer")
 
 APPEND_EVENT = "append"
 RESET_EVENT = "reset"
@@ -242,6 +245,11 @@ class LogViewer:
                 snapshot=self._read_snapshot(file_path),
             )
             watcher.task = asyncio.create_task(self._watch_file(watcher))
+
+            def on_done(task: asyncio.Task[None], file_name: str = file_name) -> None:
+                _log_watcher_task_result(file_name, task)
+
+            watcher.task.add_done_callback(on_done)
             self._watchers[file_name] = watcher
             return watcher
 
@@ -383,13 +391,53 @@ class LogViewer:
         return handoff.snapshot
 
 
+def _log_watcher_task_result(file_name: str, task: asyncio.Task[None]) -> None:
+    """Log a non-cancellation watcher-task crash so the dead tail isn't silent."""
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is None:
+        return
+    _LOGGER.error(
+        "Live-log watcher task crashed for file=%s: %s",
+        file_name,
+        error,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+
+
 async def _cancel_watcher_task(task: asyncio.Task[None]) -> None:
+    if _log_watcher_crash_if_already_dead(task):
+        # A real exception was already logged and consumed via task.exception();
+        # task.cancel() on a finished task is a no-op and result() would re-raise.
+        return
     task.cancel()
     done, _pending = await asyncio.wait({task}, timeout=WATCHER_SHUTDOWN_TIMEOUT_SECONDS)
     if task not in done:
         return
     with suppress(asyncio.CancelledError, UnboundLocalError):
         task.result()
+
+
+def _log_watcher_crash_if_already_dead(task: asyncio.Task[None]) -> bool:
+    """Log a real exception from a watcher that already died before teardown.
+
+    Without this the ``suppress(...)`` around ``task.result()`` would silently
+    discard a genuine crash. Only inspects (never awaits/raises) and skips the
+    normal cancellation case. Returns whether such a crash was logged (and its
+    exception thereby retrieved).
+    """
+    if not task.done() or task.cancelled():
+        return False
+    error = task.exception()
+    if error is None or isinstance(error, asyncio.CancelledError):
+        return False
+    _LOGGER.error(
+        "Live-log watcher task crashed before shutdown: %s",
+        error,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    return True
 
 
 def _includes_path(changes: set[tuple[Any, str]], watched_path: str) -> bool:

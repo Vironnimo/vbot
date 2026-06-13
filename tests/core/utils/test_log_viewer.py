@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import aclosing, suppress
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from core.utils.log_viewer import (
     LogViewer,
     _build_snapshot_event,
     _cancel_watcher_task,
+    _log_watcher_task_result,
     _LogSnapshot,
     parse_log_entries,
 )
@@ -407,6 +409,104 @@ async def test_cancel_watcher_task_returns_when_task_suppresses_cancellation(
     task.cancel()
     with suppress(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_log_watcher_task_result_logs_non_cancel_crash(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def crash() -> None:
+        raise RuntimeError("watcher boom")
+
+    task = asyncio.create_task(crash())
+    with suppress(RuntimeError):
+        await task
+
+    caplog.set_level(logging.ERROR, logger="vbot.log_viewer")
+    _log_watcher_task_result("2026-05-11", task)
+
+    crash_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.log_viewer" and "watcher task crashed" in record.getMessage()
+    ]
+    assert len(crash_records) == 1
+    assert crash_records[0].exc_info is not None
+    assert "2026-05-11" in crash_records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_log_watcher_task_result_ignores_cancellation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def block() -> None:
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(block())
+    await asyncio.sleep(0)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    caplog.set_level(logging.ERROR, logger="vbot.log_viewer")
+    _log_watcher_task_result("2026-05-11", task)
+
+    assert [record for record in caplog.records if record.name == "vbot.log_viewer"] == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_watcher_task_logs_a_real_crash_before_suppressing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def crash() -> None:
+        raise RuntimeError("watcher boom")
+
+    task = asyncio.create_task(crash())
+    with suppress(RuntimeError):
+        await task
+
+    caplog.set_level(logging.ERROR, logger="vbot.log_viewer")
+    await _cancel_watcher_task(task)
+
+    crash_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.log_viewer" and "crashed before shutdown" in record.getMessage()
+    ]
+    assert len(crash_records) == 1
+    assert crash_records[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_ensure_watcher_attaches_crash_logging_done_callback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "2026-05-11").write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n", encoding="utf-8"
+    )
+
+    viewer = LogViewer(tmp_path)
+
+    async def explode(_watcher: object) -> None:
+        raise RuntimeError("awatch exploded")
+
+    # Replace the watch loop so the created task fails with a real exception.
+    viewer._watch_file = explode  # type: ignore[method-assign]
+
+    caplog.set_level(logging.ERROR, logger="vbot.log_viewer")
+    watcher = await viewer._ensure_watcher("2026-05-11")
+    assert watcher.task is not None
+    with suppress(RuntimeError):
+        await watcher.task
+
+    crash_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.log_viewer" and "watcher task crashed" in record.getMessage()
+    ]
+    assert len(crash_records) == 1
 
 
 def test_read_file_rejects_invalid_name(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ and load-order preservation.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -91,6 +92,28 @@ class TestRunStartRunEnd:
         await registry.dispatch_run_start(_ctx(), session_id="s", agent_id="a")
 
         assert calls == ["ok"]
+
+    @pytest.mark.asyncio
+    async def test_run_start_handler_exception_is_logged_with_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = ExtensionRegistry()
+
+        def boom(ctx: HookContext, **payload: Any) -> None:
+            raise RuntimeError("boom")
+
+        _register(registry, "ext-a", "run_start", boom)
+
+        caplog.set_level(logging.WARNING, logger="vbot.extensions")
+        await registry.dispatch_run_start(_ctx(), session_id="s", agent_id="a")
+
+        raised_records = [
+            record
+            for record in caplog.records
+            if record.name == "vbot.extensions" and "handler raised" in record.getMessage()
+        ]
+        assert len(raised_records) == 1
+        assert raised_records[0].exc_info is not None
 
     @pytest.mark.asyncio
     async def test_run_end_passes_outcome_to_every_handler(self) -> None:
