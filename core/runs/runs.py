@@ -328,11 +328,34 @@ class Run:
         self._done.set()
 
     def mark_failed(self, error: BaseException, payload_extras: JsonObject | None = None) -> None:
-        """Move the run to failed and publish the terminal event."""
+        """Move the run to failed and publish the terminal event.
+
+        This is the single authoritative failure-log chokepoint: every run
+        executor (interactive, cron, channel, subagent) reaches it, so logging
+        here guarantees a failed run always leaves a log entry. Expected
+        ``VBotError`` failures log at ``warning`` without a traceback; any other
+        exception logs at ``error`` with the traceback.
+        """
         if self.status != RunStatus.RUNNING:
             return
         self.error = error
         self.status = RunStatus.FAILED
+        if isinstance(error, VBotError):
+            _LOGGER.warning(
+                "Run %s failed (agent=%s session=%s): %s",
+                self.id,
+                self.agent_id,
+                self.session_id,
+                error,
+            )
+        else:
+            _LOGGER.error(
+                "Run %s failed unexpectedly (agent=%s session=%s)",
+                self.id,
+                self.agent_id,
+                self.session_id,
+                exc_info=error,
+            )
         payload: JsonObject = {"status": self.status.value, "error": str(error)}
         if payload_extras:
             payload.update(payload_extras)

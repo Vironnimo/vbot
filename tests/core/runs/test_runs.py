@@ -24,6 +24,7 @@ from core.runs import (
     RunNotFoundError,
     RunStatus,
 )
+from core.utils.errors import VBotError
 
 pytestmark = pytest.mark.asyncio
 
@@ -745,6 +746,77 @@ async def test_mark_failed_omits_payload_extras_when_not_provided() -> None:
     failed_events = [event for event in run.events if event.type == "run_failed"]
     assert len(failed_events) == 1
     assert failed_events[0].payload == {"status": "failed", "error": "oops"}
+
+
+async def test_mark_failed_logs_unexpected_error_with_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-VBotError failure logs at ERROR with the exception attached."""
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    caplog.set_level(logging.ERROR, logger="vbot.runs")
+    run.mark_failed(RuntimeError("kaboom"))
+
+    error_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.runs" and record.levelno == logging.ERROR
+    ]
+    assert len(error_records) == 1
+    record = error_records[0]
+    assert "failed unexpectedly" in record.getMessage()
+    assert run.id in record.getMessage()
+    assert record.exc_info is not None
+    assert isinstance(record.exc_info[1], RuntimeError)
+
+
+async def test_mark_failed_logs_vbot_error_as_warning_without_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An expected VBotError failure logs at WARNING with no traceback."""
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    caplog.set_level(logging.WARNING, logger="vbot.runs")
+    run.mark_failed(VBotError("expected boom"))
+
+    warning_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.runs" and record.levelno == logging.WARNING
+    ]
+    assert len(warning_records) == 1
+    record = warning_records[0]
+    assert "Run %s failed" not in record.getMessage()
+    assert "expected boom" in record.getMessage()
+    assert record.exc_info is None
+    # No ERROR-level record for an expected failure.
+    assert not [
+        rec for rec in caplog.records if rec.name == "vbot.runs" and rec.levelno == logging.ERROR
+    ]
+
+
+async def test_failed_run_logs_once_through_manager_executor(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An executor that raises reaches mark_failed exactly once and logs once."""
+    manager = ChatRunManager()
+
+    async def fail(_run: Run) -> Any:
+        raise RuntimeError("executor boom")
+
+    caplog.set_level(logging.ERROR, logger="vbot.runs")
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=fail)
+    with pytest.raises(RuntimeError, match="executor boom"):
+        await run.wait()
+
+    error_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.runs"
+        and record.levelno == logging.ERROR
+        and "failed unexpectedly" in record.getMessage()
+    ]
+    assert len(error_records) == 1
 
 
 async def test_run_completed_includes_usage_from_result_object() -> None:
