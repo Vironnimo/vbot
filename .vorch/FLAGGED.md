@@ -380,3 +380,24 @@ Outstanding once credentials exist:
 
 **Why deferred:** blocked on credentials, not on code; unit/integration coverage pins the
 implemented behavior.
+
+## 2026-06-13 — MiniMax full_history replay: live probe not performed
+
+The per-provider replay rollout moved `MiniMaxAdapter` to `full_history` (its own docs require
+cross-turn reasoning preservation — the strongest case of any reviewed provider) and defaulted
+`reasoning_split: true` for reasoning-active models so the trace is captured as `reasoning_details`
+and becomes replayable through the generic request builder. No MiniMax credentials are configured
+in this environment (`~/.vbot/.env` has `MINIMAX_API_KEY=` empty, no process env var), so the
+documented mechanism was implemented from MiniMax's published docs and pinned by unit tests, not
+verified live.
+
+Outstanding once credentials exist:
+1. **Probe** — confirm `reasoning_split: true` actually returns `reasoning_details` (non-streaming
+   *and* streaming) for M2.x and M3, and that replaying a prior run's `reasoning_details` on a
+   same-model follow-up request returns 200 (no ordering/validation error).
+2. **Edge** — verify a `thinking: {type: disabled}` (effort `none`) request with `reasoning_details`
+   absent behaves, and that replayed details on a disabled-thinking request are tolerated or need a
+   guard like Anthropic's.
+
+**Why deferred:** blocked on credentials, not on code; documented behavior + unit tests pin the
+implementation, and the same-model gate prevents cross-model leakage.
