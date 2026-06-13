@@ -35,7 +35,7 @@ EXPECTED_SSE_EVENT_NAMES = [
 def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_path: Path) -> None:
     adapter = StubAdapter(stream_deltas=_test_stream_turns())
     runtime = StubRuntime(tmp_path, adapter)
-    register_read_tool(runtime.tools)
+    register_read_tool(runtime.tools, attachment_store=None, speech_service=None)
     runtime.agents.update(
         "coder",
         model="openai/gpt-5.2::api-key",
@@ -207,7 +207,7 @@ def _stream_test_run(
 ) -> Any:
     adapter = StubAdapter(stream_deltas=_test_stream_turns())
     runtime = StubRuntime(tmp_path, adapter)
-    register_read_tool(runtime.tools)
+    register_read_tool(runtime.tools, attachment_store=None, speech_service=None)
     runtime.agents.update(
         "coder",
         model="openai/gpt-5.2::api-key",

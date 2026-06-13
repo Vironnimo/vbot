@@ -1,13 +1,17 @@
-"""Built-in read tool adapted for vBot tool envelopes."""
+"""Built-in read tool: text files plus image/audio/video media handling."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+from core.attachments import AttachmentError, sniff_media_type
+from core.model_tasks import SpeechError
 from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolHandler,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -18,9 +22,11 @@ DEFAULT_LINE_LIMIT = 2000
 
 READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
-    "Read the contents of a file. Output is truncated to 2000 lines or "
-    "50 KB (whichever is hit first). If offset is past EOF, returns an "
-    "explicit end-of-file notice. Use offset/limit for large files."
+    "Read a file. Text files return their contents, truncated to 2000 lines or "
+    "50 KB (whichever is hit first); use offset/limit for large files, and an "
+    "offset past EOF returns an explicit end-of-file notice. Image files are "
+    "shown to the model directly when it supports vision; audio files are "
+    "transcribed to text; video files return a path note only."
 )
 READ_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -114,12 +120,11 @@ def _resolve_read_path(context: ToolContext, path: str) -> Path:
     return (context.workspace / candidate).resolve()
 
 
-def _read_file_text(path: Path, offset: object = None, limit: object = None) -> str:
-    """Read file content with offset/limit controls and truncation safeguards."""
+def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> str:
+    """Render file bytes as text with offset/limit controls and truncation safeguards."""
     start_line = _coerce_positive_int(offset, field_name="offset") or 1
     max_lines = _coerce_positive_int(limit, field_name="limit") or DEFAULT_LINE_LIMIT
 
-    raw = path.read_bytes()
     decoded = raw.decode("utf-8", errors="replace")
     all_lines = decoded.splitlines(keepends=True)
     total_lines = len(all_lines)
@@ -176,48 +181,151 @@ def _read_file_text(path: Path, offset: object = None, limit: object = None) -> 
     return output + ("\n\n" if output and not output.endswith("\n") else "") + hint
 
 
-def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    """Handle a read tool call and return a stable vBot result envelope."""
-    path_argument = arguments.get("path")
-    if not isinstance(path_argument, str) or not path_argument:
-        return tool_failure("invalid_arguments", "path must be a non-empty string")
+def make_read_handler(attachment_store: Any, speech_service: Any) -> ToolHandler:
+    """Create a read handler bound to the attachment store and speech service.
 
-    unknown_arguments = set(arguments) - {"path", "offset", "limit"}
-    if unknown_arguments:
-        names = ", ".join(sorted(unknown_arguments))
-        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
+    Closes over the services so the text path stays dependency-free while images
+    are promoted to attachments and audio is transcribed via speech-to-text.
+    Mirrors the image-generation tool's factory pattern.
+    """
 
-    try:
-        resolved = _resolve_read_path(context, path_argument)
-    except RuntimeError as error:
-        return tool_failure("invalid_path", str(error))
+    async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        path_argument = arguments.get("path")
+        if not isinstance(path_argument, str) or not path_argument:
+            return tool_failure("invalid_arguments", "path must be a non-empty string")
 
-    if not resolved.exists():
-        return tool_failure("file_not_found", f"file not found: {resolved}")
-    if not resolved.is_file():
-        return tool_failure("not_a_file", f"path is not a file: {resolved}")
+        unknown_arguments = set(arguments) - {"path", "offset", "limit"}
+        if unknown_arguments:
+            names = ", ".join(sorted(unknown_arguments))
+            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
+        try:
+            resolved = _resolve_read_path(context, path_argument)
+        except RuntimeError as error:
+            return tool_failure("invalid_path", str(error))
+
+        if not resolved.exists():
+            return tool_failure("file_not_found", f"file not found: {resolved}")
+        if not resolved.is_file():
+            return tool_failure("not_a_file", f"path is not a file: {resolved}")
+
+        try:
+            raw = resolved.read_bytes()
+        except OSError as error:
+            return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
+
+        media_type = sniff_media_type(raw, resolved.name)
+        if media_type.startswith("image/"):
+            return _read_image(attachment_store, resolved, raw, media_type)
+        if media_type.startswith("audio/"):
+            return await _read_audio(speech_service, resolved, raw, media_type)
+        if media_type.startswith("video/"):
+            return _read_video(resolved, media_type)
+        return _read_text(raw, arguments)
+
+    return read_handler
+
+
+def _read_text(raw: bytes, arguments: JsonObject) -> JsonObject:
+    """Return the text-rendering envelope for non-media (text/unknown) files."""
     try:
         content = _read_file_text(
-            resolved,
+            raw,
             offset=arguments.get("offset"),
             limit=arguments.get("limit"),
         )
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
-    except OSError as error:
-        return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
 
     return tool_success({"content": content})
 
 
-def register_read_tool(registry: ToolRegistry) -> None:
+def _read_image(
+    attachment_store: Any,
+    resolved: Path,
+    raw: bytes,
+    media_type: str,
+) -> JsonObject:
+    """Promote an image to an attachment and signal it for current-turn injection.
+
+    The blob goes through the attachment store (reusing its size limit and
+    allowlist); a ``read_media`` artifact tells the chat loop to inject the image
+    as a synthetic current-turn user message so a vision model actually sees it.
+    """
+    try:
+        record = attachment_store.store(resolved.name, raw)
+    except AttachmentError as error:
+        return tool_failure("attachment_error", str(error))
+
+    return tool_success(
+        {
+            "content": (
+                f"Loaded image {record.filename} ({record.media_type}) — "
+                "shown to you in the following message."
+            )
+        },
+        artifacts=[
+            {
+                "kind": "read_media",
+                "attachment_id": record.id,
+                "filename": record.filename,
+                "media_type": record.media_type,
+            }
+        ],
+    )
+
+
+async def _read_audio(
+    speech_service: Any,
+    resolved: Path,
+    raw: bytes,
+    media_type: str,
+) -> JsonObject:
+    """Transcribe an audio file to text via speech-to-text.
+
+    Transcription is plain text, which is a legal tool result on every provider,
+    so no message injection is needed. STT failures and empty transcriptions
+    surface as a failure envelope rather than aborting the run.
+    """
+    try:
+        result = await speech_service.transcribe(raw, filename=resolved.name, media_type=media_type)
+    except SpeechError as error:
+        return tool_failure("transcription_failed", str(error))
+
+    text = getattr(result, "text", None)
+    if not isinstance(text, str) or not text.strip():
+        return tool_failure(
+            "transcription_failed",
+            f"transcription produced no text for {resolved.name}",
+        )
+
+    return tool_success({"content": f"[Transcription of {resolved.name} ({media_type})]:\n{text}"})
+
+
+def _read_video(resolved: Path, media_type: str) -> JsonObject:
+    """Return a path note for video; no provider wire accepts raw video."""
+    return tool_success(
+        {
+            "content": (
+                f"[Video: {resolved.name} ({media_type}) — Path: {resolved}]. "
+                "This model cannot view video directly."
+            )
+        }
+    )
+
+
+def register_read_tool(
+    registry: ToolRegistry,
+    *,
+    attachment_store: Any,
+    speech_service: Any,
+) -> None:
     """Register the read tool with a vBot tool registry."""
     registry.register(
         READ_TOOL_NAME,
         READ_TOOL_DESCRIPTION,
         READ_TOOL_PARAMETERS,
-        read_handler,
+        make_read_handler(attachment_store, speech_service),
         display=ToolDisplay(summary_fields=("path",)),
     )
 
@@ -228,6 +336,6 @@ __all__ = [
     "READ_TOOL_DESCRIPTION",
     "READ_TOOL_NAME",
     "READ_TOOL_PARAMETERS",
-    "read_handler",
+    "make_read_handler",
     "register_read_tool",
 ]

@@ -163,7 +163,7 @@ class TestDispatchCancelWiring:
         )
         await _wait_for_registry_entry(run, "call-cancel", timeout=5.0)
         cancelled = run.cancel_tool_call("call-cancel")
-        messages = await dispatch_task
+        messages, _ = await dispatch_task
 
         # Assert
         assert cancelled is True
@@ -265,7 +265,7 @@ class TestDispatchCancelWiring:
             "reused", "Tool reusing an existing id.", {"type": "object"}, same_id_handler
         )
         second_tool_calls = [ToolCall(id="call-1", name="reused", arguments={})]
-        messages = await _dispatch_tool_calls(
+        messages, _ = await _dispatch_tool_calls(
             runtime,
             agent,
             second_tool_calls,
@@ -305,7 +305,7 @@ class TestDispatchCancelWiring:
             run.cancel_requested = True
 
         flip_task = asyncio.create_task(flip_flag_after_tool_starts())
-        messages = await _dispatch_tool_calls(
+        messages, _ = await _dispatch_tool_calls(
             runtime,
             agent,
             tool_calls,
@@ -365,7 +365,7 @@ class TestExtensionDecisionWiring:
         run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
         tool_calls = [ToolCall(id="call-1", name="guarded", arguments={"x": 1})]
 
-        messages = await _dispatch_tool_calls(
+        messages, _ = await _dispatch_tool_calls(
             runtime, agent, tool_calls, session, run, nesting_depth=0
         )
 
@@ -394,7 +394,7 @@ class TestExtensionDecisionWiring:
         run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
         tool_calls = [ToolCall(id="call-1", name="echo", arguments={"cmd": "original"})]
 
-        messages = await _dispatch_tool_calls(
+        messages, _ = await _dispatch_tool_calls(
             runtime, agent, tool_calls, session, run, nesting_depth=0
         )
 
@@ -425,7 +425,7 @@ class TestExtensionDecisionWiring:
         run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
         tool_calls = [ToolCall(id="call-1", name="replaced", arguments={})]
 
-        messages = await _dispatch_tool_calls(
+        messages, _ = await _dispatch_tool_calls(
             runtime, agent, tool_calls, session, run, nesting_depth=0
         )
 
@@ -448,7 +448,7 @@ class TestExtensionDecisionWiring:
         run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
         tool_calls = [ToolCall(id="call-1", name="t", arguments={})]
 
-        messages = await _dispatch_tool_calls(
+        messages, _ = await _dispatch_tool_calls(
             runtime, agent, tool_calls, session, run, nesting_depth=0
         )
 
@@ -478,6 +478,63 @@ class TestExtensionDecisionWiring:
 
         note_contents = [m.content for m in session.load() if m.role == "note"]
         assert "hook was here" in note_contents
+
+
+class TestReadMediaInjections:
+    """``read_media`` artifacts surface as media injections for the chat loop."""
+
+    @pytest.mark.asyncio
+    async def test_read_media_artifact_becomes_media_injection(self, tmp_path: Path) -> None:
+        def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            return tool_success(
+                {"content": "loaded"},
+                artifacts=[
+                    {
+                        "kind": "read_media",
+                        "attachment_id": "att-1",
+                        "filename": "diagram.png",
+                        "media_type": "image/png",
+                    }
+                ],
+            )
+
+        tools = ToolRegistry()
+        tools.register("read", "Reads media.", {"type": "object"}, handler)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        tool_calls = [ToolCall(id="call-1", name="read", arguments={})]
+
+        tool_messages, media_injections = await _dispatch_tool_calls(
+            runtime, agent, tool_calls, session, run, nesting_depth=0
+        )
+
+        assert len(tool_messages) == 1
+        assert media_injections == [
+            {"attachment_id": "att-1", "filename": "diagram.png", "media_type": "image/png"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_non_read_media_artifacts_produce_no_injection(self, tmp_path: Path) -> None:
+        def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            return tool_success(
+                {"message": "image generated"},
+                artifacts=[{"kind": "image", "url": "/api/x", "id": "img-1"}],
+            )
+
+        tools = ToolRegistry()
+        tools.register("image_generation", "Generates images.", {"type": "object"}, handler)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        tool_calls = [ToolCall(id="call-1", name="image_generation", arguments={})]
+
+        tool_messages, media_injections = await _dispatch_tool_calls(
+            runtime, agent, tool_calls, session, run, nesting_depth=0
+        )
+
+        assert len(tool_messages) == 1
+        assert media_injections == []
 
 
 class _StubSkillSession:
