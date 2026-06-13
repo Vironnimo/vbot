@@ -220,7 +220,11 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
-            classify_http_status(response.status_code, detail=_http_error_detail(response))
+            classify_http_status(
+                response.status_code,
+                detail=_http_error_detail(response),
+                response_headers=response.headers,
+            )
             return dict(decode_response_json(response, "GitHub Copilot provider"))
 
         return await retry_async(_do_request)
@@ -249,7 +253,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 error_body = (await response.aread()).decode("utf-8", errors="replace")
                 await response.aclose()
                 detail = _http_error_detail(response, error_body)
-                classify_http_status(response.status_code, detail=detail)
+                classify_http_status(
+                    response.status_code, detail=detail, response_headers=response.headers
+                )
                 raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
 
             return response

@@ -234,7 +234,9 @@ class DeviceFlowEngine:
         except httpx.HTTPError as error:
             raise wrap_network_error(error) from error
 
-        classify_http_status(response.status_code, detail=response.text)
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
         return response
 
     async def _post_openai_device_authorization(
@@ -251,7 +253,9 @@ class DeviceFlowEngine:
         except httpx.HTTPError as error:
             raise wrap_network_error(error) from error
 
-        classify_http_status(response.status_code, detail=response.text)
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
         return response
 
     def _device_session_from_response(
@@ -335,7 +339,9 @@ class DeviceFlowEngine:
         except httpx.HTTPError as error:
             raise wrap_network_error(error) from error
 
-        classify_http_status(response.status_code, detail=response.text)
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
         return response
 
     async def _post_openai_device_token(
@@ -359,7 +365,9 @@ class DeviceFlowEngine:
 
         if response.status_code in OPENAI_DEVICE_PENDING_STATUS_CODES:
             return response
-        classify_http_status(response.status_code, detail=response.text)
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
         return response
 
     async def _build_token(
@@ -421,7 +429,9 @@ class DeviceFlowEngine:
         except httpx.HTTPError as error:
             raise wrap_network_error(error) from error
 
-        classify_http_status(response.status_code, detail=response.text)
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
         return response
 
     async def _exchange_copilot_token(
@@ -470,7 +480,9 @@ class DeviceFlowEngine:
         except httpx.HTTPError as error:
             raise wrap_network_error(error) from error
 
-        classify_http_status(response.status_code, detail=response.text)
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
         return response
 
     def _oauth_token_from_response(

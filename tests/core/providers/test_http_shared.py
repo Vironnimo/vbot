@@ -11,16 +11,26 @@ malformed JSON becomes a non-retryable ``ProviderError``).
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 import httpx
 import pytest
 
 from core.providers._http_shared import (
+    classify_http_status,
     decode_response_json,
+    parse_retry_after,
     parse_sse_json_data,
     wrap_network_error,
 )
-from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
+from core.providers.errors import (
+    NetworkError,
+    ProviderAuthError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 
 # ---------------------------------------------------------------------------
 # wrap_network_error — exhaustive mapping table
@@ -233,3 +243,132 @@ def test_decode_response_json_preserves_cause_via_from_exc() -> None:
         decode_response_json(_fake_response("not-json"), context="test provider")
 
     assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+
+
+# ---------------------------------------------------------------------------
+# parse_retry_after — Retry-After header parsing
+# ---------------------------------------------------------------------------
+
+
+def test_parse_retry_after_delay_seconds() -> None:
+    """``Retry-After`` as a plain integer is read as seconds."""
+
+    assert parse_retry_after(httpx.Headers({"Retry-After": "5"})) == 5.0
+
+
+def test_parse_retry_after_fractional_seconds() -> None:
+    """A fractional seconds value is accepted (lenient over RFC's integer form)."""
+
+    assert parse_retry_after(httpx.Headers({"Retry-After": "2.5"})) == 2.5
+
+
+def test_parse_retry_after_negative_seconds_is_ignored() -> None:
+    """A negative delay is meaningless and is treated as no hint."""
+
+    assert parse_retry_after(httpx.Headers({"Retry-After": "-3"})) is None
+
+
+def test_parse_retry_after_ms_header() -> None:
+    """``retry-after-ms`` (millisecond hint) is converted to seconds."""
+
+    assert parse_retry_after(httpx.Headers({"retry-after-ms": "1500"})) == 1.5
+
+
+def test_parse_retry_after_ms_takes_priority_over_seconds() -> None:
+    """The finer-grained millisecond hint wins when both headers are present."""
+
+    headers = httpx.Headers({"retry-after-ms": "250", "Retry-After": "5"})
+
+    assert parse_retry_after(headers) == 0.25
+
+
+def test_parse_retry_after_http_date_future() -> None:
+    """An HTTP-date in the future yields the seconds until that moment."""
+
+    future = datetime.now(timezone.utc) + timedelta(seconds=120)
+    headers = httpx.Headers({"Retry-After": format_datetime(future, usegmt=True)})
+
+    seconds = parse_retry_after(headers)
+
+    assert seconds is not None
+    # Allow scheduling slack — should land just under the full 120s window.
+    assert 110 <= seconds <= 121
+
+
+def test_parse_retry_after_http_date_in_past_clamps_to_zero() -> None:
+    """An HTTP-date already in the past means "retry now" (clamped to 0)."""
+
+    past = datetime.now(timezone.utc) - timedelta(seconds=120)
+    headers = httpx.Headers({"Retry-After": format_datetime(past, usegmt=True)})
+
+    assert parse_retry_after(headers) == 0.0
+
+
+def test_parse_retry_after_missing_header_is_none() -> None:
+    """No ``Retry-After`` header yields no hint."""
+
+    assert parse_retry_after(httpx.Headers({})) is None
+
+
+def test_parse_retry_after_blank_header_is_none() -> None:
+    """A whitespace-only header value yields no hint."""
+
+    assert parse_retry_after(httpx.Headers({"Retry-After": "   "})) is None
+
+
+def test_parse_retry_after_malformed_header_is_none() -> None:
+    """An unparseable value is ignored rather than raising."""
+
+    assert parse_retry_after(httpx.Headers({"Retry-After": "soon-ish"})) is None
+
+
+# ---------------------------------------------------------------------------
+# classify_http_status — Retry-After attachment
+# ---------------------------------------------------------------------------
+
+
+def test_classify_http_status_attaches_retry_after_to_rate_limit() -> None:
+    """A 429 carries the parsed ``Retry-After`` onto the rate-limit error."""
+
+    with pytest.raises(ProviderRateLimitError) as exc_info:
+        classify_http_status(429, response_headers=httpx.Headers({"Retry-After": "7"}))
+
+    assert exc_info.value.retry_after == 7.0
+
+
+def test_classify_http_status_attaches_retry_after_to_retryable_error() -> None:
+    """A retryable 503 carries the parsed ``Retry-After`` onto the error."""
+
+    with pytest.raises(ProviderError) as exc_info:
+        classify_http_status(503, response_headers=httpx.Headers({"retry-after-ms": "2000"}))
+
+    assert exc_info.value.retryable is True
+    assert exc_info.value.retry_after == 2.0
+
+
+def test_classify_http_status_rate_limit_without_headers_has_no_hint() -> None:
+    """With no headers passed, ``retry_after`` stays ``None``."""
+
+    with pytest.raises(ProviderRateLimitError) as exc_info:
+        classify_http_status(429)
+
+    assert exc_info.value.retry_after is None
+
+
+def test_classify_http_status_does_not_attach_to_non_retryable_error() -> None:
+    """A non-retryable 4xx never carries a retry hint even if the header is present."""
+
+    with pytest.raises(ProviderError) as exc_info:
+        classify_http_status(400, response_headers=httpx.Headers({"Retry-After": "9"}))
+
+    assert exc_info.value.retryable is False
+    assert exc_info.value.retry_after is None
+
+
+def test_classify_http_status_auth_error_ignores_retry_after() -> None:
+    """A 401 raises an auth error (not retryable); its hint stays the default ``None``."""
+
+    with pytest.raises(ProviderAuthError) as exc_info:
+        classify_http_status(401, response_headers=httpx.Headers({"Retry-After": "9"}))
+
+    assert exc_info.value.retry_after is None

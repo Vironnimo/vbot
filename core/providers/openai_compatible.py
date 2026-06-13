@@ -299,7 +299,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             detail = (
                 f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
             )
-            classify_http_status(response.status_code, detail=detail)
+            classify_http_status(
+                response.status_code, detail=detail, response_headers=response.headers
+            )
             return dict(decode_response_json(response, "OpenAI-compatible provider"))
 
         return await retry_async(_do_request)
@@ -369,7 +371,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     if error_body
                     else str(response.status_code)
                 )
-                classify_http_status(response.status_code, detail=detail)
+                classify_http_status(
+                    response.status_code, detail=detail, response_headers=response.headers
+                )
                 # classify_http_status always raises for >= 400; this is unreachable
                 # but satisfies type checkers.
                 raise ProviderError(f"Provider error: {response.status_code}", retryable=False)

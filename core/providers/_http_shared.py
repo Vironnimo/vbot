@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -149,6 +151,67 @@ class _CaptureByteStream(httpx.AsyncByteStream):
 
 
 # ---------------------------------------------------------------------------
+# Retry-After parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_retry_after(headers: httpx.Headers) -> float | None:
+    """Parse a provider's requested retry delay from response headers.
+
+    On 429/503 (and similar) providers commonly signal how long to wait before
+    retrying. Honored forms, in priority order:
+
+    1. ``retry-after-ms`` — a millisecond hint some providers send (e.g. OpenAI).
+    2. ``Retry-After`` as ``delay-seconds`` — a non-negative number of seconds
+       (RFC 9110).
+    3. ``Retry-After`` as an ``HTTP-date`` — converted to seconds from now.
+
+    Args:
+        headers: The response's case-insensitive ``httpx.Headers`` mapping.
+
+    Returns:
+        The delay in seconds, clamped to ``>= 0``, or ``None`` when no usable
+        hint is present or the value cannot be parsed (a malformed header is
+        ignored rather than treated as an error).
+    """
+    milliseconds = headers.get("retry-after-ms")
+    if milliseconds is not None:
+        try:
+            from_ms = float(milliseconds) / 1000.0
+        except ValueError:
+            from_ms = None
+        if from_ms is not None and from_ms >= 0:
+            return from_ms
+
+    raw = headers.get("retry-after")
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+
+    # delay-seconds form: a plain (non-negative) number of seconds.
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = None
+    if seconds is not None:
+        return seconds if seconds >= 0 else None
+
+    # HTTP-date form: seconds from now, never negative (a past date means "now").
+    try:
+        retry_at = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if retry_at is None:
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    delta = (retry_at - datetime.now(UTC)).total_seconds()
+    return delta if delta > 0 else 0.0
+
+
+# ---------------------------------------------------------------------------
 # Error classification
 # ---------------------------------------------------------------------------
 
@@ -158,6 +221,7 @@ def classify_http_status(
     *,
     extra_retryable: set[int] | None = None,
     detail: str = "",
+    response_headers: httpx.Headers | None = None,
 ) -> None:
     """Classify an HTTP status code and raise the appropriate provider error.
 
@@ -172,6 +236,9 @@ def classify_http_status(
             overloaded error).
         detail: Optional detail string for the error message. If empty,
             ``str(status_code)`` is used.
+        response_headers: The response headers, when available. Used to parse a
+            ``Retry-After`` hint that is attached to retryable errors so
+            ``retry_async`` can honor the provider's requested wait.
 
     Raises:
         ProviderAuthError: 401 / 403 (not retryable).
@@ -184,14 +251,22 @@ def classify_http_status(
 
     if status_code in _AUTH_ERROR_STATUS_CODES:
         raise ProviderAuthError(f"Authentication error: {detail}")
+
+    retry_after = parse_retry_after(response_headers) if response_headers is not None else None
+
     if status_code == 429:
-        raise ProviderRateLimitError(f"Rate limited: {detail}")
+        rate_limit_error = ProviderRateLimitError(f"Rate limited: {detail}")
+        rate_limit_error.retry_after = retry_after
+        raise rate_limit_error
     if status_code >= 400:
         retryable_codes = set(_RETRYABLE_STATUS_CODES)
         if extra_retryable:
             retryable_codes |= extra_retryable
         retryable = status_code in retryable_codes
-        raise ProviderError(f"Provider error: {detail}", retryable=retryable)
+        provider_error = ProviderError(f"Provider error: {detail}", retryable=retryable)
+        if retryable:
+            provider_error.retry_after = retry_after
+        raise provider_error
 
 
 # ---------------------------------------------------------------------------

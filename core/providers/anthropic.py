@@ -340,7 +340,10 @@ class AnthropicAdapter(ProviderAdapter):
 
             detail = self._build_error_detail(response.status_code, response.text)
             classify_http_status(
-                response.status_code, extra_retryable={_HTTP_OVERLOADED}, detail=detail
+                response.status_code,
+                extra_retryable={_HTTP_OVERLOADED},
+                detail=detail,
+                response_headers=response.headers,
             )
             return dict(decode_response_json(response, "Anthropic provider"))
 
@@ -413,7 +416,10 @@ class AnthropicAdapter(ProviderAdapter):
                 await response.aclose()
                 detail = self._build_error_detail(response.status_code, error_body)
                 classify_http_status(
-                    response.status_code, extra_retryable={_HTTP_OVERLOADED}, detail=detail
+                    response.status_code,
+                    extra_retryable={_HTTP_OVERLOADED},
+                    detail=detail,
+                    response_headers=response.headers,
                 )
                 # classify_http_status always raises for >= 400; this is unreachable
                 # but satisfies type checkers.
