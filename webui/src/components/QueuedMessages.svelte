@@ -230,7 +230,7 @@
     flex-shrink: 0;
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 640px) {
     .queued-messages {
       padding: 12px 14px;
     }

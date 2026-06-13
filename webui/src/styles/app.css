@@ -1856,7 +1856,10 @@ kbd {
   opacity: 1;
 }
 
-@media (max-width: 760px) {
+/* Mobile (≤640, see DESIGN.md → Breakpoints): the sidebar collapses to a top
+   band and the navigation becomes a single compact horizontal scroll row so it
+   doesn't eat vertical space. Touch targets grow to a ≥40px hit area. */
+@media (max-width: 640px) {
   .app-shell {
     flex-direction: column;
   }
@@ -1869,9 +1872,54 @@ kbd {
     border-bottom: 1px solid var(--border);
   }
 
+  .app-shell__brand,
+  .sidebar-logo {
+    padding: 12px 14px;
+  }
+
   .app-shell__navigation,
   .nav {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 4px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding: 8px 10px;
+    scrollbar-width: none;
+  }
+
+  .app-shell__navigation::-webkit-scrollbar,
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-shell__nav-item,
+  .nav-item {
+    flex: 0 0 auto;
+    min-height: 40px;
+    white-space: nowrap;
+  }
+
+  /* Touch targets: buttons, dropdown triggers, and composer controls all reach
+     a ≥40px hit area on phone widths. */
+  .btn-new,
+  .btn-primary,
+  .btn-outline,
+  .btn-secondary,
+  .modal-btn-confirm,
+  .modal-btn-cancel,
+  .dropdown-trigger,
+  .s-dropdown-trigger {
+    min-height: 40px;
+  }
+
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .send-btn {
+    width: 40px;
+    height: 40px;
   }
 }

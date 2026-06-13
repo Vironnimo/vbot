@@ -1295,7 +1295,7 @@
     flex-shrink: 0;
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 640px) {
     .chat-view__notice-stack {
       padding: 10px 14px;
     }

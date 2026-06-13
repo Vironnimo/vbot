@@ -183,7 +183,7 @@
     font-style: italic;
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 640px) {
     .skill-autocomplete {
       right: 14px;
       left: 14px;

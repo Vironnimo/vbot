@@ -957,7 +957,7 @@
   justify-content: flex-end;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 640px) {
   .settings-layout.view {
     flex-direction: column;
     overflow: auto;
