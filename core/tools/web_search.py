@@ -25,6 +25,9 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.logging import get_logger
+
+_LOGGER = get_logger("tools.web_search")
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 
@@ -375,6 +378,7 @@ async def _search_brave(
                 )
             except httpx.RequestError as error:
                 if attempt >= _RETRY_MAX_RETRIES:
+                    _LOGGER.warning("Brave web search request failed: %s", error)
                     return None, f"request failed: {error}"
                 await _sleep_for_retry(attempt)
                 continue
@@ -384,6 +388,11 @@ async def _search_brave(
                     await _sleep_for_retry(attempt)
                     continue
                 detail = _extract_error_detail(response)
+                _LOGGER.warning(
+                    "Brave web search request failed: HTTP %s: %s",
+                    response.status_code,
+                    detail,
+                )
                 return None, f"HTTP {response.status_code}: {detail}"
 
             try:
@@ -465,6 +474,7 @@ async def _search_searxng(
                 response = await client.get(endpoint, params=params)
             except httpx.RequestError as error:
                 if attempt >= _RETRY_MAX_RETRIES:
+                    _LOGGER.warning("SearXNG web search request failed: %s", error)
                     return None, f"request failed: {error}"
                 await _sleep_for_retry(attempt)
                 continue
@@ -476,6 +486,11 @@ async def _search_searxng(
                 detail = _extract_error_detail(response)
                 if response.status_code == 403:
                     detail = f"{detail}; ensure SearXNG search formats include json"
+                _LOGGER.warning(
+                    "SearXNG web search request failed: HTTP %s: %s",
+                    response.status_code,
+                    detail,
+                )
                 return None, f"HTTP {response.status_code}: {detail}"
 
             try:
@@ -538,6 +553,7 @@ def _resolve_web_search_settings(
     try:
         raw_settings = settings_resolver()
     except Exception as error:
+        _LOGGER.error("web_search settings resolver crashed unexpectedly", exc_info=error)
         return None, f"web_search settings could not be loaded: {error}"
     return _normalize_web_search_settings(raw_settings)
 

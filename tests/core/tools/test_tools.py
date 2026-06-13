@@ -1,6 +1,7 @@
 """Tests for tool registry, envelopes, and execution scheduling."""
 
 import asyncio
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError
@@ -779,7 +780,9 @@ class TestToolExecutor:
         ]
 
     @pytest.mark.asyncio
-    async def test_handler_exception_becomes_failed_result(self) -> None:
+    async def test_handler_exception_becomes_failed_result(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         registry = ToolRegistry()
 
         def failing_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -788,12 +791,20 @@ class TestToolExecutor:
         registry.register("failing", "Fail for testing.", {"type": "object"}, failing_handler)
         executor = ToolExecutor(registry)
 
-        results = await executor.execute_many(
-            [ToolCall(id="call-1", name="failing", arguments={})],
-            make_execution_config(allowed_tools=["*"]),
-        )
+        with caplog.at_level(logging.ERROR, logger="vbot.tools"):
+            results = await executor.execute_many(
+                [ToolCall(id="call-1", name="failing", arguments={})],
+                make_execution_config(allowed_tools=["*"]),
+            )
 
         assert results == [tool_failure("tool_execution_error", "boom")]
+        crash_records = [
+            record
+            for record in caplog.records
+            if record.levelno == logging.ERROR and "crashed unexpectedly" in record.getMessage()
+        ]
+        assert crash_records, "expected an error log for the crashing tool handler"
+        assert crash_records[0].exc_info is not None
 
     @pytest.mark.asyncio
     async def test_parallel_execution_overlaps_and_preserves_order(self) -> None:

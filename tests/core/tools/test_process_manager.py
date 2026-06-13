@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
 import sys
 import time
@@ -362,6 +363,99 @@ async def test_completed_process_closes_stdin_writer(manager: ProcessManager) ->
     pipes = getattr(transport, "_pipes", None)
     if isinstance(pipes, dict):
         assert pipes == {}
+
+
+@pytest.mark.asyncio
+async def test_reader_task_failure_is_logged(
+    manager: ProcessManager, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def boom(session: Any, stream_name: str) -> None:
+        raise RuntimeError("reader exploded")
+
+    manager._read_stream = boom  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR, logger="vbot.tools.process_manager"):
+        session_id = await manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            [sys.executable, "-c", "print('done')"],
+            env=None,
+            cwd=None,
+        )
+        session = manager.get_session(session_id, AGENT_A)
+        assert session.stdout_task is not None
+        await asyncio.gather(
+            session.stdout_task,
+            session.stderr_task,
+            return_exceptions=True,
+        )
+        await asyncio.sleep(0)
+
+    reader_errors = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR and "reader failed" in record.getMessage()
+    ]
+    assert reader_errors, "expected an error log for the failing stream reader task"
+    assert reader_errors[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_watcher_task_failure_is_logged(
+    manager: ProcessManager, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def boom(session: Any) -> None:
+        raise RuntimeError("watcher exploded")
+
+    manager._watch_process = boom  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR, logger="vbot.tools.process_manager"):
+        session_id = await manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            env=None,
+            cwd=None,
+        )
+        session = manager.get_session(session_id, AGENT_A)
+        assert session.wait_task is not None
+        await asyncio.gather(session.wait_task, return_exceptions=True)
+        await asyncio.sleep(0)
+        await manager.kill(session_id, AGENT_A)
+
+    watcher_errors = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR and "completion watcher failed" in record.getMessage()
+    ]
+    assert watcher_errors, "expected an error log for the failing completion watcher task"
+    assert watcher_errors[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_kill_logs_warning_when_taskkill_fails(
+    manager: ProcessManager, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if sys.platform != "win32":
+        pytest.skip("taskkill fallback path is Windows-only")
+
+    session_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=None,
+        cwd=None,
+    )
+
+    def failing_taskkill(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("taskkill missing")
+
+    monkeypatch.setattr(subprocess, "run", failing_taskkill)
+
+    with caplog.at_level(logging.WARNING, logger="vbot.tools.process_manager"):
+        await manager.kill(session_id, AGENT_A)
+
+    assert any("taskkill failed" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio

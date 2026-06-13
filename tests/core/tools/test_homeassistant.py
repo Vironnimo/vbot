@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -238,7 +239,7 @@ async def test_list_entities_area_filter() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_list_entities_http_error() -> None:
+async def test_list_entities_http_error(caplog: pytest.LogCaptureFixture) -> None:
     respx.get(f"{_HASS_URL}/api/states").mock(
         return_value=httpx.Response(500, json={"message": "internal error"})
     )
@@ -246,9 +247,15 @@ async def test_list_entities_http_error() -> None:
     registry = ToolRegistry()
     register_homeassistant_tools(registry, _credential_resolver)
 
-    result = await _dispatch(registry, HA_LIST_ENTITIES_NAME, {})
+    with caplog.at_level(logging.WARNING, logger="vbot.tools.homeassistant"):
+        result = await _dispatch(registry, HA_LIST_ENTITIES_NAME, {})
 
     assert_failure_envelope(result, "home_assistant_error")
+    assert any(
+        record.levelno == logging.WARNING
+        and "Home Assistant request failed" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------

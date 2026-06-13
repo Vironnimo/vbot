@@ -23,6 +23,9 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.logging import get_logger
+
+_LOGGER = get_logger("tools.homeassistant")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -222,6 +225,7 @@ async def _ha_request(
                     return None, f"unsupported HTTP method: {method}"
             except httpx.RequestError as error:
                 if attempt >= _RETRY_MAX_RETRIES:
+                    _LOGGER.warning("Home Assistant request failed: %s", error)
                     return None, f"request failed: {error}"
                 await _sleep_for_retry(attempt)
                 continue
@@ -231,6 +235,11 @@ async def _ha_request(
                     await _sleep_for_retry(attempt)
                     continue
                 detail = _extract_error_detail(response)
+                _LOGGER.warning(
+                    "Home Assistant request failed: HTTP %s: %s",
+                    response.status_code,
+                    detail,
+                )
                 return None, f"HTTP {response.status_code}: {detail}"
 
             try:

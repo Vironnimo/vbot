@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from core.utils.errors import VBotError
+from core.utils.logging import get_logger
+
+_LOGGER = get_logger("tools")
 
 TOOL_ALLOWLIST_WILDCARD = "*"
 DEFAULT_TOOL_CONCURRENCY_LIMIT = 50
@@ -515,6 +518,7 @@ class ToolExecutor:
                 "invalid_tool_result" if "return" in str(error) else "invalid_arguments", str(error)
             )
         except Exception as error:
+            _LOGGER.error("Tool %s crashed unexpectedly", context.tool_name, exc_info=error)
             return tool_failure("tool_execution_error", str(error))
 
 
