@@ -337,7 +337,7 @@
 .inline-attachment {
   display: flex;
   width: fit-content;
-  max-width: min(30rem, 100%);
+  max-width: 100%;
   flex-direction: column;
   gap: 8px;
   border: 1px solid var(--border-2);
@@ -359,12 +359,17 @@
 }
 
 .inline-attachment-image {
-  width: 100%;
-  max-height: 320px;
+  width: auto;
+  max-width: 100%;
+  /* Scale with the window: the bubble width tracks the viewport, the height cap
+     keeps tall images from dominating short windows. Small images stay at their
+     natural size (no upscaling). */
+  max-height: min(60vh, 540px);
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
   object-fit: contain;
+  cursor: zoom-in;
 }
 
 .inline-attachment-name {
