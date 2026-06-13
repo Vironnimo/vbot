@@ -23,6 +23,7 @@ from core.settings.settings import (
     MAX_TEMPERATURE,
     MIN_TEMPERATURE,
     RECALL_BACKEND_PATTERN,
+    SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SettingsValidationError,
 )
 
@@ -59,7 +60,7 @@ SUBAGENT_SETTING_FIELDS = (
     "max_subagents_per_turn",
     "subagent_timeout_minutes",
 )
-APPEARANCE_FIELDS = frozenset({"language"})
+APPEARANCE_FIELDS = frozenset({"language", "chat_width"})
 COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_model"})
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
@@ -572,6 +573,8 @@ def _validate_appearance(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         return
 
     _warn_unknown_keys(diagnostics, "$.appearance", value, APPEARANCE_FIELDS, "appearance field")
+    _validate_appearance_chat_width(diagnostics, value.get("chat_width"))
+
     language = value.get("language")
     if language is None:
         return
@@ -582,6 +585,18 @@ def _validate_appearance(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         supported = ", ".join(sorted(SUPPORTED_APPEARANCE_LANGUAGES))
         _error(
             diagnostics, "$.appearance.language", f"unsupported language; supported: {supported}"
+        )
+
+
+def _validate_appearance_chat_width(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if value not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
+        supported = ", ".join(sorted(SUPPORTED_APPEARANCE_CHAT_WIDTHS))
+        _error(
+            diagnostics,
+            "$.appearance.chat_width",
+            f"unsupported chat width; supported: {supported}",
         )
 
 

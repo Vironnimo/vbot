@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from core.settings import DEFAULT_APPEARANCE_LANGUAGE
+from core.settings import DEFAULT_APPEARANCE_CHAT_WIDTH, DEFAULT_APPEARANCE_LANGUAGE
 from core.storage import (
     PHASE_TWO_DIRECTORIES,
     StorageError,
@@ -356,7 +356,10 @@ def test_save_settings_rejects_unserializable_values(tmp_path: Path) -> None:
 def test_load_appearance_settings_returns_default_language_when_missing(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 
-    assert storage.load_appearance_settings() == {"language": DEFAULT_APPEARANCE_LANGUAGE}
+    assert storage.load_appearance_settings() == {
+        "language": DEFAULT_APPEARANCE_LANGUAGE,
+        "chat_width": DEFAULT_APPEARANCE_CHAT_WIDTH,
+    }
 
 
 def test_load_appearance_settings_rejects_non_object_section(tmp_path: Path) -> None:
@@ -697,7 +700,7 @@ def test_update_settings_sections_persists_multiple_sections_with_one_save(
 
     assert save_count == 1
     assert updated == {
-        "appearance": {"language": "en"},
+        "appearance": {"language": "en", "chat_width": "comfortable"},
         "subagents": {
             "max_subagent_depth": 6,
             "max_subagents_per_turn": 12,
@@ -712,7 +715,7 @@ def test_update_settings_sections_persists_multiple_sections_with_one_save(
         "recall": {"backend": "sqlite_fts"},
     }
     assert storage.load_settings() == {
-        "appearance": {"language": "en"},
+        "appearance": {"language": "en", "chat_width": "comfortable"},
         "compaction": {
             "auto": False,
             "threshold": 0.9,
@@ -753,8 +756,29 @@ def test_update_appearance_settings_persists_language_and_preserves_other_settin
 
     updated = storage.update_appearance_settings({"language": "en"})
 
-    assert updated == {"language": "en"}
-    assert storage.load_settings() == {"appearance": {"language": "en"}, "server_port": 8500}
+    assert updated == {"language": "en", "chat_width": "comfortable"}
+    assert storage.load_settings() == {
+        "appearance": {"language": "en", "chat_width": "comfortable"},
+        "server_port": 8500,
+    }
+
+
+def test_update_appearance_settings_persists_chat_width(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"appearance": {}})
+
+    updated = storage.update_appearance_settings({"language": "en", "chat_width": "wide"})
+
+    assert updated == {"language": "en", "chat_width": "wide"}
+    assert storage.load_appearance_settings() == {"language": "en", "chat_width": "wide"}
+
+
+def test_update_appearance_settings_coerces_unknown_chat_width_to_default(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    updated = storage.update_appearance_settings({"language": "en", "chat_width": "bogus"})
+
+    assert updated == {"language": "en", "chat_width": "comfortable"}
 
 
 def test_update_appearance_settings_drops_deprecated_appearance_keys(tmp_path: Path) -> None:
@@ -772,8 +796,11 @@ def test_update_appearance_settings_drops_deprecated_appearance_keys(tmp_path: P
 
     updated = storage.update_appearance_settings({"language": "en"})
 
-    assert updated == {"language": "en"}
-    assert storage.load_settings() == {"appearance": {"language": "en"}, "server_port": 8500}
+    assert updated == {"language": "en", "chat_width": "comfortable"}
+    assert storage.load_settings() == {
+        "appearance": {"language": "en", "chat_width": "comfortable"},
+        "server_port": 8500,
+    }
 
 
 @pytest.mark.parametrize(

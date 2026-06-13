@@ -98,12 +98,33 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
     }
 
 
+@pytest.mark.parametrize("chat_width", ["comfortable", "wide", "full"])
+def test_parse_settings_update_accepts_each_supported_chat_width(chat_width: str) -> None:
+    parsed = parse_settings_update({"appearance": {"language": "en", "chat_width": chat_width}})
+
+    assert parsed == {"appearance": {"language": "en", "chat_width": chat_width}}
+
+
+def test_parse_settings_update_omits_absent_chat_width() -> None:
+    parsed = parse_settings_update({"appearance": {"language": "en"}})
+
+    assert parsed == {"appearance": {"language": "en"}}
+
+
 @pytest.mark.parametrize(
     ("params", "message"),
     [
         ({}, "settings.update requires a section"),
         ({"general": {}}, "unsupported settings sections: general"),
         ({"appearance": []}, "params.appearance must be an object"),
+        (
+            {"appearance": {"language": "en", "chat_width": "huge"}},
+            "params.appearance.chat_width must be one of",
+        ),
+        (
+            {"appearance": {"language": "en", "theme": "dark"}},
+            "unsupported appearance settings: theme",
+        ),
         ({"skills": {"directories": [1]}}, "params.skills.directories"),
         (
             {
@@ -234,7 +255,7 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
         json.dumps(
             {
                 "server_port": 8500,
-                "appearance": {"language": "en"},
+                "appearance": {"language": "en", "chat_width": "wide"},
                 "skill_directories": ["~/skills"],
                 "extension_directories": ["C:/vbot/extensions"],
                 "attachment_max_size_bytes": 1024,
@@ -352,6 +373,25 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
         ("error", "$.web_search.searxng.base_url", "must be a non-empty string"),
         ("error", "$.model_tasks.speech_to_text.target", "must be a non-empty string"),
         ("error", "$.model_tasks.speech_to_text.options", "must be an object"),
+    ]
+
+
+def test_validate_settings_file_reports_invalid_chat_width(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"appearance": {"language": "en", "chat_width": "huge"}}),
+        encoding="utf-8",
+    )
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is False
+    assert diagnostics_as_tuples(report) == [
+        (
+            "error",
+            "$.appearance.chat_width",
+            "unsupported chat width; supported: comfortable, full, wide",
+        )
     ]
 
 
