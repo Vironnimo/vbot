@@ -83,6 +83,8 @@ export const englishCatalog = Object.freeze({
   'chat.attachment.preview': 'Preview attachment',
   'chat.attachment.fileLabel': 'Attached file',
   'chat.image.alt': 'Image',
+  'chat.image.zoomIn': 'Click to view full size',
+  'chat.image.zoomOut': 'Click to fit',
   'chat.voice.startRecording': 'Start voice input',
   'chat.voice.stopRecording': 'Stop recording',
   'chat.voice.startFailed': 'Microphone recording could not start.',
