@@ -23,7 +23,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
-from core.utils.http_status import is_retryable_status
+from core.utils.http_status import HttpRequestFailure, is_retryable_status
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.homeassistant")
@@ -165,7 +165,19 @@ def _normalize_json_object(raw: Any) -> JsonObject | None:
 
 
 def _invalid_entity_id_failure(entity_id: str) -> JsonObject:
-    return tool_failure("validation_error", f"invalid entity_id format: {entity_id}")
+    return tool_failure(
+        "validation_error", f"invalid entity_id format: {entity_id}", retryable=False
+    )
+
+
+def _ha_failure_envelope(failure: HttpRequestFailure) -> JsonObject:
+    """Map a classified HA request failure onto the home_assistant_error envelope."""
+    return tool_failure(
+        "home_assistant_error",
+        failure.message,
+        retryable=failure.retryable,
+        attempts_made=failure.attempts_made,
+    )
 
 
 async def _sleep_for_retry(attempt: int) -> None:
@@ -197,7 +209,7 @@ async def _ha_request(
     url: str,
     token: str,
     json_body: JsonObject | None = None,
-) -> tuple[JsonObject | None, str | None]:
+) -> tuple[JsonObject | None, HttpRequestFailure | None]:
     """Make an HTTP request to the Home Assistant REST API with retries.
 
     Args:
@@ -207,12 +219,14 @@ async def _ha_request(
         json_body: Optional JSON body for POST requests.
 
     Returns:
-        Tuple of (response_json, error_string). One is always None.
+        Tuple of (response_json, failure). One is always None; the failure
+        carries the retry classification for the result envelope.
     """
     headers: dict[str, str] = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
+    idempotent = method == "GET"
 
     async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
         for attempt in range(_RETRY_MAX_RETRIES + 1):
@@ -222,18 +236,22 @@ async def _ha_request(
                 elif method == "POST":
                     response = await client.post(url, headers=headers, json=json_body)
                 else:
-                    return None, f"unsupported HTTP method: {method}"
+                    return None, HttpRequestFailure(f"unsupported HTTP method: {method}")
             except httpx.RequestError as error:
                 if attempt >= _RETRY_MAX_RETRIES:
                     _LOGGER.warning("Home Assistant request failed: %s", error)
-                    return None, f"request failed: {error}"
+                    return None, HttpRequestFailure(
+                        f"request failed: {error}",
+                        retryable=True,
+                        attempts_made=_RETRY_MAX_RETRIES + 1,
+                    )
                 await _sleep_for_retry(attempt)
                 continue
 
             if response.status_code >= 400:
                 # Only GET reads are idempotent; POST service calls are not.
                 if (
-                    is_retryable_status(response.status_code, idempotent=(method == "GET"))
+                    is_retryable_status(response.status_code, idempotent=idempotent)
                     and attempt < _RETRY_MAX_RETRIES
                 ):
                     await _sleep_for_retry(attempt)
@@ -244,16 +262,22 @@ async def _ha_request(
                     response.status_code,
                     detail,
                 )
-                return None, f"HTTP {response.status_code}: {detail}"
+                # A retryable status only reaches here once retries were exhausted.
+                retryable = is_retryable_status(response.status_code, idempotent=idempotent)
+                return None, HttpRequestFailure(
+                    f"HTTP {response.status_code}: {detail}",
+                    retryable=retryable,
+                    attempts_made=(_RETRY_MAX_RETRIES + 1) if retryable else None,
+                )
 
             try:
                 payload = response.json()
             except ValueError:
-                return None, "Home Assistant returned invalid JSON"
+                return None, HttpRequestFailure("Home Assistant returned invalid JSON")
 
             return payload, None
 
-    return None, "request failed"
+    return None, HttpRequestFailure("request failed")
 
 
 # ---------------------------------------------------------------------------
@@ -272,14 +296,20 @@ async def _handle_list_entities(
     domain = _normalize_text(arguments.get("domain", "")).lower()
     area = _normalize_text(arguments.get("area", "")).lower()
 
-    payload, error = await _ha_request("GET", f"{hass_url}/api/states", token)
-    if error is not None:
-        return tool_failure("home_assistant_error", error)
+    payload, failure = await _ha_request("GET", f"{hass_url}/api/states", token)
+    if failure is not None:
+        return _ha_failure_envelope(failure)
     if payload is None:
-        return tool_failure("home_assistant_error", "no response from Home Assistant")
+        return tool_failure(
+            "home_assistant_error", "no response from Home Assistant", retryable=False
+        )
 
     if not isinstance(payload, list):
-        return tool_failure("home_assistant_error", "unexpected response format from /api/states")
+        return tool_failure(
+            "home_assistant_error",
+            "unexpected response format from /api/states",
+            retryable=False,
+        )
 
     entities: list[JsonObject] = []
     for entry in payload:
@@ -328,18 +358,20 @@ async def _handle_get_state(
 
     entity_id = _normalize_text(arguments.get("entity_id", ""))
     if not entity_id:
-        return tool_failure("validation_error", "entity_id is required")
+        return tool_failure("validation_error", "entity_id is required", retryable=False)
     if not _ENTITY_ID_RE.match(entity_id):
         return _invalid_entity_id_failure(entity_id)
 
-    payload, error = await _ha_request("GET", f"{hass_url}/api/states/{entity_id}", token)
-    if error is not None:
-        return tool_failure("home_assistant_error", error)
+    payload, failure = await _ha_request("GET", f"{hass_url}/api/states/{entity_id}", token)
+    if failure is not None:
+        return _ha_failure_envelope(failure)
     if payload is None:
-        return tool_failure("home_assistant_error", f"entity {entity_id} not found")
+        return tool_failure(
+            "home_assistant_error", f"entity {entity_id} not found", retryable=False
+        )
 
     if not isinstance(payload, dict):
-        return tool_failure("home_assistant_error", "unexpected response format")
+        return tool_failure("home_assistant_error", "unexpected response format", retryable=False)
 
     return tool_success(
         {
@@ -367,14 +399,20 @@ async def _handle_list_services(
 
     domain_filter = _normalize_text(arguments.get("domain", "")).lower()
 
-    payload, error = await _ha_request("GET", f"{hass_url}/api/services", token)
-    if error is not None:
-        return tool_failure("home_assistant_error", error)
+    payload, failure = await _ha_request("GET", f"{hass_url}/api/services", token)
+    if failure is not None:
+        return _ha_failure_envelope(failure)
     if payload is None:
-        return tool_failure("home_assistant_error", "no response from Home Assistant")
+        return tool_failure(
+            "home_assistant_error", "no response from Home Assistant", retryable=False
+        )
 
     if not isinstance(payload, list):
-        return tool_failure("home_assistant_error", "unexpected response format from /api/services")
+        return tool_failure(
+            "home_assistant_error",
+            "unexpected response format from /api/services",
+            retryable=False,
+        )
 
     domains: list[JsonObject] = []
     for entry in payload:
@@ -422,22 +460,25 @@ async def _handle_call_service(
     data = _normalize_json_object(arguments.get("data"))
 
     if not domain:
-        return tool_failure("validation_error", "domain is required")
+        return tool_failure("validation_error", "domain is required", retryable=False)
     if not service:
-        return tool_failure("validation_error", "service is required")
+        return tool_failure("validation_error", "service is required", retryable=False)
     if not _DOMAIN_SERVICE_RE.match(domain):
-        return tool_failure("validation_error", f"invalid domain: {domain}")
+        return tool_failure("validation_error", f"invalid domain: {domain}", retryable=False)
     if not _DOMAIN_SERVICE_RE.match(service):
-        return tool_failure("validation_error", f"invalid service: {service}")
+        return tool_failure("validation_error", f"invalid service: {service}", retryable=False)
     if entity_id and not _ENTITY_ID_RE.match(entity_id):
         return _invalid_entity_id_failure(entity_id)
     if data is not None and "entity_id" in data:
-        return tool_failure("validation_error", "data.entity_id is not allowed; use entity_id")
+        return tool_failure(
+            "validation_error", "data.entity_id is not allowed; use entity_id", retryable=False
+        )
 
     if domain in _BLOCKED_DOMAINS:
         return tool_failure(
             "blocked_domain",
             f"domain '{domain}' is blocked for security reasons",
+            retryable=False,
         )
 
     body: JsonObject = {}
@@ -446,16 +487,18 @@ async def _handle_call_service(
     if data:
         body.update(data)
 
-    payload, error = await _ha_request(
+    payload, failure = await _ha_request(
         "POST",
         f"{hass_url}/api/services/{domain}/{service}",
         token,
         json_body=body,
     )
-    if error is not None:
-        return tool_failure("home_assistant_error", error)
+    if failure is not None:
+        return _ha_failure_envelope(failure)
     if payload is None:
-        return tool_failure("home_assistant_error", "no response from Home Assistant")
+        return tool_failure(
+            "home_assistant_error", "no response from Home Assistant", retryable=False
+        )
 
     return tool_success({"result": payload})
 

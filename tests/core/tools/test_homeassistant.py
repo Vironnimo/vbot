@@ -10,6 +10,7 @@ import httpx
 import pytest
 import respx
 
+import core.tools.homeassistant as homeassistant_module
 from core.tools.homeassistant import (
     HA_CALL_SERVICE_DESCRIPTION,
     HA_CALL_SERVICE_NAME,
@@ -699,6 +700,112 @@ async def test_no_retry_on_404() -> None:
 
     assert_failure_envelope(result, "home_assistant_error")
     assert len(route.calls) == 1  # no retry on 404
+
+
+# ---------------------------------------------------------------------------
+# Retry signalling in the failure envelope
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_exhausted_transient_status_signals_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_sleep(attempt: int) -> None:
+        del attempt
+
+    monkeypatch.setattr("core.tools.homeassistant._sleep_for_retry", _fake_sleep)
+
+    route = respx.get(f"{_HASS_URL}/api/states").mock(
+        return_value=httpx.Response(503, json={"message": "busy"})
+    )
+
+    registry = ToolRegistry()
+    register_homeassistant_tools(registry, _credential_resolver)
+
+    result = await _dispatch(registry, HA_LIST_ENTITIES_NAME, {})
+
+    error = assert_failure_envelope(result, "home_assistant_error")
+    assert error["retryable"] is True
+    assert error["attempts_made"] == homeassistant_module._RETRY_MAX_RETRIES + 1
+    assert len(route.calls) == homeassistant_module._RETRY_MAX_RETRIES + 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_exhausted_transport_error_signals_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_sleep(attempt: int) -> None:
+        del attempt
+
+    monkeypatch.setattr("core.tools.homeassistant._sleep_for_retry", _fake_sleep)
+
+    def _raise_connect_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection failed", request=request)
+
+    respx.get(f"{_HASS_URL}/api/states").mock(side_effect=_raise_connect_error)
+
+    registry = ToolRegistry()
+    register_homeassistant_tools(registry, _credential_resolver)
+
+    result = await _dispatch(registry, HA_LIST_ENTITIES_NAME, {})
+
+    error = assert_failure_envelope(result, "home_assistant_error")
+    assert error["retryable"] is True
+    assert error["attempts_made"] == homeassistant_module._RETRY_MAX_RETRIES + 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_non_retryable_status_signals_not_retryable() -> None:
+    respx.get(f"{_HASS_URL}/api/states/light.missing").mock(
+        return_value=httpx.Response(404, json={"message": "Not found"})
+    )
+
+    registry = ToolRegistry()
+    register_homeassistant_tools(registry, _credential_resolver)
+
+    result = await _dispatch(registry, HA_GET_STATE_NAME, {"entity_id": "light.missing"})
+
+    error = assert_failure_envelope(result, "home_assistant_error")
+    assert error["retryable"] is False
+    assert "attempts_made" not in error
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_non_idempotent_post_500_is_not_retryable() -> None:
+    # ha_call_service POSTs, which is not idempotent, so a 500 is fatal (no retry).
+    route = respx.post(f"{_HASS_URL}/api/services/light/turn_on").mock(
+        return_value=httpx.Response(500, json={"message": "boom"})
+    )
+
+    registry = ToolRegistry()
+    register_homeassistant_tools(registry, _credential_resolver)
+
+    result = await _dispatch(
+        registry,
+        HA_CALL_SERVICE_NAME,
+        {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"},
+    )
+
+    error = assert_failure_envelope(result, "home_assistant_error")
+    assert error["retryable"] is False
+    assert "attempts_made" not in error
+    assert len(route.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_validation_error_signals_not_retryable() -> None:
+    registry = ToolRegistry()
+    register_homeassistant_tools(registry, _credential_resolver)
+
+    result = await _dispatch(registry, HA_GET_STATE_NAME, {"entity_id": "not a valid id"})
+
+    error = assert_failure_envelope(result, "validation_error")
+    assert error["retryable"] is False
 
 
 # ---------------------------------------------------------------------------

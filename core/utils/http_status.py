@@ -27,6 +27,7 @@ runs across the desktop/server boundary and must not import from ``core`` (see
 from __future__ import annotations
 
 from collections.abc import Collection
+from dataclasses import dataclass
 
 # Retryable regardless of HTTP method — the request was demonstrably not acted on.
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 502, 503, 504})
@@ -59,3 +60,22 @@ def is_retryable_status(
     if extra is not None and status_code in extra:
         return True
     return idempotent and status_code in IDEMPOTENT_RETRYABLE_STATUS_CODES
+
+
+@dataclass(frozen=True)
+class HttpRequestFailure:
+    """A classified failure from an HTTP tool's internal request loop.
+
+    Threads the retry decision from a tool's request helper (which swallows the
+    underlying ``httpx`` error and returns a string) up to its handler, so the
+    tool result envelope can carry ``retryable``/``attempts_made`` without the
+    handler having to re-classify by inspecting the message text. ``retryable``
+    is True only when the tool gave up on a retryable status or transport error
+    after exhausting its own retries; ``attempts_made`` then records how many
+    attempts it made. Validation/fatal failures use ``retryable=False`` and no
+    attempt count.
+    """
+
+    message: str
+    retryable: bool = False
+    attempts_made: int | None = None

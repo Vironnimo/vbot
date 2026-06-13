@@ -788,11 +788,11 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
     unknown_arguments = set(arguments) - {"url", "include_links", "raw"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
-        return tool_failure("validation_error", f"Unknown argument(s): {names}")
+        return tool_failure("validation_error", f"Unknown argument(s): {names}", retryable=False)
 
     url_argument = arguments.get("url")
     if not isinstance(url_argument, str) or not url_argument.strip():
-        return tool_failure("validation_error", "url must be a non-empty string")
+        return tool_failure("validation_error", "url must be a non-empty string", retryable=False)
 
     try:
         include_links = _coerce_bool(
@@ -800,27 +800,43 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
         )
         raw = _coerce_bool(arguments.get("raw"), field_name="raw", default=False)
     except ValueError as error:
-        return tool_failure("validation_error", str(error))
+        return tool_failure("validation_error", str(error), retryable=False)
 
     url = url_argument.strip()
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
-        return tool_failure("validation_error", "only http/https URLs are allowed")
+        return tool_failure("validation_error", "only http/https URLs are allowed", retryable=False)
     if not parsed.netloc or parsed.hostname is None:
-        return tool_failure("validation_error", "url must include a valid host")
+        return tool_failure("validation_error", "url must include a valid host", retryable=False)
 
     try:
         async with _make_client() as client:
             response = await _fetch_with_retry(client, url)
     except ValueError as error:
-        return tool_failure("validation_error", str(error))
+        return tool_failure("validation_error", str(error), retryable=False)
     except httpx.HTTPStatusError as error:
-        status = error.response.status_code if error.response is not None else "unknown"
+        status_code = error.response.status_code if error.response is not None else None
+        status = status_code if status_code is not None else "unknown"
         _LOGGER.warning("web_fetch request failed: HTTP %s for %s", status, url)
-        return tool_failure("request_error", f"HTTP {status} while fetching URL: {url}")
+        # A retryable status only reaches here after the retry loop exhausted its
+        # attempts; a non-retryable status (e.g. 404) failed on the first try.
+        retryable = status_code is not None and is_retryable_status(status_code, idempotent=True)
+        return tool_failure(
+            "request_error",
+            f"HTTP {status} while fetching URL: {url}",
+            retryable=retryable,
+            attempts_made=(_RETRY_MAX_RETRIES + 1) if retryable else None,
+        )
     except httpx.RequestError as error:
+        # Transport errors are not retried by web_fetch's status-only retry loop,
+        # so the tool made a single attempt; the failure is still transient.
         _LOGGER.warning("web_fetch request failed for %s: %s", url, error)
-        return tool_failure("request_error", f"request failed while fetching URL: {error}")
+        return tool_failure(
+            "request_error",
+            f"request failed while fetching URL: {error}",
+            retryable=True,
+            attempts_made=1,
+        )
 
     raw_body = response.text
     raw_size = len(raw_body.encode("utf-8"))

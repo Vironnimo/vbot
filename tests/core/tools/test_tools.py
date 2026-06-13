@@ -262,6 +262,79 @@ class TestToolEnvelope:
     def test_invalid_envelope_is_rejected(self) -> None:
         assert is_tool_result_envelope({"ok": True, "data": {}}) is False
 
+    def test_failure_envelope_carries_retry_signal_inside_error(self) -> None:
+        result = tool_failure(
+            "request_error",
+            "HTTP 503 while fetching URL",
+            retryable=True,
+            attempts_made=4,
+        )
+
+        assert result == {
+            "ok": False,
+            "error": {
+                "code": "request_error",
+                "message": "HTTP 503 while fetching URL",
+                "retryable": True,
+                "attempts_made": 4,
+            },
+            "data": None,
+            "artifacts": [],
+        }
+        # The retry signal lives inside error, so the top-level key set is intact.
+        assert is_tool_result_envelope(result) is True
+
+    def test_failure_envelope_omits_unset_retry_signal(self) -> None:
+        result = tool_failure("validation_error", "bad input")
+
+        assert set(result["error"]) == {"code", "message"}
+        assert is_tool_result_envelope(result) is True
+
+    def test_failure_envelope_allows_retryable_false_without_attempts(self) -> None:
+        result = tool_failure("validation_error", "bad input", retryable=False)
+
+        assert result["error"] == {
+            "code": "validation_error",
+            "message": "bad input",
+            "retryable": False,
+        }
+        assert is_tool_result_envelope(result) is True
+
+    def test_failure_envelope_rejects_non_bool_retryable(self) -> None:
+        with pytest.raises(ValueError, match="retryable"):
+            tool_failure("x", "y", retryable="yes")  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("attempts", [-1, True, 1.5])
+    def test_failure_envelope_rejects_invalid_attempts_made(self, attempts: object) -> None:
+        with pytest.raises(ValueError, match="attempts_made"):
+            tool_failure("x", "y", attempts_made=attempts)  # type: ignore[arg-type]
+
+    def test_envelope_rejects_unknown_error_keys(self) -> None:
+        assert (
+            is_tool_result_envelope(
+                {
+                    "ok": False,
+                    "error": {"code": "x", "message": "y", "unexpected": 1},
+                    "data": None,
+                    "artifacts": [],
+                }
+            )
+            is False
+        )
+
+    def test_envelope_rejects_negative_attempts_made(self) -> None:
+        assert (
+            is_tool_result_envelope(
+                {
+                    "ok": False,
+                    "error": {"code": "x", "message": "y", "attempts_made": -1},
+                    "data": None,
+                    "artifacts": [],
+                }
+            )
+            is False
+        )
+
 
 class TestTool:
     def test_fields_are_stored(self) -> None:
