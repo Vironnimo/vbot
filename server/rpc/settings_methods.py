@@ -8,6 +8,7 @@ from core.debug.store import DebugTraceStore
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
 from core.settings import SettingsValidationError, parse_settings_update, validate_settings_data
+from core.utils.logging import get_logger
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -15,6 +16,7 @@ from server.rpc.provider_access import _provider_has_credentials, _provider_sett
 from server.rpc.validation import _required_string
 
 JsonObject = dict[str, Any]
+_LOGGER = get_logger("server.rpc.settings")
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",
@@ -260,7 +262,11 @@ def _trace_count(runtime: Any) -> int:
             trace_limit=debug_settings.get("trace_limit", 50),
         )
         return len(store.get_traces())
+    except (FileNotFoundError, OSError):
+        # Expected when the trace store has never been written; not an error.
+        return 0
     except Exception:
+        _LOGGER.warning("Failed to read debug trace count; reporting 0", exc_info=True)
         return 0
 
 
