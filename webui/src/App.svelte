@@ -62,7 +62,11 @@
     disconnect,
   } from '$lib/connectionState.js';
   import { rpc, debugStatus } from '$lib/api.js';
-  import { t } from '$lib/i18n.js';
+  import { init, t } from '$lib/i18n.js';
+  import {
+    appearancePrefs,
+    setChatWidth,
+  } from '$lib/appearancePrefs.svelte.js';
   import {
     createNavigationHistoryState,
     isNavigationHistoryState,
@@ -459,6 +463,24 @@
         // debug RPC unavailable — keep debug navigation hidden
       });
 
+    // Seed app-wide appearance preferences once. `chat_width` drives the chat
+    // reading-column width app-wide (passed down to ChatView); the language
+    // seed is free here and closes the startup-language gap.
+    rpc('settings.get')
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+        setChatWidth(settings?.appearance?.chat_width);
+        const language = settings?.appearance?.language;
+        if (typeof language === 'string' && language.length > 0) {
+          init(language);
+        }
+      })
+      .catch(() => {
+        // settings RPC unavailable — keep the comfortable default.
+      });
+
     return () => {
       cancelled = true;
       window.removeEventListener('popstate', handlePopState);
@@ -482,6 +504,7 @@
     <ChatView
       sharedAgents={agents}
       sharedSelectedAgentId={selectedAgentId}
+      chatWidth={appearancePrefs.chatWidth}
       {agentsRefreshToken}
       onAgentsChanged={syncAgents}
       onAgentSelected={selectAgent}

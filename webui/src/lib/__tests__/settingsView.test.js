@@ -9,6 +9,7 @@ import {
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
   accountDisplayName,
   buildAgentDefaultsPayload,
+  buildChatWidthOptions,
   buildLanguageOptions,
   buildProviderConnectPayload,
   buildProviderDisconnectPayload,
@@ -18,7 +19,7 @@ import {
   buildWebSearchProviderOptions,
   buildWebSearchSettingsPayload,
   connectionSupportsAddAccount,
-  createLanguageUpdatePayload,
+  createAppearanceUpdatePayload,
   createSkillDirectoriesUpdatePayload,
   deriveAccountCredentialKey,
   describeAccountSource,
@@ -29,9 +30,11 @@ import {
   getConnectedProviderItems,
   getConnectionAccounts,
   getDefaultSkillDirectoryValue,
+  getPersistedChatWidth,
   getRecallSettings,
   getSkillDirectories,
   getWebSearchSettings,
+  isAppearanceSaveDisabled,
   isConnectionConfigured,
   isValidAccountId,
   normalizeAccountId,
@@ -421,19 +424,18 @@ describe('SettingsView', () => {
     expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
       appearance: {
         language: 'fr',
+        chat_width: 'comfortable',
       },
     });
 
     await waitForCondition(() => toastMock.mock.calls.length > 0);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Language preference updated.',
+        title: 'Appearance updated.',
         variant: 'success',
       }),
     );
-    expect(document.body.textContent).not.toContain(
-      'Language preference updated.',
-    );
+    expect(document.body.textContent).not.toContain('Appearance updated.');
     expect(
       document
         .querySelector(
@@ -682,11 +684,47 @@ describe('settingsView helpers', () => {
         labelFallback: 'en',
       },
     ]);
-    expect(createLanguageUpdatePayload('fr')).toEqual({
+    expect(
+      createAppearanceUpdatePayload({ language: 'fr', chatWidth: 'wide' }),
+    ).toEqual({
       appearance: {
         language: 'fr',
+        chat_width: 'wide',
       },
     });
+    expect(buildChatWidthOptions().map((option) => option.id)).toEqual([
+      'comfortable',
+      'wide',
+      'full',
+    ]);
+    expect(getPersistedChatWidth({ appearance: { chat_width: 'full' } })).toBe(
+      'full',
+    );
+    // Missing or unknown values fall back to the comfortable default.
+    expect(getPersistedChatWidth({ appearance: { chat_width: 'huge' } })).toBe(
+      'comfortable',
+    );
+    expect(getPersistedChatWidth(null)).toBe('comfortable');
+    expect(
+      isAppearanceSaveDisabled({
+        loading: false,
+        saving: false,
+        selectedLanguageId: 'en',
+        selectedChatWidth: 'wide',
+        persistedLanguageId: 'en',
+        persistedChatWidth: 'comfortable',
+      }),
+    ).toBe(false);
+    expect(
+      isAppearanceSaveDisabled({
+        loading: false,
+        saving: false,
+        selectedLanguageId: 'en',
+        selectedChatWidth: 'comfortable',
+        persistedLanguageId: 'en',
+        persistedChatWidth: 'comfortable',
+      }),
+    ).toBe(true);
     expect(createSkillDirectoriesUpdatePayload([' C:/skills ', ''])).toEqual({
       skills: {
         directories: ['C:/skills'],

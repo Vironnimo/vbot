@@ -798,24 +798,48 @@ export function getPersistedLanguageId(settings) {
   return settings?.appearance?.language ?? '';
 }
 
-export function isLanguageSaveDisabled({
+// Chat reading-column width preference (mirrors the backend
+// SUPPORTED_APPEARANCE_CHAT_WIDTHS / DEFAULT_APPEARANCE_CHAT_WIDTH).
+export const CHAT_WIDTH_OPTIONS = ['comfortable', 'wide', 'full'];
+export const DEFAULT_CHAT_WIDTH = 'comfortable';
+
+export function getPersistedChatWidth(settings) {
+  const value = settings?.appearance?.chat_width;
+  return CHAT_WIDTH_OPTIONS.includes(value) ? value : DEFAULT_CHAT_WIDTH;
+}
+
+export function buildChatWidthOptions() {
+  return CHAT_WIDTH_OPTIONS.map((id) => ({
+    id,
+    labelKey: `settings.appearance.chatWidth.${id}`,
+    labelFallback: id,
+  }));
+}
+
+// The appearance section is normalized as a whole on the backend (a missing
+// field resets to its default), so both controls always save together.
+export function isAppearanceSaveDisabled({
   loading,
   saving,
   selectedLanguageId,
+  selectedChatWidth,
   persistedLanguageId,
+  persistedChatWidth,
 }) {
+  if (loading || saving || selectedLanguageId.length === 0) {
+    return true;
+  }
   return (
-    loading ||
-    saving ||
-    selectedLanguageId.length === 0 ||
-    selectedLanguageId === persistedLanguageId
+    selectedLanguageId === persistedLanguageId &&
+    selectedChatWidth === persistedChatWidth
   );
 }
 
-export function createLanguageUpdatePayload(languageId) {
+export function createAppearanceUpdatePayload({ language, chatWidth }) {
   return {
     appearance: {
-      language: languageId,
+      language,
+      chat_width: chatWidth,
     },
   };
 }
