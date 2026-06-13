@@ -4676,7 +4676,7 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
     )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
-    register_read_tool(state.runtime.tools)
+    register_read_tool(state.runtime.tools, attachment_store=None, speech_service=None)
     state.runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
     workspace = Path(state.runtime.agents.get("coder").workspace)
     workspace.mkdir(parents=True, exist_ok=True)
