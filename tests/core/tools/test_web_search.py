@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from core.tools.web_search import (
     WEB_SEARCH_TOOL_DESCRIPTION,
     WEB_SEARCH_TOOL_NAME,
     WEB_SEARCH_TOOL_PARAMETERS,
+    _resolve_web_search_settings,
     register_web_search_tool,
     web_search_handler,
 )
@@ -252,7 +254,9 @@ async def test_web_search_handler_brave_success(tmp_path: Path) -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_brave_http_error(tmp_path: Path) -> None:
+async def test_web_search_handler_brave_http_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -260,13 +264,19 @@ async def test_web_search_handler_brave_http_error(tmp_path: Path) -> None:
         return_value=httpx.Response(403, json={"error": {"detail": "forbidden"}})
     )
 
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-    )
+    with caplog.at_level(logging.WARNING, logger="vbot.tools.web_search"):
+        result = await web_search_handler(
+            make_context(workspace),
+            {"query": "vbot"},
+            _fake_credential_resolver,
+        )
 
     assert_failure_envelope(result, "provider_request_failed")
+    assert any(
+        record.levelno == logging.WARNING
+        and "Brave web search request failed" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @respx.mock
@@ -461,3 +471,24 @@ async def test_web_search_handler_searxng_rejects_invalid_base_url(tmp_path: Pat
 def test_api_key_not_in_schema() -> None:
     all_strings = _collect_schema_strings(WEB_SEARCH_TOOL_PARAMETERS)
     assert all("BRAVE_API_KEY" not in value for value in all_strings)
+
+
+def test_resolve_web_search_settings_logs_unexpected_resolver_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def boom() -> dict[str, Any]:
+        raise RuntimeError("settings backend exploded")
+
+    with caplog.at_level(logging.ERROR, logger="vbot.tools.web_search"):
+        settings, error = _resolve_web_search_settings(boom)
+
+    assert settings is None
+    assert error is not None and "could not be loaded" in error
+    crash_records = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR
+        and "settings resolver crashed unexpectedly" in record.getMessage()
+    ]
+    assert crash_records, "expected an error log for the crashing settings resolver"
+    assert crash_records[0].exc_info is not None

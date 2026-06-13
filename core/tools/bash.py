@@ -315,7 +315,14 @@ def _register_user_cancel_callback(
         except RuntimeError:
             asyncio.run(kill_coro)
         else:
-            loop.create_task(kill_coro)
+            kill_task = loop.create_task(kill_coro)
+            kill_task.add_done_callback(
+                lambda completed: _log_background_task_result(
+                    completed,
+                    f"Bash user-cancel kill failed for "
+                    f"agent={context.agent_id} session={session_id}",
+                )
+            )
 
     context.on_cancel(cancel_callback)
 

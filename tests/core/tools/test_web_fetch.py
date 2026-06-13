@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 from pathlib import Path
 
 import httpx
@@ -190,7 +191,9 @@ async def test_web_fetch_handler_http_error(tmp_path: Path) -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_web_fetch_handler_network_error(tmp_path: Path) -> None:
+async def test_web_fetch_handler_network_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     url = "https://example.com/network-fail"
@@ -200,10 +203,15 @@ async def test_web_fetch_handler_network_error(tmp_path: Path) -> None:
 
     respx.get(url).mock(side_effect=mock_connect_error)
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    with caplog.at_level(logging.WARNING, logger="vbot.tools.web_fetch"):
+        result = await web_fetch_handler(make_context(workspace), {"url": url})
 
     error = assert_failure_envelope(result, "request_error")
     assert "request failed" in error["message"].lower()
+    assert any(
+        record.levelno == logging.WARNING and "web_fetch request failed" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @respx.mock
