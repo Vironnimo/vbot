@@ -25,7 +25,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
-from core.utils.http_status import is_retryable_status
+from core.utils.http_status import HttpRequestFailure, is_retryable_status
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.web_search")
@@ -360,10 +360,10 @@ async def _search_brave(
     freshness: str,
     date_after: str,
     date_before: str,
-) -> tuple[dict[str, Any] | None, str | None]:
+) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     filters, warnings, filter_error = _build_brave_filters(freshness, date_after, date_before)
     if filter_error is not None:
-        return None, filter_error
+        return None, HttpRequestFailure(filter_error)
 
     params: dict[str, Any] = {"q": query, "count": count}
     params.update(filters)
@@ -379,7 +379,11 @@ async def _search_brave(
             except httpx.RequestError as error:
                 if attempt >= _RETRY_MAX_RETRIES:
                     _LOGGER.warning("Brave web search request failed: %s", error)
-                    return None, f"request failed: {error}"
+                    return None, HttpRequestFailure(
+                        f"request failed: {error}",
+                        retryable=True,
+                        attempts_made=_RETRY_MAX_RETRIES + 1,
+                    )
                 await _sleep_for_retry(attempt)
                 continue
 
@@ -397,12 +401,18 @@ async def _search_brave(
                     response.status_code,
                     detail,
                 )
-                return None, f"HTTP {response.status_code}: {detail}"
+                # A retryable status only reaches here after retries were exhausted.
+                retryable = is_retryable_status(response.status_code, idempotent=True)
+                return None, HttpRequestFailure(
+                    f"HTTP {response.status_code}: {detail}",
+                    retryable=retryable,
+                    attempts_made=(_RETRY_MAX_RETRIES + 1) if retryable else None,
+                )
 
             try:
                 payload = response.json()
             except ValueError:
-                return None, "provider returned invalid JSON"
+                return None, HttpRequestFailure("provider returned invalid JSON")
 
             raw_results = None
             if isinstance(payload, dict):
@@ -430,7 +440,7 @@ async def _search_brave(
 
             return normalized_payload, None
 
-    return None, "request failed"
+    return None, HttpRequestFailure("request failed")
 
 
 def _build_searxng_endpoint(base_url: str) -> tuple[str | None, str | None]:
@@ -452,16 +462,16 @@ async def _search_searxng(
     freshness: str,
     date_after: str,
     date_before: str,
-) -> tuple[dict[str, Any] | None, str | None]:
+) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     endpoint, endpoint_error = _build_searxng_endpoint(base_url)
     if endpoint_error is not None:
-        return None, endpoint_error
+        return None, HttpRequestFailure(endpoint_error)
     if endpoint is None:
-        return None, "SearXNG endpoint could not be built"
+        return None, HttpRequestFailure("SearXNG endpoint could not be built")
 
     filters, warnings, filter_error = _build_searxng_filters(freshness, date_after, date_before)
     if filter_error is not None:
-        return None, filter_error
+        return None, HttpRequestFailure(filter_error)
 
     params: dict[str, Any] = {
         "q": query,
@@ -479,7 +489,11 @@ async def _search_searxng(
             except httpx.RequestError as error:
                 if attempt >= _RETRY_MAX_RETRIES:
                     _LOGGER.warning("SearXNG web search request failed: %s", error)
-                    return None, f"request failed: {error}"
+                    return None, HttpRequestFailure(
+                        f"request failed: {error}",
+                        retryable=True,
+                        attempts_made=_RETRY_MAX_RETRIES + 1,
+                    )
                 await _sleep_for_retry(attempt)
                 continue
 
@@ -499,12 +513,18 @@ async def _search_searxng(
                     response.status_code,
                     detail,
                 )
-                return None, f"HTTP {response.status_code}: {detail}"
+                # A retryable status only reaches here after retries were exhausted.
+                retryable = is_retryable_status(response.status_code, idempotent=True)
+                return None, HttpRequestFailure(
+                    f"HTTP {response.status_code}: {detail}",
+                    retryable=retryable,
+                    attempts_made=(_RETRY_MAX_RETRIES + 1) if retryable else None,
+                )
 
             try:
                 payload = response.json()
             except ValueError:
-                return None, "provider returned invalid JSON"
+                return None, HttpRequestFailure("provider returned invalid JSON")
 
             raw_results = payload.get("results") if isinstance(payload, dict) else None
             results = _standardize_searxng_results(raw_results, count)
@@ -522,7 +542,7 @@ async def _search_searxng(
                 normalized_payload["warnings"] = warnings
             return normalized_payload, None
 
-    return None, "request failed"
+    return None, HttpRequestFailure("request failed")
 
 
 def _normalize_web_search_settings(raw_settings: Any) -> tuple[dict[str, Any] | None, str | None]:
@@ -578,20 +598,21 @@ async def web_search_handler(
     unknown_arguments = sorted(set(arguments) - _ALLOWED_ARGUMENTS)
     if unknown_arguments:
         names = ", ".join(unknown_arguments)
-        return tool_failure("validation_error", f"Unknown argument(s): {names}")
+        return tool_failure("validation_error", f"Unknown argument(s): {names}", retryable=False)
 
     query = _normalize_text(arguments.get("query"))
     if not query:
-        return tool_failure("validation_error", "query must be a non-empty string")
+        return tool_failure("validation_error", "query must be a non-empty string", retryable=False)
 
     if "count" in arguments:
         raw_count = arguments.get("count")
         if not isinstance(raw_count, int) or isinstance(raw_count, bool):
-            return tool_failure("validation_error", "count must be an integer")
+            return tool_failure("validation_error", "count must be an integer", retryable=False)
         if raw_count < _MIN_COUNT or raw_count > _MAX_COUNT:
             return tool_failure(
                 "validation_error",
                 f"count must be between {_MIN_COUNT} and {_MAX_COUNT}",
+                retryable=False,
             )
     else:
         raw_count = _DEFAULT_COUNT
@@ -600,28 +621,32 @@ async def web_search_handler(
     freshness = _normalize_text(arguments.get("freshness")).lower()
     date_after, after_error = _normalize_date(arguments.get("date_after"), "date_after")
     if after_error is not None:
-        return tool_failure("validation_error", after_error)
+        return tool_failure("validation_error", after_error, retryable=False)
 
     date_before, before_error = _normalize_date(arguments.get("date_before"), "date_before")
     if before_error is not None:
-        return tool_failure("validation_error", before_error)
+        return tool_failure("validation_error", before_error, retryable=False)
 
     if date_after and date_before and date_after > date_before:
-        return tool_failure("validation_error", "date_after must be on or before date_before")
+        return tool_failure(
+            "validation_error", "date_after must be on or before date_before", retryable=False
+        )
 
     _, _, filter_error = _build_brave_filters(freshness, date_after, date_before)
     if filter_error is not None:
-        return tool_failure("validation_error", filter_error)
+        return tool_failure("validation_error", filter_error, retryable=False)
 
     settings, settings_error = _resolve_web_search_settings(settings_resolver)
     if settings_error is not None:
-        return tool_failure("configuration_error", settings_error)
+        return tool_failure("configuration_error", settings_error, retryable=False)
     if settings is None:
-        return tool_failure("configuration_error", "web search settings could not be resolved")
+        return tool_failure(
+            "configuration_error", "web search settings could not be resolved", retryable=False
+        )
 
     provider = settings["provider"]
     if provider == WEB_SEARCH_PROVIDER_SEARXNG:
-        payload, search_error = await _search_searxng(
+        payload, search_failure = await _search_searxng(
             base_url=settings["searxng"]["base_url"],
             query=query,
             count=count,
@@ -629,20 +654,17 @@ async def web_search_handler(
             date_after=date_after,
             date_before=date_before,
         )
-        if search_error is not None:
-            return tool_failure("provider_request_failed", search_error)
-        if payload is None:
-            return tool_failure("provider_request_failed", "web search failed")
-        return tool_success(payload)
+        return _search_result_envelope(payload, search_failure)
 
     api_key = _normalize_text(credential_resolver("BRAVE_API_KEY"))
     if not api_key:
         return tool_failure(
             "missing_api_key",
             "web_search requires BRAVE_API_KEY to be configured",
+            retryable=False,
         )
 
-    payload, search_error = await _search_brave(
+    payload, search_failure = await _search_brave(
         api_key=api_key,
         query=query,
         count=count,
@@ -650,10 +672,23 @@ async def web_search_handler(
         date_after=date_after,
         date_before=date_before,
     )
-    if search_error is not None:
-        return tool_failure("provider_request_failed", search_error)
+    return _search_result_envelope(payload, search_failure)
+
+
+def _search_result_envelope(
+    payload: dict[str, Any] | None,
+    failure: HttpRequestFailure | None,
+) -> JsonObject:
+    """Map a provider search outcome onto the stable tool result envelope."""
+    if failure is not None:
+        return tool_failure(
+            "provider_request_failed",
+            failure.message,
+            retryable=failure.retryable,
+            attempts_made=failure.attempts_made,
+        )
     if payload is None:
-        return tool_failure("provider_request_failed", "web search failed")
+        return tool_failure("provider_request_failed", "web search failed", retryable=False)
     return tool_success(payload)
 
 

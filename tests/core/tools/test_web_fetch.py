@@ -253,6 +253,91 @@ async def test_web_fetch_handler_retries_retryable_statuses(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/always-busy"
+
+    async def no_retry_sleep(attempt: int) -> None:
+        del attempt
+
+    monkeypatch.setattr(web_fetch_module, "_sleep_for_retry", no_retry_sleep)
+
+    calls = 0
+
+    def mock_busy(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503, request=request, text="busy")
+
+    respx.get(url).mock(side_effect=mock_busy)
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    error = assert_failure_envelope(result, "request_error")
+    assert error["retryable"] is True
+    assert error["attempts_made"] == web_fetch_module._RETRY_MAX_RETRIES + 1
+    # All attempts were spent before the tool gave up.
+    assert calls == web_fetch_module._RETRY_MAX_RETRIES + 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_fetch_handler_non_retryable_status_signals_not_retryable(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/not-found"
+
+    respx.get(url).mock(return_value=httpx.Response(404, text="missing"))
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    error = assert_failure_envelope(result, "request_error")
+    assert error["retryable"] is False
+    assert "attempts_made" not in error
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_fetch_handler_transport_error_signals_retryable_single_attempt(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/network-fail"
+
+    def mock_connect_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    respx.get(url).mock(side_effect=mock_connect_error)
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    error = assert_failure_envelope(result, "request_error")
+    # web_fetch does not loop on transport errors, so it tried exactly once.
+    assert error["retryable"] is True
+    assert error["attempts_made"] == 1
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_validation_error_signals_not_retryable(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = await web_fetch_handler(make_context(workspace), {"url": "ftp://example.com"})
+
+    error = assert_failure_envelope(result, "validation_error")
+    assert error["retryable"] is False
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_web_fetch_handler_html_extraction(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
