@@ -242,8 +242,9 @@ def classify_http_status(
         ProviderAuthError: 401 / 403 (not retryable).
         ProviderRateLimitError: 429 (retryable).
         ProviderError: Other 4xx/5xx. Retryability follows the shared
-            ``is_retryable_status`` policy for a non-idempotent request (all
-            provider HTTP is POST), plus any ``extra_retryable`` codes.
+            ``is_retryable_status`` policy for a non-idempotent request (the
+            method-agnostic 429/502/503/504 set, plus any ``extra_retryable``
+            codes; 500 is not retried).
     """
     if not detail:
         detail = str(status_code)
@@ -258,7 +259,9 @@ def classify_http_status(
         rate_limit_error.retry_after = retry_after
         raise rate_limit_error
     if status_code >= 400:
-        # All provider HTTP requests are non-idempotent POSTs.
+        # The method-agnostic retryable set applies to every call site; discovery
+        # GETs and provider POSTs both treat 500 as fatal (not idempotency-gated
+        # here) to keep one shared policy.
         retryable = is_retryable_status(status_code, idempotent=False, extra=extra_retryable)
         provider_error = ProviderError(f"Provider error: {detail}", retryable=retryable)
         if retryable:
