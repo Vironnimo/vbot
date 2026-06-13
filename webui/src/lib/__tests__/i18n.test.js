@@ -264,6 +264,11 @@ describe('i18n t()', () => {
       'settings.appearance.subtitle',
       'settings.appearance.language',
       'settings.appearance.languageDescription',
+      'settings.appearance.chatWidth.label',
+      'settings.appearance.chatWidth.description',
+      'settings.appearance.chatWidth.comfortable',
+      'settings.appearance.chatWidth.wide',
+      'settings.appearance.chatWidth.full',
       'settings.appearance.saveSuccess',
       'settings.language.en',
     ];

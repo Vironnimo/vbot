@@ -658,10 +658,16 @@ export const englishCatalog = Object.freeze({
   'settings.extensions.restartRequired':
     'Extension changes apply after a restart.',
   'settings.appearance.title': 'Appearance',
-  'settings.appearance.subtitle': 'Language preference.',
+  'settings.appearance.subtitle': 'Language and chat reading width.',
   'settings.appearance.language': 'Language',
   'settings.appearance.languageDescription': 'Interface language.',
-  'settings.appearance.saveSuccess': 'Language preference updated.',
+  'settings.appearance.chatWidth.label': 'Chat width',
+  'settings.appearance.chatWidth.description':
+    'Reading width of the chat column on wide screens.',
+  'settings.appearance.chatWidth.comfortable': 'Comfortable',
+  'settings.appearance.chatWidth.wide': 'Wide',
+  'settings.appearance.chatWidth.full': 'Full width',
+  'settings.appearance.saveSuccess': 'Appearance updated.',
   'settings.language.en': 'English',
 
   'logs.title': 'Logs',
