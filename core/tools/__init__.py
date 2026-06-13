@@ -74,7 +74,7 @@ from core.tools.read import (
     READ_TOOL_DESCRIPTION,
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
-    read_handler,
+    make_read_handler,
     register_read_tool,
 )
 from core.tools.session_search import (
@@ -244,7 +244,7 @@ __all__ = [
     "make_skill_handler",
     "make_text_to_speech_handler",
     "make_image_generation_handler",
-    "read_handler",
+    "make_read_handler",
     "make_session_search_handler",
     "register_edit_tool",
     "register_glob_tool",

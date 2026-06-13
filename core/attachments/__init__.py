@@ -7,6 +7,7 @@ from core.attachments.attachments import (
     AttachmentStore,
     AttachmentTooLargeError,
     AttachmentTypeNotAllowedError,
+    sniff_media_type,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "AttachmentStore",
     "AttachmentTooLargeError",
     "AttachmentTypeNotAllowedError",
+    "sniff_media_type",
 ]
