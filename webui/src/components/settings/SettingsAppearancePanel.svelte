@@ -4,11 +4,14 @@
   import Dropdown from '../Dropdown.svelte';
   import { rpc } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
+  import { setChatWidth } from '$lib/appearancePrefs.svelte.js';
   import {
+    buildChatWidthOptions,
     buildLanguageOptions,
-    createLanguageUpdatePayload,
+    createAppearanceUpdatePayload,
+    getPersistedChatWidth,
     getPersistedLanguageId,
-    isLanguageSaveDisabled,
+    isAppearanceSaveDisabled,
   } from '$lib/settingsView.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -26,6 +29,9 @@
   let selectedLanguageId = $state(
     untrack(() => settings?.appearance?.language ?? 'en'),
   );
+  let selectedChatWidth = $state(
+    untrack(() => getPersistedChatWidth(settings)),
+  );
   let saving = $state(false);
   let autoSaveTimer = null;
 
@@ -38,13 +44,22 @@
       label: t(language.labelKey, language.labelFallback),
     })),
   );
+  let chatWidthDropdownOptions = $derived(
+    buildChatWidthOptions().map((option) => ({
+      value: option.id,
+      label: t(option.labelKey, option.labelFallback),
+    })),
+  );
   let persistedLanguageId = $derived(getPersistedLanguageId(settings));
+  let persistedChatWidth = $derived(getPersistedChatWidth(settings));
   let saveDisabled = $derived(
-    isLanguageSaveDisabled({
+    isAppearanceSaveDisabled({
       loading: false,
       saving,
       selectedLanguageId,
+      selectedChatWidth,
       persistedLanguageId,
+      persistedChatWidth,
     }),
   );
 
@@ -55,7 +70,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveLanguage();
+      void saveAppearance();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -79,7 +94,12 @@
     onError('');
   }
 
-  function handleManualLanguageSave() {
+  function handleChatWidthChange(value) {
+    selectedChatWidth = value;
+    onError('');
+  }
+
+  function handleManualSave() {
     if (saving) {
       return;
     }
@@ -93,10 +113,10 @@
     }
 
     clearAutoSaveTimer();
-    void saveLanguage();
+    void saveAppearance();
   }
 
-  async function saveLanguage() {
+  async function saveAppearance() {
     if (saveDisabled) {
       return;
     }
@@ -107,15 +127,18 @@
     try {
       const nextSettings = await rpc(
         'settings.update',
-        createLanguageUpdatePayload(selectedLanguageId),
+        createAppearanceUpdatePayload({
+          language: selectedLanguageId,
+          chatWidth: selectedChatWidth,
+        }),
       );
       onCommit(nextSettings);
       init(selectedLanguageId);
+      // Update the app-wide prefs store so the open chat reflows live (no
+      // reload), since chat width has no runtime reload hook.
+      setChatWidth(selectedChatWidth);
       onToast({
-        title: t(
-          'settings.appearance.saveSuccess',
-          'Language preference updated.',
-        ),
+        title: t('settings.appearance.saveSuccess', 'Appearance updated.'),
         variant: 'success',
       });
     } catch (error) {
@@ -151,11 +174,37 @@
   </div>
 </div>
 
+<div class="s-row">
+  <div class="s-row-info">
+    <div class="s-row-label">
+      {t('settings.appearance.chatWidth.label', 'Chat width')}
+    </div>
+    <div class="s-row-desc">
+      {t(
+        'settings.appearance.chatWidth.description',
+        'Reading width of the chat column on wide screens.',
+      )}
+    </div>
+  </div>
+  <div class="s-row-control s-row-control--appearance">
+    <Dropdown
+      id="settings-appearance-chat-width"
+      value={selectedChatWidth}
+      options={chatWidthDropdownOptions}
+      ariaLabel={t('settings.appearance.chatWidth.label', 'Chat width')}
+      disabled={saving}
+      triggerClass="settings-view__dropdown"
+      listClass="settings-view__thinking-list"
+      onValueChange={handleChatWidthChange}
+    />
+  </div>
+</div>
+
 <div class="s-footer">
   <button
     class="btn-primary s-save-button s-save-button--inline"
     type="button"
-    onclick={handleManualLanguageSave}
+    onclick={handleManualSave}
   >
     {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
   </button>
