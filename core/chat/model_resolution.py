@@ -5,10 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatError
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.providers.providers import ProviderRegistry
     from core.runtime.interfaces import RuntimeServices
+
+_LOGGER = get_logger("chat")
 
 
 def parse_bare_model(model: str) -> str:
@@ -49,11 +52,23 @@ def _split_agent_model(model: str) -> tuple[str, str]:
 
 
 def _model_input_modalities(runtime: RuntimeServices, agent: Any) -> frozenset[str]:
-    """Return the agent model's input modalities, empty when the model is unknown."""
+    """Return the agent model's input modalities, empty when the model is unknown.
+
+    Degrading to an empty set silently drops image/audio attachments, so the
+    expected lookup failures (malformed agent model -> ``ChatError``; unknown
+    model -> ``KeyError``) are logged at ``warning`` with the model id to make
+    the degrade visible.
+    """
     try:
         provider_id, model_id = _split_agent_model(agent.model)
         model = runtime.models.get(provider_id, model_id)
-    except Exception:
+    except (ChatError, KeyError) as error:
+        _LOGGER.warning(
+            "Could not resolve input modalities for model %r; "
+            "treating model as having no input modalities: %s",
+            getattr(agent, "model", None),
+            error,
+        )
         return frozenset()
 
     capabilities = getattr(model, "capabilities", None)

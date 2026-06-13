@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from core.utils.errors import VBotError
+from core.utils.logging import get_logger
+
+_LOGGER = get_logger("tools.process_manager")
 
 PROCESS_BUFFER_CAP_BYTES = 500 * 1024
 FINISHED_SESSION_TTL = timedelta(minutes=30)
@@ -204,13 +207,28 @@ class ProcessManager:
             self._read_stream(session, "stdout"),
             name=f"process:{session_id}:stdout",
         )
+        session.stdout_task.add_done_callback(
+            lambda task: _log_background_task_result(
+                task, f"Process stdout reader failed for session={session_id}"
+            )
+        )
         session.stderr_task = asyncio.create_task(
             self._read_stream(session, "stderr"),
             name=f"process:{session_id}:stderr",
         )
+        session.stderr_task.add_done_callback(
+            lambda task: _log_background_task_result(
+                task, f"Process stderr reader failed for session={session_id}"
+            )
+        )
         session.wait_task = asyncio.create_task(
             self._watch_process(session),
             name=f"process:{session_id}:wait",
+        )
+        session.wait_task.add_done_callback(
+            lambda task: _log_background_task_result(
+                task, f"Process completion watcher failed for session={session_id}"
+            )
         )
         return session_id
 
@@ -515,8 +533,12 @@ class ProcessManager:
                 )
                 if completed.returncode == 0:
                     return
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+            except (OSError, subprocess.TimeoutExpired) as error:
+                _LOGGER.warning(
+                    "taskkill failed for pid=%s, falling back to direct kill: %s",
+                    proc.pid,
+                    error,
+                )
 
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
@@ -550,8 +572,12 @@ class ProcessManager:
         try:
             if stdin.can_write_eof():
                 stdin.write_eof()
-        except (BrokenPipeError, ConnectionResetError, RuntimeError):
-            pass
+        except (BrokenPipeError, ConnectionResetError, RuntimeError) as error:
+            _LOGGER.warning(
+                "Process stdin EOF write failed for session=%s: %s",
+                session.session_id,
+                error,
+            )
         with contextlib.suppress(BrokenPipeError, ConnectionResetError, RuntimeError):
             stdin.close()
         session.stdin_open = False
@@ -577,6 +603,21 @@ class ProcessManager:
                 await self.sweep_finished()
         except asyncio.CancelledError:
             return
+
+
+def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
+    """Log an unexpected exception raised by a tracked background task."""
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is None:
+        return
+    _LOGGER.error(
+        "%s: %s",
+        message,
+        error,
+        exc_info=(type(error), error, error.__traceback__),
+    )
 
 
 def _chunks_between(

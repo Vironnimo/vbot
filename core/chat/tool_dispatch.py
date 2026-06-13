@@ -204,6 +204,11 @@ class _EmittingToolRegistry(ToolRegistry):
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error))
         except Exception as error:
+            # The branches above are expected tool/input failures (the normal
+            # tool contract); this catch-all is an unexpected crash inside the
+            # handler. The crash is converted to a result and the run usually
+            # continues, so Run.mark_failed never sees it — log it here.
+            _LOGGER.error("Tool %s crashed unexpectedly", context.tool_name, exc_info=error)
             return tool_failure("tool_execution_error", str(error))
 
     async def _dispatch_with_current_registry_signature(

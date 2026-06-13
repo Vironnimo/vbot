@@ -21,6 +21,9 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.logging import get_logger
+
+_LOGGER = get_logger("tools.web_fetch")
 
 _MAX_URL_BYTES = 100 * 1024
 _RESPONSE_TRUNCATED_MARKER = "\n\n[... response truncated ...]"
@@ -810,8 +813,10 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
         return tool_failure("validation_error", str(error))
     except httpx.HTTPStatusError as error:
         status = error.response.status_code if error.response is not None else "unknown"
+        _LOGGER.warning("web_fetch request failed: HTTP %s for %s", status, url)
         return tool_failure("request_error", f"HTTP {status} while fetching URL: {url}")
     except httpx.RequestError as error:
+        _LOGGER.warning("web_fetch request failed for %s: %s", url, error)
         return tool_failure("request_error", f"request failed while fetching URL: {error}")
 
     raw_body = response.text
