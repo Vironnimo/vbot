@@ -423,7 +423,7 @@ class StubStorage:
     def __init__(self, tmp_path: Path) -> None:
         self.data_dir = tmp_path
         self.prompts_dir = tmp_path / "prompts"
-        self._appearance = {"language": "en"}
+        self._appearance = {"language": "en", "chat_width": "comfortable"}
         self._skill_directories: list[str] = []
         self._settings: JsonObject = {}
         self._credentials: dict[str, str] = {}
@@ -443,7 +443,7 @@ class StubStorage:
         return ["en"]
 
     def update_appearance_settings(self, appearance: JsonObject) -> JsonObject:
-        unsupported_fields = sorted(set(appearance) - {"language"})
+        unsupported_fields = sorted(set(appearance) - {"language", "chat_width"})
         if unsupported_fields:
             raise StorageError(f"unsupported appearance settings: {', '.join(unsupported_fields)}")
         language = appearance.get("language")
@@ -451,7 +451,10 @@ class StubStorage:
             raise StorageError("Appearance language must be a non-empty string")
         if language != "en":
             raise StorageError(f"Unsupported appearance language: {language}")
-        self._appearance = {"language": language}
+        chat_width = appearance.get("chat_width")
+        if chat_width not in {"comfortable", "wide", "full"}:
+            chat_width = "comfortable"
+        self._appearance = {"language": language, "chat_width": chat_width}
         return dict(self._appearance)
 
     def load_skill_directory_settings(self) -> list[str]:
@@ -1262,7 +1265,11 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             ],
             "custom_endpoints": {"supported": False, "items": []},
         },
-        "appearance": {"language": "en", "available_languages": ["en"]},
+        "appearance": {
+            "language": "en",
+            "available_languages": ["en"],
+            "chat_width": "comfortable",
+        },
         "defaults": {},
         "subagents": {
             "max_subagent_depth": 4,
@@ -2930,8 +2937,15 @@ async def test_settings_update_persists_supported_language_and_returns_full_payl
     )
 
     assert response["ok"] is True
-    assert state.runtime.storage.load_appearance_settings() == {"language": "en"}
-    assert response["result"]["appearance"] == {"language": "en", "available_languages": ["en"]}
+    assert state.runtime.storage.load_appearance_settings() == {
+        "language": "en",
+        "chat_width": "comfortable",
+    }
+    assert response["result"]["appearance"] == {
+        "language": "en",
+        "available_languages": ["en"],
+        "chat_width": "comfortable",
+    }
     assert response["result"]["general"]["server"] == {
         "listen_host": "127.0.0.1",
         "listen_port": 8500,

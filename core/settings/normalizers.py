@@ -22,8 +22,10 @@ from core.search_config import (
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     ALLOWED_THINKING_EFFORTS,
+    DEFAULT_APPEARANCE_CHAT_WIDTH,
     MAX_TEMPERATURE,
     MIN_TEMPERATURE,
+    SUPPORTED_APPEARANCE_CHAT_WIDTHS,
 )
 from core.utils.errors import StorageError
 
@@ -52,15 +54,28 @@ COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
 def normalize_appearance_settings(appearance: Any) -> dict[str, str]:
     """Return the normalized Appearance settings subset."""
 
-    return {"language": _normalize_appearance_language(appearance)}
-
-
-def _normalize_appearance_language(appearance: Any) -> str:
     section = _coerce_appearance_section(appearance)
+    return {
+        "language": _normalize_appearance_language(section),
+        "chat_width": _normalize_appearance_chat_width(section),
+    }
+
+
+def _normalize_appearance_language(section: Mapping[str, Any]) -> str:
     value = section.get("language")
     if value is None:
         return DEFAULT_APPEARANCE_LANGUAGE
     return _validate_appearance_language(value)
+
+
+def _normalize_appearance_chat_width(section: Mapping[str, Any]) -> str:
+    # Unlike language, an unknown chat_width is a display-only preference, so a
+    # missing or invalid value normalizes to the comfortable default rather than
+    # raising. Public updates are still rejected by the settings parser.
+    value = section.get("chat_width")
+    if value not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
+        return DEFAULT_APPEARANCE_CHAT_WIDTH
+    return cast(str, value)
 
 
 def _coerce_appearance_section(appearance: Any) -> dict[str, Any]:
