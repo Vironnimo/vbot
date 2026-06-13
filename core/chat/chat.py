@@ -108,6 +108,7 @@ from core.chat.model_resolution import (
 from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
     StreamingAccumulator,
+    StreamingChunkTimeoutError,
     iter_with_chunk_timeout,
 )
 from core.chat.tool_dispatch import (
@@ -1124,7 +1125,7 @@ class ChatLoop:
             if accumulator.finish_reason is None:
                 raise NetworkError("Provider stream ended without finish delta")
             assistant_fields = accumulator.finalize_assistant_fields()
-        except (ProviderError, NetworkError) as exc:
+        except (ProviderError, NetworkError, StreamingChunkTimeoutError) as exc:
             if not emitted_visible_delta and _is_streaming_fallback_error(exc):
                 assistant_message = await self._send_non_streaming_assistant_request(
                     agent,
@@ -1135,6 +1136,9 @@ class ChatLoop:
                 )
                 _emit_assistant_events(run, assistant_message)
                 return assistant_message
+            # A chunk stall before any visible output is the not-yet-visible
+            # analogue of the transient-drop restart: replay the whole stream.
+            # Once visible output exists, this falls through and re-raises.
             if can_restart and not emitted_visible_delta and _is_stream_restartable_error(exc):
                 raise _StreamRestartNeeded(exc) from exc
             _maybe_persist_partial_thinking(accumulator, note_hook)
