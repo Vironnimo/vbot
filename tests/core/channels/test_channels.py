@@ -677,6 +677,51 @@ async def test_channel_service_send_raises_for_inactive_channel(tmp_path: Path) 
         await service.send("tg-assistant", "hello", "12345")
 
 
+@pytest.mark.asyncio
+async def test_await_adapter_shutdown_logs_real_exception_at_error(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # By the time the stop task awaits the adapter task it was already popped from
+    # _adapter_tasks, so its own done-callback returns early without logging. A real
+    # shutdown exception would surface nowhere unless _await_adapter_shutdown logs it.
+    service = make_service(tmp_path)
+
+    async def raise_shutdown_error() -> None:
+        raise RuntimeError("adapter shutdown blew up")
+
+    failing_task = asyncio.create_task(raise_shutdown_error())
+    await wait_until(failing_task.done)
+
+    with caplog.at_level(logging.ERROR, logger="vbot.channels"):
+        await service._await_adapter_shutdown("tg-assistant", failing_task)
+
+    error_records = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert any(
+        "shutdown raised during stop" in record.getMessage() and "tg-assistant" in record.getMessage()
+        for record in error_records
+    )
+    # The traceback must be attached so the underlying error is diagnosable.
+    assert any(record.exc_info is not None for record in error_records)
+
+
+@pytest.mark.asyncio
+async def test_await_adapter_shutdown_keeps_cancelled_silent(tmp_path: Path) -> None:
+    # Cooperative cancel cleanup is the normal path and must not be logged as an error.
+    service = make_service(tmp_path)
+
+    async def block_forever() -> None:
+        await asyncio.Future()
+
+    cancelled_task = asyncio.create_task(block_forever())
+    await asyncio.sleep(0)
+    cancelled_task.cancel()
+
+    await service._await_adapter_shutdown("tg-assistant", cancelled_task)
+
+    assert cancelled_task.cancelled()
+
+
 def test_channel_service_update_rejects_unknown_fields(tmp_path: Path) -> None:
     storage = ChannelStorage(tmp_path)
     config = make_config(enabled=False)

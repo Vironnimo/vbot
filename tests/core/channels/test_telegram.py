@@ -1771,6 +1771,38 @@ async def test_group_album_carries_sender_into_trigger_run(
 
 
 @pytest.mark.asyncio
+async def test_album_flush_failure_log_carries_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Losing a whole inbound album is not "expected"; the done-callback warning must carry
+    # the traceback so the dropped media is diagnosable beyond str(error).
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    async def raise_flush_error() -> None:
+        raise RuntimeError("album flush blew up")
+
+    failed_task = asyncio.create_task(raise_flush_error())
+    await asyncio.wait([failed_task])
+
+    with caplog.at_level(logging.WARNING, logger="vbot.channels.telegram"):
+        adapter._on_album_task_done("album-1", failed_task)
+
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert any(
+        "album flush failed" in record.getMessage() and "album-1" in record.getMessage()
+        for record in warnings
+    )
+    assert any(record.exc_info is not None for record in warnings)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_failed_run_sends_error_reply(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
