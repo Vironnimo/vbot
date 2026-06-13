@@ -106,7 +106,10 @@ def _bridge_queued_item_to_event_bus(state: Any, item: QueuedRunItem) -> None:
             return
         try:
             run = future.result()
+        except asyncio.CancelledError:
+            return
         except BaseException:
+            _LOGGER.warning("Queued run bridge failed", exc_info=True)
             return
         _bridge_run_to_event_bus(state, run)
 

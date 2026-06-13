@@ -1,9 +1,11 @@
 """Tests for the async retry utility.
 
 Verifies exponential backoff timing, jitter bounds, max-retries
-enforcement, fatal-error propagation, and first-attempt success.
+enforcement, fatal-error propagation, first-attempt success, and
+retry/exhaustion logging.
 """
 
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -205,3 +207,73 @@ async def test_retry_jitter_is_bounded():
         # So delay is in [base_delay, base_delay * (1 + JITTER_FACTOR)]
         assert delay >= base_delay
         assert delay <= base_delay * (1 + JITTER_FACTOR)
+
+
+# ----- Logging -----
+
+
+@pytest.mark.asyncio
+async def test_retry_logs_warning_on_each_retry_attempt(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Each retry is logged at WARNING with the error class and message."""
+    # Arrange
+    mock_fn = AsyncMock(side_effect=[ProviderRateLimitError("Rate limited"), "ok"])
+    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
+
+    # Act
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await retry_async(mock_fn)
+
+    # Assert
+    assert result == "ok"
+    retry_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.utils.retry" and "Retryable error" in record.getMessage()
+    ]
+    assert len(retry_records) == 1
+    message = retry_records[0].getMessage()
+    assert "ProviderRateLimitError" in message
+    assert "Rate limited" in message
+
+
+@pytest.mark.asyncio
+async def test_retry_logs_warning_when_retries_exhausted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Exhausting all retries logs a warning right before re-raising."""
+    # Arrange
+    mock_fn = AsyncMock(side_effect=ProviderRateLimitError("Rate limited"))
+    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
+
+    # Act / Assert
+    with (
+        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        pytest.raises(ProviderRateLimitError),
+    ):
+        await retry_async(mock_fn)
+
+    exhausted_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.utils.retry" and "Retries exhausted" in record.getMessage()
+    ]
+    assert len(exhausted_records) == 1
+    assert "ProviderRateLimitError" in exhausted_records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_log_on_success_path(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A first-attempt success logs nothing (hot path stays quiet)."""
+    # Arrange
+    mock_fn = AsyncMock(return_value="ok")
+    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
+
+    # Act
+    await retry_async(mock_fn)
+
+    # Assert
+    assert [record for record in caplog.records if record.name == "vbot.utils.retry"] == []

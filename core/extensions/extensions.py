@@ -461,6 +461,7 @@ class ExtensionRegistry:
                 extension_name,
                 phase,
                 exc,
+                exc_info=True,
             )
 
     async def _invoke(
@@ -488,6 +489,7 @@ class ExtensionRegistry:
                 extension_name,
                 event,
                 exc,
+                exc_info=True,
             )
             return _HANDLER_FAILED
 
@@ -695,7 +697,7 @@ def _register_extension(
         try:
             manifest = _load_manifest(discovered.root_path)
         except _ManifestError as exc:
-            _LOGGER.error("Extension %r manifest invalid: %s", name, exc)
+            _LOGGER.error("Extension %r manifest invalid: %s", name, exc, exc_info=True)
             return _failed_record(discovered, str(exc))
         if (
             manifest is not None
@@ -712,7 +714,13 @@ def _register_extension(
     try:
         module = _import_extension_module(name, discovered.entry_path)
     except Exception as exc:
-        _LOGGER.error("Failed to load extension %r from %s: %s", name, discovered.entry_path, exc)
+        _LOGGER.error(
+            "Failed to load extension %r from %s: %s",
+            name,
+            discovered.entry_path,
+            exc,
+            exc_info=True,
+        )
         return _failed_record(discovered, f"import failed: {exc}", manifest=manifest)
 
     record = ExtensionRecord(
@@ -736,7 +744,7 @@ def _register_extension(
     try:
         result = register_fn(api)
     except Exception as exc:
-        _LOGGER.error("Extension %r register() raised: %s", name, exc)
+        _LOGGER.error("Extension %r register() raised: %s", name, exc, exc_info=True)
         record.status = "failed"
         record.error = f"register() raised: {exc}"
         return record
@@ -768,7 +776,9 @@ def _await_pending_registers(pending: list[tuple[ExtensionRecord, Any]]) -> None
         try:
             _run_coroutine_to_completion(coro)
         except Exception as exc:
-            _LOGGER.error("Extension %r async register() raised: %s", record.name, exc)
+            _LOGGER.error(
+                "Extension %r async register() raised: %s", record.name, exc, exc_info=True
+            )
             record.status = "failed"
             record.error = f"async register() raised: {exc}"
 
