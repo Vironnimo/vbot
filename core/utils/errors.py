@@ -35,7 +35,15 @@ class ProviderError(VBotError):
 
     Subclasses like ``ProviderAuthError`` hard-code ``retryable`` to a fixed
     value; callers should not override it.
+
+    ``retry_after`` carries the server-requested minimum wait before the next
+    attempt, in seconds, when the response included a ``Retry-After`` (or
+    ``retry-after-ms``) header on a retryable status. ``None`` means the
+    response gave no such hint. ``retry_async`` honors it as a floor over its
+    own exponential backoff.
     """
+
+    retry_after: float | None = None
 
     def __init__(self, message: str = "", retryable: bool = False) -> None:
         super().__init__(message)
