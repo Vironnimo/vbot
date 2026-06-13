@@ -741,7 +741,14 @@ class ChannelService:
         except asyncio.CancelledError:
             pass
         except Exception:
-            pass
+            # The task was already popped from _adapter_tasks before this runs, so its own
+            # done-callback returns early without logging: log the shutdown failure here or
+            # it surfaces nowhere.
+            _LOGGER.error(
+                "Channel adapter shutdown raised during stop (channel=%s)",
+                channel_id,
+                exc_info=True,
+            )
 
         if self._adapter_stop_tasks.get(channel_id) is asyncio.current_task():
             self._adapter_stop_tasks.pop(channel_id, None)
