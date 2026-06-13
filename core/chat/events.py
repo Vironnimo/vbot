@@ -43,9 +43,6 @@ from core.runs import (
 )
 from core.sessions import PARTIAL_THINKING_NOTE_PREFIX, ChatSession
 from core.utils.errors import ConfigError, ProviderError, VBotError
-from core.utils.logging import get_logger
-
-_LOGGER = get_logger("chat")
 
 
 async def _close_adapter(adapter: Any) -> None:
@@ -144,17 +141,13 @@ def _exception_to_error_kind(exc: Exception) -> str:
 
 
 def _persist_run_error(run: Run, session: ChatSession, exc: Exception) -> None:
+    # Persists the user-visible error message only. The failure itself is logged
+    # centrally by Run.mark_failed once the re-raised exception reaches the run
+    # executor, so logging here would duplicate that entry.
     kind = _exception_to_error_kind(exc)
     error_message = ChatMessage.error(error_kind=kind, content=str(exc))
     session.append(error_message)
     _emit_message_event(run, ERROR_MESSAGE_PERSISTED_EVENT, error_message)
-    _LOGGER.error(
-        "Persisted run error for agent=%s session=%s kind=%s: %s",
-        run.agent_id,
-        run.session_id,
-        kind,
-        exc,
-    )
 
 
 def _timing_payload(started_at: datetime, started_perf: float) -> JsonObject:
