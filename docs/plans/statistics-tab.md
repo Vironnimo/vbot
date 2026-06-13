@@ -2,6 +2,23 @@
 
 **Goal:** A new `Statistics` WebUI tab with four sub-views — Overview, Usage (Provider/Model), Runs & Errors, Tools — computed entirely on demand from the data already persisted in session JSONL files, with no new backend storage.
 
+> This plan is written to be executed by a fresh session with no prior context. Everything needed is below.
+
+## Orientation (read first)
+
+vBot is a local-first agent harness: one async Python kernel (`core/`) behind a FastAPI server (`server/`), a Svelte WebUI (`webui/`, JavaScript — **no TypeScript**), a pywebview desktop shell, and a CLI. Communication is `POST /api/rpc` (method dispatch) + `/ws` + SSE.
+
+Mandatory project reads before coding (project rule): `.vorch/PROJECT.md` (architecture, conventions, specs index, dev/test commands) and `.vorch/GLOSSARY.md` (terms). For each domain you touch, read its spec under `.vorch/specs/` — the `read:` field on every task below lists the relevant ones. Work directly on `main`; commit per logical unit with conventional-commit messages; run the quality gates before committing.
+
+Conventions that bind this work: constructor dependency injection via `__init__` with `typing.Protocol` interfaces (no globals/service-locator); UTC ISO-8601 timestamps persisted, UI renders in user timezone; structured logging via `LogManager` (`vbot.<domain>` loggers, no `print`); **no legacy/migration branches** (read current format only); every user-visible WebUI string goes through `t(...)` in `webui/src/lib/i18n.js`.
+
+Quality gates (must be green before commit):
+```bash
+python scripts/quality.py [paths...]            # backend: format → lint → type-check → test
+python scripts/quality-frontend.py [paths...]   # frontend: + build
+```
+Run the app for live verification (see `.vorch/PROJECT.md` → Run, and `.vorch/TESTER.md` for live-testing): `python server/main.py` then open the WebUI; the desktop shell is `python desktop/main.py`.
+
 **Context:**
 
 vBot now generates a lot of data and the user wants a Statistics tab. Hard constraint from the user: **everything must be derivable from currently persisted data — no new backend storage to feed statistics** (a disposable rebuildable cache may come later, explicitly out of scope here).
@@ -43,6 +60,21 @@ Not derivable from persisted data (kept OUT of scope, see Scope):
 - **Time series granularity = day.** Core returns daily buckets keyed by the user-timezone-independent UTC date; week/month rollups and locale rendering happen in the frontend (`activeLocaleTag()` per the webui conventions).
 - **Real vs estimated tokens never merged.** Report carries `input_tokens`/`output_tokens` split into measured vs estimated, plus the count of estimated assistant turns, so the UI can badge them.
 - **No new runtime persistence schema, no legacy/migration branches** (per PROJECT.md conventions). Validation of the RPC param goes through the existing server validation patterns.
+- **Charts are hand-rolled SVG — no charting dependency** (decided with the user). The visuals are small (status donut + daily bars/sparkline); build them as inline SVG with project styling. Do not add a chart library.
+
+### Concrete interfaces & wiring (verified against the code)
+
+Use these exact entry points — they have been checked, do not re-derive or guess names:
+
+- **Runtime services** (`core/runtime/runtime.py`, public properties): `runtime.agents -> AgentStore`, `runtime.chat_sessions -> ChatSessionManager`, `runtime.storage.data_dir -> Path`.
+- **Agent listing:** `AgentStore.list() -> list[Agent]` (sorted by id); each `Agent` has `.id`. This is the agent-id source for the scan. The `StatisticsService` should depend on a minimal `Protocol` (e.g. `agent_ids()` or accepting the `AgentStore`), wired from `runtime.agents`.
+- **Sessions** (`core/sessions/`): `ChatSessionManager.list_with_metadata(agent_id) -> list[summary]` where each summary has `id`, `created_at`, `last_active_at` plus sidecar fields (derived cheaply from bookend timestamps — use it for created/last-active). `ChatSessionManager.get(agent_id, session_id).load() -> list[ChatMessage]` returns validated canonical messages in append order. Never construct `.jsonl` paths directly.
+- **Message model** (`core/chat/messages.py`): `ChatMessage` dataclass with the fields listed in Context. `to_dict()` gives the JSON shape if you need it.
+- **`usage` dict fields:** `input_tokens`, `output_tokens` (always present), optional `cache_read_tokens` / `cache_write_tokens`, and `estimated: true` when token counts were estimated rather than provider-reported. **Caveat:** canonical `input_tokens` already includes cached tokens — do NOT add cache fields on top of `input_tokens` (it would double-count). Track cache tokens only as a separate informational figure if shown at all.
+- **Model parsing** (`core/chat/model_resolution.py`): `parse_bare_model(model)` strips the optional `::<connection>[:<account>]` suffix. Provider = the segment before the first `/` of the bare model (e.g. `openrouter/anthropic/claude-sonnet-4` → provider `openrouter`).
+- **Tool result envelope** (`core/tools/tools.py`): every tool message `content` is JSON `{ok: bool, error: {code, message} | null, data, artifacts}`. There is an envelope validator in that module — reuse it; `ok: false` → failure and `error.code` is the failure category.
+- **RPC handler shape** (`server/rpc/operations_methods.py` is the closest sibling pattern): a handler is `def _handler(state: Any, params: JsonObject) -> JsonObject` (may be `async def`); it reads services off `state.runtime.<service>`; lazily build/cache a service on `state` exactly as `_log_viewer(state)` does for `LogViewer`. A methods module exposes `method_handlers() -> dict[str, RpcMethodHandler]`. Register the module by adding it to the import group **and** the registry tuple in `server/rpc/methods.py:build_method_handlers()`.
+- **WebUI transport** (`webui/src/lib/api.js`): call `rpc('statistics.report', params)`; transport errors normalize to `ApiClientError`. **Nav registration** lives in `webui/src/App.svelte` — add a `NAVIGATION_ITEMS` entry `{ id, labelKey, labelFallback }`, import the view, and add an `{:else if activeViewId === 'statistics'}` branch (mirror the existing `logs` wiring). Locale via `activeLocaleTag()` from `i18n.js` for all `Intl`/`toLocaleString` calls.
 
 ### Milestones
 
@@ -98,7 +130,7 @@ Read for all tasks: [.vorch/specs/webui.md], [.vorch/DESIGN.md].
 - Pure display/formatting helpers ⚡ *parallel with the component task* — files: [webui/src/lib/statisticsView.js, webui/src/lib/__tests__/statisticsView.test.js]
   - Number/token/percent/duration formatting (locale via `activeLocaleTag()`), measured-vs-estimated token split rendering, daily→week/month rollup, provider→model grouping for the Usage table, top-N selection, percentile labels. Keep all non-trivial logic here (unit-testable), components stay display-only.
 - `StatisticsView.svelte` — files: [webui/src/components/StatisticsView.svelte, webui/src/components/__tests__/StatisticsView.test.js]
-  - Loads `statistics.report` once on mount (and a manual refresh control), holds the active sub-view in local state, renders Overview / Usage / Runs & Errors / Tools. Visuals (status donut, daily bars/sparkline) are hand-rolled minimal SVG — no charting dependency (see open decision). All strings via `t(...)`. Estimated tokens carry a visible "~ estimated" badge. No raw tool arguments rendered.
+  - Loads `statistics.report` once on mount (and a manual refresh control), holds the active sub-view in local state, renders Overview / Usage / Runs & Errors / Tools. Visuals (status donut, daily bars/sparkline) are hand-rolled inline SVG — **no charting dependency** (decided). All strings via `t(...)`. Estimated tokens carry a visible "~ estimated" badge. No raw tool arguments rendered.
 - Wire navigation + transport — files: [webui/src/App.svelte, webui/src/lib/api.js]
   - Add the `{ id: 'statistics', labelKey: 'navigation.statistics', labelFallback: 'Statistics' }` nav item, import + route `StatisticsView`. Optional thin `api.js` wrapper only if it improves ergonomics; otherwise call `rpc('statistics.report', …)` directly. **Both shared files — sequential, do after the two tasks above.**
 - i18n — files: [webui/src/lib/i18n.js, webui/src/lib/__tests__/i18n.test.js (or the existing i18n test path)]
@@ -118,10 +150,6 @@ Read for all tasks: [.vorch/specs/webui.md], [.vorch/DESIGN.md].
 
 **Dependencies:** Phases 1-2 (so the documented contract is real).
 **Done when:** the spec exists, follows spec-workflow rules, and PROJECT.md references it.
-
-### Open Decisions
-
-- **Charts: hand-rolled SVG vs charting dependency.** Why it matters: a dependency is a lasting maintenance/footprint cost on a Pi-deployed app; hand-rolled SVG is more code but zero deps and full styling control. Options: (a) **hand-rolled minimal SVG** for the few visuals (status donut + daily bars/sparkline) — *default/recommended*; (b) a small Svelte-friendly chart lib (e.g. layercake/uplot) — only if visuals grow; (c) numbers-and-tables only, no charts in v1. Default is (a): it keeps v1 dependency-free and the visual needs are small.
 
 ### Risks & Mitigations
 
