@@ -31,6 +31,11 @@
       labelFallback: 'Logs',
     },
     {
+      id: 'statistics',
+      labelKey: 'navigation.statistics',
+      labelFallback: 'Statistics',
+    },
+    {
       id: 'debug',
       labelKey: 'navigation.debug',
       labelFallback: 'Debug',
@@ -48,6 +53,7 @@
   import DebugView from './components/DebugView.svelte';
   import LogsView from './components/LogsView.svelte';
   import SettingsView from './components/SettingsView.svelte';
+  import StatisticsView from './components/StatisticsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
   import ToastStack from './components/ToastStack.svelte';
   import {
@@ -511,6 +517,8 @@
     />
   {:else if activeViewId === 'logs'}
     <LogsView />
+  {:else if activeViewId === 'statistics'}
+    <StatisticsView />
   {:else if activeViewId === 'debug'}
     <DebugView />
   {/if}

@@ -12,6 +12,7 @@ describe('app navigation surface', () => {
       'system-prompt',
       'settings',
       'logs',
+      'statistics',
       'debug',
     ]);
   });
