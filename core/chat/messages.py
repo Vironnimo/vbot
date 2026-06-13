@@ -25,7 +25,12 @@ from core.providers.reasoning import (
     REASONING_REPLAY_NONE,
     ReasoningReplayPolicy,
 )
-from core.sessions import ChatSession, is_skill_context_note
+from core.sessions import (
+    PARTIAL_THINKING_NOTE_PREFIX,
+    ChatSession,
+    is_partial_thinking_note,
+    is_skill_context_note,
+)
 from core.tools import tool_failure
 from core.utils.tokens import estimate_message_tokens
 
@@ -599,6 +604,14 @@ def _embed_notes_into_request(
     return _repair_dangling_tool_calls(request_messages)
 
 
+def _last_assistant_index(messages: list[ChatMessage]) -> int:
+    """Return the index of the last assistant message, or -1 if none exists."""
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role == "assistant":
+            return index
+    return -1
+
+
 def _assemble_request_history(
     messages: list[ChatMessage],
     *,
@@ -609,9 +622,17 @@ def _assemble_request_history(
     pending_notes: list[ChatMessage] = []
     deferred_until_after_tools: list[ChatMessage] = []
 
-    for message in messages:
+    last_assistant_index = _last_assistant_index(messages)
+
+    for index, message in enumerate(messages):
         if message.role == "note":
             if is_skill_context_note(message):
+                continue
+            # A partial-thinking note is the only trace of an interrupted run
+            # (no assistant message is persisted for it). Embed it one-shot:
+            # only while no assistant turn follows it; once the next run
+            # produced output it is stale and skipped (it stays in JSONL).
+            if is_partial_thinking_note(message) and index < last_assistant_index:
                 continue
             pending_notes.append(message)
             continue
@@ -760,7 +781,10 @@ def _is_empty_assistant_history_message(
 
 def _system_reminder_block(message: ChatMessage) -> str:
     message.validate()
-    return f"{SYSTEM_REMINDER_OPEN_TAG}\n{message.content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
+    content = message.content
+    if isinstance(content, str) and content.startswith(PARTIAL_THINKING_NOTE_PREFIX):
+        content = content.removeprefix(PARTIAL_THINKING_NOTE_PREFIX)
+    return f"{SYSTEM_REMINDER_OPEN_TAG}\n{content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
 
 
 def _assistant_message_from_response(model: str, response: JsonObject) -> ChatMessage:
