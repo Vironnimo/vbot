@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from core.chat.content_blocks import ContentBlock
+from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.errors import ChatError, ChatSessionError, ToolIterationLimitError
 from core.chat.events import (
     _close_adapter,
@@ -149,6 +149,17 @@ def _resolve_reasoning_replay_policy(adapter: Any, model_id: str) -> ReasoningRe
     if hasattr(adapter, "reasoning_replay_policy"):
         return cast(ReasoningReplayPolicy, adapter.reasoning_replay_policy(model_id))
     return REASONING_REPLAY_CURRENT_RUN
+
+
+def _read_media_text_note(filename: str, media_type: str) -> JsonObject:
+    """Plain-text fallback when a read-media image cannot be shown to the model."""
+    return {
+        "role": "user",
+        "content": (
+            f"[Loaded media {filename} ({media_type}) from disk, but it cannot be "
+            "shown to this model directly.]"
+        ),
+    }
 
 
 class ChatLoop:
@@ -757,7 +768,7 @@ class ChatLoop:
 
             session.begin_defer_notes()
             try:
-                tool_messages = await _dispatch_tool_calls(
+                tool_messages, media_injections = await _dispatch_tool_calls(
                     self._runtime,
                     agent,
                     assistant_message.tool_calls,
@@ -768,6 +779,12 @@ class ChatLoop:
                 for tool_message in tool_messages:
                     session.append(tool_message)
                     messages.append(_message_to_request_dict(tool_message))
+                # A tool may ask to show media (e.g. read on an image): inject it
+                # as a synthetic current-turn user message after the tool results
+                # so the tool-cycle invariant (results before any non-tool message)
+                # is preserved.
+                for injection in media_injections:
+                    await self._inject_read_media(agent, session, messages, injection)
                 # Honor cancellation only after every sibling tool result has
                 # been persisted, so a mid-cycle cancel never leaves an
                 # assistant turn with dangling tool_calls in JSONL history.
@@ -787,6 +804,47 @@ class ChatLoop:
                 )
 
         raise ToolIterationLimitError("maximum tool iterations exceeded")
+
+    async def _inject_read_media(
+        self,
+        agent: Any,
+        session: ChatSession,
+        messages: list[JsonObject],
+        injection: JsonObject,
+    ) -> None:
+        """Inject a tool-loaded media file as a synthetic current-turn user message.
+
+        Only the small ``MediaBlock`` reference is persisted to the session, so a
+        later run degrades it to a path note through the once-at-start resolver
+        and context stays small. The base64-resolved request dict is appended to
+        the in-flight ``messages`` so the model sees the image this turn — the
+        resolver does not run again inside the tool loop. A non-vision model (or a
+        missing resolver) gets a plain text note instead of a hard error, so the
+        run never aborts.
+        """
+        media_type = injection["media_type"]
+        filename = injection["filename"]
+        media_block = MediaBlock(
+            type="media",
+            attachment_id=injection["attachment_id"],
+            filename=filename,
+            media_type=media_type,
+        )
+        user_message = ChatMessage.user([media_block])
+        session.append(user_message)
+
+        input_modalities = _model_input_modalities(self._runtime, agent)
+        vision_unavailable = media_type.startswith("image/") and "image" not in input_modalities
+        if self._attachment_resolver is None or vision_unavailable:
+            messages.append(_read_media_text_note(filename, media_type))
+            return
+
+        resolved = await self._attachment_resolver.resolve_messages(
+            [_message_to_request_dict(user_message)],
+            current_user_message_id=user_message.id,
+            input_modalities=input_modalities,
+        )
+        messages.append(resolved[0])
 
     async def _maybe_auto_compact(
         self,

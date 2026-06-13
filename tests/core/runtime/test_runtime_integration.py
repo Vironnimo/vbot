@@ -773,9 +773,11 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
         {
             "name": "read",
             "description": (
-                "Read the contents of a file. Output is truncated to 2000 lines or "
-                "50 KB (whichever is hit first). If offset is past EOF, returns an "
-                "explicit end-of-file notice. Use offset/limit for large files."
+                "Read a file. Text files return their contents, truncated to 2000 lines or "
+                "50 KB (whichever is hit first); use offset/limit for large files, and an "
+                "offset past EOF returns an explicit end-of-file notice. Image files are "
+                "shown to the model directly when it supports vision; audio files are "
+                "transcribed to text; video files return a path note only."
             ),
             "parameters": {
                 "type": "object",

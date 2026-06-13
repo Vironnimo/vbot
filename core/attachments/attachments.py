@@ -216,6 +216,17 @@ class AttachmentStore:
             path.unlink(missing_ok=True)
 
 
+def sniff_media_type(data: bytes, filename: str) -> str:
+    """Detect a file's MIME type from its bytes without storing it.
+
+    Public wrapper over the internal magic-bytes sniffer so callers (notably the
+    ``read`` tool) can classify a file as image/audio/video/text before deciding
+    whether to promote it to an attachment. Does not touch disk or the allowlist.
+    """
+
+    return _sniff_mime(data, filename)
+
+
 def _sniff_mime(data: bytes, filename: str) -> str:
     """Detect one allowed MIME type using a bounded magic-bytes strategy."""
 
@@ -394,4 +405,5 @@ __all__ = [
     "AttachmentStore",
     "AttachmentTooLargeError",
     "AttachmentTypeNotAllowedError",
+    "sniff_media_type",
 ]
