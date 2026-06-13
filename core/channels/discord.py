@@ -212,6 +212,17 @@ class DiscordChannelAdapter(ChannelAdapter):
     # -- Inbound handling -------------------------------------------------------------
 
     async def _handle_inbound_message(self, message: Any) -> None:
+        # discord.py runs this inside its own event loop and catches/logs any exception to
+        # the `discord` logger only, silently dropping the message. Surface failures in the
+        # vbot.channels.discord logger so inbound dispatch crashes are not invisible.
+        try:
+            await self._dispatch_inbound_message(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.error("Discord inbound dispatch failed", exc_info=True)
+
+    async def _dispatch_inbound_message(self, message: Any) -> None:
         author = getattr(message, "author", None)
         if author is None or bool(getattr(author, "bot", False)):
             return
