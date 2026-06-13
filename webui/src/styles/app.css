@@ -46,6 +46,21 @@
   --space-xl: 28px;
   --sidebar-width: 210px;
 
+  /* Content-width / reading-measure layer. Single source of truth for how wide
+     content is allowed to grow on large monitors (see DESIGN.md → Layout).
+     `--chat-measure` is the live chat reading column; it defaults to the
+     comfortable tier and is overridden per `[data-chat-width]` on `.chat-view`.
+     The `--content-max-*` tokens cap non-chat views (settings/forms vs.
+     detail/wide panels) and are not user-configurable. */
+  --chat-measure-comfortable: 780px;
+  --chat-measure-wide: 1100px;
+  --chat-measure: var(--chat-measure-comfortable);
+  --content-max-narrow: 920px;
+  --content-max-wide: 1180px;
+
+  /* Breakpoint convention (documented; CSS cannot use vars in media queries):
+     mobile ≤640 · tablet 641–960 · desktop ≥961 · wide ≥1280. */
+
   /* Stacking layers (higher = closer to the viewer). Floating UI such as
      dropdown panels is portaled to <body> and must sit above modals so a
      menu opened from inside a modal stays visible — keep `--z-floating`

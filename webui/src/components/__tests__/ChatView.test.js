@@ -108,6 +108,43 @@ describe('ChatView', () => {
     document.body.innerHTML = '';
   });
 
+  it('marks the chat view with the default comfortable chat-width', () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    expect(
+      document.querySelector('.chat-view')?.getAttribute('data-chat-width'),
+    ).toBe('comfortable');
+  });
+
+  it('reflects the chatWidth prop on the chat view for the measure cap', () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        chatWidth: 'full',
+      },
+    });
+    flushSync();
+
+    // `full` is the opt-out hook: the CSS sets `--chat-measure: none` on this
+    // attribute, removing the reading-width cap.
+    expect(
+      document.querySelector('.chat-view')?.getAttribute('data-chat-width'),
+    ).toBe('full');
+  });
+
   it('shows the combined input and output usage in the token badge', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({

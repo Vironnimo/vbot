@@ -38,6 +38,42 @@ describe('ChatTimeline', () => {
     vi.useRealTimers();
   });
 
+  it('wraps messages in a capped, centered measure column', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-measure-wrapper',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-one',
+        role: 'user',
+        content: 'Hello',
+        timestamp: '2026-05-10T09:00:00',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    // `.messages` is the full-width scroll container; `.messages__content` is
+    // the inner column capped/centered via `--chat-measure` (driven by
+    // `data-chat-width` on `.chat-view`, see ChatView). The wrapper must exist
+    // and hold the rendered messages.
+    const scrollContainer = document.querySelector('.messages');
+    const measureColumn = document.querySelector('.messages__content');
+    expect(scrollContainer).toBeTruthy();
+    expect(measureColumn).toBeTruthy();
+    expect(scrollContainer.contains(measureColumn)).toBe(true);
+    expect(measureColumn.querySelector('.msg.user')).toBeTruthy();
+  });
+
   it('does not show a date separator for a single-day history', () => {
     const sessionState = ensureSessionState(
       createChatState(),
