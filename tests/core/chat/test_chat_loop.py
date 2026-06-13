@@ -2249,7 +2249,10 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
 
     assert run.status == RunStatus.FAILED
     assert persisted_roles(messages) == ["user", "note", "error"]
-    assert messages[1].content == "Partial thinking before interruption:\nNeed to write the file."
+    assert (
+        messages[1].content
+        == "[partial-thinking] Partial thinking before interruption:\nNeed to write the file."
+    )
     assert messages[2].error_kind == "provider_error"
     assert "malformed or incomplete arguments" in (messages[2].content or "")
     assert [event.type for event in run.events][-2:] == [
@@ -2438,7 +2441,10 @@ async def test_streaming_cancellation_with_reasoning_persists_partial_thinking_n
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert persisted_roles(messages) == ["user", "note"]
-    assert messages[1].content == "Partial thinking before interruption:\nNeed network."
+    assert (
+        messages[1].content
+        == "[partial-thinking] Partial thinking before interruption:\nNeed network."
+    )
 
 
 @pytest.mark.asyncio
@@ -2462,7 +2468,10 @@ async def test_streaming_network_error_with_reasoning_persists_partial_thinking_
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert persisted_roles(messages) == ["user", "note", "error"]
-    assert messages[1].content == "Partial thinking before interruption:\nNeed network."
+    assert (
+        messages[1].content
+        == "[partial-thinking] Partial thinking before interruption:\nNeed network."
+    )
     assert messages[2].error_kind == "network_error"
 
 
