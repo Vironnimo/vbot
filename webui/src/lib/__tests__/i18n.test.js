@@ -446,6 +446,61 @@ describe('i18n t()', () => {
     expect(t('debug.expandRow')).not.toBe(t('debug.collapseRow'));
   });
 
+  it('contains Statistics tab copy for navigation, sub-views, and metrics', () => {
+    const requiredKeys = [
+      'navigation.statistics',
+      'statistics.eyebrow',
+      'statistics.title',
+      'statistics.subtitle',
+      'statistics.loading',
+      'statistics.loadError',
+      'statistics.empty',
+      'statistics.none',
+      'statistics.generatedAt',
+      'statistics.estimatedBadge',
+      'statistics.estimatedHint',
+      'statistics.derivedHint',
+      'statistics.subview.overview',
+      'statistics.subview.usage',
+      'statistics.subview.runs',
+      'statistics.subview.tools',
+      'statistics.granularity.day',
+      'statistics.granularity.week',
+      'statistics.granularity.month',
+      'statistics.status.completed',
+      'statistics.status.failed',
+      'statistics.status.cancelled',
+      'statistics.role.assistant',
+      'statistics.role.run_summary',
+      'statistics.overview.agents',
+      'statistics.overview.runs',
+      'statistics.overview.runStatus',
+      'statistics.overview.dailyTrend',
+      'statistics.usage.measuredTokens',
+      'statistics.usage.estimatedTokens',
+      'statistics.usage.providers',
+      'statistics.usage.models',
+      'statistics.runs.cancelRate',
+      'statistics.runs.failureRate',
+      'statistics.runs.fallbackRuns',
+      'statistics.runs.longest',
+      'statistics.errors.byKind',
+      'statistics.errors.byHour',
+      'statistics.tools.perTool',
+      'statistics.tools.noArgsNote',
+      'statistics.col.tokens',
+      'statistics.col.share',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(t('navigation.statistics')).toBe('Statistics');
+    expect(t('statistics.generatedAt', undefined, { time: '12:00' })).toBe(
+      'Generated 12:00',
+    );
+    expect(t('statistics.estimatedBadge')).toContain('estimated');
+    expect(t('statistics.subview.runs')).toBe('Runs & errors');
+  });
+
   it('does not expose Components showcase labels in the live catalog', () => {
     expect(englishCatalog['components.title']).toBeUndefined();
     expect(englishCatalog['components.toast.errorMessage']).toBeUndefined();

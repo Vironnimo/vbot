@@ -1,0 +1,264 @@
+// Pure display/formatting helpers for the Statistics tab. All non-trivial
+// presentation logic lives here so the Svelte component stays display-only and
+// this layer can be unit-tested in isolation. Locale-aware number formatting
+// takes the active UI locale (`activeLocaleTag()` from i18n.js) so dates and
+// numbers follow the app language, never the implicit browser locale.
+
+export const STATISTICS_SUB_VIEWS = Object.freeze([
+  'overview',
+  'usage',
+  'runs',
+  'tools',
+]);
+
+export const DAILY_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
+
+const EM_DASH = '—';
+
+function toFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+export function formatInteger(value, locale = 'en') {
+  return new Intl.NumberFormat(locale).format(
+    Math.round(toFiniteNumber(value)),
+  );
+}
+
+// Tokens are plain grouped integers today; kept distinct from formatInteger so a
+// future compact form (1.2k) only has to change here.
+export function formatTokens(value, locale = 'en') {
+  return formatInteger(value, locale);
+}
+
+export function formatPercent(ratio, { fractionDigits = 1 } = {}) {
+  if (ratio == null || !Number.isFinite(ratio)) {
+    return EM_DASH;
+  }
+  return `${(ratio * 100).toFixed(fractionDigits)}%`;
+}
+
+export function formatShare(value, total, options = {}) {
+  const numericTotal = toFiniteNumber(total);
+  if (numericTotal <= 0) {
+    return formatPercent(0, options);
+  }
+  return formatPercent(toFiniteNumber(value) / numericTotal, options);
+}
+
+export function formatDurationMs(milliseconds) {
+  if (milliseconds == null || !Number.isFinite(milliseconds)) {
+    return EM_DASH;
+  }
+  const value = Math.max(0, milliseconds);
+  if (value < 1000) {
+    return `${Math.round(value)} ms`;
+  }
+  if (value < 60000) {
+    return `${(value / 1000).toFixed(1)} s`;
+  }
+  const minutes = Math.floor(value / 60000);
+  const seconds = Math.round((value % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+export function formatDateTime(isoString, locale = 'en') {
+  const date = parseIso(isoString);
+  if (date === null) {
+    return EM_DASH;
+  }
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+export function formatDate(isoString, locale = 'en') {
+  const date = parseIso(isoString);
+  if (date === null) {
+    return EM_DASH;
+  }
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(date);
+}
+
+export function formatHourLabel(hour) {
+  const safeHour = Math.max(0, Math.min(23, Math.round(toFiniteNumber(hour))));
+  return `${String(safeHour).padStart(2, '0')}:00`;
+}
+
+function parseIso(isoString) {
+  if (typeof isoString !== 'string' || isoString.length === 0) {
+    return null;
+  }
+  const date = new Date(isoString);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// Measured and estimated tokens are NEVER merged into one authoritative number;
+// this returns both halves plus a flag so the UI can badge the estimated part.
+export function tokenSplit(record) {
+  const measured =
+    toFiniteNumber(record?.measured_input_tokens) +
+    toFiniteNumber(record?.measured_output_tokens);
+  const estimated =
+    toFiniteNumber(record?.estimated_input_tokens) +
+    toFiniteNumber(record?.estimated_output_tokens);
+  return {
+    measured,
+    estimated,
+    total: measured + estimated,
+    hasEstimated: estimated > 0,
+    hasMeasured: measured > 0,
+  };
+}
+
+export function topN(list, count) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list.slice(0, Math.max(0, count));
+}
+
+// Group the flat per-model usage list under its provider for the Usage table.
+// Returns providers sorted by combined token volume descending, each with its
+// models in the order received (the report already sorts models by volume).
+export function groupModelsByProvider(models) {
+  if (!Array.isArray(models)) {
+    return [];
+  }
+  const byProvider = new Map();
+  for (const model of models) {
+    const provider = model?.provider ?? 'unknown';
+    if (!byProvider.has(provider)) {
+      byProvider.set(provider, { provider, models: [], totalTokens: 0 });
+    }
+    const group = byProvider.get(provider);
+    group.models.push(model);
+    group.totalTokens += toFiniteNumber(model?.total_tokens);
+  }
+  return [...byProvider.values()].sort(
+    (left, right) => right.totalTokens - left.totalTokens,
+  );
+}
+
+// Roll the day-granularity series up to week (ISO Monday) or month buckets,
+// summing every numeric field. 'day' returns the series unchanged. Each point
+// must carry a `date` of the shape 'YYYY-MM-DD'.
+export function rollupDaily(points, granularity = 'day') {
+  if (!Array.isArray(points)) {
+    return [];
+  }
+  if (granularity === 'day' || !DAILY_GRANULARITIES.includes(granularity)) {
+    return points.map((point) => ({ ...point }));
+  }
+
+  const buckets = new Map();
+  for (const point of points) {
+    const bucketKey = bucketKeyFor(point?.date, granularity);
+    if (bucketKey === null) {
+      continue;
+    }
+    if (!buckets.has(bucketKey)) {
+      buckets.set(bucketKey, { date: bucketKey });
+    }
+    const bucket = buckets.get(bucketKey);
+    for (const [key, value] of Object.entries(point)) {
+      if (key === 'date') {
+        continue;
+      }
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        bucket[key] = toFiniteNumber(bucket[key]) + value;
+      }
+    }
+  }
+  return [...buckets.values()].sort((left, right) =>
+    left.date < right.date ? -1 : left.date > right.date ? 1 : 0,
+  );
+}
+
+function bucketKeyFor(dateString, granularity) {
+  if (typeof dateString !== 'string' || dateString.length < 7) {
+    return null;
+  }
+  if (granularity === 'month') {
+    return dateString.slice(0, 7);
+  }
+  // week → the Monday of that ISO week, as a 'YYYY-MM-DD' string.
+  const date = new Date(`${dateString}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  const dayOfWeek = (date.getUTCDay() + 6) % 7; // Monday = 0
+  date.setUTCDate(date.getUTCDate() - dayOfWeek);
+  return date.toISOString().slice(0, 10);
+}
+
+// Build a `points="x,y …"` attribute for an SVG sparkline polyline. Values map
+// left→right across `width`; the largest value touches the top of `height`.
+export function sparklinePoints(values, width, height) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return '';
+  }
+  const numeric = values.map(toFiniteNumber);
+  if (numeric.length === 1) {
+    return `0,${height} ${width},${height - barFraction(numeric[0], numeric[0]) * height}`;
+  }
+  const max = Math.max(...numeric, 0);
+  return numeric
+    .map((value, index) => {
+      const x = (index / (numeric.length - 1)) * width;
+      const y = height - barFraction(value, max) * height;
+      return `${round(x)},${round(y)}`;
+    })
+    .join(' ');
+}
+
+function barFraction(value, max) {
+  return max > 0 ? Math.max(0, value) / max : 0;
+}
+
+function round(value) {
+  return Math.round(value * 100) / 100;
+}
+
+// Scale a list of bar values to [0,1] fractions of the largest value, so the
+// component can size bars without re-deriving the max.
+export function barFractions(values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return [];
+  }
+  const numeric = values.map(toFiniteNumber);
+  const max = Math.max(...numeric, 0);
+  return numeric.map((value) => barFraction(value, max));
+}
+
+// Donut segments for the run-status ring: each segment carries its fraction of
+// the whole and the cumulative fraction before it (for stroke-dashoffset). Zero
+// total yields no segments so the component can render an empty ring.
+export function donutSegments(parts) {
+  const entries = Array.isArray(parts) ? parts : [];
+  const total = entries.reduce(
+    (sum, part) => sum + toFiniteNumber(part?.value),
+    0,
+  );
+  if (total <= 0) {
+    return [];
+  }
+  let cumulative = 0;
+  const segments = [];
+  for (const part of entries) {
+    const value = toFiniteNumber(part?.value);
+    if (value <= 0) {
+      continue;
+    }
+    const fraction = value / total;
+    segments.push({
+      key: part?.key ?? '',
+      value,
+      fraction,
+      offset: cumulative,
+    });
+    cumulative += fraction;
+  }
+  return segments;
+}
