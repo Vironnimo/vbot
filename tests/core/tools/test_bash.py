@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -833,3 +834,55 @@ async def test_background_watcher_discards_user_cancelled_session_id_after_consu
 
     # The watcher must have consumed and discarded the entry, so the set no longer holds it.
     assert session_id not in bash_module._user_cancelled_session_ids
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_kill_failure_is_logged(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing user-cancel kill task is surfaced through the done-callback log.
+
+    The cancel callback schedules ``process_manager.kill`` on the running loop and
+    attaches ``_log_background_task_result`` as a done-callback. When that kill
+    raises, the failure must be logged at error level with a traceback.
+    """
+    kill_failed = asyncio.Event()
+    monkeypatch.setattr(bash_module, "_user_cancelled_session_ids", set())
+
+    async def failing_kill(session_id: str, agent_id: str) -> None:
+        kill_failed.set()
+        raise RuntimeError("kill exploded")
+
+    captured_callback: list[Callable[[], None]] = []
+
+    def cancel_registration_hook(callback: Callable[[], None]) -> None:
+        captured_callback.append(callback)
+
+    monkeypatch.setattr(manager, "kill", failing_kill)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+
+    context = make_context(tmp_path, cancel_registration_hook=cancel_registration_hook)
+    # Register the user-cancel callback through the handler's wiring without
+    # spawning a real process by exercising the registrar directly.
+    bash_module._register_user_cancel_callback(manager, context, "session-x")
+    assert captured_callback, "cancel callback should have been registered"
+
+    with caplog.at_level(logging.ERROR, logger="vbot.tools.bash"):
+        # Fire the cancel callback: it schedules the failing kill task and
+        # attaches the logging done-callback.
+        captured_callback[0]()
+        await asyncio.wait_for(kill_failed.wait(), timeout=2)
+        # Let the scheduled kill task finish so its done-callback runs.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    kill_errors = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR and "user-cancel kill failed" in record.getMessage()
+    ]
+    assert kill_errors, "expected an error log for the failing user-cancel kill task"
+    assert kill_errors[0].exc_info is not None
