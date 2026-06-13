@@ -224,7 +224,7 @@ async def _dispatch_tool_calls(
     run: Run,
     *,
     nesting_depth: int,
-) -> list[ChatMessage]:
+) -> tuple[list[ChatMessage], list[JsonObject]]:
     run.raise_if_cancelled()
     emitting_registry = _EmittingToolRegistry(
         runtime.tools,
@@ -266,15 +266,54 @@ async def _dispatch_tool_calls(
             nesting_depth=nesting_depth,
         ),
     )
-    return [
-        ChatMessage.tool(
-            tool_call_id=tool_call.id,
-            name=tool_call.name,
-            content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-            timing=emitting_registry.timing_for_call(tool_call.id),
+    tool_messages: list[ChatMessage] = []
+    media_injections: list[JsonObject] = []
+    for tool_call, result in zip(tool_calls, results, strict=True):
+        tool_messages.append(
+            ChatMessage.tool(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                timing=emitting_registry.timing_for_call(tool_call.id),
+            )
         )
-        for tool_call, result in zip(tool_calls, results, strict=True)
-    ]
+        media_injections.extend(_read_media_injections(result))
+    return tool_messages, media_injections
+
+
+def _read_media_injections(result: JsonObject) -> list[JsonObject]:
+    """Extract ``read_media`` injection descriptors from a tool result envelope.
+
+    A tool (currently ``read`` on an image) emits a ``read_media`` artifact to
+    ask the chat loop to inject the media as a synthetic current-turn user
+    message so a vision model actually sees it. Each descriptor carries the
+    attachment reference the loop needs to build a ``MediaBlock``. Artifacts of
+    any other ``kind`` (e.g. ``image_generation`` output) yield nothing.
+    """
+    artifacts = result.get("artifacts")
+    if not isinstance(artifacts, list):
+        return []
+
+    injections: list[JsonObject] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("kind") != "read_media":
+            continue
+        attachment_id = artifact.get("attachment_id")
+        filename = artifact.get("filename")
+        media_type = artifact.get("media_type")
+        if (
+            isinstance(attachment_id, str)
+            and isinstance(filename, str)
+            and isinstance(media_type, str)
+        ):
+            injections.append(
+                {
+                    "attachment_id": attachment_id,
+                    "filename": filename,
+                    "media_type": media_type,
+                }
+            )
+    return injections
 
 
 def _activate_triggered_skills(
