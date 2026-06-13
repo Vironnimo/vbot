@@ -22,7 +22,7 @@ from core.chat import (
     MessageSender,
     ToolCall,
 )
-from core.chat.streaming import StreamingDeltaError
+from core.chat.streaming import StreamingChunkTimeoutError, StreamingDeltaError
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -2584,6 +2584,72 @@ async def test_streaming_mode_restart_exhaustion_persists_error(tmp_path: Path) 
     assert run.status == RunStatus.FAILED
     assert persisted_roles(messages) == ["user", "error"]
     assert messages[1].error_kind == "network_error"
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_restarts_after_chunk_stall_before_visible_output(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            # First attempt receives non-visible bytes then the provider goes
+            # silent — surfaced as a chunk-stall timeout, not a ProviderError.
+            [
+                {"type": "reasoning_meta", "reasoning_meta": {"sig": "x"}},
+                StreamingChunkTimeoutError("provider stream stalled"),
+            ],
+            # Restart re-issues the whole request and completes cleanly.
+            [
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await ChatLoop(runtime, streaming=True).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert assistant.content == "Recovered"
+    assert len(adapter.stream_requests) == 2
+    assert run.status == RunStatus.COMPLETED
+    # The discarded attempt leaves no error and no partial-thinking note.
+    assert persisted_roles(messages) == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_does_not_restart_after_chunk_stall_with_visible_output(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Visible"},
+                StreamingChunkTimeoutError("provider stream stalled"),
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(StreamingChunkTimeoutError, match="stalled"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    # A stall after visible output is not replayed — exactly one stream attempt.
+    assert len(adapter.stream_requests) == 1
+    assert run.status == RunStatus.FAILED
+    assert persisted_roles(messages) == ["user", "error"]
+    assert messages[1].error_kind == "timeout"
 
 
 @pytest.mark.asyncio
