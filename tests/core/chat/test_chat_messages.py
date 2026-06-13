@@ -34,6 +34,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
 )
+from core.sessions import PARTIAL_THINKING_NOTE_PREFIX
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 FIXED_TIMING = {
@@ -1291,3 +1292,46 @@ class TestReasoningReplayShaping:
 
         assert "reasoning" not in restored[0]
         assert restored[1]["reasoning"] == "Live thinking."
+
+
+class TestPartialThinkingNoteEmbedding:
+    """Phase-4 one-shot embedding of the interrupted-run partial-thinking note."""
+
+    def _note(self, body: str) -> ChatMessage:
+        return ChatMessage.note(
+            f"{PARTIAL_THINKING_NOTE_PREFIX}Partial thinking before interruption:\n{body}",
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+    def test_embedded_when_no_assistant_turn_follows(self) -> None:
+        # An interrupted run persisted only this note; the next request must
+        # surface it once, with the routing prefix stripped from the text.
+        messages = [
+            ChatMessage.user("Do it", timestamp=FIXED_TIMESTAMP),
+            self._note("half a thoug"),
+            ChatMessage.user("Try again", timestamp=FIXED_TIMESTAMP),
+        ]
+
+        request = _embed_notes_into_request(messages)
+
+        reminders = [m for m in request if "Partial thinking" in m.get("content", "")]
+        assert len(reminders) == 1
+        assert reminders[0]["role"] == "user"
+        assert "<system-reminder>" in reminders[0]["content"]
+        assert PARTIAL_THINKING_NOTE_PREFIX not in reminders[0]["content"]
+
+    def test_skipped_once_a_later_assistant_turn_exists(self) -> None:
+        # After the next run produced an assistant turn, the note is stale and
+        # must no longer be embedded (it stays in JSONL for debugging).
+        messages = [
+            ChatMessage.user("Do it", timestamp=FIXED_TIMESTAMP),
+            self._note("half a thoug"),
+            ChatMessage.assistant(
+                model="openai/gpt-5.2", content="done", timestamp=FIXED_TIMESTAMP
+            ),
+            ChatMessage.user("Next", timestamp=FIXED_TIMESTAMP),
+        ]
+
+        request = _embed_notes_into_request(messages)
+
+        assert all("Partial thinking" not in m.get("content", "") for m in request)

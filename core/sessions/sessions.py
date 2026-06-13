@@ -28,6 +28,7 @@ SESSION_LINE_ENDING_BYTES = b"\n"
 SESSION_APPEND_FLAGS = os.O_APPEND | os.O_CREAT | os.O_WRONLY
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
+PARTIAL_THINKING_NOTE_PREFIX = "[partial-thinking] "
 _TAIL_CHUNK_SIZE = 8192
 _LOGGER = get_logger("sessions")
 
@@ -428,6 +429,15 @@ def is_skill_context_note(message: ChatMessage) -> bool:
         message.role == "note"
         and isinstance(message.content, str)
         and message.content.startswith(SKILL_CONTEXT_NOTE_PREFIX)
+    )
+
+
+def is_partial_thinking_note(message: ChatMessage) -> bool:
+    """Return whether a note holds partial thinking from an interrupted run."""
+    return (
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith(PARTIAL_THINKING_NOTE_PREFIX)
     )
 
 
