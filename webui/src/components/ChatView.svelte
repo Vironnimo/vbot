@@ -51,6 +51,10 @@
   let {
     sharedAgents = [],
     sharedSelectedAgentId = '',
+    // Chat reading-column width preference: 'comfortable' | 'wide' | 'full'.
+    // Phase 3 seeds the persisted value from App; the default keeps the chat
+    // self-contained (centered, capped at the comfortable measure).
+    chatWidth = 'comfortable',
     agentsRefreshToken = 0,
     onAgentsChanged,
     onAgentSelected,
@@ -997,7 +1001,11 @@
   });
 </script>
 
-<section class="view view-chat active chat-view" aria-labelledby="chat-title">
+<section
+  class="view view-chat active chat-view"
+  data-chat-width={chatWidth}
+  aria-labelledby="chat-title"
+>
   <ChatHeader
     agents={chatState.agents}
     selectedAgentId={chatState.selectedAgentId}
@@ -1051,32 +1059,34 @@
       <div class="chat-view__surface">
         {#if loadingHistory || historyError || actionError || actionInfo || activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
-            {#if loadingHistory}
-              <p class="chat-view__notice">
-                {t('loading.history', 'Loading chat history…')}
-              </p>
-            {/if}
-            {#if historyError}
-              <p class="chat-view__error">
-                {t(
-                  'chat.historyLoadError',
-                  'Chat history could not be loaded.',
-                )}
-                {historyError}
-              </p>
-            {/if}
-            {#if actionError}
-              <p class="chat-view__error">{actionError}</p>
-            {/if}
-            {#if actionInfo}
-              <p class="chat-view__info">{actionInfo}</p>
-            {/if}
-            {#if activeSessionState?.error}
-              <p class="chat-view__error">
-                {t('chat.runError', 'Run failed.')}
-                {activeSessionState.error}
-              </p>
-            {/if}
+            <div class="chat-view__measure chat-view__notice-inner">
+              {#if loadingHistory}
+                <p class="chat-view__notice">
+                  {t('loading.history', 'Loading chat history…')}
+                </p>
+              {/if}
+              {#if historyError}
+                <p class="chat-view__error">
+                  {t(
+                    'chat.historyLoadError',
+                    'Chat history could not be loaded.',
+                  )}
+                  {historyError}
+                </p>
+              {/if}
+              {#if actionError}
+                <p class="chat-view__error">{actionError}</p>
+              {/if}
+              {#if actionInfo}
+                <p class="chat-view__info">{actionInfo}</p>
+              {/if}
+              {#if activeSessionState?.error}
+                <p class="chat-view__error">
+                  {t('chat.runError', 'Run failed.')}
+                  {activeSessionState.error}
+                </p>
+              {/if}
+            </div>
           </div>
         {/if}
         <div class="chat-view__timeline-shell">
@@ -1133,11 +1143,13 @@
               </button>
             </div>
           {/if}
-          <QueuedMessages
-            queuedMessages={activeSessionState?.queue ?? []}
-            onRemoveQueuedMessage={handleRemoveQueuedMessage}
-            onEditQueuedMessage={handleEditQueuedMessage}
-          />
+          <div class="chat-view__measure">
+            <QueuedMessages
+              queuedMessages={activeSessionState?.queue ?? []}
+              onRemoveQueuedMessage={handleRemoveQueuedMessage}
+              onEditQueuedMessage={handleEditQueuedMessage}
+            />
+          </div>
           <ChatComposer
             disabled={composerDisabled}
             isRunning={isRunActive(activeSessionState)}
@@ -1198,13 +1210,25 @@
   }
 
   .chat-view__notice-stack {
-    display: flex;
     flex-shrink: 0;
-    flex-direction: column;
-    gap: 6px;
     padding: 10px 20px;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
+  }
+
+  /* Center inner content on the same axis as the capped message column. Bars
+     (notice stack, composer) stay full-width; their content is capped to
+     `--chat-measure` and centered. `full` disables the cap (measure: none). */
+  .chat-view__measure {
+    width: 100%;
+    max-width: var(--chat-measure);
+    margin-inline: auto;
+  }
+
+  .chat-view__notice-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .chat-view__notice,
@@ -1230,6 +1254,9 @@
     justify-content: space-between;
     gap: 14px;
     flex-shrink: 0;
+    width: 100%;
+    max-width: var(--chat-measure);
+    margin-inline: auto;
     border-left: 3px solid var(--accent);
     padding: 9px 20px 9px 12px;
     border-top: 1px solid var(--border);

@@ -253,7 +253,27 @@ Within views, two-pane splits (Agents: 240px list + fluid detail; Settings: 168p
 
 In scrollable edit surfaces, the primary save action belongs at the bottom of the scroll region in a sticky footer, not in the panel header. This keeps the action visually near the edited fields and available after long scrolls.
 
-Chat messages use 28px horizontal padding with 75% max-width for user message bubbles (right-aligned). Assistant prose flows full-width without a bounding box.
+### Content width / reading measure
+
+No view stretches edge-to-edge on a wide monitor. Each scroll area fills its full width (scrollbar at the edge), but its **inner content column is capped and centered** so prose keeps an ergonomic line length. The caps are CSS custom properties in `:root` (`webui/src/styles/app.css`):
+
+- `--chat-measure-comfortable: 780px` (~72ch, the default) · `--chat-measure-wide: 1100px` — the chat reading column.
+- `--chat-measure` is the live chat measure. It defaults to `--chat-measure-comfortable` and is overridden by `[data-chat-width]` on `.chat-view`: `wide` → `--chat-measure-wide`, `full` → `none` (edge-to-edge, the old behavior). The active value is user-selectable in **Appearance** settings (`appearance.chat_width`, persisted) and applied app-wide.
+- `--content-max-narrow: 920px` — settings/forms and label↔control rows. `--content-max-wide: 1180px` — detail/wide panels (Agents detail, System Prompt). These are fixed, not user-configurable.
+
+Wide data tables and log rows (Logs, Cron, Debug) are **not** force-capped — they keep their own horizontal scroll rather than squishing.
+
+### Breakpoints
+
+CSS media queries cannot read custom properties, so the breakpoint set is a documented convention rather than a token. Use these thresholds; only deviate where a specific layout genuinely regresses:
+
+- **mobile** ≤ 640px · **tablet** 641–960px · **desktop** ≥ 961px · **wide** ≥ 1280px.
+
+On mobile (≤640px) the sidebar collapses to a top bar, two-pane splits stack, and interactive targets grow to ≥40px hit area.
+
+### Chat messages
+
+Chat messages use 28px horizontal padding as the column gutter. User message bubbles are right-aligned at 75% max-width *of the capped reading measure*. Assistant prose flows free (no bounding box) but within the same centered, capped measure. The composer, notice stack, and session banner align to the same center axis as the messages.
 
 The spacing scale:
 
@@ -363,9 +383,9 @@ Inline dot-text lines within assistant messages. No box or card — just a color
 
 ### Chat messages
 
-User messages: right-aligned, `surface-2` card with `border-left: 3px solid accent`. Max-width 75%. Header reversed (avatar on right).
+User messages: right-aligned, `surface-2` card with `border-left: 3px solid accent`. Max-width 75% of the capped reading measure (see Layout → Content width). Header reversed (avatar on right).
 
-Assistant messages: no card — prose flows free at full content width. Tool events, thinking blocks, and code snippets appear inline between prose paragraphs.
+Assistant messages: no card — prose flows free within the centered, capped reading measure (`--chat-measure`). Tool events, thinking blocks, and code snippets appear inline between prose paragraphs.
 
 Error messages: standalone timeline entries, not assistant bubbles. Use the red semantic token sparingly: red avatar tint, red author label, and a compact text block with a red left border plus low-opacity red background.
 
