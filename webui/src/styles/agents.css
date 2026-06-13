@@ -136,6 +136,14 @@
   scrollbar-gutter: stable;
 }
 
+/* Cap the detail content to the wide content measure and center it; the scroll
+   container itself stays full-width so the scrollbar stays at the pane edge. */
+.agents-view .agent-detail-scroll > * {
+  width: 100%;
+  max-width: var(--content-max-wide);
+  margin-inline: auto;
+}
+
 .agents-view .detail-top {
   display: flex;
   align-items: flex-start;
