@@ -885,7 +885,7 @@
     }
   }
 
-  @media (max-width: 860px) {
+  @media (max-width: 960px) {
     .logs-view {
       padding: 20px;
     }

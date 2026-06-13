@@ -965,7 +965,7 @@
     overflow-y: auto;
   }
 
-  @media (max-width: 920px) {
+  @media (max-width: 960px) {
     .cron-view {
       padding: 20px;
     }

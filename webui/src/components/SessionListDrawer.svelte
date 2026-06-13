@@ -394,7 +394,7 @@
     color: var(--red);
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 640px) {
     .session-drawer {
       width: 100%;
       min-width: 0;

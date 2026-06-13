@@ -417,7 +417,7 @@
     }
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 640px) {
     .chat-header {
       height: auto;
       flex-wrap: wrap;

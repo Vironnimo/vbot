@@ -980,7 +980,7 @@
     text-align: center;
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 640px) {
     .sp-scroll {
       padding: 18px 16px;
     }
