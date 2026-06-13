@@ -346,6 +346,24 @@ def test_classify_http_status_attaches_retry_after_to_retryable_error() -> None:
     assert exc_info.value.retry_after == 2.0
 
 
+def test_classify_http_status_504_is_retryable_in_provider_path() -> None:
+    """A 504 Gateway Timeout is retryable on the (non-idempotent) provider path."""
+
+    with pytest.raises(ProviderError) as exc_info:
+        classify_http_status(504)
+
+    assert exc_info.value.retryable is True
+
+
+def test_classify_http_status_500_is_not_retryable_in_provider_path() -> None:
+    """A 500 is not retryable on the non-idempotent provider path."""
+
+    with pytest.raises(ProviderError) as exc_info:
+        classify_http_status(500)
+
+    assert exc_info.value.retryable is False
+
+
 def test_classify_http_status_rate_limit_without_headers_has_no_hint() -> None:
     """With no headers passed, ``retry_after`` stays ``None``."""
 

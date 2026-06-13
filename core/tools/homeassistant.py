@@ -23,6 +23,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.http_status import is_retryable_status
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.homeassistant")
@@ -37,7 +38,6 @@ _RETRY_MAX_RETRIES = 2
 _RETRY_INITIAL_DELAY_SECONDS = 1.0
 _RETRY_BACKOFF_FACTOR = 2
 _RETRY_JITTER_FACTOR = 0.5
-_RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
 
 _REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=15.0)
 
@@ -231,7 +231,11 @@ async def _ha_request(
                 continue
 
             if response.status_code >= 400:
-                if response.status_code in _RETRYABLE_STATUS_CODES and attempt < _RETRY_MAX_RETRIES:
+                # Only GET reads are idempotent; POST service calls are not.
+                if (
+                    is_retryable_status(response.status_code, idempotent=(method == "GET"))
+                    and attempt < _RETRY_MAX_RETRIES
+                ):
                     await _sleep_for_retry(attempt)
                     continue
                 detail = _extract_error_detail(response)
