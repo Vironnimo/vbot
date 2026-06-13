@@ -16,7 +16,7 @@ OpenAI-compatible provider with OpenRouter-specific reasoning and multi-modality
 - vBot `max` maps to `xhigh`.
 - Runtime sends `reasoning: {effort}` plus `include_reasoning: true` when reasoning is active.
 - If injected `model_lookup` says reasoning is unsupported, `reasoning`, `include_reasoning`, and generic `reasoning_effort` controls are stripped.
-- Reasoning replay policy: `current_run` (inherited ABC default, deliberately settled in the Phase-3 rollout 2026-06-13 and pinned by a test). OpenRouter fronts many upstreams and bills replayed `reasoning_details` text; switch only with probe evidence per upstream family.
+- Reasoning replay policy: `current_run`, and this is the genuinely correct target (not a deferred placeholder). OpenRouter's [reasoning-tokens docs](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens) frame `reasoning`/`reasoning_details` preservation as in-run ("useful specifically for tool calling"); cross-run replay is undocumented. The in-run hard requirements are met — some upstreams 400 without echoed reasoning (Gemini "thought_signature" in `reasoning_details` of the `reasoning.encrypted` type), and `current_run` keeps `reasoning_meta` within the run, round-tripped by `_apply_openai_reasoning_meta` and pinned by a test. Replayed blocks must match the original sequence unmodified (docs: "you cannot rearrange or modify the sequence of these blocks"). **Billing of replayed `reasoning_details` is inferred, not documented** — the docs only state that generation bills as output. Revisit `full_history` only per upstream family (the hook's `model_id` supports a split) and only with probes; the same-model gate already blocks cross-model replay.
 
 ## Catalog Normalization
 
