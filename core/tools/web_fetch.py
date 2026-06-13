@@ -21,6 +21,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.http_status import is_retryable_status
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.web_fetch")
@@ -108,7 +109,6 @@ _RETRY_MAX_RETRIES = 3
 _RETRY_INITIAL_DELAY_SECONDS = 1.0
 _RETRY_BACKOFF_FACTOR = 2
 _RETRY_JITTER_FACTOR = 0.5
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 _MAX_REDIRECTS = 10
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
@@ -741,7 +741,10 @@ async def _request_with_retry(client: httpx.AsyncClient, url: httpx.URL) -> http
     for attempt in range(_RETRY_MAX_RETRIES + 1):
         response = await client.get(url)
         if response.status_code >= 400:
-            if attempt >= _RETRY_MAX_RETRIES or response.status_code not in _RETRYABLE_STATUS_CODES:
+            # GET is idempotent — safe to repeat (includes a transient 500).
+            if attempt >= _RETRY_MAX_RETRIES or not is_retryable_status(
+                response.status_code, idempotent=True
+            ):
                 response.raise_for_status()
             await _sleep_for_retry(attempt)
             continue

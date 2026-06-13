@@ -14,6 +14,7 @@ from core.providers.errors import ProviderAuthError, ProviderError, ProviderRate
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
 from core.providers.providers import OPENAI_CODEX_DEVICE_FLOW, OAuthConfig
 from core.providers.token_store import OAuthToken, TokenStore
+from core.utils.http_status import is_retryable_status
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
@@ -22,7 +23,6 @@ _LOGGER = get_logger("providers.token_getter")
 TOKEN_EXPIRY_BUFFER_SECONDS = 30
 TOKEN_EXCHANGE_FALLBACK_MINUTES = 25
 GITHUB_OAUTH_TOKEN_EXTRA_KEY = "github_oauth_token"
-TOKEN_EXCHANGE_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503})
 COPILOT_INTEGRATION_ID = "vscode-chat"
 COPILOT_EDITOR_VERSION = "vBot/0.1.0"
 
@@ -318,6 +318,9 @@ def _classify_token_exchange_status(status_code: int, response_body: str) -> Non
     detail = f"{status_code} {response_body}".strip() if response_body else str(status_code)
     if status_code == 429:
         raise ProviderRateLimitError(f"Rate limited: {detail}")
-    if status_code in TOKEN_EXCHANGE_RETRYABLE_STATUS_CODES:
+    # OAuth token exchange is a non-idempotent POST: authorization codes are
+    # single-use, so a 500 (possibly already-consumed code, often deterministic)
+    # must not be blindly retried.
+    if is_retryable_status(status_code, idempotent=False):
         raise ProviderError(f"Provider error: {detail}", retryable=True)
     raise ProviderAuthError("OAuth token refresh failed — please reconnect")

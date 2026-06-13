@@ -239,7 +239,15 @@ async def test_list_entities_area_filter() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_list_entities_http_error(caplog: pytest.LogCaptureFixture) -> None:
+async def test_list_entities_http_error(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A 500 on an idempotent GET is now retryable; stub the backoff sleep so the
+    # exhausted-retries path still fails fast.
+    async def _fake_sleep(attempt: int) -> None:
+        del attempt
+
+    monkeypatch.setattr("core.tools.homeassistant._sleep_for_retry", _fake_sleep)
     respx.get(f"{_HASS_URL}/api/states").mock(
         return_value=httpx.Response(500, json={"message": "internal error"})
     )
@@ -623,11 +631,12 @@ async def test_network_error_retry(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status_code", [429, 502, 503])
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
 async def test_retry_transient_http_status(
     monkeypatch: pytest.MonkeyPatch,
     status_code: int,
 ) -> None:
+    # ha_list_entities issues a GET (idempotent), so 500 and 504 retry too.
     sleep_attempts: list[int] = []
 
     async def _fake_sleep(attempt: int) -> None:
