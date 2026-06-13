@@ -232,7 +232,9 @@ def test_owning_source_stem_prefers_longest_prefix():
 
     source_stems = ["openai_compatible", "openai"]  # longest first
 
-    assert module._owning_source_stem("openai_compatible_oauth", source_stems) == "openai_compatible"
+    assert (
+        module._owning_source_stem("openai_compatible_oauth", source_stems) == "openai_compatible"
+    )
     assert module._owning_source_stem("openai", source_stems) == "openai"
     assert module._owning_source_stem("unrelated", source_stems) is None
 
