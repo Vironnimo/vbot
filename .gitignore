@@ -25,10 +25,6 @@ stuff/
 TODO.md
 desktop/settings.json
 .data-dir-base/
-.vorch/WORKTREE.md
-
-# Task plan files (worktree-local, never committed)
-docs/plans/
 
 # Node / webui
 node_modules/
