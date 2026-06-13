@@ -6,12 +6,13 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from core.chat.messages import ChatMessage
 from core.sessions import ChatSessionManager
-from core.statistics import CountEntry, StatisticsReport, StatisticsService
+from core.statistics import AgentDirectory, CountEntry, StatisticsReport, StatisticsService
 from core.tools import tool_failure, tool_success
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
@@ -77,9 +78,7 @@ def _run_summary(*, status: str, at: datetime, duration_ms: int, run_id: str) ->
     )
 
 
-def _write_session(
-    manager: ChatSessionManager, agent_id: str, messages: list[ChatMessage]
-) -> str:
+def _write_session(manager: ChatSessionManager, agent_id: str, messages: list[ChatMessage]) -> str:
     session = manager.create(agent_id)
     for message in messages:
         session.append(message)
@@ -88,7 +87,7 @@ def _write_session(
 
 def _service(tmp_path: Path, agent_ids: list[str]) -> tuple[StatisticsService, ChatSessionManager]:
     manager = ChatSessionManager(tmp_path)
-    service = StatisticsService(manager, _FakeAgents(agent_ids))
+    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents(agent_ids)))
     return service, manager
 
 
@@ -113,7 +112,7 @@ def test_empty_data_returns_zeroed_report(tmp_path: Path) -> None:
 def test_agent_with_no_sessions_counts_agent_only(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
     manager.sessions_dir("main").mkdir(parents=True, exist_ok=True)
-    service = StatisticsService(manager, _FakeAgents(["main"]))
+    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents(["main"])))
 
     report = service.report()
 
@@ -130,7 +129,9 @@ def test_messages_by_role_and_last_activity(tmp_path: Path) -> None:
         "main",
         [
             ChatMessage.user("hi", timestamp=BASE),
-            _assistant(model="openrouter/anthropic/claude-sonnet-4", at=BASE + timedelta(seconds=1)),
+            _assistant(
+                model="openrouter/anthropic/claude-sonnet-4", at=BASE + timedelta(seconds=1)
+            ),
             ChatMessage.note("background", timestamp=BASE + timedelta(seconds=2)),
             _run_summary(
                 status="completed",
@@ -168,10 +169,14 @@ def test_run_segmentation_status_and_tool_calls(tmp_path: Path) -> None:
                 envelope=tool_success({"text": "x"}),
                 duration_ms=40,
             ),
-            _run_summary(status="completed", at=BASE + timedelta(seconds=2), duration_ms=2000, run_id="r1"),
+            _run_summary(
+                status="completed", at=BASE + timedelta(seconds=2), duration_ms=2000, run_id="r1"
+            ),
             # Run 2 — failed, no tools.
             _assistant(model=model, at=BASE + timedelta(seconds=3)),
-            _run_summary(status="failed", at=BASE + timedelta(seconds=4), duration_ms=500, run_id="r2"),
+            _run_summary(
+                status="failed", at=BASE + timedelta(seconds=4), duration_ms=500, run_id="r2"
+            ),
         ],
     )
 
@@ -194,10 +199,14 @@ def test_derived_fallback_detects_mid_run_model_switch(tmp_path: Path) -> None:
         [
             _assistant(model="openrouter/anthropic/claude-sonnet-4", at=BASE),
             _assistant(model="openai/gpt-5", at=BASE + timedelta(seconds=1)),
-            _run_summary(status="completed", at=BASE + timedelta(seconds=2), duration_ms=1000, run_id="r1"),
+            _run_summary(
+                status="completed", at=BASE + timedelta(seconds=2), duration_ms=1000, run_id="r1"
+            ),
             # Single-model run — no fallback.
             _assistant(model="openai/gpt-5", at=BASE + timedelta(seconds=3)),
-            _run_summary(status="completed", at=BASE + timedelta(seconds=4), duration_ms=1000, run_id="r2"),
+            _run_summary(
+                status="completed", at=BASE + timedelta(seconds=4), duration_ms=1000, run_id="r2"
+            ),
         ],
     )
 
@@ -224,7 +233,9 @@ def test_measured_and_estimated_tokens_stay_separate(tmp_path: Path) -> None:
                 at=BASE + timedelta(seconds=1),
                 usage={"input_tokens": 7, "output_tokens": 3, "estimated": True},
             ),
-            _run_summary(status="completed", at=BASE + timedelta(seconds=2), duration_ms=1000, run_id="r1"),
+            _run_summary(
+                status="completed", at=BASE + timedelta(seconds=2), duration_ms=1000, run_id="r1"
+            ),
         ],
     )
 
@@ -269,7 +280,9 @@ def test_tool_success_failure_envelopes_and_p95(tmp_path: Path) -> None:
         )
     )
     messages.append(
-        _run_summary(status="completed", at=BASE + timedelta(seconds=10), duration_ms=500, run_id="r1")
+        _run_summary(
+            status="completed", at=BASE + timedelta(seconds=10), duration_ms=500, run_id="r1"
+        )
     )
     _write_session(manager, "main", messages)
 
@@ -297,7 +310,9 @@ def test_errors_grouped_by_kind_provider_model_agent_hour(tmp_path: Path) -> Non
             _assistant(model=model, at=BASE),
             ChatMessage.error("rate_limit", "slow down", timestamp=BASE + timedelta(seconds=1)),
             ChatMessage.error("timeout", "too slow", timestamp=BASE + timedelta(seconds=2)),
-            _run_summary(status="failed", at=BASE + timedelta(seconds=3), duration_ms=100, run_id="r1"),
+            _run_summary(
+                status="failed", at=BASE + timedelta(seconds=3), duration_ms=100, run_id="r1"
+            ),
         ],
     )
 
@@ -347,13 +362,13 @@ def test_percentiles_over_known_run_durations(tmp_path: Path) -> None:
     _write_session(manager, "main", messages)
 
     report = service.report()
-    duration = report.runs.duration
+    duration_stats = report.runs.duration
 
-    assert duration.count == 10
-    assert duration.average_ms == pytest.approx(550.0)
-    assert duration.p50_ms == 500.0
-    assert duration.p90_ms == 900.0
-    assert duration.p95_ms == 1000.0
+    assert duration_stats.count == 10
+    assert duration_stats.average_ms == pytest.approx(550.0)
+    assert duration_stats.p50_ms == 500.0
+    assert duration_stats.p90_ms == 900.0
+    assert duration_stats.p95_ms == 1000.0
     assert report.overview.median_run_duration_ms == 500.0
 
 
@@ -367,9 +382,13 @@ def test_since_until_windowing_filters_by_message_timestamp(tmp_path: Path) -> N
         "main",
         [
             _assistant(model=model, at=day_one, usage={"input_tokens": 10, "output_tokens": 1}),
-            _run_summary(status="completed", at=day_one + timedelta(seconds=1), duration_ms=111, run_id="r1"),
+            _run_summary(
+                status="completed", at=day_one + timedelta(seconds=1), duration_ms=111, run_id="r1"
+            ),
             _assistant(model=model, at=day_two, usage={"input_tokens": 50, "output_tokens": 5}),
-            _run_summary(status="completed", at=day_two + timedelta(seconds=1), duration_ms=222, run_id="r2"),
+            _run_summary(
+                status="completed", at=day_two + timedelta(seconds=1), duration_ms=222, run_id="r2"
+            ),
         ],
     )
 
@@ -395,7 +414,9 @@ def test_open_run_group_detected_without_trailing_summary(tmp_path: Path) -> Non
         "main",
         [
             _assistant(model=model, at=BASE),
-            _run_summary(status="completed", at=BASE + timedelta(seconds=1), duration_ms=100, run_id="r1"),
+            _run_summary(
+                status="completed", at=BASE + timedelta(seconds=1), duration_ms=100, run_id="r1"
+            ),
             # A second assistant turn with no terminal run_summary → open group.
             _assistant(model=model, at=BASE + timedelta(seconds=2)),
         ],
@@ -416,7 +437,9 @@ def test_multiple_agents_and_daily_trend(tmp_path: Path) -> None:
         [
             _assistant(model=model, at=BASE),
             ChatMessage.error("network_error", "boom", timestamp=BASE + timedelta(seconds=1)),
-            _run_summary(status="failed", at=BASE + timedelta(seconds=2), duration_ms=300, run_id="r1"),
+            _run_summary(
+                status="failed", at=BASE + timedelta(seconds=2), duration_ms=300, run_id="r1"
+            ),
         ],
     )
     _write_session(

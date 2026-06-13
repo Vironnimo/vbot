@@ -306,6 +306,7 @@ async def test_read_image_injects_base64_for_vision_model(
             for message in messages
             if message.role == "user" and isinstance(message.content, list)
         )
+        assert isinstance(injected.content, list)
         assert isinstance(injected.content[0], MediaBlock)
         assert injected.content[0].media_type == "image/png"
         persisted = json.dumps([message.to_dict() for message in messages])
@@ -340,9 +341,7 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
 
     runtime.start()
     try:
-        agent = runtime.agents.create(
-            "coder", "Coder Agent", model="fake-provider/fake-model-v1"
-        )
+        agent = runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
         Path(agent.workspace).joinpath("diagram.png").write_bytes(_PNG_BYTES)
 
         # The run must complete without raising even though the model lacks vision.
@@ -370,6 +369,7 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
             for message in messages
             if message.role == "user" and isinstance(message.content, list)
         )
+        assert isinstance(injected.content, list)
         assert isinstance(injected.content[0], MediaBlock)
     finally:
         runtime.stop()

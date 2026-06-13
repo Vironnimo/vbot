@@ -751,9 +751,7 @@ def test_list_uncommitted_paths_returns_porcelain_lines(monkeypatch):
     lines = module._list_uncommitted_paths(Path("C:/repo/.worktrees/task"))
 
     assert lines == [" M webui/src/App.svelte", "?? docs/plans/task.md"]
-    assert calls == [
-        ["git", "-C", str(Path("C:/repo/.worktrees/task")), "status", "--porcelain"]
-    ]
+    assert calls == [["git", "-C", str(Path("C:/repo/.worktrees/task")), "status", "--porcelain"]]
 
 
 def test_cmd_delete_lists_uncommitted_files_when_non_force_remove_fails(

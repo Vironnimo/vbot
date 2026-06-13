@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -14,7 +15,6 @@ from core.tools import (
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
     ToolContext,
-    ToolHandler,
     ToolRegistry,
     is_tool_result_envelope,
     make_read_handler,
@@ -75,8 +75,14 @@ def make_context(workspace: Path, tool_name: str = READ_TOOL_NAME) -> ToolContex
     )
 
 
-def make_handler(store: Any = None, speech: Any = None) -> ToolHandler:
-    return make_read_handler(store or _FakeAttachmentStore(), speech or _FakeSpeech())
+# The read handler is always async; mypy needs the precise awaitable-returning type
+# (the registry's ``ToolHandler`` alias is a sync-or-async union that can't be awaited).
+_ReadHandler = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+def make_handler(store: Any = None, speech: Any = None) -> _ReadHandler:
+    handler = make_read_handler(store or _FakeAttachmentStore(), speech or _FakeSpeech())
+    return cast(_ReadHandler, handler)
 
 
 def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
@@ -106,7 +112,9 @@ def assert_failure_envelope(result: dict[str, object], code: str) -> dict[str, s
 def test_register_read_tool_exposes_provider_schema_without_description_property() -> None:
     registry = ToolRegistry()
 
-    register_read_tool(registry, attachment_store=_FakeAttachmentStore(), speech_service=_FakeSpeech())
+    register_read_tool(
+        registry, attachment_store=_FakeAttachmentStore(), speech_service=_FakeSpeech()
+    )
 
     tool = registry.get("read")
     assert tool.name == READ_TOOL_NAME == "read"
