@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatLoop, ChatMessage
+from core.chat.content_blocks import MediaBlock
 from core.prompts import SkillPromptRegistry
 from core.providers.adapter import ProviderAdapter
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningReplayPolicy
@@ -236,6 +237,140 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
         assert tool_result["data"] is None
         assert tool_result["artifacts"] == []
         assert adapter.requests[1].messages[3]["content"] == messages[2].content
+    finally:
+        runtime.stop()
+
+
+_PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+def _user_media_parts(messages: list[JsonObject]) -> list[JsonObject]:
+    """Return every resolved ``media`` part across user messages in a request."""
+    return [
+        part
+        for message in messages
+        if message.get("role") == "user" and isinstance(message.get("content"), list)
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "media"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_read_image_injects_base64_for_vision_model(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FakeAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_read", "name": "read", "arguments": {"path": "diagram.png"}}
+                ],
+            },
+            {"content": "I can see the diagram.", "tool_calls": None},
+        ]
+    )
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["APP_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+
+    runtime.start()
+    try:
+        agent = runtime.agents.create(
+            "coder", "Coder Agent", model="fake-provider/fake-model-vision"
+        )
+        Path(agent.workspace).joinpath("diagram.png").write_bytes(_PNG_BYTES)
+
+        assistant = await runtime.chat_loop.send(
+            "coder", "Look at diagram.png", session_id="session-one"
+        )
+
+        assert assistant.content == "I can see the diagram."
+
+        # The follow-up provider request carries the image as a base64 media part
+        # in a synthetic current-turn user message.
+        media_parts = _user_media_parts(adapter.requests[1].messages)
+        assert len(media_parts) == 1
+        assert media_parts[0]["media_type"] == "image/png"
+        assert media_parts[0]["base64"]
+
+        # The persisted session stores only a small MediaBlock reference, never base64.
+        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        injected = next(
+            message
+            for message in messages
+            if message.role == "user" and isinstance(message.content, list)
+        )
+        assert isinstance(injected.content[0], MediaBlock)
+        assert injected.content[0].media_type == "image/png"
+        persisted = json.dumps([message.to_dict() for message in messages])
+        assert "base64" not in persisted
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_read_image_degrades_to_note_for_non_vision_model(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FakeAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_read", "name": "read", "arguments": {"path": "diagram.png"}}
+                ],
+            },
+            {"content": "I cannot view the image directly.", "tool_calls": None},
+        ]
+    )
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["APP_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+
+    runtime.start()
+    try:
+        agent = runtime.agents.create(
+            "coder", "Coder Agent", model="fake-provider/fake-model-v1"
+        )
+        Path(agent.workspace).joinpath("diagram.png").write_bytes(_PNG_BYTES)
+
+        # The run must complete without raising even though the model lacks vision.
+        assistant = await runtime.chat_loop.send(
+            "coder", "Look at diagram.png", session_id="session-one"
+        )
+
+        assert assistant.content == "I cannot view the image directly."
+
+        # No base64 image part reaches the non-vision provider; a text note does.
+        assert _user_media_parts(adapter.requests[1].messages) == []
+        note = next(
+            message
+            for message in adapter.requests[1].messages
+            if message.get("role") == "user"
+            and isinstance(message.get("content"), str)
+            and "cannot be shown" in message["content"]
+        )
+        assert "diagram.png" in note["content"]
+
+        # The MediaBlock is still persisted (so a later run degrades it to a path note).
+        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        injected = next(
+            message
+            for message in messages
+            if message.role == "user" and isinstance(message.content, list)
+        )
+        assert isinstance(injected.content[0], MediaBlock)
     finally:
         runtime.stop()
 
@@ -568,6 +703,17 @@ def _write_model_resource(resources: Path) -> None:
                         "name": "Fake Model Two",
                         "capabilities": {
                             "vision": False,
+                            "tools": True,
+                            "json_mode": True,
+                            "reasoning": {"supported": True},
+                        },
+                        "context_window": 4096,
+                        "max_output_tokens": 1024,
+                    },
+                    "fake-model-vision": {
+                        "name": "Fake Vision Model",
+                        "capabilities": {
+                            "vision": True,
                             "tools": True,
                             "json_mode": True,
                             "reasoning": {"supported": True},
