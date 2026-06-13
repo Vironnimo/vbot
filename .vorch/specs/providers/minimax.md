@@ -31,9 +31,10 @@ MiniMax is wired as an OpenAI-compatible chat-completions provider with provider
 
 - MiniMax's OpenAI-compatible API does not use OpenAI-style `reasoning_effort`. `MiniMaxAdapter` strips generic OpenAI reasoning payload keys before applying MiniMax controls.
 - For `MiniMax-M3`, active vBot efforts map to `thinking: {type: adaptive}` and `none` maps to `thinking: {type: disabled}`.
-- For M2.x models, the adapter suppresses `thinking` while leaving explicit caller-controlled `reasoning_split` alone unless catalog lookup says reasoning is unsupported.
+- For M2.x models the adapter suppresses `thinking` (those models reason by default).
+- The adapter defaults `reasoning_split: true` whenever reasoning is active (M2.x always; M3 unless thinking is disabled), so the thinking trace is returned separately as `reasoning_details` instead of inline `<think>…</think>` in `content`. A caller-set `reasoning_split` is left alone; catalog reasoning-unsupported strips it. This is the capture half of the replay policy below — `reasoning_details` is what gets persisted in `reasoning_meta` and replayed.
 - Non-streaming responses with `reasoning_details` expose their text as visible `reasoning` while preserving the original details in `reasoning_meta`.
-- Reasoning replay policy: `current_run` (inherited ABC default, deliberately settled in the Phase-3 rollout 2026-06-13 and pinned by a test) — no probe evidence that MiniMax's OpenAI-compatible wire wants cross-run reasoning replay.
+- Reasoning replay policy: `full_history`. MiniMax's own guidance is the strongest of any provider reviewed — preserving the reasoning trace across multi-turn interactions is "essential" and discarding it measurably degrades quality (their published SWE-Bench/Tau²/GAIA deltas). With `reasoning_split: true` defaulted, the generic request builder round-trips `reasoning_meta.reasoning_details` onto same-model assistant history; the chat layer's same-model gate strips cross-model entries. **Not yet probed against the live MiniMax API** (no credentials in this environment) — behavior is pinned by unit tests; live verification is deferred in `.vorch/FLAGGED.md` (2026-06-13).
 
 ## Constraints & Gotchas
 

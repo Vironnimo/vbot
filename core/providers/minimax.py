@@ -11,7 +11,11 @@ from core.providers.openai_compatible import (
     _read_optional_non_empty_string,
     _read_string,
 )
-from core.providers.reasoning import normalize_thinking_effort
+from core.providers.reasoning import (
+    REASONING_REPLAY_FULL_HISTORY,
+    ReasoningReplayPolicy,
+    normalize_thinking_effort,
+)
 
 MINIMAX_M3_MODEL_ID = "MiniMax-M3"
 MINIMAX_M2_SUPPORTED_PARAMETERS = (
@@ -144,15 +148,40 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             return payload
 
         if model_id != MINIMAX_M3_MODEL_ID:
+            # M2.x reasons by default; split the trace into reasoning_details so
+            # it is captured separately (not inline <think>) and stays replayable
+            # across runs under the full_history policy.
             payload.pop("thinking", None)
+            payload.setdefault("reasoning_split", True)
             return payload
 
         effort = normalize_thinking_effort(thinking_effort or reasoning_effort)
         if effort == "none":
             payload.setdefault("thinking", {"type": "disabled"})
+            payload.pop("reasoning_split", None)
         elif effort:
             payload.setdefault("thinking", {"type": "adaptive"})
+            payload.setdefault("reasoning_split", True)
+        else:
+            payload.setdefault("reasoning_split", True)
         return payload
+
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        """Replay reasoning across runs — MiniMax's own guidance requires it.
+
+        MiniMax documents that preserving the reasoning trace across multi-turn
+        interactions is essential and that discarding it measurably degrades
+        quality. ``_build_payload`` defaults ``reasoning_split: true`` so the
+        trace is captured as ``reasoning_details``; the generic request builder
+        then replays ``reasoning_meta.reasoning_details`` on same-model history
+        (the chat layer's gate strips cross-model entries).
+
+        Not yet probed against the live MiniMax API (no credentials in this
+        environment); the implemented behavior is pinned by unit tests and the
+        deferred live verification is recorded in ``.vorch/FLAGGED.md``.
+        """
+        del model_id
+        return REASONING_REPLAY_FULL_HISTORY
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         normalized = super().normalize_response(response)
