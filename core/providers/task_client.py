@@ -162,4 +162,5 @@ def classify_task_response(response: httpx.Response) -> None:
     classify_http_status(
         response.status_code,
         detail=f"{response.status_code} {detail}".strip() if detail else str(response.status_code),
+        response_headers=response.headers,
     )

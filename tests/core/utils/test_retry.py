@@ -21,6 +21,7 @@ from core.utils.retry import (
     INITIAL_DELAY_SECONDS,
     JITTER_FACTOR,
     MAX_RETRIES,
+    MAX_RETRY_AFTER_SECONDS,
     retry_async,
 )
 
@@ -207,6 +208,110 @@ async def test_retry_jitter_is_bounded():
         # So delay is in [base_delay, base_delay * (1 + JITTER_FACTOR)]
         assert delay >= base_delay
         assert delay <= base_delay * (1 + JITTER_FACTOR)
+
+
+# ----- Retry-After honoring -----
+
+
+def _rate_limit_with_retry_after(seconds: float) -> ProviderRateLimitError:
+    """Build a rate-limit error carrying a server ``Retry-After`` hint."""
+    error = ProviderRateLimitError("Rate limited")
+    error.retry_after = seconds
+    return error
+
+
+@pytest.mark.asyncio
+async def test_retry_honors_retry_after_as_floor_over_backoff():
+    """A ``retry_after`` larger than the backoff replaces every computed delay."""
+    # Arrange
+    mock_fn = AsyncMock(side_effect=_rate_limit_with_retry_after(10.0))
+    recorded_delays: list[float] = []
+
+    async def mock_sleep(delay: float) -> None:
+        recorded_delays.append(delay)
+
+    # Act / Assert
+    with (
+        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        patch("core.utils.retry.random.uniform", return_value=0.0),
+        pytest.raises(ProviderRateLimitError),
+    ):
+        await retry_async(mock_fn)
+
+    # Every attempt's exponential backoff (1s, 2s, 4s) is below 10s, so the
+    # provider hint dominates throughout.
+    assert recorded_delays == [10.0, 10.0, 10.0]
+
+
+@pytest.mark.asyncio
+async def test_retry_after_smaller_than_backoff_keeps_exponential():
+    """A ``retry_after`` below the computed backoff does not shorten the wait."""
+    # Arrange
+    mock_fn = AsyncMock(side_effect=_rate_limit_with_retry_after(0.1))
+    recorded_delays: list[float] = []
+
+    async def mock_sleep(delay: float) -> None:
+        recorded_delays.append(delay)
+
+    # Act / Assert
+    with (
+        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        patch("core.utils.retry.random.uniform", return_value=0.0),
+        pytest.raises(ProviderRateLimitError),
+    ):
+        await retry_async(mock_fn)
+
+    assert recorded_delays[0] == pytest.approx(INITIAL_DELAY_SECONDS)
+    assert recorded_delays[1] == pytest.approx(INITIAL_DELAY_SECONDS * BACKOFF_FACTOR)
+    assert recorded_delays[2] == pytest.approx(INITIAL_DELAY_SECONDS * BACKOFF_FACTOR**2)
+
+
+@pytest.mark.asyncio
+async def test_retry_after_is_capped_at_maximum():
+    """An excessive ``retry_after`` is clamped to ``MAX_RETRY_AFTER_SECONDS``."""
+    # Arrange
+    mock_fn = AsyncMock(side_effect=_rate_limit_with_retry_after(9999.0))
+    recorded_delays: list[float] = []
+
+    async def mock_sleep(delay: float) -> None:
+        recorded_delays.append(delay)
+
+    # Act / Assert
+    with (
+        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        patch("core.utils.retry.random.uniform", return_value=0.0),
+        pytest.raises(ProviderRateLimitError),
+    ):
+        await retry_async(mock_fn)
+
+    assert all(delay == MAX_RETRY_AFTER_SECONDS for delay in recorded_delays)
+
+
+@pytest.mark.asyncio
+async def test_retry_logs_when_honoring_retry_after(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Honoring a server hint is noted in the retry log line."""
+    # Arrange
+    mock_fn = AsyncMock(side_effect=[_rate_limit_with_retry_after(10.0), "ok"])
+    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
+
+    # Act
+    with (
+        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry.random.uniform", return_value=0.0),
+    ):
+        result = await retry_async(mock_fn)
+
+    # Assert
+    assert result == "ok"
+    retry_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.utils.retry" and "Retryable error" in record.getMessage()
+    ]
+    assert len(retry_records) == 1
+    assert "honoring server Retry-After" in retry_records[0].getMessage()
 
 
 # ----- Logging -----

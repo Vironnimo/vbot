@@ -302,7 +302,11 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
-            classify_http_status(response.status_code, detail=_http_error_detail(response))
+            classify_http_status(
+                response.status_code,
+                detail=_http_error_detail(response),
+                response_headers=response.headers,
+            )
             return dict(decode_response_json(response, "OpenAI provider"))
 
         return await retry_async(_do_request)
@@ -333,6 +337,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 classify_http_status(
                     response.status_code,
                     detail=_http_error_detail(response, error_body),
+                    response_headers=response.headers,
                 )
                 raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
             return response
