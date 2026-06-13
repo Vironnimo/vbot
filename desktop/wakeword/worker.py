@@ -41,7 +41,10 @@ _HTTP_TIMEOUT = 30.0
 _RPC_TIMEOUT = 10.0
 _MAX_RETRIES = 3
 
-_RETRYABLE_STATUS_CODES = frozenset([429, 502, 503])
+# Mirrors the always-retryable set in core/utils/http_status.py for a
+# non-idempotent POST (audio transcription). Duplicated, not imported: the
+# desktop process must not import from core (see .vorch/PROJECT.md).
+_RETRYABLE_STATUS_CODES = frozenset([429, 502, 503, 504])
 
 
 class WakewordWorker:

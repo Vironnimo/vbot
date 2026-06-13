@@ -23,6 +23,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+from core.utils.http_status import is_retryable_status
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -30,9 +31,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # HTTP status constants
 # ---------------------------------------------------------------------------
-
-# Standard retryable HTTP status codes (common to all providers).
-_RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 502, 503})
 
 # Auth-related HTTP status codes — not retryable.
 _AUTH_ERROR_STATUS_CODES: frozenset[int] = frozenset({401, 403})
@@ -232,8 +230,8 @@ def classify_http_status(
     Args:
         status_code: HTTP response status code.
         extra_retryable: Provider-specific status codes to treat as retryable
-            in addition to the standard set (e.g. ``{529}`` for Anthropic's
-            overloaded error).
+            in addition to the shared set (e.g. ``{529}`` for Anthropic's
+            overloaded error). See ``core.utils.http_status`` for the policy.
         detail: Optional detail string for the error message. If empty,
             ``str(status_code)`` is used.
         response_headers: The response headers, when available. Used to parse a
@@ -243,8 +241,9 @@ def classify_http_status(
     Raises:
         ProviderAuthError: 401 / 403 (not retryable).
         ProviderRateLimitError: 429 (retryable).
-        ProviderError: Other 4xx/5xx (retryable only for status codes in
-            the retryable set).
+        ProviderError: Other 4xx/5xx. Retryability follows the shared
+            ``is_retryable_status`` policy for a non-idempotent request (all
+            provider HTTP is POST), plus any ``extra_retryable`` codes.
     """
     if not detail:
         detail = str(status_code)
@@ -259,10 +258,8 @@ def classify_http_status(
         rate_limit_error.retry_after = retry_after
         raise rate_limit_error
     if status_code >= 400:
-        retryable_codes = set(_RETRYABLE_STATUS_CODES)
-        if extra_retryable:
-            retryable_codes |= extra_retryable
-        retryable = status_code in retryable_codes
+        # All provider HTTP requests are non-idempotent POSTs.
+        retryable = is_retryable_status(status_code, idempotent=False, extra=extra_retryable)
         provider_error = ProviderError(f"Provider error: {detail}", retryable=retryable)
         if retryable:
             provider_error.retry_after = retry_after
