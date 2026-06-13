@@ -10,6 +10,7 @@ import httpx
 import pytest
 import respx
 
+import core.tools.web_search as web_search_module
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.web_search import (
     WEB_SEARCH_TOOL_DESCRIPTION,
@@ -346,6 +347,102 @@ async def test_web_search_handler_retries_transient_http_status(
     assert data["result_count"] == 0
     assert len(route.calls) == 2
     assert sleep_attempts == [0]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_brave_exhausted_status_signals_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    async def _fake_sleep(attempt: int) -> None:
+        del attempt
+
+    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
+
+    route = respx.get(_BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(503, json={"error": {"message": "busy"}})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["retryable"] is True
+    assert error["attempts_made"] == web_search_module._RETRY_MAX_RETRIES + 1
+    assert len(route.calls) == web_search_module._RETRY_MAX_RETRIES + 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_brave_network_error_signals_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    async def _fake_sleep(attempt: int) -> None:
+        del attempt
+
+    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
+
+    def _raise_connect_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection failed", request=request)
+
+    respx.get(_BRAVE_ENDPOINT).mock(side_effect=_raise_connect_error)
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["retryable"] is True
+    assert error["attempts_made"] == web_search_module._RETRY_MAX_RETRIES + 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_brave_non_retryable_status_signals_not_retryable(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.get(_BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(403, json={"error": {"detail": "forbidden"}})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["retryable"] is False
+    assert "attempts_made" not in error
+
+
+@pytest.mark.asyncio
+async def test_web_search_validation_error_signals_not_retryable(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "   "},
+        _fake_credential_resolver,
+    )
+
+    error = assert_failure_envelope(result, "validation_error")
+    assert error["retryable"] is False
 
 
 @respx.mock
