@@ -481,7 +481,7 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 960px) {
   .agents-view .agents-layout,
   .agents-view .detail-top {
     flex-direction: column;

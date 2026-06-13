@@ -1059,7 +1059,7 @@
     stroke-width: 1.4;
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 640px) {
     .input-area {
       padding: 12px 14px;
     }
