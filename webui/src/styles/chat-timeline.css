@@ -9,10 +9,25 @@
 
 .messages__content {
   display: flex;
+  width: 100%;
   min-width: 0;
   min-height: 100%;
+  max-width: var(--chat-measure);
+  margin-inline: auto;
   flex: 1;
   flex-direction: column;
+}
+
+/* Chat reading column width. `.messages` stays full-width (scrollbar at the
+   edge); only the inner content column is capped and centered. The live width
+   comes from `--chat-measure`, which `.chat-view[data-chat-width]` overrides
+   below (Phase 3 supplies the persisted value). `full` disables the cap. */
+.chat-view[data-chat-width='wide'] {
+  --chat-measure: var(--chat-measure-wide);
+}
+
+.chat-view[data-chat-width='full'] {
+  --chat-measure: none;
 }
 
 .chat-empty-state {
