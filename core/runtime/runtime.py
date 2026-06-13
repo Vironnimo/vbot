@@ -242,7 +242,11 @@ class Runtime:
         self._start_process_manager()
         self._tools = ToolRegistry()
         self._memory_service = MemoryService()
-        register_read_tool(self._tools)
+        register_read_tool(
+            self._tools,
+            attachment_store=self._attachment_store,
+            speech_service=self._speech,
+        )
         register_edit_tool(self._tools)
         register_glob_tool(self._tools)
         register_grep_tool(self._tools)
