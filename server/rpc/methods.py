@@ -13,6 +13,7 @@ from server.rpc import (
     extensions_methods,
     operations_methods,
     settings_methods,
+    statistics_methods,
 )
 from server.rpc.dispatcher import RpcMethodHandler
 
@@ -32,6 +33,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         extensions_methods,
         operations_methods,
         debug_methods,
+        statistics_methods,
     ):
         handlers.update(registry.method_handlers())
     return handlers
