@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -1000,6 +1002,33 @@ class TestRefreshModels:
 
         with pytest.raises(ModelDiscoveryError, match="Model discovery failed"):
             await refresh_models(openrouter_config, API_KEY, tmp_path / "resources")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_logs_warning_on_catalog_refresh_failure(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+        caplog: Any,
+    ):
+        """A primary catalog-refresh failure logs a warning (no traceback) before raising."""
+
+        respx.get(OPENROUTER_MODELS_URL).mock(
+            return_value=httpx.Response(500, text="Internal Server Error")
+        )
+
+        with (
+            caplog.at_level(logging.WARNING, logger="vbot.models.discovery"),
+            pytest.raises(ModelDiscoveryError),
+        ):
+            await refresh_models(openrouter_config, API_KEY, tmp_path / "resources")
+
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        failure_record = next(
+            r for r in warning_records if "Model catalog refresh failed" in r.getMessage()
+        )
+        assert openrouter_config.id in failure_record.getMessage()
+        assert failure_record.exc_info is None
 
     @respx.mock
     @pytest.mark.asyncio
