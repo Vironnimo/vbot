@@ -16,7 +16,8 @@ from typing import Any, Protocol
 import httpx
 
 from core.models.models import Model, ModelRegistry
-from core.providers.errors import CatalogEntrySkipped
+from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
@@ -25,8 +26,9 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
-from core.utils.errors import VBotError
+from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
+from core.utils.retry import retry_async
 
 OVERRIDE_FILE_SUFFIX = ".overrides.json"
 _LOGGER = get_logger("models.discovery")
@@ -124,7 +126,7 @@ async def refresh_models(
                         adapter_class,
                         credential_connection,
                     )
-                except (httpx.HTTPError, ValueError) as exc:
+                except (httpx.HTTPError, ProviderError, NetworkError, ValueError) as exc:
                     _LOGGER.warning(
                         "Supplementary model fetch failed for provider '%s' with params %s: %s",
                         provider_config.id,
@@ -187,7 +189,14 @@ async def refresh_models(
         output_path.write_text(
             json.dumps(output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-    except (httpx.HTTPError, json.JSONDecodeError, OSError, ValueError) as exc:
+    except (
+        httpx.HTTPError,
+        ProviderError,
+        NetworkError,
+        json.JSONDecodeError,
+        OSError,
+        ValueError,
+    ) as exc:
         _LOGGER.warning(
             "Model catalog refresh failed for provider %s: %s",
             provider_config.id,
@@ -247,19 +256,42 @@ async def _fetch_raw_models(
         adapter_class,
         credential_connection,
     )
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.get(url, headers=headers)
-        response.raise_for_status()
-        payload = response.json()
 
-    raw_models = _raw_models_from_payload(payload)
-    if not isinstance(raw_models, list):
-        raise ValueError("Models response must contain a list, a data list, or a models list")
+    async def _request_models() -> tuple[Any, list[Mapping[str, Any]]]:
+        # Catalog refresh now shares the provider chat path's transient-failure
+        # handling: transport/timeout errors and retryable statuses (429/502/503/
+        # 504) are re-issued with backoff + Retry-After; a malformed body or a
+        # fatal status (401/403/404/500) raises a non-retryable error that aborts
+        # immediately.
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                response = await client.get(url, headers=headers)
+            except httpx.TransportError as exc:
+                raise wrap_network_error(exc) from exc
+            if response.status_code >= 400:
+                error_body = response.text
+                detail = (
+                    f"{response.status_code} {error_body}".strip()
+                    if error_body
+                    else str(response.status_code)
+                )
+                classify_http_status(
+                    response.status_code,
+                    detail=detail,
+                    response_headers=response.headers,
+                )
+            payload = response.json()
 
-    for raw_model in raw_models:
-        if not isinstance(raw_model, dict):
-            raise ValueError("Every raw model entry must be an object")
-    return payload, raw_models
+        raw_models = _raw_models_from_payload(payload)
+        if not isinstance(raw_models, list):
+            raise ValueError("Models response must contain a list, a data list, or a models list")
+
+        for raw_model in raw_models:
+            if not isinstance(raw_model, dict):
+                raise ValueError("Every raw model entry must be an object")
+        return payload, raw_models
+
+    return await retry_async(_request_models)
 
 
 def _raw_models_from_payload(payload: Any) -> Any:
