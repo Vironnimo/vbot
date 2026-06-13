@@ -675,6 +675,14 @@
     scrollbar-gutter: stable;
   }
 
+  /* Cap the prompt editor/preview content to the wide content measure and
+     center it; the scroll container stays full-width (scrollbar at the edge). */
+  .sp-scroll > * {
+    width: 100%;
+    max-width: var(--content-max-wide);
+    margin-inline: auto;
+  }
+
   .sp-header {
     display: flex;
     align-items: center;

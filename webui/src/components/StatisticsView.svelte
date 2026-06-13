@@ -869,6 +869,15 @@
     height: 100%;
     color: var(--text-hi);
   }
+
+  /* Cap the header and stat panels to the wide content measure and center
+     them so charts and summaries don't stretch across a wide monitor. The
+     `.stats-view` scroll container stays full-width (scrollbar at the edge). */
+  .stats-view > * {
+    width: 100%;
+    max-width: var(--content-max-wide);
+    margin-inline: auto;
+  }
   .stats-view__header {
     display: flex;
     justify-content: space-between;

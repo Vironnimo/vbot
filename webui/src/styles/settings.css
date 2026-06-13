@@ -75,8 +75,13 @@
   padding: 24px 32px;
 }
 
+/* Cap the panel to the narrow content measure and center it in the scroll
+   area so label↔control rows stop flying apart on wide monitors. The
+   `.settings-content` scroll container stays full-width (scrollbar at edge). */
 .s-panel {
   width: 100%;
+  max-width: var(--content-max-narrow);
+  margin-inline: auto;
 }
 
 .s-panel-header {
