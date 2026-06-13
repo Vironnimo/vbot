@@ -1057,11 +1057,11 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.image-lightbox')).toBeNull();
   });
 
-  it('does not open the lightbox for user attachment thumbnails', () => {
+  it('opens the lightbox when a user attachment thumbnail is clicked', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
-      'session-user-attachment-no-lightbox',
+      'session-user-attachment-lightbox',
     );
     sessionState.messages = [
       {
@@ -1070,7 +1070,52 @@ describe('ChatTimeline', () => {
         content: [
           {
             type: 'media',
-            attachment_id: 'attachment-no-lightbox',
+            attachment_id: 'attachment-lightbox',
+            filename: 'photo.png',
+            media_type: 'image/png',
+          },
+        ],
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const image = document.querySelector('.inline-attachment-image');
+    expect(image).toBeTruthy();
+    expect(document.querySelector('.image-lightbox')).toBeNull();
+
+    image.click();
+    flushSync();
+
+    const lightbox = document.querySelector('.image-lightbox');
+    expect(lightbox).toBeTruthy();
+    expect(
+      lightbox.querySelector('.image-lightbox__image').getAttribute('src'),
+    ).toBe(image.src);
+  });
+
+  it('does not open the lightbox for modifier-clicked attachment thumbnails', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-user-attachment-modifier-click',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-attachment-image',
+        role: 'user',
+        content: [
+          {
+            type: 'media',
+            attachment_id: 'attachment-modifier-click',
             filename: 'photo.png',
             media_type: 'image/png',
           },
@@ -1091,10 +1136,130 @@ describe('ChatTimeline', () => {
     const image = document.querySelector('.inline-attachment-image');
     expect(image).toBeTruthy();
 
-    image.click();
+    image.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, ctrlKey: true }),
+    );
     flushSync();
 
     expect(document.querySelector('.image-lightbox')).toBeNull();
+  });
+
+  it('toggles the lightbox between fit and actual size on image click', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-lightbox-zoom-toggle',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-lightbox-zoom',
+      sequence: 1,
+      payload: {
+        message: {
+          role: 'assistant',
+          content: '![diagram](https://example.com/diagram.png)',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    document.querySelector('.assistant-run .msg-markdown img').click();
+    flushSync();
+
+    const overlay = document.querySelector('.image-lightbox');
+    const lightboxImage = overlay.querySelector('.image-lightbox__image');
+    expect(overlay.classList.contains('image-lightbox--zoomed')).toBe(false);
+
+    // Simulate an image larger than the viewport so zoom-in is available.
+    Object.defineProperty(lightboxImage, 'naturalWidth', {
+      value: 4000,
+      configurable: true,
+    });
+    Object.defineProperty(lightboxImage, 'naturalHeight', {
+      value: 3000,
+      configurable: true,
+    });
+    window.innerWidth = 800;
+    window.innerHeight = 600;
+    window.dispatchEvent(new Event('resize'));
+    flushSync();
+
+    expect(lightboxImage.classList.contains('zoomable')).toBe(true);
+
+    lightboxImage.click();
+    flushSync();
+    expect(overlay.classList.contains('image-lightbox--zoomed')).toBe(true);
+    expect(lightboxImage.classList.contains('zoomed')).toBe(true);
+
+    lightboxImage.click();
+    flushSync();
+    expect(overlay.classList.contains('image-lightbox--zoomed')).toBe(false);
+
+    // Clicking the image must not close the lightbox.
+    expect(document.querySelector('.image-lightbox')).toBeTruthy();
+  });
+
+  it('does not zoom the lightbox when the image fits the viewport', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-lightbox-no-zoom',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-lightbox-no-zoom',
+      sequence: 1,
+      payload: {
+        message: {
+          role: 'assistant',
+          content: '![small](https://example.com/small.png)',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    document.querySelector('.assistant-run .msg-markdown img').click();
+    flushSync();
+
+    const overlay = document.querySelector('.image-lightbox');
+    const lightboxImage = overlay.querySelector('.image-lightbox__image');
+
+    Object.defineProperty(lightboxImage, 'naturalWidth', {
+      value: 200,
+      configurable: true,
+    });
+    Object.defineProperty(lightboxImage, 'naturalHeight', {
+      value: 150,
+      configurable: true,
+    });
+    window.innerWidth = 1200;
+    window.innerHeight = 900;
+    window.dispatchEvent(new Event('resize'));
+    flushSync();
+
+    expect(lightboxImage.classList.contains('zoomable')).toBe(false);
+
+    lightboxImage.click();
+    flushSync();
+    expect(overlay.classList.contains('image-lightbox--zoomed')).toBe(false);
   });
 
   it('keeps markdown-like user text as plain text', () => {
