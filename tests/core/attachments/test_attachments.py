@@ -14,7 +14,36 @@ from core.attachments.attachments import (
     AttachmentStore,
     AttachmentTooLargeError,
     AttachmentTypeNotAllowedError,
+    sniff_media_type,
 )
+
+
+@pytest.mark.parametrize(
+    ("filename", "data", "expected_media_type"),
+    [
+        ("photo.jpg", b"\xff\xd8\xff\x00\x10", "image/jpeg"),
+        ("diagram.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00", "image/png"),
+        ("song.mp3", b"ID3\x04\x00mp3-data", "audio/mpeg"),
+        ("clip.wav", b"RIFF\x24\x00\x00\x00WAVEfmt ", "audio/wav"),
+        ("movie.mp4", b"\x00\x00\x00\x18ftypisommp4-data", "video/mp4"),
+        ("report.pdf", b"%PDF-1.7\n1 0 obj\n", "application/pdf"),
+        ("notes.txt", "héllo wörld\n".encode(), "text/plain"),
+        ("payload.bin", b"\x00\x01\x02\xff\xfe", "application/octet-stream"),
+    ],
+)
+def test_sniff_media_type_classifies_known_signatures(
+    filename: str,
+    data: bytes,
+    expected_media_type: str,
+) -> None:
+    assert sniff_media_type(data, filename) == expected_media_type
+
+
+def test_sniff_media_type_does_not_create_attachments(tmp_path: Path) -> None:
+    # Sniffing is a pure byte inspection: it must not write any blob/sidecar.
+    sniff_media_type(b"\x89PNG\r\n\x1a\n", "diagram.png")
+
+    assert not (tmp_path / "attachments").exists()
 
 
 @pytest.mark.parametrize(
