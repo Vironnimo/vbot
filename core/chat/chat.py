@@ -16,6 +16,7 @@ from core.chat.events import (
     _emit_message_event,
     _emit_streaming_assistant_events,
     _is_model_fallback_trigger,
+    _is_stream_restartable_error,
     _is_streaming_fallback_error,
     _maybe_persist_partial_thinking,
     _persist_run_error,
@@ -138,6 +139,26 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("chat")
 
 MAX_TOOL_ITERATIONS = 1000
+
+# How often a streaming attempt may be restarted from scratch after a transient
+# drop that occurred before any visible output. Each restart re-issues the whole
+# request (the adapter's own connect-level retry still applies per attempt), so
+# this bounds only the post-connect mid-stream replays.
+MAX_STREAM_RESTARTS = 2
+
+
+class _StreamRestartNeeded(Exception):  # noqa: N818 — control-flow signal, not an error
+    """Internal signal: a streaming attempt dropped before any visible output.
+
+    Raised by ``_consume_stream_attempt`` and caught by
+    ``_send_streaming_assistant_request`` to replay the stream. It never escapes
+    the chat loop — the final attempt cannot restart and re-raises the real
+    error instead.
+    """
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
 
 
 def _resolve_reasoning_replay_policy(adapter: Any, model_id: str) -> ReasoningReplayPolicy:
@@ -1038,6 +1059,47 @@ class ChatLoop:
         run: Run,
         note_hook: Callable[[str], None] | None = None,
     ) -> ChatMessage:
+        # A transient drop before any visible output is replayed as a full stream
+        # restart (the not-yet-visible analogue of the non-streaming fallback).
+        # Once anything visible has been emitted, the failure propagates instead —
+        # partial output cannot be replayed cleanly.
+        for attempt in range(MAX_STREAM_RESTARTS + 1):
+            try:
+                return await self._consume_stream_attempt(
+                    agent,
+                    adapter,
+                    model_id,
+                    messages,
+                    tools,
+                    run,
+                    note_hook,
+                    can_restart=attempt < MAX_STREAM_RESTARTS,
+                )
+            except _StreamRestartNeeded as restart:
+                _LOGGER.warning(
+                    "Streaming attempt %d/%d dropped before any visible output "
+                    "(%s: %s); restarting stream",
+                    attempt + 1,
+                    MAX_STREAM_RESTARTS + 1,
+                    type(restart.cause).__name__,
+                    restart.cause,
+                )
+        # Unreachable: the final attempt runs with can_restart=False, so it either
+        # returns a message or re-raises the underlying error.
+        raise AssertionError("stream restart loop exited without returning")
+
+    async def _consume_stream_attempt(
+        self,
+        agent: Any,
+        adapter: Any,
+        model_id: str,
+        messages: list[JsonObject],
+        tools: list[JsonObject],
+        run: Run,
+        note_hook: Callable[[str], None] | None,
+        *,
+        can_restart: bool,
+    ) -> ChatMessage:
         accumulator = StreamingAccumulator()
         emitted_visible_delta = False
         stream = adapter.stream(
@@ -1059,29 +1121,24 @@ class ChatLoop:
                     run.emit(visible_delta.event_type, visible_delta.payload)
                     emitted_visible_delta = True
                 run.raise_if_cancelled()
-        except ProviderError as exc:
-            if emitted_visible_delta or not _is_streaming_fallback_error(exc):
-                _maybe_persist_partial_thinking(accumulator, note_hook)
-                raise
-            assistant_message = await self._send_non_streaming_assistant_request(
-                agent,
-                adapter,
-                model_id,
-                messages,
-                tools,
-            )
-            _emit_assistant_events(run, assistant_message)
-            return assistant_message
-        except BaseException:
+            if accumulator.finish_reason is None:
+                raise NetworkError("Provider stream ended without finish delta")
+            assistant_fields = accumulator.finalize_assistant_fields()
+        except (ProviderError, NetworkError) as exc:
+            if not emitted_visible_delta and _is_streaming_fallback_error(exc):
+                assistant_message = await self._send_non_streaming_assistant_request(
+                    agent,
+                    adapter,
+                    model_id,
+                    messages,
+                    tools,
+                )
+                _emit_assistant_events(run, assistant_message)
+                return assistant_message
+            if can_restart and not emitted_visible_delta and _is_stream_restartable_error(exc):
+                raise _StreamRestartNeeded(exc) from exc
             _maybe_persist_partial_thinking(accumulator, note_hook)
             raise
-
-        if accumulator.finish_reason is None:
-            _maybe_persist_partial_thinking(accumulator, note_hook)
-            raise NetworkError("Provider stream ended without finish delta")
-
-        try:
-            assistant_fields = accumulator.finalize_assistant_fields()
         except BaseException:
             _maybe_persist_partial_thinking(accumulator, note_hook)
             raise

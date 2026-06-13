@@ -29,8 +29,33 @@ GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models"
 OPENAI_SUBSCRIPTION_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
 OPENCODE_GO_MODELS_URL = "https://opencode-go.example/v1/models"
 STUB_DISCOVERY_MODELS_URL = "https://stub-provider.example/v1/models"
+_SIMPLE_MODELS_URL = "https://simple.example/v1/models"
 API_KEY = "test-openrouter-key"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def _simple_compatible_config() -> ProviderConfig:
+    """Minimal OpenAI-compatible provider: one fetch per refresh, no supplementary calls."""
+    return ProviderConfig(
+        id="simple",
+        name="Simple",
+        adapter="openai_compatible",
+        base_url="https://simple.example/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="SIMPLE_KEY",
+                ),
+            )
+        ],
+        defaults={},
+        models_endpoint="/models",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -1029,6 +1054,77 @@ class TestRefreshModels:
         )
         assert openrouter_config.id in failure_record.getMessage()
         assert failure_record.exc_info is None
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_retries_transient_status_then_succeeds(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A retryable status (503) is re-issued with backoff before succeeding."""
+
+        # Skip the real backoff sleep so the retry path stays fast.
+        async def _no_sleep(_delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
+
+        responses = [
+            httpx.Response(503, text="Service Unavailable"),
+            httpx.Response(200, json={"data": [{"id": "model-a", "name": "Model A"}]}),
+        ]
+        route = respx.get(_SIMPLE_MODELS_URL).mock(side_effect=responses)
+
+        result = await refresh_models(_simple_compatible_config(), API_KEY, tmp_path / "resources")
+
+        assert route.call_count == 2
+        assert result["model_count"] == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_does_not_retry_fatal_status(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A fatal status (404) aborts immediately without retrying."""
+
+        async def _fail_if_called(_delay: float) -> None:
+            raise AssertionError("fatal status must not trigger a retry sleep")
+
+        monkeypatch.setattr("core.utils.retry.asyncio.sleep", _fail_if_called)
+        route = respx.get(_SIMPLE_MODELS_URL).mock(return_value=httpx.Response(404, text="Not Found"))
+
+        with pytest.raises(ModelDiscoveryError, match="Model discovery failed"):
+            await refresh_models(_simple_compatible_config(), API_KEY, tmp_path / "resources")
+
+        assert route.call_count == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_retries_transport_error_then_succeeds(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A transient transport failure is re-issued before succeeding."""
+
+        async def _no_sleep(_delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
+
+        responses = [
+            httpx.ConnectError("connection reset"),
+            httpx.Response(200, json={"data": [{"id": "model-a", "name": "Model A"}]}),
+        ]
+        route = respx.get(_SIMPLE_MODELS_URL).mock(side_effect=responses)
+
+        result = await refresh_models(_simple_compatible_config(), API_KEY, tmp_path / "resources")
+
+        assert route.call_count == 2
+        assert result["model_count"] == 1
 
     @respx.mock
     @pytest.mark.asyncio

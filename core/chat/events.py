@@ -71,8 +71,20 @@ def _emit_message_event(run: Run, event_type: str, message: ChatMessage) -> None
     run.emit(event_type, {"message": _visible_message_payload(message)})
 
 
-def _is_streaming_fallback_error(error: ProviderError) -> bool:
+def _is_streaming_fallback_error(error: Exception) -> bool:
     return isinstance(error, ProviderStreamingUnsupportedError)
+
+
+def _is_stream_restartable_error(error: Exception) -> bool:
+    """Whether a streaming failure may be replayed as a fresh stream.
+
+    True only for retryable transport/timeout failures (``NetworkError``,
+    ``ProviderTimeoutError``, retryable ``ProviderError``). The chat loop
+    restarts the stream from scratch only when *nothing visible* has been
+    emitted yet, so the replay cannot duplicate output the user already saw —
+    this is the streaming analogue of the streaming→non-streaming fallback.
+    """
+    return bool(getattr(error, "retryable", False))
 
 
 PARTIAL_THINKING_CAP = 2000

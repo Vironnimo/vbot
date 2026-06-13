@@ -2499,6 +2499,94 @@ async def test_streaming_network_error_without_reasoning_does_not_add_partial_no
 
 
 @pytest.mark.asyncio
+async def test_streaming_mode_restarts_after_transient_drop_before_visible_output(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            # First attempt receives bytes (non-visible reasoning_meta) then drops.
+            [
+                {"type": "reasoning_meta", "reasoning_meta": {"sig": "x"}},
+                NetworkError("dropped after first byte"),
+            ],
+            # Restart re-issues the whole request and completes cleanly.
+            [
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await ChatLoop(runtime, streaming=True).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert assistant.content == "Recovered"
+    assert len(adapter.stream_requests) == 2
+    assert run.status == RunStatus.COMPLETED
+    # The discarded attempt leaves no error and no partial-thinking note.
+    assert persisted_roles(messages) == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_does_not_restart_after_visible_delta(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Visible"},
+                NetworkError("dropped mid-stream"),
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(NetworkError, match="dropped mid-stream"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    # A drop after visible output is not replayed — exactly one stream attempt.
+    assert len(adapter.stream_requests) == 1
+    assert run.status == RunStatus.FAILED
+    assert persisted_roles(messages) == ["user", "error"]
+    assert messages[1].error_kind == "network_error"
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_restart_exhaustion_persists_error(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            NetworkError("drop 1"),
+            NetworkError("drop 2"),
+            NetworkError("drop 3"),
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(NetworkError, match="drop 3"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    # Initial attempt plus MAX_STREAM_RESTARTS replays, then the error surfaces.
+    assert len(adapter.stream_requests) == 3
+    assert run.status == RunStatus.FAILED
+    assert persisted_roles(messages) == ["user", "error"]
+    assert messages[1].error_kind == "network_error"
+
+
+@pytest.mark.asyncio
 async def test_fresh_follow_up_omits_old_reasoning_and_reasoning_meta_from_request(
     tmp_path: Path,
 ) -> None:
