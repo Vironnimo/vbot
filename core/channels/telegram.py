@@ -619,11 +619,14 @@ class TelegramChannelAdapter(ChannelAdapter):
         if error is None:
             return
 
+        # Losing an entire inbound album is not "expected"; carry the traceback so the
+        # dropped media is diagnosable beyond str(error).
         _LOGGER.warning(
             "Telegram album flush failed (channel=%s album=%s): %s",
             self._config.id,
             album_id,
             error,
+            exc_info=(type(error), error, error.__traceback__),
         )
 
     # -- Update parsing -------------------------------------------------------------------

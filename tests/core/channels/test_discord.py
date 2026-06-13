@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -629,6 +630,59 @@ async def test_ensure_outbound_session_uses_cached_target_kind(tmp_path: Path) -
 
     assert route.session_id == "ch-dc-assistant-100"
     assert chat_sessions.exists("assistant", route.session_id)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_inbound_dispatch_failure_logged_in_vbot_logger(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # discord.py catches and logs handler exceptions only to its own `discord` logger and
+    # silently drops the message; the adapter must surface the failure in
+    # vbot.channels.discord so the crash is visible.
+    channel = FakeChannel(100, guild=None, recipient_id=50)
+    adapter, _sessions, _trigger, _client = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+    )
+
+    async def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("dispatch exploded")
+
+    adapter._engine.handle_inbound_text = boom  # type: ignore[method-assign]
+    message = make_message(channel, message_id=200, author_id=50, content="hello")
+
+    with caplog.at_level(logging.ERROR, logger="vbot.channels.discord"):
+        # Must not raise out of the handler: discord.py would otherwise be the only place
+        # the error lands.
+        await adapter._handle_inbound_message(message)
+
+    error_records = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert any("Discord inbound dispatch failed" in record.getMessage() for record in error_records)
+    assert any(record.exc_info is not None for record in error_records)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_inbound_dispatch_propagates_cancellation(tmp_path: Path) -> None:
+    # Cooperative cancel must not be swallowed by the dispatch error boundary.
+    channel = FakeChannel(100, guild=None, recipient_id=50)
+    adapter, _sessions, _trigger, _client = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+    )
+
+    async def cancel(*_args: Any, **_kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    adapter._engine.handle_inbound_text = cancel  # type: ignore[method-assign]
+    message = make_message(channel, message_id=200, author_id=50, content="hello")
+
+    with pytest.raises(asyncio.CancelledError):
+        await adapter._handle_inbound_message(message)
     await adapter.stop()
 
 
