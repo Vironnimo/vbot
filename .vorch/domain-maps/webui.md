@@ -15,9 +15,9 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 - `ChatView.svelte`, `chatState.js`, `chatTimeline.js`, `ChatTimeline.svelte`, `ChatComposer.svelte`, `QueuedMessages.svelte`, and `SessionListDrawer.svelte` own the Chat surface, timeline aggregation, composer input, server-backed queue projection, and local Session overrides. `chatState.js` is the public helper surface and owns Session/Run mutation; pure history/live timeline projection belongs in `chatTimeline.js`.
 - `AgentsView.svelte`, `agentForm.js`, and `modelSelection.js` own Agent CRUD form state, sparse edit payloads, backend-backed model/connection selection, tool/skill access controls, custom prompt toggle, workspace editing, and memory-mode handling.
 - `SettingsView.svelte`, `settingsView.js`, `channelSettings.js`, `taskModelSettings.js`, `desktopBridge.js`, and `wakewordSettings.js` own Settings panel state, settings update payloads, provider OAuth UI state, channel forms, specialized model bindings, Desktop bridge calls, and Voice panel state.
-- `SystemPromptView.svelte` owns prompt fragment editing and prompt-scope UX; backend prompt semantics live in `.vorch/specs/prompts.md`.
-- `LogsView.svelte` and `logsView.js` own read-only log file selection, local level/search/sort state, and dedicated log-stream reconnect behavior; backend parsing and socket contracts live in `.vorch/specs/logs.md`.
-- `CronView.svelte` and `cronView.js` own the Cron tab view state and create/update payload construction; scheduler behavior lives in `.vorch/specs/automation.md`.
+- `SystemPromptView.svelte` owns prompt fragment editing and prompt-scope UX; backend prompt semantics live in `.vorch/domain-maps/prompts.md`.
+- `LogsView.svelte` and `logsView.js` own read-only log file selection, local level/search/sort state, and dedicated log-stream reconnect behavior; backend parsing and socket contracts live in `.vorch/domain-maps/logs.md`.
+- `CronView.svelte` and `cronView.js` own the Cron tab view state and create/update payload construction; scheduler behavior lives in `.vorch/domain-maps/automation.md`.
 - `markdown.js`, `toastState.js`, `audioRecorder.js`, `sessionListView.js`, `clientCaches.js`, and the other small `lib/` helpers should stay pure where practical and are covered by focused Vitest tests under matching `__tests__/` directories.
 
 ## State Flows
@@ -79,7 +79,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 - Browser resources (`EventSource`, `WebSocket`, `MediaRecorder`, object URLs, timers, and polling intervals) need explicit cleanup on component destroy or state change.
 - App-wide transient success/error feedback should use the app-level `ToastStack`; avoid new local toast systems inside individual views.
 - Keep business-ish normalization in `webui/src/lib/*` helpers where it can be unit-tested, and keep Svelte components focused on display, input, and orchestration.
-- Frontend tests use Vitest/jsdom and live near the source under `webui/src/**/__tests__/`. For frontend-only changes, use `python scripts/quality-frontend.py [paths...]` when a real code path changes; doc-only spec edits do not need Vitest.
+- Frontend tests use Vitest/jsdom and live near the source under `webui/src/**/__tests__/`. For frontend-only changes, use `python scripts/quality-frontend.py [paths...]` when a real code path changes; doc-only domain-map edits do not need Vitest.
 
 ## Constraints & Gotchas
 

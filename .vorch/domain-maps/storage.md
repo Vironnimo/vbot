@@ -10,7 +10,7 @@ Data-directory bootstrap, atomic settings and credential persistence, and raw pr
 
 `ensure_directories()` creates the shared bootstrap directories under `<data_dir>`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `debug`, `oauth`, `prompts`, `recall`, `speech`, `skills`, and `logs`.
 
-`<data_dir>/settings.json` is a UTF-8 JSON object. Storage owns raw file I/O, validation-gated loading, normalized persistence helpers, and locked read-modify-write transactions; `.vorch/specs/settings.md` owns the raw key list and public `settings.update` section shapes.
+`<data_dir>/settings.json` is a UTF-8 JSON object. Storage owns raw file I/O, validation-gated loading, normalized persistence helpers, and locked read-modify-write transactions; `.vorch/domain-maps/settings.md` owns the raw key list and public `settings.update` section shapes.
 
 `<data_dir>/.env` is a user-owned credential fallback file. Storage can read it as a snapshot or update one single-line credential key; process environment values remain higher precedence when callers request a merged environment snapshot.
 
@@ -24,7 +24,7 @@ Other domains may create additional data under the same root on demand. For exam
 - `StorageManager(data_dir=None, config=None, resources_dir=None)` resolves `data_dir`, stores the resources root, and owns a process-local re-entrant lock for settings transactions.
 - Data-root and credentials: `ensure_directories()`, `load_environment()`, `load_data_dir_credentials()`, `set_data_dir_credential(key, value)`, `remove_data_dir_credential(key)`, and `build_environment_snapshot()`.
 - Raw settings transactions: `load_settings()`, `save_settings(settings)`, `update_settings(mutator)`, and `update_settings_sections(settings_update)`. `load_settings()` returns `{}` for a missing file and raises `StorageError` for invalid JSON/schema diagnostics from `core/settings/validation.py`.
-- Normalized settings helpers cover Appearance, Skills directories, Sub-Agent limits, Compaction, Agent defaults, Recall, Web Search, Debug, and Model Task bindings. Section schema knowledge lives in `core/settings/normalizers.py` (see `.vorch/specs/settings.md`); Storage's job is to call those normalizers, merge, delete empty sections where applicable, and persist.
+- Normalized settings helpers cover Appearance, Skills directories, Sub-Agent limits, Compaction, Agent defaults, Recall, Web Search, Debug, and Model Task bindings. Section schema knowledge lives in `core/settings/normalizers.py` (see `.vorch/domain-maps/settings.md`); Storage's job is to call those normalizers, merge, delete empty sections where applicable, and persist.
 - Prompt fragments: `copy_prompt_fragments()`, `read_prompt_fragment()`, `write_prompt_fragment()`, `reset_prompt_fragment()`, plus Agent-scope helpers `copy_agent_prompt_fragments()`, `agent_prompts_dir()`, `agent_prompt_fragment_exists()`, `read_agent_prompt_fragment()`, `write_agent_prompt_fragment()`, and `reset_agent_prompt_fragment()`.
 
 ## Conventions

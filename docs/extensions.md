@@ -6,7 +6,7 @@ enable/disable; it can contribute several **capabilities** — hooks, tools, and
 recall backends — through a single `register(api)` entry point.
 
 This is the author guide. For the precise internal contract (composition rules,
-dispatch internals) see [`.vorch/specs/extensions.md`](../.vorch/specs/extensions.md);
+dispatch internals) see [`.vorch/domain-maps/extensions.md`](../.vorch/domain-maps/extensions.md);
 for runnable samples see [`examples/extensions/`](../examples/extensions/).
 
 > **Trust boundary.** Extensions run in-process with the **same trust as the
@@ -163,7 +163,7 @@ Skill instead.)
 (`factory` is `RecallBackendContext -> RecallBackend`). The name must be
 lowercase snake_case and must not collide with a built-in. Once registered, a
 backend becomes selectable via `settings.recall.backend` (Settings → Recall).
-See [`.vorch/specs/recall.md`](../.vorch/specs/recall.md) for the backend
+See [`.vorch/domain-maps/recall.md`](../.vorch/domain-maps/recall.md) for the backend
 protocol.
 
 ## Lifecycle: startup and shutdown

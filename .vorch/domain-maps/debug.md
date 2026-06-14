@@ -97,7 +97,7 @@ Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_head
 
 ### RPC (`server/rpc/debug_methods.py`)
 
-See `.vorch/specs/server.md` for the envelope. All gated on `debug.enabled` except where noted.
+See `.vorch/domain-maps/server.md` for the envelope. All gated on `debug.enabled` except where noted.
 
 - `debug.status` → `{ enabled, trace_limit, trace_count, data_directory }`. **Always available** (ungated).
 - `debug.trace_list` → `{ traces }` — index entries, newest first.

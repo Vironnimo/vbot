@@ -79,7 +79,7 @@ class DebugTraceStore:
         Args:
             trace_id: Unique identifier for this trace.
             trace_data: Full trace payload following the canonical shape in
-                ``.vorch/specs/debug.md``. Metadata is extracted from the
+                ``.vorch/domain-maps/debug.md``. Metadata is extracted from the
                 nested ``request`` / ``response`` objects for the index entry.
         """
         self._ensure_directories()

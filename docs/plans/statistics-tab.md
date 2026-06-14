@@ -8,7 +8,7 @@
 
 vBot is a local-first agent harness: one async Python kernel (`core/`) behind a FastAPI server (`server/`), a Svelte WebUI (`webui/`, JavaScript — **no TypeScript**), a pywebview desktop shell, and a CLI. Communication is `POST /api/rpc` (method dispatch) + `/ws` + SSE.
 
-Mandatory project reads before coding (project rule): `.vorch/PROJECT.md` (architecture, conventions, specs index, dev/test commands) and `.vorch/GLOSSARY.md` (terms). For each domain you touch, read its spec under `.vorch/specs/` — the `read:` field on every task below lists the relevant ones. Work directly on `main`; commit per logical unit with conventional-commit messages; run the quality gates before committing.
+Mandatory project reads before coding (project rule): `.vorch/PROJECT.md` (architecture, conventions, domain-maps index, dev/test commands) and `.vorch/GLOSSARY.md` (terms). For each domain you touch, read its domain map under `.vorch/domain-maps/` — the `read:` field on every task below lists the relevant ones. Work directly on `main`; commit per logical unit with conventional-commit messages; run the quality gates before committing.
 
 Conventions that bind this work: constructor dependency injection via `__init__` with `typing.Protocol` interfaces (no globals/service-locator); UTC ISO-8601 timestamps persisted, UI renders in user timezone; structured logging via `LogManager` (`vbot.<domain>` loggers, no `print`); **no legacy/migration branches** (read current format only); every user-visible WebUI string goes through `t(...)` in `webui/src/lib/i18n.js`.
 
@@ -50,7 +50,7 @@ Not derivable from persisted data (kept OUT of scope, see Scope):
 
 **Scope:**
 
-- **In:** new read-only `core/statistics/` aggregation domain; one server RPC returning a full statistics report (optional time-window param); new `Statistics` WebUI tab with 4 internal sub-views; i18n; tests; new spec + PROJECT.md index update.
+- **In:** new read-only `core/statistics/` aggregation domain; one server RPC returning a full statistics report (optional time-window param); new `Statistics` WebUI tab with 4 internal sub-views; i18n; tests; new domain map + PROJECT.md index update.
 - **Out:** any new persistence or derived cache (on-demand full scan only in v1); cost/pricing; authoritative fallback/subagent-from-events; Logs / Attachments / Skills / Extensions / Memory statistics (future "System Health" surface); a dedicated Sessions sub-tab (data is available; deferred to a later iteration).
 
 **Assumptions & Constraints:**
@@ -83,7 +83,7 @@ Use these exact entry points — they have been checked, do not re-derive or gue
 | M1 | Core aggregation | `core/statistics/` computes a full `StatisticsReport` from JSONL in one pass; unit-tested against synthetic sessions covering every role, run segmentation, real+estimated usage, tool envelopes, errors. |
 | M2 | RPC contract | `statistics.report` returns the report (optional `{ since, until }` window); registered and tested. |
 | M3 | WebUI tab | `Statistics` nav item + `StatisticsView.svelte` with Overview / Usage / Runs & Errors / Tools sub-views, pure helpers in `lib/statisticsView.js`, i18n, Vitest. |
-| M4 | Docs | `.vorch/specs/statistics.md` + PROJECT.md specs index / core-modules entry. |
+| M4 | Docs | `.vorch/domain-maps/statistics.md` + PROJECT.md domain-maps index / core-modules entry. |
 
 ### Phase Breakdown
 
@@ -91,7 +91,7 @@ Use these exact entry points — they have been checked, do not re-derive or gue
 **Goal of this phase:** A DI-constructed `StatisticsService` that scans all sessions once and returns a `StatisticsReport` dataclass tree covering all four tabs' needs.
 **Can run in parallel with:** none (foundation).
 
-- Implement the domain — read: [.vorch/specs/sessions.md], [.vorch/specs/recall.md] (scan pattern), [.vorch/specs/chat.md] (message shape), [.vorch/specs/models.md] (model-id convention) — files: [core/statistics/__init__.py, core/statistics/statistics.py]
+- Implement the domain — read: [.vorch/domain-maps/sessions.md], [.vorch/domain-maps/recall.md] (scan pattern), [.vorch/domain-maps/chat.md] (message shape), [.vorch/domain-maps/models.md] (model-id convention) — files: [core/statistics/__init__.py, core/statistics/statistics.py]
   - `StatisticsService(chat_sessions, agents)` via constructor injection; `agents` is a minimal `Protocol` exposing the agent-id list (wired from the runtime's agents service). No global singletons.
   - One pass: for each agent id → `chat_sessions.list_with_metadata(agent_id)` for session created/last-active + `chat_sessions.get(agent_id, id).load()` for messages. Accumulate:
     - **Totals:** agents, sessions, messages-by-role, last-activity overall + per agent (from `list_with_metadata`).
@@ -111,7 +111,7 @@ Use these exact entry points — they have been checked, do not re-derive or gue
 **Goal of this phase:** Expose the report over RPC.
 **Can run in parallel with:** none (depends on Phase 1; touches the shared registry).
 
-- New methods module — read: [.vorch/specs/server.md], [.vorch/specs/runtime.md] — files: [server/rpc/statistics_methods.py]
+- New methods module — read: [.vorch/domain-maps/server.md], [.vorch/domain-maps/runtime.md] — files: [server/rpc/statistics_methods.py]
   - `statistics.report` handler: optional params `{ since?, until? }` (ISO UTC) validated through the existing server validation approach; reject unknown params like sibling handlers. Build/obtain `StatisticsService` from runtime state (mirror how `operations_methods` lazily builds `LogViewer`), call it, return the report as a JSON-serializable dict. Strip nothing sensitive needed — there is no opaque provider metadata in the report by construction (no raw tool args, no reasoning_meta).
   - `method_handlers()` returns `{ "statistics.report": ... }`.
 - Register the module — files: [server/rpc/methods.py]
@@ -125,7 +125,7 @@ Use these exact entry points — they have been checked, do not re-derive or gue
 #### Phase 3: WebUI Statistics tab
 **Goal of this phase:** The four-sub-view tab, rendered from one `statistics.report` call.
 **Can run in parallel with:** none as a phase (depends on the Phase 2 contract), but tasks **within** it parallelize where file-scopes are disjoint.
-Read for all tasks: [.vorch/specs/webui.md], [.vorch/DESIGN.md].
+Read for all tasks: [.vorch/domain-maps/webui.md], [.vorch/DESIGN.md].
 
 - Pure display/formatting helpers ⚡ *parallel with the component task* — files: [webui/src/lib/statisticsView.js, webui/src/lib/__tests__/statisticsView.test.js]
   - Number/token/percent/duration formatting (locale via `activeLocaleTag()`), measured-vs-estimated token split rendering, daily→week/month rollup, provider→model grouping for the Usage table, top-N selection, percentile labels. Keep all non-trivial logic here (unit-testable), components stay display-only.
@@ -143,13 +143,13 @@ Read for all tasks: [.vorch/specs/webui.md], [.vorch/DESIGN.md].
 **Goal of this phase:** Document the new domain per project rules.
 **Can run in parallel with:** Phase 3 (disjoint files), once the Phase 1/2 contract is settled.
 
-- New spec — **read [.vorch/workflows/spec-workflow.md] first** — files: [.vorch/specs/statistics.md]
+- New domain map — **read [.vorch/workflows/domain-map-workflow.md] first** — files: [.vorch/domain-maps/statistics.md]
   - Factual working notes: the read-only-aggregation boundary, the run-summary segmentation rule, real-vs-estimated token handling, the derived-fallback caveat, the `statistics.report` contract, and what is explicitly NOT derivable (cost, authoritative fallback/subagent). Every claim backed by source/tests.
 - Index it — files: [.vorch/PROJECT.md]
-  - Add `core/statistics` to the Core modules list and a `.vorch/specs/statistics.md` row to the Specs index table.
+  - Add `core/statistics` to the Core modules list and a `.vorch/domain-maps/statistics.md` row to the Domain Maps index table.
 
 **Dependencies:** Phases 1-2 (so the documented contract is real).
-**Done when:** the spec exists, follows spec-workflow rules, and PROJECT.md references it.
+**Done when:** the domain map exists, follows domain-map-workflow rules, and PROJECT.md references it.
 
 ### Risks & Mitigations
 
@@ -158,6 +158,6 @@ Read for all tasks: [.vorch/specs/webui.md], [.vorch/DESIGN.md].
 | Full scan slow as data grows | Med | Med | Single pass for all aggregates; one RPC call; document the disposable-cache path (recall pattern) as the explicit future step — do not pre-build it. |
 | Estimated tokens misread as real spend | Med | High | Never merge measured + estimated; surface both with counts; UI badge. |
 | Run segmentation wrong for internal/automation runs (no `user_message_persisted`) | Med | Low | Segment strictly on `run_summary` boundaries (present for all run types); cover internal-run shape in tests. |
-| Derived fallback mistaken for authoritative | Low | Med | Label it "derived from in-run model change"; document the caveat in the spec and UI copy. |
+| Derived fallback mistaken for authoritative | Low | Med | Label it "derived from in-run model change"; document the caveat in the domain map and UI copy. |
 | Raw tool arguments leaking into stats | Low | High | Aggregate only tool `name`, `timing`, and `{ok,error.code}`; never read `tool_calls.arguments` into the report; assert in tests. |
 | Parallel edits to shared files (`methods.py`, `App.svelte`, `i18n.js`) | Med | Med | Marked sequential; no `⚡` on shared-file tasks. |

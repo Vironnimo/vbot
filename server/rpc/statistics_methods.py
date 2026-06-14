@@ -1,7 +1,7 @@
 """Statistics RPC handler.
 
 ``statistics.report`` returns a full read-only :class:`StatisticsReport` computed
-on demand from persisted Sessions (see ``.vorch/specs/statistics.md``). It accepts
+on demand from persisted Sessions (see ``.vorch/domain-maps/statistics.md``). It accepts
 an optional ``{since, until}`` ISO-8601 UTC window and contains no opaque provider
 metadata by construction (no raw tool arguments, no reasoning data).
 """

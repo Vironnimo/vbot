@@ -1,7 +1,7 @@
 """Tests for ProviderDebugRecorder / _TraceCapture: shape, redaction, lifecycle.
 
 These drive the capture object directly (as the HTTP transport does) without a
-real network, asserting the canonical trace shape in ``.vorch/specs/debug.md``:
+real network, asserting the canonical trace shape in ``.vorch/domain-maps/debug.md``:
 one complete raw request and one complete raw response per provider call, with
 the full aggregate body (streaming or not) under ``response.body`` and no
 ``stream.events`` split.

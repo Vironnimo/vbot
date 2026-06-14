@@ -3,7 +3,7 @@
 This domain computes a full :class:`StatisticsReport` on demand by scanning the
 canonical JSONL Sessions that already exist — it adds no persistence of its own
 and writes nothing. Every figure is derived from persisted ``ChatMessage`` data
-(see ``.vorch/specs/statistics.md``):
+(see ``.vorch/domain-maps/statistics.md``):
 
 - **Runs** come from ``run_summary`` records, which annotate the immediately
   preceding Assistant Run. Assistant/tool messages carry no ``run_id`` of their

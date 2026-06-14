@@ -49,7 +49,7 @@ arrives as `api.config` (from `settings.json` → `extensions.config.<name>`), a
 Decision objects for the `tool_call` hook (`Deny`, `Modify`, `Replace`) import
 straight from `core.extensions`.
 
-See `.vorch/specs/extensions.md` for the full contract: every event's
+See `.vorch/domain-maps/extensions.md` for the full contract: every event's
 composition rule, identity and the optional `extension.json` manifest, lifecycle
 timing, and the trust boundary (extensions share the kernel's trust — there is
 no sandbox).
