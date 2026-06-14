@@ -199,6 +199,58 @@ def test_built_in_commands_include_current_catalog() -> None:
     }
 
 
+def test_built_in_commands_declare_argument_and_output_metadata() -> None:
+    specs = CommandDispatcher.BUILT_IN_COMMANDS
+    argument_modes = {name: spec.argument for name, spec in specs.items()}
+    output_channels = {name: spec.output for name, spec in specs.items()}
+
+    assert argument_modes == {
+        "compact": "optional",
+        "handoff": "optional",
+        "help": "none",
+        "new": "none",
+        "retry": "none",
+        "status": "none",
+        "stop": "none",
+    }
+    assert output_channels == {
+        "compact": "toast",
+        "handoff": "action",
+        "help": "transient",
+        "new": "action",
+        "retry": "action",
+        "status": "transient",
+        "stop": "toast",
+    }
+
+
+def test_dispatch_status_marks_transient_output() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/status")
+
+    assert isinstance(result, CommandHandled)
+    assert result.output == "transient"
+
+
+def test_dispatch_help_marks_transient_output() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/help")
+
+    assert isinstance(result, CommandHandled)
+    assert result.output == "transient"
+
+
+def test_dispatch_stop_marks_toast_output() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/stop")
+
+    assert isinstance(result, CommandHandled)
+    assert result.output == "toast"
+
+
 def test_dispatch_handoff_without_argument_returns_action() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
@@ -233,10 +285,34 @@ def test_dispatch_handoff_tolerates_surrounding_whitespace() -> None:
     assert result == CommandAction(name="handoff", argument="coder")
 
 
-def test_dispatch_handoff_with_two_arguments_returns_not_a_command() -> None:
+def test_dispatch_handoff_takes_full_remainder_as_argument() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
     result = dispatcher.dispatch("coder", "session-one", "/handoff a b")
+
+    assert result == CommandAction(name="handoff", argument="a b")
+
+
+def test_dispatch_compact_with_instruction_returns_action_with_argument() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/compact keep the API design")
+
+    assert result == CommandAction(name="compact", argument="keep the API design")
+
+
+def test_dispatch_compact_without_instruction_returns_action_without_argument() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/compact")
+
+    assert result == CommandAction(name="compact", argument=None)
+
+
+def test_dispatch_no_argument_command_with_trailing_text_is_not_a_command() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/status now")
 
     assert isinstance(result, NotACommand)
 
@@ -265,7 +341,8 @@ def test_dispatch_accessor_commands_return_actions(message: str, action_name: st
         (" /STOP ", True),
         ("/handoff", True),
         ("/handoff coder", True),
-        ("/handoff a b", False),
+        ("/handoff a b", True),
+        ("/compact keep the design", True),
         ("/bogus", False),
         ("/stop now", False),
         ("hello", False),

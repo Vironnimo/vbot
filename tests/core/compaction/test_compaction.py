@@ -325,6 +325,34 @@ async def test_summarization_strategy_compact_is_incremental_after_checkpoint() 
     assert "ALREADY COMPACTED assistant one" not in prompt
 
 
+@pytest.mark.asyncio
+async def test_summarization_strategy_compact_includes_user_instruction() -> None:
+    messages = [
+        _user("u1", "first turn"),
+        _assistant("a1", "first answer"),
+        _user("u2", "tail turn"),
+        _assistant("a2", "tail answer"),
+    ]
+    adapter = StubSummaryAdapter({"content": "Compacted context."})
+    storage = StubStorage("Create a continuation context.")
+    settings = CompactionSettings(tail_tokens=4)
+    strategy = SummarizationStrategy()
+
+    await strategy.compact(
+        messages,
+        agent=object(),
+        summary_adapter=adapter,
+        summary_model_id="anthropic/claude-sonnet-4",
+        storage=storage,
+        settings=settings,
+        instruction="focus on the unresolved bug",
+    )
+
+    prompt = adapter.requests[0]["messages"][0]["content"]
+    assert "<user_instruction>" in prompt
+    assert "focus on the unresolved bug" in prompt
+
+
 def test_compaction_service_should_auto_compact_thresholds() -> None:
     service = CompactionService(NoopStrategy())
 

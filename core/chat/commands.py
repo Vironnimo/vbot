@@ -26,7 +26,16 @@ else:
 CommandActionName = Literal["compact", "handoff", "new_session", "retry_last_turn"]
 StatusActivityName = Literal["idle", "running"]
 
-CommandHandler = Callable[[str, str], "CommandHandled | CommandAction"]
+# Argument mode drives the autocomplete trigger behavior: ``none`` commands run
+# immediately on selection; ``optional``/``required`` insert the token and wait
+# for text. ``required`` is unused today but kept deliberately for future
+# commands. Output channel drives how the accessor presents a handled command:
+# ``toast`` (transient confirmation), ``transient`` (a non-persisted chat card),
+# or ``action`` (a state change such as a session switch or a re-run).
+CommandArgumentMode = Literal["none", "optional", "required"]
+CommandOutputChannel = Literal["toast", "transient", "action"]
+
+CommandHandler = Callable[[str, str, "str | None"], "CommandHandled | CommandAction"]
 
 _LOGGER = get_logger("chat.commands")
 
@@ -39,11 +48,27 @@ _STATUS_MODEL_DISPLAY_OVERRIDE: ContextVar[str | None] = ContextVar(
 
 
 @dataclass(frozen=True)
+class CommandSpec:
+    """Declarative metadata for a built-in slash command.
+
+    ``argument`` and ``output`` replace per-command special cases: trigger and
+    presentation behavior are derived from these two attributes instead of
+    being hardcoded at each call site.
+    """
+
+    name: str
+    description: str
+    argument: CommandArgumentMode
+    output: CommandOutputChannel
+
+
+@dataclass(frozen=True)
 class CommandHandled:
     """Result indicating command dispatch handled the message."""
 
     reply: str | None
     data: dict[str, object] | None = None
+    output: CommandOutputChannel | None = None
 
 
 @dataclass(frozen=True)
@@ -78,14 +103,49 @@ DispatchResult = CommandHandled | CommandAction | NotACommand
 class CommandDispatcher:
     """Dispatches built-in slash commands before run startup."""
 
-    BUILT_IN_COMMANDS: dict[str, str] = {
-        "compact": "Compact the current session's context immediately.",
-        "handoff": "Write a handoff and start a new session (optionally for another agent).",
-        "help": "Show available built-in slash commands.",
-        "new": "Start a new session for the current agent.",
-        "retry": "Retry the last user turn in this session.",
-        "status": "Show current session and runtime status.",
-        "stop": "Cancel the active run for this session.",
+    BUILT_IN_COMMANDS: dict[str, CommandSpec] = {
+        "compact": CommandSpec(
+            "compact",
+            "Compact the current session's context immediately.",
+            argument="optional",
+            output="toast",
+        ),
+        "handoff": CommandSpec(
+            "handoff",
+            "Write a handoff and start a new session (optionally for another agent).",
+            argument="optional",
+            output="action",
+        ),
+        "help": CommandSpec(
+            "help",
+            "Show available built-in slash commands.",
+            argument="none",
+            output="transient",
+        ),
+        "new": CommandSpec(
+            "new",
+            "Start a new session for the current agent.",
+            argument="none",
+            output="action",
+        ),
+        "retry": CommandSpec(
+            "retry",
+            "Retry the last user turn in this session.",
+            argument="none",
+            output="action",
+        ),
+        "status": CommandSpec(
+            "status",
+            "Show current session and runtime status.",
+            argument="none",
+            output="transient",
+        ),
+        "stop": CommandSpec(
+            "stop",
+            "Cancel the active run for this session.",
+            argument="none",
+            output="toast",
+        ),
     }
 
     def __init__(
@@ -102,20 +162,22 @@ class CommandDispatcher:
         self._models = models
         self._started_at = started_at
         self._commands: dict[str, CommandHandler] = {
-            "/compact": self._handle_compact,
-            "/help": self._handle_help,
-            "/new": self._handle_new,
-            "/retry": self._handle_retry,
-            "/status": self._handle_status,
-            "/stop": self._handle_stop,
+            "compact": self._handle_compact,
+            "handoff": self._handle_handoff,
+            "help": self._handle_help,
+            "new": self._handle_new,
+            "retry": self._handle_retry,
+            "status": self._handle_status,
+            "stop": self._handle_stop,
         }
 
     def dispatch(self, agent_id: str, session_id: str, message_text: str) -> DispatchResult:
         """Dispatch one message as a built-in slash command when recognized."""
-        handler = self._resolve_command(message_text)
-        if handler is None:
+        matched = self._match_command(message_text)
+        if matched is None:
             return NotACommand()
-        return handler(agent_id, session_id)
+        spec, argument = matched
+        return self._commands[spec.name](agent_id, session_id, argument)
 
     def recognizes(self, message_text: str) -> bool:
         """Return whether dispatching this message would handle it as a command.
@@ -123,32 +185,47 @@ class CommandDispatcher:
         Lets accessors gate command authorization before ``dispatch()`` runs handler
         side effects (e.g. ``/stop`` cancelling a Run).
         """
-        return self._resolve_command(message_text) is not None
+        return self._match_command(message_text) is not None
 
-    def _resolve_command(self, message_text: str) -> CommandHandler | None:
+    def _match_command(self, message_text: str) -> tuple[CommandSpec, str | None] | None:
+        """Resolve a message to a command spec and its parsed argument.
+
+        ``none`` commands match only when nothing trails the token, so text after
+        a no-argument command falls through as a normal message. ``optional`` and
+        ``required`` commands take the entire remainder after the first token as
+        their argument (single source of truth for both ``dispatch`` and
+        ``recognizes``).
+        """
         stripped_text = message_text.strip()
+        if not stripped_text.startswith("/"):
+            return None
         first_token, _, remainder = stripped_text.partition(" ")
-        if first_token.lower() == "/handoff":
-            trailing = remainder.strip()
-            if not trailing:
-                return lambda _agent_id, _session_id: CommandAction(name="handoff", argument=None)
-            tokens = trailing.split()
-            if len(tokens) != 1:
+        name = first_token[1:].lower()
+        spec = self.BUILT_IN_COMMANDS.get(name)
+        if spec is None:
+            return None
+        argument = remainder.strip()
+        if spec.argument == "none":
+            if argument:
                 return None
-            target_agent_id = tokens[0]
-            return lambda _agent_id, _session_id: CommandAction(
-                name="handoff", argument=target_agent_id
-            )
-        return self._commands.get(stripped_text.lower())
+            return spec, None
+        return spec, (argument or None)
 
-    def _handle_compact(self, agent_id: str, session_id: str) -> CommandAction:
-        return CommandAction(name="compact")
+    def _handle_compact(
+        self, agent_id: str, session_id: str, argument: str | None
+    ) -> CommandAction:
+        return CommandAction(name="compact", argument=argument)
 
-    def _handle_help(self, agent_id: str, session_id: str) -> CommandHandled:
+    def _handle_handoff(
+        self, agent_id: str, session_id: str, argument: str | None
+    ) -> CommandAction:
+        return CommandAction(name="handoff", argument=argument)
+
+    def _handle_help(self, agent_id: str, session_id: str, argument: str | None) -> CommandHandled:
         lines = ["Built-in slash commands:"]
         lines.extend(
-            f"/{name} - {description}"
-            for name, description in sorted(self.BUILT_IN_COMMANDS.items())
+            f"/{spec.name} - {spec.description}"
+            for spec in sorted(self.BUILT_IN_COMMANDS.values(), key=lambda spec: spec.name)
         )
         lines.extend(
             [
@@ -157,22 +234,24 @@ class CommandDispatcher:
                 "Use $skill-name to force a skill without sending a slash command.",
             ]
         )
-        return CommandHandled(reply="\n".join(lines))
+        return CommandHandled(reply="\n".join(lines), output="transient")
 
-    def _handle_stop(self, agent_id: str, session_id: str) -> CommandHandled:
+    def _handle_stop(self, agent_id: str, session_id: str, argument: str | None) -> CommandHandled:
         try:
             self._chat_runs.cancel_by_session(agent_id, session_id)
         except RunNotFoundError:
-            return CommandHandled(reply="No active run to cancel.")
-        return CommandHandled(reply="Run cancelled.")
+            return CommandHandled(reply="No active run to cancel.", output="toast")
+        return CommandHandled(reply="Run cancelled.", output="toast")
 
-    def _handle_new(self, agent_id: str, session_id: str) -> CommandAction:
+    def _handle_new(self, agent_id: str, session_id: str, argument: str | None) -> CommandAction:
         return CommandAction(name="new_session")
 
-    def _handle_retry(self, agent_id: str, session_id: str) -> CommandAction:
+    def _handle_retry(self, agent_id: str, session_id: str, argument: str | None) -> CommandAction:
         return CommandAction(name="retry_last_turn")
 
-    def _handle_status(self, agent_id: str, session_id: str) -> CommandHandled:
+    def _handle_status(
+        self, agent_id: str, session_id: str, argument: str | None
+    ) -> CommandHandled:
         agent: Agent | None = None
         messages: list[ChatMessage] = []
 
@@ -217,7 +296,7 @@ class CommandDispatcher:
             model_display_name,
             activity,
         )
-        return CommandHandled(reply=text)
+        return CommandHandled(reply=text, output="transient")
 
 
 def resolve_status_model_details(

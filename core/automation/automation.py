@@ -77,6 +77,12 @@ class TriggerService:
         """Retry the last user turn for a channel or automation entry point."""
         return await self._trigger_chat_loop.retry_run(agent_id, session_id)
 
-    async def compact_session(self, agent_id: str, session_id: str) -> str:
-        """Compact a session and return a user-facing command reply."""
-        return await self._chat_loop.compact_session(agent_id, session_id)
+    async def compact_session(
+        self, agent_id: str, session_id: str, instruction: str | None = None
+    ) -> str:
+        """Compact a session and return a user-facing command reply.
+
+        ``instruction`` carries the optional free-text argument from
+        ``/compact <instruction>`` down into the summarization prompt.
+        """
+        return await self._chat_loop.compact_session(agent_id, session_id, instruction)
