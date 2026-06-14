@@ -76,10 +76,44 @@ class CommandAction:
     """Result indicating a recognized command needs accessor-level execution."""
 
     name: CommandActionName
-    # Optional command argument. For ``handoff`` this is the target agent id,
-    # or ``None`` to hand off to the current agent. Kept generic so the
-    # dataclass stays reusable for future argument-bearing commands.
+    # Optional command argument, kept as the raw text after the command token so
+    # the dataclass stays reusable across argument-bearing commands. ``compact``
+    # passes its free-text instruction through verbatim; ``handoff`` carries the
+    # ``agent:<id>``-prefixed grammar that ``parse_handoff_argument`` interprets.
     argument: str | None = None
+
+
+@dataclass(frozen=True)
+class HandoffArgument:
+    """Parsed ``/handoff`` argument: an optional target agent and instruction."""
+
+    target_agent_id: str | None
+    instruction: str | None
+
+
+def parse_handoff_argument(argument: str | None) -> HandoffArgument:
+    """Split a raw ``/handoff`` argument into a target agent and an instruction.
+
+    The grammar is an optional leading ``agent:<id>`` token that selects the
+    receiving agent, with everything after it (or the whole argument when the
+    token is absent) taken as a free-text instruction woven into the handoff
+    prompt. The ``agent:`` keyword is matched case-insensitively while the id
+    keeps its case. A bare ``agent:`` with no id is not a valid target, so it
+    falls through as instruction text — a stray colon in free text never
+    swallows the target slot (e.g. ``remember: call bob``).
+    """
+    text = (argument or "").strip()
+    if not text:
+        return HandoffArgument(target_agent_id=None, instruction=None)
+    first_token, _, remainder = text.partition(" ")
+    if first_token.lower().startswith("agent:"):
+        target = first_token[len("agent:") :].strip()
+        if target:
+            return HandoffArgument(
+                target_agent_id=target,
+                instruction=remainder.strip() or None,
+            )
+    return HandoffArgument(target_agent_id=None, instruction=text)
 
 
 @dataclass(frozen=True)

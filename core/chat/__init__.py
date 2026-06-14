@@ -21,7 +21,9 @@ if TYPE_CHECKING:
     from core.chat.commands import CommandHandled as CommandHandled
     from core.chat.commands import CommandSpec as CommandSpec
     from core.chat.commands import DispatchResult as DispatchResult
+    from core.chat.commands import HandoffArgument as HandoffArgument
     from core.chat.commands import NotACommand as NotACommand
+    from core.chat.commands import parse_handoff_argument as parse_handoff_argument
     from core.chat.errors import ChatError as ChatError
     from core.chat.errors import ChatMessageValidationError as ChatMessageValidationError
     from core.chat.errors import ChatSessionError as ChatSessionError
@@ -42,12 +44,14 @@ _EXPORT_MODULES = {
     "CommandHandled": "core.chat.commands",
     "CommandSpec": "core.chat.commands",
     "DispatchResult": "core.chat.commands",
+    "HandoffArgument": "core.chat.commands",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.chat",
     "InputOrigin": "core.chat.chat",
     "MAX_TOOL_ITERATIONS": "core.chat.chat",
     "MessageSender": "core.chat.chat",
     "NotACommand": "core.chat.commands",
     "parse_bare_model": "core.chat.chat",
+    "parse_handoff_argument": "core.chat.commands",
     "ToolCall": "core.chat.chat",
     "ToolIterationLimitError": "core.chat.errors",
 }
