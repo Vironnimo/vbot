@@ -4,6 +4,8 @@ The conversation history to compact is provided inside <history>...</history>.
 
 If an earlier compaction summary is provided inside <previous_summary>...</previous_summary>, treat it as established context that precedes <history>. Carry its still-relevant facts forward into your output — do not drop them just because they are not repeated in <history>. Your output must stand alone as the complete continuation context, covering both the previous summary and the new history.
 
+If a <user_instruction>...</user_instruction> block is present, the user gave it for this specific compaction. Follow it and let it steer what you emphasize, keep, or condense — without ever dropping the critical details required below.
+
 Requirements:
 - Preserve exact file paths, symbol names, command names, and exact error strings.
 - Preserve what has already been tried and the outcome of each attempt.
