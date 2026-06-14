@@ -132,17 +132,27 @@ def _extract_command_text(content: str | list[ContentBlock]) -> str | None:
     return None
 
 
-def _command_handled_response(result: CommandHandled | str | None) -> JsonObject:
+def _command_handled_response(
+    result: CommandHandled | str | None,
+    *,
+    output: str | None = None,
+) -> JsonObject:
     if isinstance(result, CommandHandled):
         reply = result.reply
         data = result.data
+        channel = output or result.output
     else:
         reply = result
         data = None
+        channel = output
 
     response: JsonObject = {
         "command_handled": True,
         "reply": reply or "",
+        # The output channel travels with the handled command so the frontend
+        # presents it (toast / transient card / action) without a second lookup
+        # by command name. Defaults to "toast" for replies that carry no channel.
+        "output": channel or "toast",
     }
     if data:
         response["data"] = dict(data)
@@ -189,7 +199,9 @@ async def _handle_command_action(
 ) -> JsonObject:
     match command_action.name:
         case "compact":
-            return await _handle_compact_command(state, agent_id, session_id)
+            return await _handle_compact_command(
+                state, agent_id, session_id, command_action.argument
+            )
         case "handoff":
             return await _handle_handoff_command(
                 state, agent_id, session_id, command_action.argument
@@ -221,7 +233,8 @@ def _handle_new_session_command(state: Any, agent_id: str, session_id: str) -> J
         CommandHandled(
             reply=f"New session started: {new_session_id}",
             data={"command": "new", "session_id": new_session_id},
-        )
+        ),
+        output="action",
     )
 
 
@@ -288,7 +301,8 @@ async def _handle_handoff_command(
                 "session_id": new_session_id,
                 "agent_id": target,
             },
-        )
+        ),
+        output="action",
     )
 
 
@@ -416,12 +430,16 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
 
 
-async def _handle_compact_command(state: Any, agent_id: str, session_id: str) -> JsonObject:
+async def _handle_compact_command(
+    state: Any, agent_id: str, session_id: str, instruction: str | None = None
+) -> JsonObject:
     try:
-        reply = await state.runtime.trigger_service.compact_session(agent_id, session_id)
+        reply = await state.runtime.trigger_service.compact_session(
+            agent_id, session_id, instruction
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _command_handled_response(reply)
+    return _command_handled_response(reply, output="toast")
 
 
 async def _retry_chat(state: Any, params: JsonObject) -> JsonObject:

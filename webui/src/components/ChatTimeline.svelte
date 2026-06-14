@@ -21,6 +21,7 @@
   let {
     sessionState,
     agentName = '',
+    transientCards = [],
     submittedTurnScrollKey = 0,
     submittedTurnScrollRunId = '',
     subAgentStatuses = {},
@@ -64,7 +65,8 @@
     latestTerminalStateForItems(timelineItems),
   );
   let timelineSignature = $derived(
-    timelineItems.map((item) => timelineItemSignature(item)).join('|'),
+    `${timelineItems.map((item) => timelineItemSignature(item)).join('|')}` +
+      `#${transientCards.map((card) => card.id).join(',')}`,
   );
   let shouldRenderSubmittedTurnScrollSpacer = $derived(
     hasSubmittedTurnUserItem(),
@@ -433,7 +435,7 @@
   onscroll={handleMessagesScroll}
 >
   <div class="messages__content">
-    {#if timelineItems.length === 0}
+    {#if timelineItems.length === 0 && transientCards.length === 0}
       <div class="empty-state chat-empty-state">
         <svg class="empty-state-icon" viewBox="0 0 32 32" aria-hidden="true">
           <path d="M5 7h22v14H16l-6 5v-5H5z" />
@@ -481,6 +483,18 @@
             showRetry={shouldRenderRetryButton(item, latestTerminalState)}
           />
         {/if}
+      {/each}
+      {#each transientCards as card (card.id)}
+        <div
+          class="transient-card"
+          role="note"
+          aria-label={t('chat.transientCard.label', 'Command output')}
+        >
+          <span class="transient-card__label">
+            {t('chat.transientCard.label', 'Command output')}
+          </span>
+          <pre class="transient-card__body">{card.text}</pre>
+        </div>
       {/each}
       {#if shouldRenderSubmittedTurnScrollSpacer}
         <div

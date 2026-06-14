@@ -619,8 +619,37 @@
     return { marker: trigger, start, end: boundedCursor };
   };
 
+  // A no-argument built-in command runs the instant it is chosen from the `/`
+  // popup — no token is inserted and no second Enter is needed. The partial
+  // token the user typed (e.g. `/stat`) is cleared first, mirroring submit()'s
+  // reset block, then the canonical command is sent. Backend command dispatch
+  // runs before the run path, so this never enters the busy-session queue.
+  const executeImmediateCommand = (skill) => {
+    const normalizedName = String(skill.name).replace(/^\/+/, '');
+    if (!normalizedName) {
+      return;
+    }
+    content = '';
+    inputOrigin = '';
+    triggerContext = null;
+    activeSkillIndex = 0;
+    _triggerClosed = true;
+    isDragOver = false;
+    resetInputHeight();
+    onSendMessage?.(`/${normalizedName}`);
+  };
+
   const selectSkill = async (skill) => {
     if (!triggerContext || !skill?.name) {
+      return;
+    }
+
+    if (
+      triggerContext.marker === '/' &&
+      skill.type === 'command' &&
+      skill.argument === 'none'
+    ) {
+      executeImmediateCommand(skill);
       return;
     }
 

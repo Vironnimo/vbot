@@ -36,6 +36,7 @@ class CompactionStrategy(Protocol):
         summary_model_id: str,
         storage: Any,
         settings: CompactionSettings,
+        instruction: str | None = None,
     ) -> ChatMessage:
         """Produce and return a compaction checkpoint message."""
 
@@ -77,6 +78,7 @@ class SummarizationStrategy:
         summary_model_id: str,
         storage: Any,
         settings: CompactionSettings,
+        instruction: str | None = None,
     ) -> ChatMessage:
         """Summarize pre-tail history and return a compaction checkpoint.
 
@@ -103,7 +105,9 @@ class SummarizationStrategy:
 
         history_text = _render_history_for_prompt(pre_tail_messages)
         prompt_fragment = storage.read_prompt_fragment("compaction.md")
-        prompt_text = _build_compaction_prompt(prompt_fragment, history_text, previous_summary)
+        prompt_text = _build_compaction_prompt(
+            prompt_fragment, history_text, previous_summary, instruction
+        )
 
         compacted_token_count = previous_token_count + _estimate_token_span(pre_tail_messages)
         response = await summary_adapter.send(
@@ -137,6 +141,7 @@ class CompactionService:
         summary_model_id: str,
         storage: Any,
         settings: CompactionSettings,
+        instruction: str | None = None,
     ) -> ChatMessage:
         """Delegate compaction and wrap unexpected strategy failures."""
         try:
@@ -147,6 +152,7 @@ class CompactionService:
                 summary_model_id=summary_model_id,
                 storage=storage,
                 settings=settings,
+                instruction=instruction,
             )
         except CompactionError:
             raise
@@ -246,8 +252,11 @@ def _build_compaction_prompt(
     prompt_fragment: str,
     history_text: str,
     previous_summary: str | None = None,
+    instruction: str | None = None,
 ) -> str:
     sections = [prompt_fragment.strip()]
+    if instruction and instruction.strip():
+        sections.append(f"<user_instruction>\n{instruction.strip()}\n</user_instruction>")
     if previous_summary and previous_summary.strip():
         sections.append(f"<previous_summary>\n{previous_summary.strip()}\n</previous_summary>")
     sections.append(f"<history>\n{history_text}\n</history>")

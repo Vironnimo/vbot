@@ -606,7 +606,7 @@ async def test_compact_command_action_replies_without_trigger_run(
     )
     await drain_chat_queue(adapter, 12345)
 
-    compact_mock.assert_awaited_once_with("assistant", "ch-tg-assistant-12345")
+    compact_mock.assert_awaited_once_with("assistant", "ch-tg-assistant-12345", None)
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="Context compacted.")
     await adapter.stop()
@@ -764,7 +764,9 @@ async def test_compact_action_runs_in_worker_and_keeps_handler_unblocked(
     compact_started = asyncio.Event()
     release_compact = asyncio.Event()
 
-    async def slow_compact(_agent_id: str, _session_id: str) -> str:
+    async def slow_compact(
+        _agent_id: str, _session_id: str, _instruction: str | None = None
+    ) -> str:
         compact_started.set()
         await release_compact.wait()
         return "Context compacted."

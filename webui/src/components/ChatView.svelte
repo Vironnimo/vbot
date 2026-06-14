@@ -75,8 +75,18 @@
   let cancellingRun = $state(false);
   let historyError = $state('');
   let actionError = $state('');
-  let actionInfo = $state('');
   let availableSkills = $state([]);
+  // Chat-local bottom toast for `output: "toast"` command replies (e.g. /stop,
+  // /compact). Replaces the old top `actionInfo` notice — command output now
+  // lives at the bottom of the chat. Error notices stay in the top stack.
+  let commandToast = $state('');
+  // Non-persisted `output: "transient"` command cards (/status, /help) rendered
+  // in the chat stream. Kept in a dedicated array so incoming run events never
+  // clear them; only a displayed-session change (or reload) empties them. Cards
+  // stack — that stacking is the status-comparison mechanism.
+  let transientCards = $state([]);
+  let transientCardsSessionKey = '';
+  let transientCardSeq = 0;
   let showSessionDrawer = $state(false);
   let viewingSessionId = $state('');
   let viewingSessionAgentId = $state('');
@@ -87,7 +97,9 @@
   let subAgentResults = $state({});
   let handledSessionNavigationKey = '';
   let handledConnectionSnapshot = null;
-  const ACTION_INFO_TIMEOUT_MS = 4000;
+  // Bottom command toast auto-dismiss. Kept as a single constant so the
+  // dwell time can be tuned in one place.
+  const COMMAND_TOAST_TIMEOUT_MS = 5000;
   const HISTORY_INITIAL_LIMIT = 100;
   const HISTORY_OLDER_LIMIT = 50;
   const SUBAGENT_RESULT_HISTORY_LIMIT = 20;
@@ -98,7 +110,7 @@
   // a still-rendered row simply refetches (missing entries allow fetch).
   const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
   const SUBAGENT_RESULT_CACHE_LIMIT = 100;
-  let actionInfoTimeoutId = null;
+  let commandToastTimeoutId = null;
 
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
@@ -223,28 +235,51 @@
   });
 
   onDestroy(() => {
-    if (actionInfoTimeoutId !== null) {
-      clearTimeout(actionInfoTimeoutId);
-      actionInfoTimeoutId = null;
+    if (commandToastTimeoutId !== null) {
+      clearTimeout(commandToastTimeoutId);
+      commandToastTimeoutId = null;
     }
   });
 
-  const setActionInfo = (message) => {
-    if (actionInfoTimeoutId !== null) {
-      clearTimeout(actionInfoTimeoutId);
-      actionInfoTimeoutId = null;
+  // Transient cards belong to the displayed session only. Switching sessions
+  // (or the page reloading) drops them; reloading the same session's history
+  // (e.g. after /compact) does not, because the displayed key is unchanged.
+  $effect(() => {
+    const key = displayedSessionKey();
+    if (key !== transientCardsSessionKey) {
+      transientCardsSessionKey = key;
+      transientCards = [];
+    }
+  });
+
+  const showCommandToast = (message) => {
+    if (commandToastTimeoutId !== null) {
+      clearTimeout(commandToastTimeoutId);
+      commandToastTimeoutId = null;
     }
 
-    actionInfo = typeof message === 'string' ? message : '';
+    commandToast = typeof message === 'string' ? message : '';
 
-    if (!actionInfo) {
+    if (!commandToast) {
       return;
     }
 
-    actionInfoTimeoutId = setTimeout(() => {
-      actionInfo = '';
-      actionInfoTimeoutId = null;
-    }, ACTION_INFO_TIMEOUT_MS);
+    commandToastTimeoutId = setTimeout(() => {
+      commandToast = '';
+      commandToastTimeoutId = null;
+    }, COMMAND_TOAST_TIMEOUT_MS);
+  };
+
+  const appendTransientCard = (text) => {
+    const body = typeof text === 'string' ? text : '';
+    if (!body) {
+      return;
+    }
+    transientCardSeq += 1;
+    transientCards = [
+      ...transientCards,
+      { id: `transient-${transientCardSeq}`, text: body },
+    ];
   };
 
   const normalizedBuiltInCommandName = (value) => {
@@ -306,6 +341,11 @@
               : item.name,
           description: item.description ?? '',
           type: item.type,
+          // Trigger/presentation metadata for commands (skills omit these):
+          // `argument` drives immediate-run vs insert; `output` is read off the
+          // command response envelope, not here, but is kept for completeness.
+          argument: item.argument,
+          output: item.output,
         }))
         .filter((item) => item.name.length > 0);
     } catch (error) {
@@ -800,7 +840,6 @@
 
   const sendStream = async (agent, sessionState, content, options = {}) => {
     actionError = '';
-    actionInfo = '';
     try {
       const params = {
         agent_id: agent.id,
@@ -812,22 +851,29 @@
       }
       const run = await rpc('chat.stream', params);
       if (run?.command_handled) {
-        setActionInfo(run.reply);
         const commandSwitch = commandSwitchFromResponse(run);
         if (commandSwitch) {
+          // `action` channel: a session switch (/new, /handoff). When the switch
+          // targets a different agent than the one currently selected, update the
+          // agent-selection state first so the shared selection flow observes the
+          // new agent before the session switch lands. `switchToCurrentSession`
+          // then updates the target agent's `current_session_id` and loads it.
           const targetAgentId = commandSwitch.targetAgentId || agent.id;
-          // When the switch targets a different agent than the one currently
-          // selected, update the agent-selection state first so the shared
-          // selection flow observes the new agent before the session switch
-          // lands. `switchToCurrentSession` then updates the target agent's
-          // `current_session_id` and loads the new session.
           if (targetAgentId !== chatState.selectedAgentId) {
             selectAgent(chatState, targetAgentId);
             onAgentSelected?.(targetAgentId);
           }
           await switchToCurrentSession(targetAgentId, commandSwitch.sessionId);
-        } else if (isCompactCommand(content)) {
-          await loadHistoryForSession(agent.id, sessionState.sessionId);
+        } else if (run.output === 'transient') {
+          // `transient` channel: a non-persisted card in the chat stream.
+          appendTransientCard(run.reply);
+        } else {
+          // `toast` channel (default): a chat-local bottom confirmation. /compact
+          // additionally reloads history so the new checkpoint is shown.
+          showCommandToast(run.reply);
+          if (isCompactCommand(content)) {
+            await loadHistoryForSession(agent.id, sessionState.sessionId);
+          }
         }
         return true;
       }
@@ -1057,7 +1103,7 @@
         />
       {/if}
       <div class="chat-view__surface">
-        {#if loadingHistory || historyError || actionError || actionInfo || activeSessionState?.error}
+        {#if loadingHistory || historyError || actionError || activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
             <div class="chat-view__measure chat-view__notice-inner">
               {#if loadingHistory}
@@ -1077,9 +1123,6 @@
               {#if actionError}
                 <p class="chat-view__error">{actionError}</p>
               {/if}
-              {#if actionInfo}
-                <p class="chat-view__info">{actionInfo}</p>
-              {/if}
               {#if activeSessionState?.error}
                 <p class="chat-view__error">
                   {t('chat.runError', 'Run failed.')}
@@ -1093,6 +1136,7 @@
           <ChatTimeline
             sessionState={activeSessionState}
             agentName={activeAgent.name}
+            {transientCards}
             {submittedTurnScrollKey}
             {submittedTurnScrollRunId}
             hasOlderHistory={activeSessionState?.hasOlderHistory === true}
@@ -1150,13 +1194,24 @@
               onEditQueuedMessage={handleEditQueuedMessage}
             />
           </div>
-          <ChatComposer
-            disabled={composerDisabled}
-            isRunning={isRunActive(activeSessionState)}
-            {availableSkills}
-            onSendMessage={handleSendMessage}
-            onTranscriptionError={handleTranscriptionError}
-          />
+          <div class="chat-view__composer-shell">
+            {#if commandToast}
+              <div
+                class="chat-view__command-toast"
+                role="status"
+                aria-live="polite"
+              >
+                <p class="chat-view__command-toast-message">{commandToast}</p>
+              </div>
+            {/if}
+            <ChatComposer
+              disabled={composerDisabled}
+              isRunning={isRunActive(activeSessionState)}
+              {availableSkills}
+              onSendMessage={handleSendMessage}
+              onTranscriptionError={handleTranscriptionError}
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -1232,20 +1287,46 @@
   }
 
   .chat-view__notice,
-  .chat-view__info,
   .chat-view__error {
     margin: 0;
     color: var(--text-med);
     font-size: 12.5px;
   }
 
-  .chat-view__info {
-    color: var(--text-med);
-    white-space: pre-wrap;
-  }
-
   .chat-view__error {
     color: var(--red);
+  }
+
+  /* Chat-local bottom toast: floats just above the composer (same anchoring as
+     the composer's own attachment-error toast), centered on the chat measure. */
+  .chat-view__composer-shell {
+    position: relative;
+  }
+
+  .chat-view__command-toast {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    width: 100%;
+    max-width: var(--chat-measure);
+    margin-inline: auto;
+    padding: 10px 12px;
+    border: 1px solid var(--border-2);
+    border-left: 2px solid var(--accent);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  .chat-view__command-toast-message {
+    margin: 0;
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    line-height: 1.4;
+    white-space: pre-wrap;
   }
 
   .chat-view__subagent-session-notice {

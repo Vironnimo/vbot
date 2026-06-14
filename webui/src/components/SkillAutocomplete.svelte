@@ -38,6 +38,11 @@
       .map((skill) => ({
         name: skill.name,
         description: skill.description ?? '',
+        // Carry trigger metadata through so the composer can tell a no-argument
+        // command (run immediately) from a skill or argument-bearing command
+        // (insert token and wait) when one is selected.
+        type: skill.type,
+        argument: skill.argument,
         searchText: `${skill.name} ${skill.description ?? ''}`.toLowerCase(),
       }));
   }

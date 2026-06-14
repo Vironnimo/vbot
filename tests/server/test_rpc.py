@@ -4290,6 +4290,7 @@ async def test_chat_methods_reject_compact_command_while_session_run_is_active(
         "result": {
             "command_handled": True,
             "reply": "Cannot compact while a run is active for this session.",
+            "output": "toast",
         },
     }
     assert compaction_service.calls == 0
@@ -4326,6 +4327,7 @@ async def test_chat_methods_handle_compact_command_when_service_unavailable(
         "result": {
             "command_handled": True,
             "reply": "Compaction is not available.",
+            "output": "toast",
         },
     }
     assert adapter.requests == []
@@ -4361,6 +4363,7 @@ async def test_chat_methods_handle_compact_command_model_errors_as_command_reply
         "result": {
             "command_handled": True,
             "reply": "Compaction failed: agent has no model set",
+            "output": "toast",
         },
     }
     assert compaction_service.calls == 0
@@ -5818,6 +5821,7 @@ async def test_chat_methods_reject_handoff_command_while_session_run_is_active(
         "result": {
             "command_handled": True,
             "reply": "A handoff can be started after the current run finishes.",
+            "output": "toast",
         },
     }
     sessions = state.runtime.chat_sessions.list_with_metadata("coder")

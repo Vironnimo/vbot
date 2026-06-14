@@ -43,11 +43,17 @@ def _list_commands(state: Any, params: JsonObject) -> JsonObject:
     try:
         command_items = [
             {
-                "name": name.removeprefix("/"),
-                "description": description,
+                "name": spec.name,
+                "description": spec.description,
                 "type": "command",
+                # Argument mode and output channel let the frontend derive trigger
+                # and presentation behavior without per-command special cases.
+                "argument": spec.argument,
+                "output": spec.output,
             }
-            for name, description in sorted(CommandDispatcher.BUILT_IN_COMMANDS.items())
+            for spec in sorted(
+                CommandDispatcher.BUILT_IN_COMMANDS.values(), key=lambda spec: spec.name
+            )
         ]
         skill_registry = state.runtime.skills
         filter_allowed = getattr(skill_registry, "filter_allowed", None)

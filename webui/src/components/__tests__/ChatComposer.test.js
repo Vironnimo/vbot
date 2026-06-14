@@ -99,6 +99,74 @@ describe('ChatComposer', () => {
     expect(input.value).toBe('/compact');
   });
 
+  it('runs a no-argument command immediately without inserting it', async () => {
+    const onSendMessage = vi.fn();
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        onSendMessage,
+        availableSkills: [
+          {
+            name: 'status',
+            description: 'Show current session and runtime status.',
+            type: 'command',
+            argument: 'none',
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const input = composerInput();
+    input.value = '/stat';
+    input.setSelectionRange(5, 5);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    document.body
+      .querySelector('.skill-autocomplete__option')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+    flushSync();
+
+    expect(onSendMessage).toHaveBeenCalledWith('/status');
+    expect(input.value).toBe('');
+  });
+
+  it('inserts an argument-bearing command instead of running it', async () => {
+    const onSendMessage = vi.fn();
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        onSendMessage,
+        availableSkills: [
+          {
+            name: 'compact',
+            description: 'Compact the current session context.',
+            type: 'command',
+            argument: 'optional',
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const input = composerInput();
+    input.value = '/com';
+    input.setSelectionRange(4, 4);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    document.body
+      .querySelector('.skill-autocomplete__option')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+    flushSync();
+
+    expect(input.value).toBe('/compact');
+    expect(onSendMessage).not.toHaveBeenCalled();
+  });
+
   it('offers only skills for inline dollar autocomplete', async () => {
     mountedComponent = mount(ChatComposer, {
       target: document.body,
