@@ -5720,7 +5720,7 @@ async def test_chat_methods_handle_handoff_command_for_other_agent(
             "params": {
                 "agent_id": "coder",
                 "session_id": "session-one",
-                "content": "/handoff reviewer",
+                "content": "/handoff agent:reviewer",
             },
         },
     )
@@ -5745,6 +5745,60 @@ async def test_chat_methods_handle_handoff_command_for_other_agent(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_handle_handoff_command_with_agent_and_instruction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("reviewer", name="Reviewer")
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+    bridged_runs: list[Any] = []
+    monkeypatch.setattr(
+        delegates,
+        "_bridge_run_to_event_bus",
+        lambda _state, run: bridged_runs.append(run),
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": "/handoff agent:reviewer don't forget the plates!",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    # The agent: prefix still targets reviewer, and the trailing text rides along
+    # as the handoff-writing instruction.
+    assert result["data"]["agent_id"] == "reviewer"
+    await bridged_runs[0].wait()
+    # The handoff-writing run runs as an internal note on the source session, so
+    # its prompt — with the woven instruction — is persisted there.
+    source_history = state.runtime.chat_sessions.get("coder", "session-one").load()
+    notes = [message for message in source_history if message.role == "note"]
+    assert any("don't forget the plates!" in str(note.content) for note in notes)
+
+
+def test_build_handoff_prompt_weaves_instruction_and_preserves_base() -> None:
+    from server.rpc.chat_methods import HANDOFF_INSTRUCTION, _build_handoff_prompt
+
+    assert _build_handoff_prompt(None) == HANDOFF_INSTRUCTION
+    assert _build_handoff_prompt("   ") == HANDOFF_INSTRUCTION
+
+    woven = _build_handoff_prompt("keep the deployment notes")
+    assert woven.startswith(HANDOFF_INSTRUCTION)
+    assert "keep the deployment notes" in woven
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
 async def test_chat_methods_handle_handoff_command_with_missing_target_agent(
     tmp_path: Path,
     method: str,
@@ -5760,7 +5814,7 @@ async def test_chat_methods_handle_handoff_command_with_missing_target_agent(
             "params": {
                 "agent_id": "coder",
                 "session_id": "session-one",
-                "content": "/handoff ghost",
+                "content": "/handoff agent:ghost",
             },
         },
     )

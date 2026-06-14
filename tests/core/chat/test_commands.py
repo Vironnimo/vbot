@@ -16,7 +16,12 @@ from core.chat import (
     CommandHandled,
     NotACommand,
 )
-from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
+from core.chat.commands import (
+    STATUS_PLACEHOLDER,
+    HandoffArgument,
+    build_status_text,
+    parse_handoff_argument,
+)
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.runs import ChatRunManager, Run, RunCancelledError
 from core.sessions import ChatSessionManager
@@ -288,9 +293,51 @@ def test_dispatch_handoff_tolerates_surrounding_whitespace() -> None:
 def test_dispatch_handoff_takes_full_remainder_as_argument() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/handoff a b")
+    result = dispatcher.dispatch("coder", "session-one", "/handoff agent:main do not forget")
 
-    assert result == CommandAction(name="handoff", argument="a b")
+    assert result == CommandAction(name="handoff", argument="agent:main do not forget")
+
+
+def test_parse_handoff_argument_empty_is_neither_target_nor_instruction() -> None:
+    assert parse_handoff_argument(None) == HandoffArgument(target_agent_id=None, instruction=None)
+    assert parse_handoff_argument("   ") == HandoffArgument(target_agent_id=None, instruction=None)
+
+
+def test_parse_handoff_argument_agent_prefix_only_selects_target() -> None:
+    assert parse_handoff_argument("agent:main") == HandoffArgument(
+        target_agent_id="main", instruction=None
+    )
+
+
+def test_parse_handoff_argument_instruction_only_keeps_current_agent() -> None:
+    assert parse_handoff_argument("don't forget the plates!") == HandoffArgument(
+        target_agent_id=None, instruction="don't forget the plates!"
+    )
+
+
+def test_parse_handoff_argument_agent_prefix_with_instruction() -> None:
+    assert parse_handoff_argument("agent:main don't forget the plates!") == HandoffArgument(
+        target_agent_id="main", instruction="don't forget the plates!"
+    )
+
+
+def test_parse_handoff_argument_keyword_is_case_insensitive_id_keeps_case() -> None:
+    assert parse_handoff_argument("Agent:MyReviewer review carefully") == HandoffArgument(
+        target_agent_id="MyReviewer", instruction="review carefully"
+    )
+
+
+def test_parse_handoff_argument_bare_agent_prefix_falls_through_to_instruction() -> None:
+    # ``agent:`` with no id is not a valid target slot.
+    assert parse_handoff_argument("agent: do the thing") == HandoffArgument(
+        target_agent_id=None, instruction="agent: do the thing"
+    )
+
+
+def test_parse_handoff_argument_colon_in_free_text_does_not_capture_target() -> None:
+    assert parse_handoff_argument("remember: call bob") == HandoffArgument(
+        target_agent_id=None, instruction="remember: call bob"
+    )
 
 
 def test_dispatch_compact_with_instruction_returns_action_with_argument() -> None:
