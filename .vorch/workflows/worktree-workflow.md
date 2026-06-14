@@ -57,5 +57,5 @@ If the task is cancelled or aborted, use the project-specific `delete` command (
 ## Gotchas
 
 - **One branch per worktree** — a branch can only be checked out in one worktree at a time. The `create` operation must create a fresh branch for the task.
-- **Untracked files in worktree** — plan files (`docs/plans/`) and other untracked files exist only in the worktree; they are not visible in the main repo directory.
+- **Untracked files in worktree** — plan files (`.vorch/plans/`) and other untracked files exist only in the worktree; they are not visible in the main repo directory.
 - **Commands are project-specific** — use the worktree command names and paths documented in `.vorch/PROJECT.md`; do not assume a fixed script path.
