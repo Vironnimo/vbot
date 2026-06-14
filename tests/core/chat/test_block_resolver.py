@@ -31,9 +31,17 @@ class _StubPrompts:
         return "System prompt"
 
 
+class _StubModels:
+    """Mirror ``ModelRegistry.get`` enough for input-modality resolution."""
+
+    def get(self, _provider_id: str, _model_id: str) -> object:
+        return SimpleNamespace(capabilities=SimpleNamespace(input_modalities=("text", "image")))
+
+
 class _StubRuntime:
     def __init__(self) -> None:
         self.system_prompts = _StubPrompts()
+        self.models = _StubModels()
 
 
 class _StubAgent:
