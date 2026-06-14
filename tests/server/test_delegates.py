@@ -305,6 +305,8 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "name": "compact",
                     "description": "Compact the current session's context immediately.",
                     "type": "command",
+                    "argument": "optional",
+                    "output": "toast",
                 },
                 {
                     "name": "handoff",
@@ -312,31 +314,43 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                         "Write a handoff and start a new session (optionally for another agent)."
                     ),
                     "type": "command",
+                    "argument": "optional",
+                    "output": "action",
                 },
                 {
                     "name": "help",
                     "description": "Show available built-in slash commands.",
                     "type": "command",
+                    "argument": "none",
+                    "output": "transient",
                 },
                 {
                     "name": "new",
                     "description": "Start a new session for the current agent.",
                     "type": "command",
+                    "argument": "none",
+                    "output": "action",
                 },
                 {
                     "name": "retry",
                     "description": "Retry the last user turn in this session.",
                     "type": "command",
+                    "argument": "none",
+                    "output": "action",
                 },
                 {
                     "name": "status",
                     "description": "Show current session and runtime status.",
                     "type": "command",
+                    "argument": "none",
+                    "output": "transient",
                 },
                 {
                     "name": "stop",
                     "description": "Cancel the active run for this session.",
                     "type": "command",
+                    "argument": "none",
+                    "output": "toast",
                 },
                 {
                     "name": "alpha",
@@ -379,6 +393,7 @@ async def test_chat_stream_slash_command_returns_handled_result_without_starting
         "result": {
             "command_handled": True,
             "reply": "Run cancelled.",
+            "output": "toast",
         },
     }
     assert command_dispatcher.calls == [("agent-1", "session-1", "/stop")]

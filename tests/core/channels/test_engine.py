@@ -374,9 +374,26 @@ async def test_compact_command_action_replies_in_worker(tmp_path: Path) -> None:
     await engine.handle_inbound_text(make_conversation(), "/compact")
     await drain(engine, 12345)
 
-    compact_mock.assert_awaited_once_with("assistant", SESSION_ID)
+    compact_mock.assert_awaited_once_with("assistant", SESSION_ID, None)
     trigger_mock.assert_not_awaited()
     assert transport.sent == [("12345", "Context compacted.")]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_compact_command_action_forwards_instruction(tmp_path: Path) -> None:
+    compact_mock = AsyncMock(return_value="Context compacted.")
+    command_dispatcher = make_command_dispatcher(
+        result=CommandAction(name="compact", argument="keep the API design")
+    )
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path, compact_session=compact_mock, command_dispatcher=command_dispatcher
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/compact keep the API design")
+    await drain(engine, 12345)
+
+    compact_mock.assert_awaited_once_with("assistant", SESSION_ID, "keep the API design")
     await engine.stop()
 
 

@@ -665,6 +665,7 @@ class ChannelConversationEngine:
                         reply = await self._trigger_service.compact_session(
                             route.agent_id,
                             route.session_id,
+                            command_action.argument,
                         )
                 except Exception as error:
                     self._log_command_action_failure(command_action.name, route, reply_plan, error)

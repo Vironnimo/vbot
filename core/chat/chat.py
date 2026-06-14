@@ -329,13 +329,17 @@ class ChatLoop:
             executor=lambda run: self._execute_run(run, content=None, retry=True),
         )
 
-    async def compact_session(self, agent_id: str, session_id: str) -> str:
+    async def compact_session(
+        self, agent_id: str, session_id: str, instruction: str | None = None
+    ) -> str:
         """Manually compact a session and return a user-facing command reply.
 
         Refuses while a run is active for the session. On success one
         compaction checkpoint is appended to the session; failures inside
         the compaction itself are converted into a reply string instead of
-        raising, matching the `/compact` command contract.
+        raising, matching the `/compact` command contract. ``instruction`` is the
+        optional free-text argument from `/compact <instruction>` and is woven
+        into the summarization prompt.
         """
         if self._compaction_service is None:
             return "Compaction is not available."
@@ -368,6 +372,7 @@ class ChatLoop:
                 summary_model_id=summary_model_id,
                 storage=self._runtime.storage,
                 settings=settings,
+                instruction=instruction,
             )
             session.append(checkpoint)
         except Exception as exc:
