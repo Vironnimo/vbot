@@ -308,7 +308,11 @@
       return false;
     }
 
-    return normalizedBuiltInCommandName(trimmed) === 'compact';
+    // Compare only the first token so `/compact <instruction>` is recognized,
+    // not just the bare `/compact`. Without this, the history reload that
+    // surfaces the new compaction separator is skipped for the argument form.
+    const firstToken = trimmed.split(/\s+/)[0];
+    return normalizedBuiltInCommandName(firstToken) === 'compact';
   };
 
   // Extract a session-switch target from a handled command response.
