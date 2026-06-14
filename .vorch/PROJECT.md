@@ -21,55 +21,55 @@ cli/           ← CLI accessor. Server lifecycle locally; all other domains via
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
-**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, statistics, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels, skills, automation, storage, utils. Each is a folder with a main file as public API, soft limit 1000 lines per file. `model_tasks/` is the single deep task module: it owns specialized task-model bindings and target discovery (`model_tasks.py` as the main file) **and** the per-task execution services with their provider wire clients (`speech*.py`, `image*.py`, `embeddings*.py`). Provider and automation internals live in their specs (`providers.md`, `automation.md`).
+**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, statistics, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels, skills, automation, storage, utils. Each is a folder with a main file as public API, soft limit 1000 lines per file. `model_tasks/` is the single deep task module: it owns specialized task-model bindings and target discovery (`model_tasks.py` as the main file) **and** the per-task execution services with their provider wire clients (`speech*.py`, `image*.py`, `embeddings*.py`). Provider and automation internals live in their domain maps (`providers.md`, `automation.md`).
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push) + `/ws/logs` (selected log-file live tail) + SSE (streaming) + dedicated attachment HTTP endpoints (`POST /api/upload`, `GET /api/attachments/{id}`). No auth (single-user-local).
 
 **Data flow:** Accessors → HTTP/WS/SSE → server RPC handlers → core (orchestration via providers, models, tools, agents) → external APIs. Agentic-only — no separate non-agentic streaming path.
 
-**Configuration:** `settings.json` for application settings, `.env` for API keys and bot tokens. Both live in the data directory (`~/.vbot`). The `.env` belongs to the user and is read at startup as a fallback credential source; process environment keeps higher precedence than the data-dir `.env`, and vBot never rewrites `os.environ` from `.env` values. Settings read-modify-write is serialized through a process-local storage transaction and persisted with one atomic JSON replace; `settings.update` applies all accepted sections in one transaction before any runtime reload hooks run. All user-editable JSON (`settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, `cron/jobs.json`) is validated through `core/settings/validation.py` before runtime code consumes it, failing fast with file/path diagnostics. Individual `settings.json` keys and update sections are documented in `.vorch/specs/settings.md`.
+**Configuration:** `settings.json` for application settings, `.env` for API keys and bot tokens. Both live in the data directory (`~/.vbot`). The `.env` belongs to the user and is read at startup as a fallback credential source; process environment keeps higher precedence than the data-dir `.env`, and vBot never rewrites `os.environ` from `.env` values. Settings read-modify-write is serialized through a process-local storage transaction and persisted with one atomic JSON replace; `settings.update` applies all accepted sections in one transaction before any runtime reload hooks run. All user-editable JSON (`settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, `cron/jobs.json`) is validated through `core/settings/validation.py` before runtime code consumes it, failing fast with file/path diagnostics. Individual `settings.json` keys and update sections are documented in `.vorch/domain-maps/settings.md`.
 
 **I18n:** Every user-visible string through the i18n system from day 1. English fallback. Backend: `utils/`, Frontend: `webui/src/lib/i18n.js`.
 
-## Specs
+## Domain Maps
 
-Each domain has a spec in `.vorch/specs/`, named after its module. A **domain** is any module or subsystem with a clear boundary that you need context about before touching it. **When you work on a domain, read its spec.** Your task lists the relevant specs as a starting point, not a ceiling — read others if you need them.
+Each domain has a **domain map** in `.vorch/domain-maps/`, named after its module. A **domain** is any module or subsystem with a clear boundary that you need context about before touching it. A domain map is factual working notes to orient you before you touch the domain — not the ultimate source of truth: when a map and the code disagree, the code wins, and you fix the map. **When you work on a domain, read its map.** Your task lists the relevant maps as a starting point, not a ceiling — read others if you need them.
 
-| Spec file | Domain | What it covers |
+| Map file | Domain | What it covers |
 |---|---|---|
-| `.vorch/specs/runtime.md` | `core/runtime/` | Bootstrap, service lifecycle, DI wiring |
-| `.vorch/specs/providers.md` | `core/providers/` | Provider domain overview, per-connection `mode` / `models_endpoint` and per-model `connections` allowlist, index to provider-specific specs |
-| `.vorch/specs/providers/openai.md` | OpenAI provider | Single provider with `api-key` (chat/completions) and `subscription` (codex/responses) connections, Codex OAuth, ChatGPT account header, model discovery |
-| `.vorch/specs/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
-| `.vorch/specs/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas; index to the task execution child specs |
-| `.vorch/specs/model_tasks/speech.md` | speech execution | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
-| `.vorch/specs/model_tasks/image.md` | image execution | Image generation execution, artifacts, provider wire behavior |
-| `.vorch/specs/model_tasks/embeddings.md` | embedding execution | Text-embedding execution, provider wire, vector output for recall |
-| `.vorch/specs/chat.md` | `core/chat/` | Canonical ChatMessage format, chat-loop constraints, Run execution |
-| `.vorch/specs/runs.md` | `core/runs/` | Run lifecycle, cancellation, timeline events, in-memory queues |
-| `.vorch/specs/compaction.md` | `core/compaction/` | Context-window compaction, checkpoints, summary strategy |
-| `.vorch/specs/sessions.md` | `core/sessions/` | Session persistence, metadata, current JSONL storage contract |
-| `.vorch/specs/recall.md` | `core/recall/` | Session recall backend interface, JSONL scan backend, SQLite FTS derived index, vector chunked semantic index |
-| `.vorch/specs/statistics.md` | `core/statistics/` | Read-only on-demand aggregation over Sessions, run-summary segmentation, real-vs-estimated tokens, `statistics.report` RPC, Statistics tab |
-| `.vorch/specs/memory.md` | `core/memory/` | Pinned memory service, workspace memory files, backend boundary |
-| `.vorch/specs/settings.md` | `core/settings/` | Public settings update schemas, validation, section normalization, parser errors |
-| `.vorch/specs/prompts.md` | `core/prompts/` | System Prompt assembly, editable fragments, prompt variables |
-| `.vorch/specs/attachments.md` | `core/attachments/` | Blob storage, MIME sniffing, attachment metadata, text extraction |
-| `.vorch/specs/extensions.md` | `core/extensions/` | Extension hook loading, handler registration, runtime/chat event contracts |
-| `.vorch/specs/agent.md` | `core/agents/` | Agent schema, persistence, workspace lifecycle, archive-on-delete |
-| `.vorch/specs/subagents.md` | `core/subagents/` | Sub-agent coordinator, in-memory batch tracking, parent-child run linkage |
-| `.vorch/specs/tools.md` | `core/tools/` | Tool domain overview and index to tool-specific specs |
-| `.vorch/specs/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |
-| `.vorch/specs/skills.md` | `core/skills/` | Local skill metadata loading and prompt allowlist filtering |
-| `.vorch/specs/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
-| `.vorch/specs/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send |
-| `.vorch/specs/channels/discord.md` | Discord channels | Gateway lifecycle, history backfill, thread routing, attachments, outbound behavior |
-| `.vorch/specs/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
-| `.vorch/specs/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
-| `.vorch/specs/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |
-| `.vorch/specs/webui.md` | `webui/` | Svelte app shell, API client, Chat/Agents views, queue behavior |
-| `.vorch/specs/logs.md` | log viewer subsystem | Daily log parsing, log RPC/socket contract, WebUI Logs tab behavior |
-| `.vorch/specs/debug.md` | `core/debug/` | Debug Mode, trace storage, secret redaction, recorder lifecycle, debug RPC contract |
+| `.vorch/domain-maps/runtime.md` | `core/runtime/` | Bootstrap, service lifecycle, DI wiring |
+| `.vorch/domain-maps/providers.md` | `core/providers/` | Provider domain overview, per-connection `mode` / `models_endpoint` and per-model `connections` allowlist, index to provider-specific maps |
+| `.vorch/domain-maps/providers/openai.md` | OpenAI provider | Single provider with `api-key` (chat/completions) and `subscription` (codex/responses) connections, Codex OAuth, ChatGPT account header, model discovery |
+| `.vorch/domain-maps/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
+| `.vorch/domain-maps/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas; index to the task-execution child maps |
+| `.vorch/domain-maps/model_tasks/speech.md` | speech execution | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
+| `.vorch/domain-maps/model_tasks/image.md` | image execution | Image generation execution, artifacts, provider wire behavior |
+| `.vorch/domain-maps/model_tasks/embeddings.md` | embedding execution | Text-embedding execution, provider wire, vector output for recall |
+| `.vorch/domain-maps/chat.md` | `core/chat/` | Canonical ChatMessage format, chat-loop constraints, Run execution |
+| `.vorch/domain-maps/runs.md` | `core/runs/` | Run lifecycle, cancellation, timeline events, in-memory queues |
+| `.vorch/domain-maps/compaction.md` | `core/compaction/` | Context-window compaction, checkpoints, summary strategy |
+| `.vorch/domain-maps/sessions.md` | `core/sessions/` | Session persistence, metadata, current JSONL storage contract |
+| `.vorch/domain-maps/recall.md` | `core/recall/` | Session recall backend interface, JSONL scan backend, SQLite FTS derived index, vector chunked semantic index |
+| `.vorch/domain-maps/statistics.md` | `core/statistics/` | Read-only on-demand aggregation over Sessions, run-summary segmentation, real-vs-estimated tokens, `statistics.report` RPC, Statistics tab |
+| `.vorch/domain-maps/memory.md` | `core/memory/` | Pinned memory service, workspace memory files, backend boundary |
+| `.vorch/domain-maps/settings.md` | `core/settings/` | Public settings update schemas, validation, section normalization, parser errors |
+| `.vorch/domain-maps/prompts.md` | `core/prompts/` | System Prompt assembly, editable fragments, prompt variables |
+| `.vorch/domain-maps/attachments.md` | `core/attachments/` | Blob storage, MIME sniffing, attachment metadata, text extraction |
+| `.vorch/domain-maps/extensions.md` | `core/extensions/` | Extension hook loading, handler registration, runtime/chat event contracts |
+| `.vorch/domain-maps/agent.md` | `core/agents/` | Agent schema, persistence, workspace lifecycle, archive-on-delete |
+| `.vorch/domain-maps/subagents.md` | `core/subagents/` | Sub-agent coordinator, in-memory batch tracking, parent-child run linkage |
+| `.vorch/domain-maps/tools.md` | `core/tools/` | Tool domain overview and index to tool-specific maps |
+| `.vorch/domain-maps/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |
+| `.vorch/domain-maps/skills.md` | `core/skills/` | Local skill metadata loading and prompt allowlist filtering |
+| `.vorch/domain-maps/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
+| `.vorch/domain-maps/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send |
+| `.vorch/domain-maps/channels/discord.md` | Discord channels | Gateway lifecycle, history backfill, thread routing, attachments, outbound behavior |
+| `.vorch/domain-maps/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
+| `.vorch/domain-maps/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
+| `.vorch/domain-maps/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |
+| `.vorch/domain-maps/webui.md` | `webui/` | Svelte app shell, API client, Chat/Agents views, queue behavior |
+| `.vorch/domain-maps/logs.md` | log viewer subsystem | Daily log parsing, log RPC/socket contract, WebUI Logs tab behavior |
+| `.vorch/domain-maps/debug.md` | `core/debug/` | Debug Mode, trace storage, secret redaction, recorder lifecycle, debug RPC contract |
 
 ## Conventions
 
@@ -139,7 +139,7 @@ python desktop/main.py                # Desktop shell
 cd webui && npm install && npm run build   # Svelte → static JS/CSS
 ```
 
-**Data directory:** `~/.vbot` — created on first run. Holds `.env`, `settings.json`, and all runtime data: `attachments/`, `logs/`, `oauth/`, `cron/jobs.json`, `speech/`, the disposable recall index under `recall/` (`session_index.sqlite` for FTS, `session_vectors.sqlite` for vector), and prompt overrides under `prompts/` and `agents/<agent-id>/prompts/`. Per-domain layout details live in the relevant specs.
+**Data directory:** `~/.vbot` — created on first run. Holds `.env`, `settings.json`, and all runtime data: `attachments/`, `logs/`, `oauth/`, `cron/jobs.json`, `speech/`, the disposable recall index under `recall/` (`session_index.sqlite` for FTS, `session_vectors.sqlite` for vector), and prompt overrides under `prompts/` and `agents/<agent-id>/prompts/`. Per-domain layout details live in the relevant domain maps.
 
 ## Testing
 
@@ -177,6 +177,6 @@ Use this section only for important strategic decisions, unusual global constrai
 - **Overrides are for research-only gaps.** `resources/models/<provider>.overrides.json` is only for durable facts the provider APIs do not expose and that were verified externally. Do not use overrides for facts the adapter can discover, infer, or validate.
 - **Two-channel transport architecture:** SSE is the per-Run streaming channel; WebSocket is persistent app-wide server-push for lifecycle summaries. Clients send commands through `POST /api/rpc`, not through WebSocket.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages. Visible chat turns can also carry `input_origin: "speech_transcription"` through RPC; the chat loop then adds a hidden system-reminder note immediately before the unchanged visible user message so the model knows the text may contain STT errors.
-- **Built-in commands and skill triggers are separate layers.** Recognized pure-text slash commands are handled before a Run starts. `/skill-name` and `$skill-name` are skill activation hints that preserve the original user message; `$` autocomplete is skill-only. Each built-in command declares two attributes (`CommandSpec`): an `argument` mode (`none`/`optional`/`required`) and an `output` channel (`toast`/`transient`/`action`), from which trigger and presentation behavior are derived rather than hardcoded per command. `optional`/`required` commands take the text after the token as an argument (e.g. `/compact <instruction>`, `/handoff [agent:<id>] [instruction]`); `none` commands match only when nothing trails them. `/handoff` and `/new` are `action` commands that start model runs / switch sessions; `/handoff [agent:<id>] [instruction]` parses an optional `agent:<id>` target token (default: current agent) and an optional free-text instruction woven into the handoff prompt, then triggers an internal note-driven Run to write the handoff, creates a new session, injects the handoff as a user message, and auto-runs the receiving agent. Details in `.vorch/specs/chat.md`.
+- **Built-in commands and skill triggers are separate layers.** Recognized pure-text slash commands are handled before a Run starts. `/skill-name` and `$skill-name` are skill activation hints that preserve the original user message; `$` autocomplete is skill-only. Each built-in command declares two attributes (`CommandSpec`): an `argument` mode (`none`/`optional`/`required`) and an `output` channel (`toast`/`transient`/`action`), from which trigger and presentation behavior are derived rather than hardcoded per command. `optional`/`required` commands take the text after the token as an argument (e.g. `/compact <instruction>`, `/handoff [agent:<id>] [instruction]`); `none` commands match only when nothing trails them. `/handoff` and `/new` are `action` commands that start model runs / switch sessions; `/handoff [agent:<id>] [instruction]` parses an optional `agent:<id>` target token (default: current agent) and an optional free-text instruction woven into the handoff prompt, then triggers an internal note-driven Run to write the handoff, creates a new session, injects the handoff as a user message, and auto-runs the receiving agent. Details in `.vorch/domain-maps/chat.md`.
 - **Deployment target is Linux, development happens on Windows.** The server is meant to run headless on a Raspberry Pi (64-bit OS); desktop/CLI accessors stay on Windows. Keep core/server/cli code platform-neutral: no Windows-only assumptions without a POSIX branch, path validation accepts/rejects both path flavors on any host, and process management branches on `os.name`/`sys.platform`.
 - **Busy-session queueing is owned by `ChatRunManager`.** Browser sends, `TriggerService`, and subagent routing all enqueue into the same in-memory FIFO per `(agent_id, session_id)`. WebUI queue state is only a server-backed projection and must not become a second source of truth.
