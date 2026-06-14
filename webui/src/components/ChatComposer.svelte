@@ -549,7 +549,10 @@
         )
       : autocompleteItems;
 
-    return Math.min(matchingItems.length, 8);
+    // Mirror SkillAutocomplete's match set exactly (same predicate, no cap) so
+    // arrow-key navigation can reach every rendered entry — the popup shows all
+    // matches (scrollable), and the keyboard must not stop short of the list.
+    return matchingItems.length;
   };
 
   function triggerItemsForContext(context) {

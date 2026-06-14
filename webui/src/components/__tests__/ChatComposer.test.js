@@ -325,6 +325,43 @@ describe('ChatComposer', () => {
     expect(autocompleteOptions()[1].getAttribute('aria-selected')).toBe('true');
   });
 
+  it('lets keyboard navigation reach every rendered match (no cap)', () => {
+    const manySkills = Array.from({ length: 9 }, (_item, index) => ({
+      name: `skill-${index + 1}`,
+      description: `Skill number ${index + 1}.`,
+      valid: true,
+    }));
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { availableSkills: manySkills },
+    });
+    flushSync();
+
+    const input = composerInput();
+    input.value = '/';
+    input.setSelectionRange(1, 1);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    // All nine render (the popup is scrollable); arrow-key navigation must be
+    // able to reach the last one. A stale count cap stopped the active index at
+    // the eighth entry, leaving the ninth unreachable by keyboard.
+    expect(autocompleteOptions()).toHaveLength(9);
+
+    for (let step = 0; step < 8; step += 1) {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+      );
+      flushSync();
+      input.dispatchEvent(
+        new KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }),
+      );
+      flushSync();
+    }
+
+    expect(autocompleteOptions()[8].getAttribute('aria-selected')).toBe('true');
+  });
+
   it('keeps popup closed after Escape keyup', () => {
     mountedComponent = mount(ChatComposer, {
       target: document.body,
