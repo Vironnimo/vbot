@@ -5,7 +5,7 @@ debug-aware HTTP client. The capturing transport (see
 ``core/providers/_http_shared.py``) calls :meth:`begin_capture` for every
 request that flows over the wire and feeds raw request/response data into
 the returned :class:`_TraceCapture`. The capture builds one canonical
-trace (see ``.vorch/specs/debug.md``), applies structured secret
+trace (see ``.vorch/domain-maps/debug.md``), applies structured secret
 redaction, and persists it through :class:`DebugTraceStore`.
 
 Adapters contain no capture logic — they only set the per-request
