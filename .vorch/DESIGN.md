@@ -377,6 +377,13 @@ Three semantic colors, pill shape (12px border-radius), mono font 11.5px:
 
 Slide in from the right (bottom-right stack). `surface` background, `border-2` border, 6px radius, dark shadow. Left border only — 2px colored stripe indicates type: green (success), red (error), amber (warn), accent (info). No icons — the stripe carries all semantic weight.
 
+### Command output (toast & transient card)
+
+Built-in slash command replies render at the **bottom** of the chat, not the top notice stack. Two surfaces, chosen by the command's `output` channel (see `.vorch/specs/chat.md`):
+
+- **Bottom command toast** (`toast` channel, e.g. `/stop`, `/compact`): a chat-local confirmation floating just above the composer (`bottom: calc(100% + 10px)`, centered on `--chat-measure`). `surface` background, `border-2` border with a 2px accent left stripe, dark shadow, `font-ui` `text-med` body with `pre-wrap`. Auto-dismisses after 5s. This is the composer-local toast pattern — **not** the app-wide bottom-right `ToastStack`.
+- **Transient card** (`transient` channel, e.g. `/status`, `/help`): a non-persisted card in the chat stream. `surface-2` fill, `border-2` border with a 2px accent left stripe, 10px radius. A `mono-sm` uppercase label tag sits above a monospace (`font-mono`, 12px) `pre-wrap` body for the key/value lines, so it reads as a diagnostic snapshot distinct from real chat bubbles. Cards **stack** (no dedup, no dismiss) — successive snapshots sit underneath each other for visual comparison — and disappear on session switch or reload.
+
 ### Tool call events
 
 Inline dot-text lines within assistant messages. No box or card — just a colored `●` dot + monospace function name + args + timing on one line. Expandable body (indented, `border-2` left border) shows ARGS and RESULT in mono-xs labels + mono-body values. Three states: done (green dot), running (amber blinking dot), error (red dot, red timing text, red result text).

@@ -438,6 +438,7 @@ class StubCompactionService:
         summary_model_id: str,
         storage: Any,
         settings: Any,
+        instruction: str | None = None,
     ) -> ChatMessage:
         self.compact_calls.append(
             {
@@ -447,6 +448,7 @@ class StubCompactionService:
                 "summary_model_id": summary_model_id,
                 "storage": storage,
                 "summary_model": getattr(settings, "summary_model", None),
+                "instruction": instruction,
             }
         )
         if self._compact_error is not None:
@@ -1318,7 +1320,43 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
     assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
     assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
     assert compaction_service.compact_calls[0]["storage"] is runtime.storage
+    assert compaction_service.compact_calls[0]["instruction"] is None
     assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_compact_session_forwards_instruction_to_service(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = ClosingStubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted context.",
+        tail_boundary_id=tail_user.id,
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+
+    reply = await loop.compact_session("coder", "session-one", "keep the API design")
+
+    assert reply == "Context compacted."
+    assert compaction_service.compact_calls[0]["instruction"] == "keep the API design"
 
 
 @pytest.mark.asyncio

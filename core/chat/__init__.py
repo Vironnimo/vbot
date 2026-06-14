@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from core.chat.commands import CommandAction as CommandAction
     from core.chat.commands import CommandDispatcher as CommandDispatcher
     from core.chat.commands import CommandHandled as CommandHandled
+    from core.chat.commands import CommandSpec as CommandSpec
     from core.chat.commands import DispatchResult as DispatchResult
     from core.chat.commands import NotACommand as NotACommand
     from core.chat.errors import ChatError as ChatError
@@ -39,6 +40,7 @@ _EXPORT_MODULES = {
     "CommandDispatcher": "core.chat.commands",
     "CommandAction": "core.chat.commands",
     "CommandHandled": "core.chat.commands",
+    "CommandSpec": "core.chat.commands",
     "DispatchResult": "core.chat.commands",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.chat",
     "InputOrigin": "core.chat.chat",

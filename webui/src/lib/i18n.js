@@ -164,6 +164,7 @@ export const englishCatalog = Object.freeze({
   'chat.runError': 'Run failed.',
   'chat.errorDetails': 'Details',
   'chat.compacted': 'Context compacted',
+  'chat.transientCard.label': 'Command output',
 
   'sessions.title': 'Sessions',
   'sessions.hide': 'Hide sessions',

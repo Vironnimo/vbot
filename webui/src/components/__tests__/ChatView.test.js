@@ -275,12 +275,13 @@ describe('ChatView', () => {
     expect(document.body.querySelector('.chat-refresh')).toBeNull();
   });
 
-  it('shows inline info and skips run subscription when a command is handled', async () => {
+  it('shows a bottom toast and skips run subscription when a toast command is handled', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         streamResponse: {
           command_handled: true,
           reply: 'Run cancelled.',
+          output: 'toast',
         },
       }),
     );
@@ -304,8 +305,9 @@ describe('ChatView', () => {
 
     await waitForCondition(
       () =>
-        document.body.querySelector('.chat-view__info')?.textContent?.trim() ===
-        'Run cancelled.',
+        document.body
+          .querySelector('.chat-view__command-toast')
+          ?.textContent?.trim() === 'Run cancelled.',
       100,
     );
 
@@ -317,7 +319,7 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
   });
 
-  it('shows inline info when /status command is handled', async () => {
+  it('renders a transient card when a transient command is handled', async () => {
     const statusReply =
       'Agent: Alpha\nModel: claude-sonnet-4\nSession started: 2026-05-19';
 
@@ -328,6 +330,8 @@ describe('ChatView', () => {
             name: 'status',
             description: 'Show current agent and session status.',
             type: 'command',
+            argument: 'none',
+            output: 'transient',
           },
         ],
         streamHandler: ({ content }) => {
@@ -335,6 +339,7 @@ describe('ChatView', () => {
             return {
               command_handled: true,
               reply: statusReply,
+              output: 'transient',
             };
           }
           throw new Error(`Unexpected stream content: ${content}`);
@@ -355,22 +360,61 @@ describe('ChatView', () => {
     await waitForCondition(
       () =>
         document.body
-          .querySelector('.chat-view__info')
+          .querySelector('.transient-card')
           ?.textContent?.includes('Agent: Alpha'),
       100,
     );
 
-    const inlineInfo = document.body.querySelector('.chat-view__info');
-    expect(inlineInfo?.textContent).toContain(
-      'Agent: Alpha\nModel: claude-sonnet-4',
-    );
-    expect(inlineInfo?.textContent).toContain('Session started: 2026-05-19');
+    const card = document.body.querySelector('.transient-card__body');
+    expect(card?.textContent).toContain('Agent: Alpha\nModel: claude-sonnet-4');
+    expect(card?.textContent).toContain('Session started: 2026-05-19');
+    // Transient output is never echoed into the bottom toast.
+    expect(document.body.querySelector('.chat-view__command-toast')).toBeNull();
     expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
       agent_id: 'alpha',
       session_id: 'session-1',
       content: '/status',
     });
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
+  });
+
+  it('stacks transient cards so successive snapshots can be compared', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamHandler: ({ content }) => {
+          if (content === '/status') {
+            return {
+              command_handled: true,
+              reply: 'Agent: Alpha',
+              output: 'transient',
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('/status');
+    await waitForCondition(
+      () => document.body.querySelectorAll('.transient-card').length === 1,
+      100,
+    );
+
+    sendComposerMessage('/status');
+    await waitForCondition(
+      () => document.body.querySelectorAll('.transient-card').length === 2,
+      100,
+    );
+
+    expect(document.body.querySelectorAll('.transient-card')).toHaveLength(2);
   });
 
   it('switches to the session returned by a handled /new command', async () => {
@@ -414,9 +458,10 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(document.body.querySelector('.chat-view__info')?.textContent).toBe(
-      'New session started: session-new',
-    );
+    // `/new` is an action command: it switches the session rather than showing
+    // a toast or transient card.
+    expect(document.body.querySelector('.chat-view__command-toast')).toBeNull();
+    expect(document.body.querySelector('.transient-card')).toBeNull();
     expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
       agent_id: 'alpha',
       session_id: 'session-1',
@@ -480,9 +525,9 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(document.body.querySelector('.chat-view__info')?.textContent).toBe(
-      'Handoff sent to alpha. Opening new session.',
-    );
+    // `/handoff` is an action command: no toast or transient card.
+    expect(document.body.querySelector('.chat-view__command-toast')).toBeNull();
+    expect(document.body.querySelector('.transient-card')).toBeNull();
     expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
       agent_id: 'alpha',
       session_id: 'session-1',
@@ -581,9 +626,9 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(document.body.querySelector('.chat-view__info')?.textContent).toBe(
-      'Handoff sent to beta. Opening new session.',
-    );
+    // Cross-agent `/handoff` is an action command: no toast or transient card.
+    expect(document.body.querySelector('.chat-view__command-toast')).toBeNull();
+    expect(document.body.querySelector('.transient-card')).toBeNull();
     expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
       agent_id: 'alpha',
       session_id: 'parent-session',
@@ -703,8 +748,9 @@ describe('ChatView', () => {
 
     await waitForCondition(
       () =>
-        document.body.querySelector('.chat-view__info')?.textContent?.trim() ===
-        'Run cancelled.',
+        document.body
+          .querySelector('.chat-view__command-toast')
+          ?.textContent?.trim() === 'Run cancelled.',
       100,
     );
 
@@ -783,8 +829,9 @@ describe('ChatView', () => {
 
     await waitForCondition(
       () =>
-        document.body.querySelector('.chat-view__info')?.textContent?.trim() ===
-        'Run cancelled.',
+        document.body
+          .querySelector('.chat-view__command-toast')
+          ?.textContent?.trim() === 'Run cancelled.',
       100,
     );
 
@@ -854,8 +901,9 @@ describe('ChatView', () => {
 
     await waitForCondition(
       () =>
-        document.body.querySelector('.chat-view__info')?.textContent?.trim() ===
-        'Context compacted.',
+        document.body
+          .querySelector('.chat-view__command-toast')
+          ?.textContent?.trim() === 'Context compacted.',
       100,
     );
 
