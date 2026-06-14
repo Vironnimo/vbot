@@ -915,6 +915,66 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
 
+  it('reloads history after a /compact that carries an instruction', async () => {
+    const streamCalls = [];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        commandItems: [
+          {
+            name: '/compact',
+            description: 'Compact the current session context.',
+            type: 'command',
+            argument: 'optional',
+            output: 'toast',
+          },
+        ],
+        streamHandler: ({ content }) => {
+          streamCalls.push(content);
+          if (content === '/compact focus on the auth work') {
+            return {
+              command_handled: true,
+              reply: 'Context compacted.',
+              output: 'toast',
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    // The reload is what surfaces the new compaction separator. The argument
+    // form must trigger it just like the bare `/compact` does — regression
+    // guard for `isCompactCommand` matching only the leading token.
+    const historyReloadCount = () =>
+      rpcMock.mock.calls.filter(
+        ([method, params]) =>
+          method === 'chat.history' && params?.session_id === 'session-1',
+      ).length;
+    const reloadsBefore = historyReloadCount();
+
+    sendComposerMessage('/compact focus on the auth work');
+
+    await waitForCondition(
+      () =>
+        document.body
+          .querySelector('.chat-view__command-toast')
+          ?.textContent?.trim() === 'Context compacted.',
+      100,
+    );
+    await waitForCondition(() => historyReloadCount() > reloadsBefore, 100);
+
+    expect(streamCalls).toEqual(['/compact focus on the auth work']);
+    expect(historyReloadCount()).toBeGreaterThan(reloadsBefore);
+  });
+
   it('queues non-command messages while a run is active', async () => {
     const streamCalls = [];
     rpcMock.mockImplementation(
