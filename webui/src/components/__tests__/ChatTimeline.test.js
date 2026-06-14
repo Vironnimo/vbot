@@ -155,6 +155,107 @@ describe('ChatTimeline', () => {
     expect(dateSeparators[1].textContent.trim()).toBe('Today');
   });
 
+  it('anchors a transient card after the timeline item it followed', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-transient-anchor',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-first',
+        role: 'user',
+        content: 'First question',
+        timestamp: '2026-05-10T09:00:00',
+      },
+      {
+        id: 'user-second',
+        role: 'user',
+        content: 'Second question',
+        timestamp: '2026-05-10T09:05:00',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        transientCards: [
+          {
+            id: 'transient-1',
+            text: 'Command output body',
+            anchorId: 'user-first',
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const card = document.querySelector('.transient-card');
+    const userMessages = Array.from(document.querySelectorAll('.msg.user'));
+    const firstMessage = userMessages.find((element) =>
+      element.textContent.includes('First question'),
+    );
+    const secondMessage = userMessages.find((element) =>
+      element.textContent.includes('Second question'),
+    );
+
+    expect(card).toBeTruthy();
+    expect(card.textContent).toContain('Command output body');
+    // The card stays anchored to the first message it followed, so the later
+    // message renders below it instead of the card being pushed to the bottom.
+    expect(
+      firstMessage.compareDocumentPosition(card) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      card.compareDocumentPosition(secondMessage) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('falls back to the end for a transient card whose anchor item is gone', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-transient-anchor-missing',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-only',
+        role: 'user',
+        content: 'Only question',
+        timestamp: '2026-05-10T09:00:00',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        transientCards: [
+          {
+            id: 'transient-orphan',
+            text: 'Orphaned output',
+            anchorId: 'item-that-no-longer-exists',
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const card = document.querySelector('.transient-card');
+    const message = document.querySelector('.msg.user');
+    expect(card).toBeTruthy();
+    expect(card.textContent).toContain('Orphaned output');
+    // A stale anchor keeps the card visible at the end rather than dropping it.
+    expect(
+      message.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('renders persisted run and tool durations after history load', () => {
     const sessionState = ensureSessionState(
       createChatState(),
