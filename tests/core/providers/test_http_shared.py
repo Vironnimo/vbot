@@ -82,7 +82,7 @@ def test_wrap_network_error_connect_error_is_network_error() -> None:
     assert isinstance(wrapped, NetworkError)
     assert wrapped.retryable is True
     # ``NetworkError`` must remain a non-``ProviderError`` so it never triggers
-    # model fallback (see ``.vorch/specs/providers.md`` gotchas).
+    # model fallback (see ``.vorch/domain-maps/providers.md`` gotchas).
     assert not isinstance(wrapped, ProviderError)
     assert "connection refused" in str(wrapped)
 

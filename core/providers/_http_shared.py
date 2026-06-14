@@ -284,7 +284,7 @@ def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
     ``LocalProtocolError``, ``NetworkError``, and any other transport-level
     failure — are wrapped as ``NetworkError`` (retryable and not
     provider-specific). ``NetworkError`` deliberately stays a non-``ProviderError``
-    so it never triggers model fallback (see ``.vorch/specs/providers.md`` gotchas).
+    so it never triggers model fallback (see ``.vorch/domain-maps/providers.md`` gotchas).
     """
     if isinstance(error, httpx.TimeoutException):
         return ProviderTimeoutError(f"Request failed: {error}")

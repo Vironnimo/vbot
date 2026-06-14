@@ -3,7 +3,7 @@
 When an adapter is built with a ``ProviderDebugRecorder``, its HTTP client
 carries the shared capture transport (see ``core/providers/_http_shared.py``).
 These tests drive ``OpenAICompatibleAdapter.send()`` and assert the persisted
-trace follows the canonical shape in ``.vorch/specs/debug.md``: raw request /
+trace follows the canonical shape in ``.vorch/domain-maps/debug.md``: raw request /
 response bodies, nested ``context``, redacted headers, and metadata. They also
 assert the debug context never leaks into the provider-bound payload.
 """

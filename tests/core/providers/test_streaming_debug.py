@@ -2,7 +2,7 @@
 
 Driving ``OpenAICompatibleAdapter.stream()`` with a recorder-backed client,
 these assert the persisted trace follows the canonical shape in
-``.vorch/specs/debug.md``: one complete raw aggregate SSE response body under
+``.vorch/domain-maps/debug.md``: one complete raw aggregate SSE response body under
 ``response.body`` (including the ``data: [DONE]`` sentinel), the run context
 records ``streaming: true``, and an error-status response keeps its raw body
 under ``response.body``. No ``stream.events`` split is produced — the canonical

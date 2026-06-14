@@ -262,7 +262,7 @@ Several test names and fixture names from earlier in the project still reference
 
 ### 3. `OpenAIAdapter._build_codex_headers` still defensively merges `self._config.extra_headers`
 
-`core/providers/openai.py:173-174` merges `self._config.extra_headers` into the Codex request headers in addition to the adapter-owned `CODEX_EXTRA_HEADERS`. The spec (`openai.md`) forbids provider-level `extra_headers` for the OpenAI provider, and the new `resources/providers/openai.json` no longer has the field. The merge is defensive belt-and-suspenders code.
+`core/providers/openai.py:173-174` merges `self._config.extra_headers` into the Codex request headers in addition to the adapter-owned `CODEX_EXTRA_HEADERS`. The domain map (`openai.md`) forbids provider-level `extra_headers` for the OpenAI provider, and the new `resources/providers/openai.json` no longer has the field. The merge is defensive belt-and-suspenders code.
 
 **Why it can be removed safely:** with `extra_headers` gone from the JSON, the merge is a no-op. If a future contributor adds `extra_headers` back to the provider config, the merge would silently re-introduce the leak that Phase 5 was designed to prevent. The current implementation is correct but offers a backdoor.
 
@@ -356,7 +356,7 @@ Outstanding once credentials exist:
    blocks under explicit disable, the guard can be lightened.
 2. **Live verification** — one real multi-run Anthropic session (run with tool calls → run
    completes → new run in same session) confirming no 4xx and thinking blocks accepted; spot-check
-   a mid-session model switch. Record outcomes in `.vorch/specs/providers/anthropic.md`.
+   a mid-session model switch. Record outcomes in `.vorch/domain-maps/providers/anthropic.md`.
 
 **Why deferred:** blocked on credentials, not on code; unit/integration coverage pins the
 implemented behavior.

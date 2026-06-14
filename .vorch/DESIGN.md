@@ -379,7 +379,7 @@ Slide in from the right (bottom-right stack). `surface` background, `border-2` b
 
 ### Command output (toast & transient card)
 
-Built-in slash command replies render at the **bottom** of the chat, not the top notice stack. Two surfaces, chosen by the command's `output` channel (see `.vorch/specs/chat.md`):
+Built-in slash command replies render at the **bottom** of the chat, not the top notice stack. Two surfaces, chosen by the command's `output` channel (see `.vorch/domain-maps/chat.md`):
 
 - **Bottom command toast** (`toast` channel, e.g. `/stop`, `/compact`): a chat-local confirmation floating just above the composer (`bottom: calc(100% + 10px)`, centered on `--chat-measure`). `surface` background, `border-2` border with a 2px accent left stripe, dark shadow, `font-ui` `text-med` body with `pre-wrap`. Auto-dismisses after 5s. This is the composer-local toast pattern — **not** the app-wide bottom-right `ToastStack`.
 - **Transient card** (`transient` channel, e.g. `/status`, `/help`): a non-persisted card in the chat stream. `surface-2` fill, `border-2` border with a 2px accent left stripe, 10px radius. A `mono-sm` uppercase label tag sits above a monospace (`font-mono`, 12px) `pre-wrap` body for the key/value lines, so it reads as a diagnostic snapshot distinct from real chat bubbles. Cards **stack** (no dedup, no dismiss) — successive snapshots sit underneath each other for visual comparison — and disappear on session switch or reload.
