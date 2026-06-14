@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.chat import CommandAction, CommandHandled
+from core.chat import CommandAction, CommandHandled, parse_handoff_argument
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.runs import ActiveRunError, ChatRunManager
 from server.rpc.agent_methods import _create_session
@@ -238,12 +238,32 @@ def _handle_new_session_command(state: Any, agent_id: str, session_id: str) -> J
     )
 
 
+def _build_handoff_prompt(instruction: str | None) -> str:
+    """Weave an optional user instruction into the base handoff prompt.
+
+    Mirrors the `/compact <instruction>` pattern: the bare handoff prompt is
+    unchanged when no instruction is given, so the no-argument path is identical
+    to before.
+    """
+    cleaned = (instruction or "").strip()
+    if not cleaned:
+        return HANDOFF_INSTRUCTION
+    return (
+        f"{HANDOFF_INSTRUCTION}\n"
+        "\n"
+        "The user added a specific instruction for this handoff. Follow it while "
+        "writing, without dropping anything else that genuinely matters:\n"
+        f"{cleaned}"
+    )
+
+
 async def _handle_handoff_command(
     state: Any,
     agent_id: str,
     session_id: str,
-    target_agent_id: str | None,
+    argument: str | None,
 ) -> JsonObject:
+    parsed = parse_handoff_argument(argument)
     try:
         active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
         if active_run is not None:
@@ -251,7 +271,7 @@ async def _handle_handoff_command(
                 "A handoff can be started after the current run finishes.",
             )
 
-        target = (target_agent_id or "").strip() or agent_id
+        target = parsed.target_agent_id or agent_id
         if target != agent_id:
             try:
                 state.runtime.agents.get(target)
@@ -262,7 +282,7 @@ async def _handle_handoff_command(
 
         handoff_run = await state.runtime.trigger_service.trigger_run(
             agent_id,
-            HANDOFF_INSTRUCTION,
+            _build_handoff_prompt(parsed.instruction),
             session_id=session_id,
             internal=True,
         )
