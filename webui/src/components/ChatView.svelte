@@ -41,6 +41,7 @@
     startRun,
     syncQueueFromServer,
     updateQueuedMessageContent,
+    visibleTimelineItemsForRender,
   } from '../lib/chatState.js';
   import ChatHeader from './chat/ChatHeader.svelte';
   import ChatComposer from './ChatComposer.svelte';
@@ -82,8 +83,9 @@
   let commandToast = $state('');
   // Non-persisted `output: "transient"` command cards (/status, /help) rendered
   // in the chat stream. Kept in a dedicated array so incoming run events never
-  // clear them; only a displayed-session change (or reload) empties them. Cards
-  // stack — that stacking is the status-comparison mechanism.
+  // clear them; only a displayed-session change (or reload) empties them. Each
+  // card carries the id of the timeline item it followed at creation, so the
+  // timeline anchors it in place instead of restacking all cards at the bottom.
   let transientCards = $state([]);
   let transientCardsSessionKey = '';
   let transientCardSeq = 0;
@@ -275,10 +277,16 @@
     if (!body) {
       return;
     }
+    // Anchor the card to the timeline item present when the command ran, so it
+    // stays at that position (like a chat message) instead of being pushed to
+    // the bottom by later messages. `null` anchors a card created on an empty
+    // timeline to the top.
+    const items = visibleTimelineItemsForRender(activeSessionState);
+    const anchorId = items.length > 0 ? items[items.length - 1].id : null;
     transientCardSeq += 1;
     transientCards = [
       ...transientCards,
-      { id: `transient-${transientCardSeq}`, text: body },
+      { id: `transient-${transientCardSeq}`, text: body, anchorId },
     ];
   };
 
