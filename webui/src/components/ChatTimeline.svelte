@@ -47,6 +47,12 @@
   const SESSION_SCROLL_POSITION_LIMIT = 100;
 
   let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
+  // Transient cards interleaved with the timeline: each renders after the
+  // item it was anchored to (`leading` for cards created on an empty timeline,
+  // `trailing` for cards whose anchor item is gone after a history reload).
+  let transientCardGroups = $derived(
+    groupTransientCards(timelineItems, transientCards),
+  );
   let timelineDateKeys = $derived(
     timelineItems.map((item) => dateKeyForTimestamp(timestampForItem(item))),
   );
@@ -221,6 +227,25 @@
         .join('~')}`;
     }
     return item.id;
+  }
+
+  function groupTransientCards(items, cards) {
+    const itemIds = new Set(items.map((item) => item.id));
+    const groups = { leading: [], byItemId: new Map(), trailing: [] };
+    for (const card of cards) {
+      if (card.anchorId && itemIds.has(card.anchorId)) {
+        const anchored = groups.byItemId.get(card.anchorId) ?? [];
+        anchored.push(card);
+        groups.byItemId.set(card.anchorId, anchored);
+      } else if (card.anchorId == null) {
+        groups.leading.push(card);
+      } else {
+        // The anchor item no longer exists (e.g. a history reload changed ids);
+        // keep the card visible at the end rather than dropping it.
+        groups.trailing.push(card);
+      }
+    }
+    return groups;
   }
 
   function handleTimelineClick(event) {
@@ -451,6 +476,9 @@
         </p>
       </div>
     {:else}
+      {#each transientCardGroups.leading as card (card.id)}
+        {@render transientCard(card)}
+      {/each}
       {#each timelineItems as item, itemIndex (item.id)}
         {#if shouldRenderTimelineDateSeparator(itemIndex)}
           <div class="date-sep">
@@ -483,18 +511,12 @@
             showRetry={shouldRenderRetryButton(item, latestTerminalState)}
           />
         {/if}
+        {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}
+          {@render transientCard(card)}
+        {/each}
       {/each}
-      {#each transientCards as card (card.id)}
-        <div
-          class="transient-card"
-          role="note"
-          aria-label={t('chat.transientCard.label', 'Command output')}
-        >
-          <span class="transient-card__label">
-            {t('chat.transientCard.label', 'Command output')}
-          </span>
-          <pre class="transient-card__body">{card.text}</pre>
-        </div>
+      {#each transientCardGroups.trailing as card (card.id)}
+        {@render transientCard(card)}
       {/each}
       {#if shouldRenderSubmittedTurnScrollSpacer}
         <div
@@ -506,6 +528,19 @@
     {/if}
   </div>
 </section>
+
+{#snippet transientCard(card)}
+  <div
+    class="transient-card"
+    role="note"
+    aria-label={t('chat.transientCard.label', 'Command output')}
+  >
+    <span class="transient-card__label">
+      {t('chat.transientCard.label', 'Command output')}
+    </span>
+    <pre class="transient-card__body">{card.text}</pre>
+  </div>
+{/snippet}
 
 {#if lightboxImage}
   <ImageLightbox
