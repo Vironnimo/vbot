@@ -20,7 +20,7 @@ Your agent file lists any additional files to read on top of these. Apply the sa
 |---|---|
 | Git (branches, commits, merges) | **Orchestrator + User** |
 | Project docs (`.vorch/PROJECT.md`) | **Orchestrator only** |
-| Spec files (`.vorch/specs/`) | **Orchestrator only** |
+| Domain maps (`.vorch/domain-maps/`) | **Orchestrator only** |
 | Glossary (`.vorch/GLOSSARY.md`) | **Orchestrator only** |
 | Planning & file-scope assignment | **Planner** |
 | Application code, tests, and UI | **Builder** |
@@ -28,7 +28,15 @@ Your agent file lists any additional files to read on top of these. Apply the sa
 | Web research (tech, libraries, APIs) | **Researcher** |
 | Codebase exploration & structured summaries | **Explorer** |
 
-**No agent operates outside their role.** Only the Orchestrator and User touch git. Only the Orchestrator writes `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and files under `.vorch/specs/`. Every other agent writes only within the scope defined by their role.
+**No agent operates outside their role.** Only the Orchestrator and User touch git. Only the Orchestrator writes `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and files under `.vorch/domain-maps/`. Every other agent writes only within the scope defined by their role.
+
+## Architecture
+
+**Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget: the system must stay small enough to hold in your head.
+
+- Default to extending an existing module. A new module, layer, or abstraction needs explicit justification.
+- Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around.
+- Expose what callers need, hide everything else.
 
 ## Code Quality
 
@@ -109,4 +117,4 @@ Do NOT install packages speculatively. Only request what the current task requir
 
 If a section referenced from `.vorch/PROJECT.md` doesn't exist yet, skip it and proceed with what you have.
 
-When working on a domain, read its spec file from `.vorch/specs/`. Your task will list which specs to read — treat that as a starting point, not a ceiling. Read others if you need them.
+When working on a domain, read its domain map from `.vorch/domain-maps/`. Your task will list which maps to read — treat that as a starting point, not a ceiling. Read others if you need them.
