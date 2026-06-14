@@ -328,26 +328,6 @@ Consolidating means deciding which side owns the schema (settings as central aut
 and rewiring AgentStore create/update paths plus their tests. Deferred: behavior-relevant refactor beyond
 the audit's settings-consolidation scope.
 
-## 2026-06-11 — RESOLVED: server/app.py pokes ChatLoop privates
-
-Resolves the entry "server/app.py pokes ChatLoop privates for compaction wiring" (2026-06-11).
-`Runtime.start()` now constructs both canonical ChatLoops with one shared
-`CompactionService(SummarizationStrategy())` via constructor injection. The server-side private
-pokes are gone, `app.state.compaction_service` is gone (nothing consumed it), and the
-`_runtime_*` probe helpers in `server/app.py` plus the `_state_*` probe fallbacks in
-`server/rpc/runtime_access.py` were replaced by direct reads of runtime/app-state services.
-`Runtime.config` is now a public property for the server's pre-start bind resolution.
-
-## 2026-06-11 — RESOLVED: agent.json double validation
-
-Resolves the entry "agent.json is validated twice" (2026-06-11). `core/settings` is the schema
-authority: `validate_temperature` / `validate_thinking_effort` (plus the shared constants) are now
-public, and both `core/agents/agents.py` and `server/rpc/agent_methods.py` delegate to them
-(wrapping into `AgentError` / `invalid_request`). The load path validates once —
-`_agent_from_dict` trusts `load_validated_agent_json` and only normalizes shapes; the finite-
-temperature check moved into `core/settings/validation.py` so nothing was lost.
-`core/settings/normalizers.py` keeps its storage-facing "Agent default …" variant deliberately
-(distinct message contract, shares the constants).
 
 ## 2026-06-12 — Channel observed-note writes can race with non-channel Runs
 
