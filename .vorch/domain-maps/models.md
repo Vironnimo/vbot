@@ -76,6 +76,11 @@ overwrite", highest layer wins per top-level field. Precedence highest first:
   that defines it — never deep-merged or concatenated. In particular the whole
   `reasoning` object and the whole `metadata` blob are replaced wholesale (the
   `metadata` wholesale rule has a known interaction — see Constraints).
+- A `null` does **not** count as defining a top-level field — it never overwrites a
+  value a lower layer supplied ("fill, don't overwrite, don't un-fill"). This is what
+  lets a provider's `context_window: null` fall through to the canonical window the
+  join inherits (e.g. opencode-go `minimax-m3` → `512000`); without it the higher
+  `null` would clobber the base value and the join would yield nothing.
 
 The merged record (pointer stripped) is constructed into a typed `Model` by
 `_model_from_record`; a layer set that fails to supply a required field (`name`,
