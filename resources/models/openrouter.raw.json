@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-15T22:10:37.424110+00:00",
+  "fetched_at": "2026-06-15T23:24:24.029319+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
@@ -4137,6 +4137,7 @@
           "reasoning",
           "response_format",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -5012,10 +5013,8 @@
           "logprobs",
           "max_tokens",
           "min_p",
-          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
-          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",
