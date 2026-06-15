@@ -569,7 +569,7 @@ export const englishCatalog = Object.freeze({
   'settings.providers.accounts.addButton': 'Add account…',
   'settings.providers.accounts.nameLabel': 'Account',
   'settings.providers.accounts.nameHint':
-    'Optional name for this credential slot. Leave empty for the default account.',
+    'Optional name for this account. Only needed if you add more than one — otherwise leave it empty.',
   'settings.providers.accounts.invalidId':
     'Account names use 1–32 lowercase letters, digits, or underscores and start with a letter or digit.',
   'settings.providers.accounts.removeEnvHint':
@@ -598,7 +598,7 @@ export const englishCatalog = Object.freeze({
   'settings.providers.add.saveKey': 'Save key',
   'settings.providers.add.keyError': 'API key could not be saved.',
   'settings.providers.add.oauthIntro':
-    'vBot opens an authorization code you confirm at {provider} in the browser.',
+    'Click Connect to begin. vBot then shows a code to enter at {provider} in your browser.',
   'settings.channels.title': 'Channels',
   'settings.channels.subtitle': 'Manage channel routing and runtime status.',
   'settings.channels.add': 'Add channel',

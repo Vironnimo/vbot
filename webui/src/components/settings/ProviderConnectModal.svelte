@@ -384,7 +384,7 @@
     <p class="provider-connect-modal__hint">
       {t(
         'settings.providers.accounts.nameHint',
-        'Optional name for this credential slot. Leave empty for the default account.',
+        'Optional name for this account. Only needed if you add more than one — otherwise leave it empty.',
       )}
     </p>
   {/if}
@@ -586,7 +586,7 @@
           <p class="provider-connect-modal__hint">
             {t(
               'settings.providers.add.oauthIntro',
-              'vBot opens an authorization code you confirm at {provider} in the browser.',
+              'Click Connect to begin. vBot then shows a code to enter at {provider} in your browser.',
               providerValues(selectedProvider),
             )}
           </p>
