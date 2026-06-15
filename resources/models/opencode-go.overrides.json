@@ -1,5 +1,5 @@
 {
-  "_comment": "Hand layer for the opencode-go gateway. The endpoint returns bare ids with no context window and no wire protocol, so this file carries the real context_window/max_output_tokens AND the per-model wire protocol fact (metadata.opencode_go.protocol: anthropic|openai), routing the adapter. Per-model reasoning: deepseek-v4-flash/deepseek-v4-pro drop their capabilities so the generated [high,max] ladder is inherited at load; the other models keep capabilities.reasoning.supported:true (a verified hand fact the bare endpoint and models.dev feed lack). metadata is replaced wholesale by the highest layer at load (assembly contract), so this metadata becomes the effective metadata.",
+  "_comment": "Hand layer for the opencode-go gateway. The endpoint returns bare ids with no context window and no wire protocol, so this file carries the per-model wire protocol fact (metadata.opencode_go.protocol: anthropic|openai), routing the adapter. Most models also carry explicit hand context_window/max_output_tokens (the gateway's own limits, which may deviate from the lab). minimax-m3 and qwen3.7-max instead carry a 'canonical' pointer (lab/model) and inherit context_window/max_output_tokens/family from the canonical base at load — the gateway matches the lab for those, so a pointer avoids duplicating the numbers. Per-model reasoning: deepseek-v4-flash/deepseek-v4-pro drop their capabilities so the generated [high,max] ladder is inherited at load; the other models keep capabilities.reasoning.supported:true (a verified hand fact the bare endpoint and models.dev feed lack). metadata is replaced wholesale by the highest layer at load (assembly contract), so this metadata becomes the effective metadata.",
   "models": {
     "deepseek-v4-flash": {
       "context_window": 1000000,
@@ -353,6 +353,7 @@
       }
     },
     "minimax-m3": {
+      "canonical": "minimax/MiniMax-M3",
       "metadata": {
         "opencode_go": {
           "protocol": "anthropic"
@@ -424,6 +425,7 @@
       }
     },
     "qwen3.7-max": {
+      "canonical": "alibaba/qwen3.7-max",
       "metadata": {
         "opencode_go": {
           "protocol": "anthropic"
