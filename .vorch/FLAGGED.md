@@ -601,3 +601,34 @@ symptoms are fixed in this change; the notes below are the residual cleanup/scop
    effort (or Anthropic adaptive thinking), not the model's native toggle/budget
    parameter. Wiring those request shapes remains deferred until a reachable model
    needs the native shape.
+
+## 2026-06-16 - opencode-go rebuilt from models.dev provider section (supersedes the above #1)
+
+Item #1 in the 2026-06-15 live-test entry (and the early "canonical pointer for
+minimax-m3/qwen3.7-max" patch) is **RESOLVED and superseded.** Root cause, found with
+the user: the opencode-go endpoint returns bare ids, and refresh pulled only the
+reasoning *control* from the models.dev provider section — not the limits, modalities,
+family, or the bare reasoning flag. So those gaps had been stuffed with hand-guessed
+override numbers (200000, 128000, …) that matched neither the gateway nor the lab.
+
+Fix: refresh now fills ALL of them from the provider's own models.dev section
+(`models_dev.provider_limits` / `provider_modalities` / `provider_family` /
+`provider_reasoning_supported`, wired in `discovery._enrich_provider_model`,
+"fill, don't overwrite"; modalities widen only as a strict superset). The opencode-go
+override is now ONLY the per-model wire `protocol` + a `hy3-preview` canonical pointer
+(the one model with no models.dev limit block). No hand-guessed numbers remain. The
+earlier null-skip merge fix and the on/off `/status` display both stay (still correct).
+
+Residual / new:
+- **qwen3.5-plus protocol** is now `anthropic` (models.dev `npm: @ai-sdk/anthropic`,
+  consistent with the other qwen models); the prior override said `openai`. Deprecated
+  model — worth a live re-check if it is ever used.
+- **github-copilot.json + anthropic.json kept as-is** (NOT regenerated). They cannot be
+  refreshed — Copilot OAuth is expired (reconnect → `model refresh github-copilot`),
+  anthropic is the normalizer-less stub — so they still carry their pre-rebuild data.
+  We briefly disabled them (`.old`) but reverted: their data is valid (Copilot) / a
+  deliberate stub (anthropic), they load fine, and several tests treat them as core
+  seeds. They self-update on the next refresh once the blocker is gone.
+- **Protocol could be auto-derived** from the models.dev `npm` hint (it matches all 19
+  models). Kept explicit in the override for now — a wrong protocol breaks the request,
+  so an explicit fact beats an inferred one. Auto-derivation is a possible future tidy-up.

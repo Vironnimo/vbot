@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-15T17:07:35.760703+00:00",
+  "fetched_at": "2026-06-15T22:10:35.601201+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -58,7 +58,8 @@
         "api-key"
       ],
       "context_window": 256000,
-      "max_output_tokens": null,
+      "family": "codestral",
+      "max_output_tokens": 4096,
       "name": "codestral-2508"
     },
     "devstral-2512": {
@@ -87,7 +88,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "devstral",
+      "max_output_tokens": 262144,
       "name": "devstral-2512"
     },
     "devstral-latest": {
@@ -118,7 +120,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "devstral",
+      "max_output_tokens": 262144,
       "name": "devstral-2512"
     },
     "devstral-medium-latest": {
@@ -147,7 +150,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "devstral",
+      "max_output_tokens": 262144,
       "name": "devstral-2512"
     },
     "labs-leanstral-2603": {
@@ -250,7 +254,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "magistral-medium",
+      "max_output_tokens": 16384,
       "name": "magistral-medium-2509"
     },
     "magistral-small-2509": {
@@ -456,7 +461,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "ministral",
+      "max_output_tokens": 128000,
       "name": "ministral-3b-2512"
     },
     "ministral-8b-2512": {
@@ -524,7 +530,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "ministral",
+      "max_output_tokens": 128000,
       "name": "ministral-8b-2512"
     },
     "mistral-code-agent-latest": {
@@ -649,7 +656,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "mistral-large",
+      "max_output_tokens": 262144,
       "name": "mistral-large-2512"
     },
     "mistral-large-latest": {
@@ -681,7 +689,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "mistral-large",
+      "max_output_tokens": 262144,
       "name": "mistral-large-2512"
     },
     "mistral-medium": {
@@ -748,7 +757,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "mistral-medium",
+      "max_output_tokens": 131072,
       "name": "mistral-medium-2505"
     },
     "mistral-medium-2508": {
@@ -782,7 +792,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "mistral-medium",
+      "max_output_tokens": 262144,
       "name": "mistral-medium-2508"
     },
     "mistral-medium-2604": {
@@ -815,7 +826,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "mistral-medium",
+      "max_output_tokens": 262144,
       "name": "mistral-medium-latest"
     },
     "mistral-medium-3": {
@@ -985,7 +997,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "mistral-medium",
+      "max_output_tokens": 262144,
       "name": "mistral-medium-latest"
     },
     "mistral-small-2506": {
@@ -1017,7 +1030,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "mistral-small",
+      "max_output_tokens": 16384,
       "name": "mistral-small-2506"
     },
     "mistral-small-2603": {
@@ -1050,7 +1064,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "mistral-small",
+      "max_output_tokens": 256000,
       "name": "mistral-small-2603"
     },
     "mistral-small-latest": {
@@ -1083,7 +1098,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "mistral-small",
+      "max_output_tokens": 256000,
       "name": "mistral-small-2603"
     },
     "mistral-tiny-2407": {
@@ -1281,7 +1297,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "mistral-nemo",
+      "max_output_tokens": 128000,
       "name": "open-mistral-nemo"
     },
     "open-mistral-nemo-2407": {
