@@ -401,7 +401,8 @@ svg {
 }
 
 .btn-new,
-.btn-primary {
+.btn-primary,
+.modal-btn-confirm {
   padding: 6px 14px;
 }
 
