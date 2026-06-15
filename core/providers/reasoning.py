@@ -115,6 +115,39 @@ def model_reasoning_supported(
     return supported if isinstance(supported, bool) else None
 
 
+def model_reasoning_levels(
+    model_lookup: Callable[[str], Any] | None,
+    model_id: str,
+) -> tuple[str, ...] | None:
+    """Return the model's effective reasoning-effort ladder, or ``None`` when absent.
+
+    The ladder is the merged-at-load ``capabilities.reasoning.levels`` projected
+    from the models.dev feed (see ``stuff/HANDOFF-model-db.md`` → "Merge beim
+    Laden"). Adapters snap a selected effort against this per-model ladder instead
+    of a provider-global constant; the adapter constant is only the floor when a
+    model has no feed ladder, which this function signals by returning ``None``.
+
+    Returns ``None`` (no ladder — caller falls back to the adapter floor) when
+    there is no ``model_lookup``, the model is unknown, or its ``levels`` is empty
+    (e.g. a budget-only model, or opencode-go whose hand override currently
+    clobbers the ladder — a Phase-5 concern). Returns the non-empty ladder tuple
+    otherwise. The connection-pin suffix is stripped before lookup, mirroring
+    :func:`model_reasoning_supported`.
+    """
+
+    if model_lookup is None:
+        return None
+
+    catalog_model_id = model_id.split("::", 1)[0]
+    model = model_lookup(catalog_model_id)
+    if model is None:
+        return None
+    levels = model.capabilities.reasoning.levels
+    if not levels:
+        return None
+    return tuple(levels)
+
+
 def remove_reasoning_kwargs(
     kwargs: MutableMapping[str, Any],
     *parameter_names: str,

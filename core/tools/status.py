@@ -7,6 +7,7 @@ from datetime import datetime
 from core.agents.agents import AgentNotFoundError, AgentStore
 from core.chat.commands import (
     build_status_reply,
+    resolve_actual_thinking_effort,
     resolve_status_activity,
     resolve_status_model_details,
 )
@@ -89,16 +90,20 @@ def make_status_handler(
             )
 
         activity = resolve_status_activity(chat_runs, agent_id, session_id)
-        context_window, model_display_name = resolve_status_model_details(agent, models)
+        model_details = resolve_status_model_details(agent, models)
 
         try:
             text = build_status_reply(
                 agent,
                 messages,
-                context_window,
+                model_details.context_window,
                 started_at,
-                model_display_name,
+                model_details.display_name,
                 activity,
+                actual_thinking_effort=resolve_actual_thinking_effort(
+                    agent.thinking_effort,
+                    model_details.reasoning_levels,
+                ),
             )
         except Exception:
             _LOGGER.error("Failed to build status tool reply", exc_info=True)
