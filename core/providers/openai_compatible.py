@@ -33,10 +33,16 @@ from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
     closest_supported_effort,
     model_reasoning_supported,
+    normalize_thinking_effort,
     remove_reasoning_kwargs,
+    warn_effort_swallowed,
+    warn_rejected_effort,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
+from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+
+_LOGGER = get_logger("providers.openai_compatible")
 
 # ---------------------------------------------------------------------------
 # SSE parsing constants
@@ -283,6 +289,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors.
         """
 
+        # Capture the agent-selected effort before ``_build_payload`` consumes the
+        # reasoning kwargs, so the observability signals below can name it.
+        selected_effort = _selected_thinking_effort(kwargs)
+
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
             payload = self._build_payload(messages, model_id, **kwargs)
@@ -299,10 +309,28 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             detail = (
                 f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
             )
+            # Surface a rejected reasoning effort (strict providers return 400)
+            # before classifying — classification and retry policy are unchanged.
+            warn_rejected_effort(
+                status_code=response.status_code,
+                detail=detail,
+                model_id=model_id,
+                selected_effort=selected_effort,
+                provider_logger=_LOGGER,
+            )
             classify_http_status(
                 response.status_code, detail=detail, response_headers=response.headers
             )
-            return dict(decode_response_json(response, "OpenAI-compatible provider"))
+            parsed = dict(decode_response_json(response, "OpenAI-compatible provider"))
+            # A non-``none`` effort that comes back with 0 reasoning tokens was
+            # effectively swallowed by the provider — surface it.
+            warn_effort_swallowed(
+                selected_effort=selected_effort,
+                usage=parsed.get("usage"),
+                model_id=model_id,
+                provider_logger=_LOGGER,
+            )
+            return parsed
 
         return await retry_async(_do_request)
 
@@ -663,6 +691,19 @@ def _apply_openai_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> None
         }
         for tool in tools
     ]
+
+
+def _selected_thinking_effort(kwargs: Mapping[str, Any]) -> str:
+    """Return the agent-selected reasoning effort from request kwargs.
+
+    Mirrors ``_apply_openai_reasoning``'s precedence (``thinking_effort`` wins
+    over a raw ``reasoning_effort``) but does not mutate kwargs, so it can read
+    the selection before the payload builder consumes it for the observability
+    signals. Returns the canonical effort, or an empty string when none was set.
+    """
+    thinking_effort = kwargs.get("thinking_effort") or ""
+    reasoning_effort = kwargs.get("reasoning_effort") or ""
+    return normalize_thinking_effort(thinking_effort or reasoning_effort)
 
 
 def _apply_openai_reasoning(

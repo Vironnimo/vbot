@@ -8,6 +8,8 @@ immediate failure on auth errors.
 from __future__ import annotations
 
 import json
+import logging
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -2451,3 +2453,155 @@ class TestNormalizeCatalogEntry:
         assert model.capabilities.input_modalities == ("text",)
         assert model.capabilities.output_modalities == ("text",)
         assert model.capabilities.task_types == ("chat", "text_output")
+
+
+# ---------------------------------------------------------------------------
+# send() — reasoning observability signals
+# ---------------------------------------------------------------------------
+
+
+_OPENAI_COMPATIBLE_LOGGER = "vbot.providers.openai_compatible"
+
+# A successful response whose usage reports the model did no reasoning.
+RESPONSE_WITH_ZERO_REASONING_TOKENS = {
+    "id": "chatcmpl-zero",
+    "object": "chat.completion",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello!"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
+}
+
+RESPONSE_WITH_REASONING_TOKENS = {
+    "id": "chatcmpl-think",
+    "object": "chat.completion",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello!"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 25,
+        "total_tokens": 35,
+        "completion_tokens_details": {"reasoning_tokens": 20},
+    },
+}
+
+
+class TestSendReasoningObservability:
+    """send() surfaces the two reasoning feedback signals without changing behavior."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_400_naming_effort_warns_and_still_raises(
+        self, openai_adapter, caplog: Any
+    ) -> None:
+        """A 400 naming a rejected effort warns and still raises the same fatal error."""
+        # Arrange
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(400, text="invalid value for 'reasoning_effort': 'max'")
+        )
+
+        # Act / Assert — classification is unchanged: fatal, non-retryable.
+        with (
+            caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER),
+            pytest.raises(ProviderError) as exc_info,
+        ):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="max")
+
+        assert exc_info.value.retryable is False
+        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "gpt-5.2" in message
+        assert "max" in message
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_400_unrelated_detail_does_not_warn(
+        self, openai_adapter, caplog: Any
+    ) -> None:
+        """A 400 that does not name an effort raises but emits no effort warning."""
+        # Arrange
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(400, text="context length exceeded")
+        )
+
+        # Act / Assert
+        with (
+            caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER),
+            pytest.raises(ProviderError),
+        ):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="max")
+
+        assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_effort_with_zero_reasoning_tokens_warns(
+        self, openai_adapter, caplog: Any
+    ) -> None:
+        """A non-none effort that returns 0 reasoning tokens emits a structured warning."""
+        # Arrange
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSE_WITH_ZERO_REASONING_TOKENS)
+        )
+
+        # Act
+        with caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="high")
+
+        # Assert
+        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "gpt-5.2" in message
+        assert "high" in message
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_effort_with_reasoning_tokens_does_not_warn(
+        self, openai_adapter, caplog: Any
+    ) -> None:
+        """A non-none effort with non-zero reasoning tokens emits no warning."""
+        # Arrange
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSE_WITH_REASONING_TOKENS)
+        )
+
+        # Act
+        with caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="high")
+
+        # Assert
+        assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_none_effort_with_zero_reasoning_tokens_does_not_warn(
+        self, openai_adapter, caplog: Any
+    ) -> None:
+        """Effort 'none' that returns 0 reasoning tokens is expected, not a swallowed effort."""
+        # Arrange
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSE_WITH_ZERO_REASONING_TOKENS)
+        )
+
+        # Act
+        with caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="none")
+
+        # Assert
+        assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
