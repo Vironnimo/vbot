@@ -934,7 +934,9 @@ class StubAdapter:
             return {"content": "OK", "tool_calls": None}
         return self._responses.pop(0)
 
-    def normalize_response(self, response: JsonObject) -> JsonObject:
+    def normalize_response(
+        self, response: JsonObject, *, model_id: str | None = None
+    ) -> JsonObject:
         return response
 
     async def stream(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> Any:

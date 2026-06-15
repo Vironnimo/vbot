@@ -76,6 +76,14 @@ _MODELS_DEV_TYPE_EFFORT = "effort"
 _MODELS_DEV_TYPE_BUDGET_TOKENS = "budget_tokens"
 _MODELS_DEV_TYPE_TOGGLE = "toggle"
 
+# models.dev ``interleaved`` → the per-model reasoning RESPONSE field (Phase 5):
+# which wire field the response returns reasoning in. Shapes:
+# ``{"field": "reasoning_content"}`` / ``{"field": "reasoning_details"}`` (named
+# field) and bare ``true`` (interleaved, no field-name override). Only the
+# field-named shape carries a usable selector; bare ``true`` yields ``None`` so
+# the adapter keeps its hardcoded default-key scan.
+_MODELS_DEV_INTERLEAVED_FIELD_KEY = "field"
+
 
 class ModelsDevError(VBotError):
     """A models.dev catalog fetch / shape-verification failure.
@@ -563,6 +571,32 @@ def provider_reasoning_block(
     # provider (whose bare ``/models`` endpoint reports no reasoning) produce an
     # invalid ``supported: false`` block carrying an effort ladder.
     return {"supported": bool(provider_model.get("reasoning")), **provider_control}
+
+
+def reasoning_response_field(
+    catalog: ModelsDevCatalog,
+    *,
+    models_dev_id: str,
+    wire_id: str,
+) -> str | None:
+    """Return the per-model reasoning RESPONSE field, or ``None`` (Phase 5).
+
+    Projects the provider section's models.dev ``interleaved`` value into the
+    field-name selector the adapter reads from ``metadata.<provider>.\
+    reasoning_response_field``: ``{"field": "reasoning_content"}`` /
+    ``{"field": "reasoning_details"}`` → that field name. Bare ``interleaved:
+    true`` (no field-name override) and an absent ``interleaved`` both yield
+    ``None`` so the adapter keeps its hardcoded default-key scan (graceful).
+    """
+
+    provider_model = catalog.provider_model(models_dev_id, wire_id)
+    if provider_model is None:
+        return None
+    interleaved = provider_model.get("interleaved")
+    if not isinstance(interleaved, Mapping):
+        return None
+    field_name = interleaved.get(_MODELS_DEV_INTERLEAVED_FIELD_KEY)
+    return field_name if isinstance(field_name, str) and field_name else None
 
 
 # ---------------------------------------------------------------------------

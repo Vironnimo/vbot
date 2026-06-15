@@ -448,3 +448,43 @@ Two things surfaced reviewing the Phase 3 regeneration:
    reconcile so effective opencode-go models keep the real context window AND the correct reasoning
    ladder. Net effect today: opencode-go reasoning still works (override `supported: true`) but snaps
    against the adapter floor instead of `[high, max]` — no regression, just not yet enriched.
+
+## 2026-06-15 — Model DB Phase 5: wire selectors are now data (status + leftovers)
+
+Phase 5 moved the per-model wire FACTS into the provider-scoped `metadata` blob; the wire MECHANICS
+stay in the adapters. Done and verified by unit tests + a clean validator run:
+
+- **opencode-go `protocol`** routes on `metadata.opencode_go.protocol` (`resources/models/opencode-go.overrides.json`);
+  the stale `_ANTHROPIC_MESSAGES_MODELS` frozenset is removed; unknown models default to OpenAI + a `warn`.
+- **Mistral `prompt_mode`** drives off `metadata.mistral.prompt_mode` (`resources/models/mistral.overrides.json`);
+  the `MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES` prefix tuple is removed.
+- **Reasoning response field** is data-driven and graceful in `normalize_response` (reads
+  `metadata.<provider>.reasoning_response_field`, else the hardcoded scan); refresh projects models.dev
+  `interleaved` into it (`models_dev.reasoning_response_field` + `discovery._enrich_provider_model`).
+- **Copilot family** now comes from `Model.family` (wins over `metadata.github_copilot.family`).
+
+The **2026-06-15 Phase-3 (orchestrator review) opencode-go override ↔ feed reconciliation** item above
+is RESOLVED here: effective `opencode-go/deepseek-v4-pro` reasoning == `{supported: true, control:
+"levels", levels: ["high","max"]}` (override drops its `capabilities` so the generated ladder is
+inherited); the other 14 override models keep `capabilities.reasoning: {supported: true}`; real
+context windows are preserved. Validator clean.
+
+Leftovers (deliberately NOT done):
+
+1. **Generated-only opencode-go models keep `context_window: 0`** — `minimax-m3` and `qwen3.7-max` got a
+   thin override entry carrying ONLY `metadata.opencode_go.protocol: "anthropic"` (so they route
+   correctly), but their required fields still come from the generated provider layer where
+   `context_window: 0`. The 3 truly override-less generated models (`kimi-k2.7-code`, …) likewise keep
+   `context_window: 0` and route the OpenAI default + a `warn`. This is the **Phase-6** `context_window`
+   workstream (provider-config-level default + global floor); not fixed here per the phase scope.
+2. **Catalog regeneration to populate `reasoning_response_field` was NOT run** — the projection code path
+   is in place and unit-tested, but the credentialed catalogs (`openrouter`, `opencode-go`) were not
+   re-refreshed in this phase, so the on-disk generated files do not yet carry the field. The graceful
+   fallback means runtime behavior is unchanged until a refresh runs (`model refresh openrouter` /
+   `opencode-go` will pick it up). mistral/openai have no `interleaved` in the feed; github-copilot/
+   minimax/anthropic are credential-blocked (see prior Phase-3 flags).
+3. **Pre-existing (not Phase 5): `tests/server/test_rpc_integration.py::
+   test_model_list_and_settings_get_follow_credential_contract`** fails on a stale `reasoning` snapshot
+   (the expected dict omits the typed `control`/`levels` fields the model.list serializer now emits).
+   Reproduces with all Phase-5 changes stashed → it is an earlier-phase test-snapshot debt, flagged as a
+   spawned task. The model.list serializer is correct; only the test fixture is stale.

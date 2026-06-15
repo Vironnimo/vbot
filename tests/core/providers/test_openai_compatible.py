@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -965,6 +966,155 @@ class TestSendSuccess:
         assert normalized["content"] == "Done"
         assert normalized["reasoning"] == "Visible reasoning"
         assert normalized["reasoning_meta"] == {"reasoning_details": reasoning_details}
+
+
+def _model_with_reasoning_response_field(
+    model_id: str,
+    provider_metadata_key: str,
+    response_field: str | None,
+) -> Model:
+    metadata: dict[str, object] = {}
+    if response_field is not None:
+        metadata = {provider_metadata_key: {"reasoning_response_field": response_field}}
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=True),
+        ),
+        context_window=128000,
+        max_output_tokens=4096,
+        metadata=metadata,
+    )
+
+
+class TestDataDrivenReasoningResponseField:
+    """``metadata.<provider>.reasoning_response_field`` selects the response field."""
+
+    def test_falls_back_to_default_scan_without_metadata(self) -> None:
+        """No metadata field (and no model_id) → today's hardcoded default scan."""
+
+        adapter = OpenAICompatibleAdapter(OPENROUTER_CONFIG, API_KEY)
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning_content": "Visible reasoning",
+                    }
+                }
+            ]
+        }
+
+        normalized = adapter.normalize_response(response)
+
+        assert normalized["reasoning"] == "Visible reasoning"
+
+    def test_reasoning_content_field_drives_visible_reasoning(self) -> None:
+        adapter = OpenAICompatibleAdapter(
+            OPENROUTER_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _model_with_reasoning_response_field(
+                model_id, "openrouter", "reasoning_content"
+            ),
+        )
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning_content": "Visible reasoning",
+                    }
+                }
+            ]
+        }
+
+        normalized = adapter.normalize_response(response, model_id="deepseek/deepseek-v4-pro")
+
+        assert normalized["reasoning"] == "Visible reasoning"
+
+    def test_reasoning_details_field_surfaces_through_meta(self) -> None:
+        reasoning_details = [{"type": "reasoning.text", "text": "opaque"}]
+        adapter = OpenAICompatibleAdapter(
+            OPENROUTER_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _model_with_reasoning_response_field(
+                model_id, "openrouter", "reasoning_details"
+            ),
+        )
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning_details": reasoning_details,
+                    }
+                }
+            ]
+        }
+
+        normalized = adapter.normalize_response(response, model_id="google/gemini-3-flash-preview")
+
+        assert normalized["reasoning_meta"] == {"reasoning_details": reasoning_details}
+
+    def test_custom_named_visible_field_is_preferred(self) -> None:
+        """A catalog-named visible field not in the default scan still wins."""
+
+        adapter = OpenAICompatibleAdapter(
+            OPENROUTER_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _model_with_reasoning_response_field(
+                model_id, "openrouter", "deep_thoughts"
+            ),
+        )
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "deep_thoughts": "Custom-field reasoning",
+                    }
+                }
+            ]
+        }
+
+        normalized = adapter.normalize_response(response, model_id="lab/custom")
+
+        assert normalized["reasoning"] == "Custom-field reasoning"
+
+    def test_metadata_key_normalizes_provider_hyphens(self) -> None:
+        """The metadata key uses underscores (opencode-go → opencode_go)."""
+
+        config = replace(OPENROUTER_CONFIG, id="opencode-go")
+        adapter = OpenAICompatibleAdapter(
+            config,
+            API_KEY,
+            model_lookup=lambda model_id: _model_with_reasoning_response_field(
+                model_id, "opencode_go", "reasoning_content"
+            ),
+        )
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning_content": "Visible reasoning",
+                    }
+                }
+            ]
+        }
+
+        normalized = adapter.normalize_response(response, model_id="deepseek-v4-pro")
+
+        assert normalized["reasoning"] == "Visible reasoning"
 
 
 # ---------------------------------------------------------------------------

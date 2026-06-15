@@ -25,6 +25,7 @@ from core.models.models_dev import (
     ModelsDevCatalog,
     auto_canonical_pointer,
     provider_reasoning_block,
+    reasoning_response_field,
 )
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.errors import CatalogEntrySkipped, NetworkError
@@ -270,23 +271,37 @@ def _project_provider_models(
     for wire_id, model in normalized_models.items():
         data = _model_to_data(model)
         if catalog is not None:
-            _enrich_provider_model(data, models_dev_id, wire_id, catalog)
+            _enrich_provider_model(data, provider_config.id, models_dev_id, wire_id, catalog)
         projected[wire_id] = data
     return projected
 
 
+def _provider_metadata_key(provider_id: str) -> str:
+    """Return the provider-scoped metadata key for a vBot provider id.
+
+    Hyphens are normalized to underscores so the key is a valid identifier and
+    matches the adapter-side convention (e.g. ``opencode-go`` →
+    ``opencode_go``, mirroring ``metadata.github_copilot``).
+    """
+
+    return provider_id.replace("-", "_")
+
+
 def _enrich_provider_model(
     data: dict[str, Any],
+    provider_id: str,
     models_dev_id: str,
     wire_id: str,
     catalog: ModelsDevCatalog,
 ) -> None:
-    """Stamp the auto canonical pointer + deviating ladder onto one model dict.
+    """Stamp the auto canonical pointer + deviating ladder + wire metadata.
 
     Mutates ``data`` in place:
 
     * adds a top-level ``canonical`` pointer for an exact lab-section wire-id
       match;
+    * projects the models.dev ``interleaved`` response field into
+      ``metadata.<provider>.reasoning_response_field`` (Phase 5) when present;
     * when models.dev reports a ladder that *deviates* from the lab spec, sets
       ``capabilities.reasoning`` to that deviating block (provider layer wins at
       load);
@@ -300,6 +315,18 @@ def _enrich_provider_model(
     pointer = auto_canonical_pointer(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
     if pointer is not None:
         data["canonical"] = pointer
+
+    response_field = reasoning_response_field(
+        catalog,
+        models_dev_id=models_dev_id,
+        wire_id=wire_id,
+    )
+    if response_field is not None:
+        metadata = data.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            provider_metadata = metadata.setdefault(_provider_metadata_key(provider_id), {})
+            if isinstance(provider_metadata, dict):
+                provider_metadata["reasoning_response_field"] = response_field
 
     deviating = provider_reasoning_block(
         catalog,
