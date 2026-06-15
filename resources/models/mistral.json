@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-08T12:47:43.056134+00:00",
+  "fetched_at": "2026-06-15T17:07:35.760703+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -25,11 +25,15 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": null,
       "name": "codestral-2508"
     },
     "codestral-latest": {
+      "canonical": "mistral/codestral-latest",
       "capabilities": {
         "input_modalities": [
           "text"
@@ -38,9 +42,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -53,11 +54,15 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": null,
       "name": "codestral-2508"
     },
     "devstral-2512": {
+      "canonical": "mistral/devstral-2512",
       "capabilities": {
         "input_modalities": [
           "text"
@@ -66,9 +71,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -81,6 +83,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "devstral-2512"
@@ -109,11 +114,15 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "devstral-2512"
     },
     "devstral-medium-latest": {
+      "canonical": "mistral/devstral-medium-latest",
       "capabilities": {
         "input_modalities": [
           "text"
@@ -122,9 +131,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -137,6 +143,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "devstral-2512"
@@ -169,6 +178,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 196608,
       "max_output_tokens": null,
       "name": "labs-leanstral-2603"
@@ -201,11 +213,15 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "magistral-medium-2509"
     },
     "magistral-medium-latest": {
+      "canonical": "mistral/magistral-medium-latest",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -215,9 +231,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "reasoning",
           "response_format",
@@ -233,6 +246,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "magistral-medium-2509"
@@ -265,6 +281,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "magistral-small-2509"
@@ -297,6 +316,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "mistral-small-2603"
@@ -328,6 +350,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "ministral-14b-2512"
@@ -359,6 +384,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "ministral-14b-2512"
@@ -390,6 +418,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "ministral-3b-2512"
@@ -421,6 +452,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "ministral-3b-2512"
@@ -452,6 +486,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "ministral-8b-2512"
@@ -483,6 +520,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "ministral-8b-2512"
@@ -511,6 +551,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "devstral-2512"
@@ -539,6 +582,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": null,
       "name": "codestral-2508"
@@ -567,11 +613,15 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": null,
       "name": "codestral-2508"
     },
     "mistral-large-2512": {
+      "canonical": "mistral/mistral-large-2512",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -581,9 +631,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -598,11 +645,15 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "mistral-large-2512"
     },
     "mistral-large-latest": {
+      "canonical": "mistral/mistral-large-latest",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -612,9 +663,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -629,6 +677,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "mistral-large-2512"
@@ -644,9 +695,10 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [
+          "reasoning",
           "response_format",
           "tools"
         ],
@@ -660,11 +712,15 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 131072,
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
       "max_output_tokens": null,
-      "name": "mistral-medium-2508"
+      "name": "mistral-medium-latest"
     },
     "mistral-medium-2505": {
+      "canonical": "mistral/mistral-medium-2505",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -674,9 +730,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -691,6 +744,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "mistral-medium-2505"
@@ -722,11 +778,15 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "mistral-medium-2508"
     },
     "mistral-medium-2604": {
+      "canonical": "mistral/mistral-medium-2604",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -736,9 +796,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "reasoning",
           "response_format",
@@ -754,9 +811,12 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
-      "name": "mistral-medium-3-5"
+      "name": "mistral-medium-latest"
     },
     "mistral-medium-3": {
       "capabilities": {
@@ -786,9 +846,12 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
-      "name": "mistral-medium-3-5"
+      "name": "mistral-medium-latest"
     },
     "mistral-medium-3-5": {
       "capabilities": {
@@ -818,9 +881,12 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
-      "name": "mistral-medium-3-5"
+      "name": "mistral-medium-latest"
     },
     "mistral-medium-3.5": {
       "capabilities": {
@@ -850,9 +916,12 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
-      "name": "mistral-medium-3-5"
+      "name": "mistral-medium-latest"
     },
     "mistral-medium-c21211-r0-75": {
       "capabilities": {
@@ -887,6 +956,7 @@
       "name": "mistral-medium-3-5"
     },
     "mistral-medium-latest": {
+      "canonical": "mistral/mistral-medium-latest",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -896,10 +966,8 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
+          "reasoning",
           "response_format",
           "tools"
         ],
@@ -913,11 +981,15 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 131072,
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
       "max_output_tokens": null,
-      "name": "mistral-medium-2508"
+      "name": "mistral-medium-latest"
     },
     "mistral-small-2506": {
+      "canonical": "mistral/mistral-small-2506",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -927,9 +999,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -944,11 +1013,15 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "mistral-small-2506"
     },
     "mistral-small-2603": {
+      "canonical": "mistral/mistral-small-2603",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -958,9 +1031,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "reasoning",
           "response_format",
@@ -976,11 +1046,15 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "mistral-small-2603"
     },
     "mistral-small-latest": {
+      "canonical": "mistral/mistral-small-latest",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -990,9 +1064,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "reasoning",
           "response_format",
@@ -1008,6 +1079,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "mistral-small-2603"
@@ -1036,6 +1110,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "open-mistral-nemo"
@@ -1064,6 +1141,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "open-mistral-nemo"
@@ -1096,6 +1176,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "mistral-small-2603"
@@ -1128,9 +1211,12 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
-      "name": "mistral-medium-3-5"
+      "name": "mistral-medium-latest"
     },
     "mistral-vibe-cli-with-tools": {
       "capabilities": {
@@ -1143,9 +1229,10 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [
+          "reasoning",
           "response_format",
           "tools"
         ],
@@ -1159,9 +1246,12 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 131072,
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
       "max_output_tokens": null,
-      "name": "mistral-medium-2508"
+      "name": "mistral-medium-latest"
     },
     "open-mistral-nemo": {
       "capabilities": {
@@ -1187,6 +1277,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "open-mistral-nemo"
@@ -1215,6 +1308,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "open-mistral-nemo"
@@ -1242,6 +1338,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "name": "voxtral-mini-2507"
@@ -1269,6 +1368,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "name": "voxtral-mini-2507"
@@ -1297,6 +1399,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "name": "voxtral-small-2507"
@@ -1325,6 +1430,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "name": "voxtral-small-2507"

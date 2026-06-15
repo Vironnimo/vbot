@@ -1,4 +1,5 @@
 {
+  "fetched_at": "2026-06-15T17:08:55.101967+00:00",
   "models": {
     "codex-auto-review": {
       "capabilities": {
@@ -29,10 +30,12 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "subscription"
+      ],
       "context_window": 272000,
       "max_output_tokens": null,
-      "name": "Codex Auto Review",
-      "connections": ["subscription"]
+      "name": "Codex Auto Review"
     },
     "gpt-5.2": {
       "capabilities": {
@@ -57,12 +60,15 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
-      "name": "GPT-5.2",
-      "connections": ["api-key"]
+      "name": "GPT-5.2"
     },
     "gpt-5.4": {
+      "canonical": "openai/gpt-5.4",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -72,9 +78,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "parallel_tool_calls",
           "reasoning",
@@ -91,12 +94,15 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "subscription"
+      ],
       "context_window": 272000,
       "max_output_tokens": null,
-      "name": "GPT-5.4",
-      "connections": ["subscription"]
+      "name": "GPT-5.4"
     },
     "gpt-5.4-mini": {
+      "canonical": "openai/gpt-5.4-mini",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -106,9 +112,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "parallel_tool_calls",
           "reasoning",
@@ -125,12 +128,15 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "subscription"
+      ],
       "context_window": 272000,
       "max_output_tokens": null,
-      "name": "GPT-5.4-Mini",
-      "connections": ["subscription"]
+      "name": "GPT-5.4-Mini"
     },
     "gpt-5.5": {
+      "canonical": "openai/gpt-5.5",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -140,9 +146,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "parallel_tool_calls",
           "reasoning",
@@ -159,11 +162,14 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "subscription"
+      ],
       "context_window": 272000,
       "max_output_tokens": null,
-      "name": "GPT-5.5",
-      "connections": ["subscription"]
+      "name": "GPT-5.5"
     }
   },
-  "provider_id": "openai"
+  "provider_id": "openai",
+  "source": "discovery"
 }
