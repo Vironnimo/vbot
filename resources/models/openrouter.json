@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-15T17:07:32.600334+00:00",
+  "fetched_at": "2026-06-15T22:10:37.424110+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -34,6 +34,7 @@
         "api-key"
       ],
       "context_window": 256000,
+      "family": "jamba",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -188,6 +189,7 @@
         "api-key"
       ],
       "context_window": 32768,
+      "family": "llama",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -225,7 +227,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -263,7 +265,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -312,6 +314,7 @@
         "api-key"
       ],
       "context_window": 65536,
+      "family": "allenai",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -364,6 +367,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "nova",
       "max_output_tokens": 65535,
       "metadata": {
         "openrouter": {
@@ -407,6 +411,7 @@
         "api-key"
       ],
       "context_window": 300000,
+      "family": "nova-lite",
       "max_output_tokens": 5120,
       "metadata": {
         "openrouter": {
@@ -447,6 +452,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "nova-micro",
       "max_output_tokens": 5120,
       "metadata": {
         "openrouter": {
@@ -490,6 +496,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "nova",
       "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
@@ -533,6 +540,7 @@
         "api-key"
       ],
       "context_window": 300000,
+      "family": "nova-pro",
       "max_output_tokens": 5120,
       "metadata": {
         "openrouter": {
@@ -626,6 +634,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "claude",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -670,6 +679,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "claude",
       "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
@@ -728,6 +738,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-fable",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -781,6 +792,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "claude-haiku",
       "max_output_tokens": 64000,
       "metadata": {
         "openrouter": {
@@ -831,6 +843,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "claude-opus",
       "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
@@ -884,6 +897,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "claude-opus",
       "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
@@ -941,6 +955,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "claude-opus",
       "max_output_tokens": 64000,
       "metadata": {
         "openrouter": {
@@ -1001,6 +1016,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-opus",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -1059,6 +1075,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-opus",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -1116,6 +1133,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-opus",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -1173,6 +1191,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-opus",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -1230,6 +1249,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-opus",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -1287,6 +1307,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-opus",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -1338,6 +1359,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-sonnet",
       "max_output_tokens": 64000,
       "metadata": {
         "openrouter": {
@@ -1391,6 +1413,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-sonnet",
       "max_output_tokens": 64000,
       "metadata": {
         "openrouter": {
@@ -1451,6 +1474,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-sonnet",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -1495,7 +1519,7 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -1586,6 +1610,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "trinity",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -1631,6 +1656,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "trinity-mini",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -1858,6 +1884,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "ernie",
       "max_output_tokens": 16000,
       "metadata": {
         "openrouter": {
@@ -2053,6 +2080,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "seed",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -2104,6 +2132,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "seed",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -2155,6 +2184,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "seed",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -2213,6 +2243,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "seed",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -2287,7 +2318,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -2323,7 +2354,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -2359,7 +2390,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -2503,7 +2534,8 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
+      "family": "mistral",
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -2547,6 +2579,7 @@
         "api-key"
       ],
       "context_window": 256000,
+      "family": "command-a",
       "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
@@ -2590,6 +2623,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "command-r",
       "max_output_tokens": 4000,
       "metadata": {
         "openrouter": {
@@ -2633,6 +2667,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "command-r",
       "max_output_tokens": 4000,
       "metadata": {
         "openrouter": {
@@ -2674,6 +2709,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "command-r",
       "max_output_tokens": 4000,
       "metadata": {
         "openrouter": {
@@ -2722,7 +2758,8 @@
         "api-key"
       ],
       "context_window": 128000,
-      "max_output_tokens": null,
+      "family": "cogito",
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -2768,6 +2805,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "deepseek",
       "max_output_tokens": 16000,
       "metadata": {
         "openrouter": {
@@ -2817,6 +2855,7 @@
         "api-key"
       ],
       "context_window": 163840,
+      "family": "deepseek",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -2869,6 +2908,7 @@
         "api-key"
       ],
       "context_window": 163840,
+      "family": "deepseek",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -2916,6 +2956,7 @@
         "api-key"
       ],
       "context_window": 163840,
+      "family": "deepseek-thinking",
       "max_output_tokens": 16000,
       "metadata": {
         "openrouter": {
@@ -2967,6 +3008,7 @@
         "api-key"
       ],
       "context_window": 163840,
+      "family": "deepseek",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -3012,6 +3054,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "deepseek-thinking",
       "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
@@ -3060,6 +3103,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "deepseek",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -3112,6 +3156,7 @@
         "api-key"
       ],
       "context_window": 163840,
+      "family": "deepseek",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -3164,6 +3209,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "deepseek",
       "max_output_tokens": 64000,
       "metadata": {
         "openrouter": {
@@ -3216,6 +3262,7 @@
         "api-key"
       ],
       "context_window": 163840,
+      "family": "deepseek",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -3274,10 +3321,12 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "max_output_tokens": null,
+      "family": "deepseek-flash",
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "DeepSeek: DeepSeek V4 Flash"
@@ -3332,10 +3381,12 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "deepseek-thinking",
       "max_output_tokens": 384000,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "DeepSeek: DeepSeek V4 Pro"
@@ -3380,7 +3431,8 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
+      "family": "rnj",
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -3419,7 +3471,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -3479,6 +3531,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-flash",
       "max_output_tokens": 65535,
       "metadata": {
         "openrouter": {
@@ -3522,6 +3575,7 @@
         "api-key"
       ],
       "context_window": 32768,
+      "family": "gemini-flash",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -3581,6 +3635,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-flash-lite",
       "max_output_tokens": 65535,
       "metadata": {
         "openrouter": {
@@ -3640,6 +3695,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-flash-lite",
       "max_output_tokens": 65535,
       "metadata": {
         "openrouter": {
@@ -3699,6 +3755,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-pro",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -3755,6 +3812,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -3814,6 +3872,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-pro",
       "max_output_tokens": 65535,
       "metadata": {
         "openrouter": {
@@ -3878,10 +3937,12 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-flash",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "Google: Gemini 3 Flash Preview"
@@ -3923,6 +3984,7 @@
         "api-key"
       ],
       "context_window": 65536,
+      "family": "gemini-pro",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -3976,6 +4038,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "gemini-flash",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -4040,6 +4103,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-flash-lite",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -4104,6 +4168,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-flash-lite",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -4237,10 +4302,12 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-pro",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "Google: Gemini 3.1 Pro Preview"
@@ -4300,10 +4367,12 @@
         "api-key"
       ],
       "context_window": 1048756,
+      "family": "gemini-pro",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "Google: Gemini 3.1 Pro Preview Custom Tools"
@@ -4364,6 +4433,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-flash",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -4535,6 +4605,7 @@
         "api-key"
       ],
       "context_window": 8192,
+      "family": "gemma",
       "max_output_tokens": 2048,
       "metadata": {
         "openrouter": {
@@ -4587,6 +4658,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "gemma",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -4639,6 +4711,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "gemma",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -4689,6 +4762,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "gemma",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -4733,7 +4807,8 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
+      "family": "gemma",
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -4793,7 +4868,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "gemma",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -4848,6 +4924,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "gemma",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -4908,6 +4985,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "gemma",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -4959,6 +5037,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "gemma",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -5003,6 +5082,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "lyria",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -5047,6 +5127,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "lyria",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -5086,7 +5167,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -5126,7 +5207,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -5166,7 +5247,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -5362,6 +5443,7 @@
         "api-key"
       ],
       "context_window": 131000,
+      "family": "granite",
       "max_output_tokens": 131000,
       "metadata": {
         "openrouter": {
@@ -5409,6 +5491,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "granite",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -5452,6 +5535,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "mercury",
       "max_output_tokens": 50000,
       "metadata": {
         "openrouter": {
@@ -5499,6 +5583,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "ling",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -5546,6 +5631,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "ling",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -5594,6 +5680,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "ring",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -5851,6 +5938,7 @@
         "api-key"
       ],
       "context_window": 256000,
+      "family": "kat-coder",
       "max_output_tokens": 80000,
       "metadata": {
         "openrouter": {
@@ -5888,7 +5976,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -5926,7 +6014,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -5964,7 +6052,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -6009,7 +6097,8 @@
         "api-key"
       ],
       "context_window": 128000,
-      "max_output_tokens": null,
+      "family": "liquid",
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6053,7 +6142,8 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
+      "family": "liquid",
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6099,7 +6189,8 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
+      "family": "liquid",
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6148,6 +6239,7 @@
         "api-key"
       ],
       "context_window": 8000,
+      "family": "alpha",
       "max_output_tokens": 2000,
       "metadata": {
         "openrouter": {
@@ -6192,6 +6284,7 @@
         "api-key"
       ],
       "context_window": 8192,
+      "family": "llama",
       "max_output_tokens": 8000,
       "metadata": {
         "openrouter": {
@@ -6236,7 +6329,8 @@
         "api-key"
       ],
       "context_window": 8192,
-      "max_output_tokens": null,
+      "family": "llama",
+      "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6285,6 +6379,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -6334,6 +6429,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -6383,6 +6479,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -6428,6 +6525,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "llama",
       "max_output_tokens": 60000,
       "metadata": {
         "openrouter": {
@@ -6473,6 +6571,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "llama",
       "max_output_tokens": 80000,
       "metadata": {
         "openrouter": {
@@ -6514,7 +6613,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "llama",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6563,6 +6663,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -6606,7 +6707,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "llama",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6658,6 +6760,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -6710,6 +6813,7 @@
         "api-key"
       ],
       "context_window": 10000000,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -6801,6 +6905,7 @@
         "api-key"
       ],
       "context_window": 163840,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -6877,7 +6982,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -6920,7 +7025,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -6970,6 +7075,7 @@
         "api-key"
       ],
       "context_window": 16384,
+      "family": "phi",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -7015,6 +7121,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "phi",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -7096,7 +7203,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -7137,6 +7244,7 @@
         "api-key"
       ],
       "context_window": 1000192,
+      "family": "minimax",
       "max_output_tokens": 1000192,
       "metadata": {
         "openrouter": {
@@ -7184,6 +7292,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "minimax",
       "max_output_tokens": 40000,
       "metadata": {
         "openrouter": {
@@ -7235,10 +7344,12 @@
         "api-key"
       ],
       "context_window": 204800,
+      "family": "minimax",
       "max_output_tokens": 196608,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "MiniMax: MiniMax M2"
@@ -7272,6 +7383,7 @@
         "api-key"
       ],
       "context_window": 65536,
+      "family": "minimax",
       "max_output_tokens": 2048,
       "metadata": {
         "openrouter": {
@@ -7323,10 +7435,12 @@
         "api-key"
       ],
       "context_window": 204800,
+      "family": "minimax",
       "max_output_tokens": 196608,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "MiniMax: MiniMax M2.1"
@@ -7378,10 +7492,12 @@
         "api-key"
       ],
       "context_window": 204800,
+      "family": "minimax",
       "max_output_tokens": 196608,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "MiniMax: MiniMax M2.5"
@@ -7431,6 +7547,7 @@
         "api-key"
       ],
       "context_window": 204800,
+      "family": "minimax",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -7490,6 +7607,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "minimax",
       "max_output_tokens": 512000,
       "metadata": {
         "openrouter": {
@@ -7538,7 +7656,8 @@
         "api-key"
       ],
       "context_window": 256000,
-      "max_output_tokens": null,
+      "family": "codestral",
+      "max_output_tokens": 256000,
       "metadata": {
         "openrouter": {
           "modality": "text+file->text"
@@ -7628,7 +7747,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "devstral",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+file->text"
@@ -7679,7 +7799,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "ministral",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -7730,7 +7851,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "ministral",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -7781,7 +7903,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "ministral",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -7871,7 +7994,8 @@
         "api-key"
       ],
       "context_window": 128000,
-      "max_output_tokens": null,
+      "family": "mistral-large",
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text+file->text"
@@ -7919,7 +8043,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "mistral-large",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text+file->text"
@@ -7970,7 +8095,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "mistral-large",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file->text"
@@ -8021,7 +8147,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "mistral-medium",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file->text"
@@ -8074,7 +8201,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "mistral-medium",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file->text"
@@ -8125,7 +8253,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "mistral-medium",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file->text"
@@ -8174,7 +8303,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "mistral-nemo",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -8222,7 +8352,8 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
+      "family": "mistral",
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+file->text"
@@ -8269,6 +8400,7 @@
         "api-key"
       ],
       "context_window": 32768,
+      "family": "mistral-small",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -8320,7 +8452,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "mistral-small",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -8368,6 +8501,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "mistral-small",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -8420,6 +8554,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "mistral-small",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -8468,7 +8603,8 @@
         "api-key"
       ],
       "context_window": 65536,
-      "max_output_tokens": null,
+      "family": "mistral",
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text+file->text"
@@ -8511,7 +8647,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -8637,7 +8773,8 @@
         "api-key"
       ],
       "context_window": 32000,
-      "max_output_tokens": null,
+      "family": "mistral",
+      "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
           "modality": "text+file+audio->text"
@@ -8682,6 +8819,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "kimi-k2",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -8731,6 +8869,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "kimi-k2",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -8779,10 +8918,12 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "kimi-thinking",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "MoonshotAI: Kimi K2 Thinking"
@@ -8832,10 +8973,12 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "kimi-k2",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "MoonshotAI: Kimi K2.5"
@@ -8887,10 +9030,12 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "kimi-k2",
       "max_output_tokens": 262142,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "MoonshotAI: Kimi K2.6"
@@ -8978,6 +9123,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "kimi-k2",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -9015,6 +9161,7 @@
         "api-key"
       ],
       "context_window": 81920,
+      "family": "morph",
       "max_output_tokens": 38000,
       "metadata": {
         "openrouter": {
@@ -9052,6 +9199,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "morph",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -9188,6 +9336,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "nousresearch",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -9229,7 +9378,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "hermes",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -9276,6 +9426,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "nousresearch",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -9321,7 +9472,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "hermes",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -9366,7 +9518,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "hermes",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -9413,6 +9566,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "nemotron",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -9500,6 +9654,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "nemotron",
       "max_output_tokens": 228000,
       "metadata": {
         "openrouter": {
@@ -9542,7 +9697,8 @@
         "api-key"
       ],
       "context_window": 256000,
-      "max_output_tokens": null,
+      "family": "nemotron",
+      "max_output_tokens": 256000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -9593,6 +9749,7 @@
         "api-key"
       ],
       "context_window": 256000,
+      "family": "nemotron",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -9643,7 +9800,8 @@
         "api-key"
       ],
       "context_window": 1000000,
-      "max_output_tokens": null,
+      "family": "nemotron",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -9687,6 +9845,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "nemotron",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -9735,6 +9894,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "nemotron",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -9777,6 +9937,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "nemotron",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -9820,6 +9981,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "nemotron",
       "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
@@ -9868,6 +10030,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "nemotron",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -9959,7 +10122,8 @@
         "api-key"
       ],
       "context_window": 128000,
-      "max_output_tokens": null,
+      "family": "nemotron",
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -10003,7 +10167,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -10049,6 +10213,7 @@
         "api-key"
       ],
       "context_window": 16385,
+      "family": "gpt",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -10097,6 +10262,7 @@
         "api-key"
       ],
       "context_window": 4095,
+      "family": "gpt",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -10146,6 +10312,7 @@
         "api-key"
       ],
       "context_window": 16385,
+      "family": "gpt",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -10192,6 +10359,7 @@
         "api-key"
       ],
       "context_window": 4095,
+      "family": "gpt",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -10238,6 +10406,7 @@
         "api-key"
       ],
       "context_window": 8191,
+      "family": "gpt",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -10286,6 +10455,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -10334,6 +10504,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -10380,7 +10551,8 @@
         "api-key"
       ],
       "context_window": 1047576,
-      "max_output_tokens": null,
+      "family": "gpt",
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file->text"
@@ -10426,6 +10598,7 @@
         "api-key"
       ],
       "context_window": 1047576,
+      "family": "gpt-mini",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -10472,6 +10645,7 @@
         "api-key"
       ],
       "context_window": 1047576,
+      "family": "gpt-nano",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -10525,6 +10699,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -10578,6 +10753,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt",
       "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
@@ -10631,6 +10807,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -10683,6 +10860,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -10736,6 +10914,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt-mini",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -10791,6 +10970,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "o-mini",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -10829,6 +11009,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "o-mini",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -10914,6 +11095,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -11017,6 +11199,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11061,6 +11244,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt-codex",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -11112,6 +11296,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-codex",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11168,6 +11353,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11224,6 +11410,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11280,6 +11467,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-mini",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11336,7 +11524,8 @@
         "api-key"
       ],
       "context_window": 400000,
-      "max_output_tokens": null,
+      "family": "gpt-nano",
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file->text"
@@ -11381,6 +11570,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-pro",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11437,6 +11627,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11484,6 +11675,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt-codex",
       "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
@@ -11536,6 +11728,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-codex",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11589,6 +11782,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-codex",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11641,6 +11835,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-codex",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -11698,6 +11893,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11745,6 +11941,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt-codex",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -11798,6 +11995,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-codex",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11852,6 +12050,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-pro",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -11899,6 +12098,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -11955,6 +12155,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-codex",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -12012,6 +12213,7 @@
         "api-key"
       ],
       "context_window": 1050000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -12066,6 +12268,7 @@
         "api-key"
       ],
       "context_window": 272000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -12123,6 +12326,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-mini",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -12180,6 +12384,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-nano",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -12235,6 +12440,7 @@
         "api-key"
       ],
       "context_window": 1050000,
+      "family": "gpt-pro",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -12292,6 +12498,7 @@
         "api-key"
       ],
       "context_window": 1050000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -12346,6 +12553,7 @@
         "api-key"
       ],
       "context_window": 1050000,
+      "family": "gpt-pro",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -12399,6 +12607,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "gpt",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -12452,6 +12661,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "o-mini",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -12504,6 +12714,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -12563,7 +12774,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "gpt-oss",
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -12611,6 +12823,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "gpt-oss",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -12670,7 +12883,8 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "family": "gpt-oss",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -12725,6 +12939,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "gpt-oss",
       "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
@@ -12775,6 +12990,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "gpt-oss",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -12829,6 +13045,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -12872,6 +13089,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o-pro",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -12926,6 +13144,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -12979,6 +13198,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -13030,6 +13250,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o-mini",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -13075,6 +13296,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -13129,6 +13351,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o-pro",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -13183,6 +13406,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o-mini",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -13236,6 +13460,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o-mini",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -13284,6 +13509,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "o",
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
@@ -13324,7 +13550,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -13508,7 +13734,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -13555,7 +13781,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -13596,7 +13822,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -13666,7 +13892,8 @@
         "api-key"
       ],
       "context_window": 2000000,
-      "max_output_tokens": null,
+      "family": "auto",
+      "max_output_tokens": 2000000,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file+audio+video->text+image"
@@ -13699,7 +13926,7 @@
         "api-key"
       ],
       "context_window": 128000,
-      "max_output_tokens": null,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -13753,7 +13980,7 @@
         "api-key"
       ],
       "context_window": 200000,
-      "max_output_tokens": null,
+      "max_output_tokens": 8000,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -13786,7 +14013,7 @@
         "api-key"
       ],
       "context_window": 1000000,
-      "max_output_tokens": null,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -13833,6 +14060,7 @@
         "api-key"
       ],
       "context_window": 1048756,
+      "family": "alpha",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -13866,7 +14094,7 @@
         "api-key"
       ],
       "context_window": 2000000,
-      "max_output_tokens": null,
+      "max_output_tokens": 200000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -14036,7 +14264,8 @@
         "api-key"
       ],
       "context_window": 127072,
-      "max_output_tokens": null,
+      "family": "sonar",
+      "max_output_tokens": 127072,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -14079,7 +14308,8 @@
         "api-key"
       ],
       "context_window": 128000,
-      "max_output_tokens": null,
+      "family": "sonar-deep-research",
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -14120,6 +14350,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "sonar-pro",
       "max_output_tokens": 8000,
       "metadata": {
         "openrouter": {
@@ -14167,6 +14398,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "sonar-pro",
       "max_output_tokens": 8000,
       "metadata": {
         "openrouter": {
@@ -14210,7 +14442,8 @@
         "api-key"
       ],
       "context_window": 128000,
-      "max_output_tokens": null,
+      "family": "sonar-reasoning",
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -14253,7 +14486,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "Poolside: Laguna M.1 (free)"
@@ -14293,7 +14527,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "Poolside: Laguna XS.2 (free)"
@@ -14337,6 +14572,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "glm",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -14386,6 +14622,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -14431,6 +14668,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -14476,6 +14714,7 @@
         "api-key"
       ],
       "context_window": 128000,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -14518,6 +14757,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -14561,6 +14801,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -14608,6 +14849,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -14657,6 +14899,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -14711,6 +14954,7 @@
         "api-key"
       ],
       "context_window": 131702,
+      "family": "qwen",
       "max_output_tokens": 40960,
       "metadata": {
         "openrouter": {
@@ -14757,6 +15001,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
@@ -14806,6 +15051,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -14857,6 +15103,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -14911,6 +15158,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -14960,6 +15208,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
@@ -15011,6 +15260,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -15063,6 +15313,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -15115,6 +15366,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
@@ -15155,7 +15407,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -15205,6 +15457,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -15252,6 +15505,7 @@
         "api-key"
       ],
       "context_window": 160000,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -15294,6 +15548,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -15343,6 +15598,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -15386,6 +15642,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -15429,6 +15686,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "qwen",
       "max_output_tokens": 262000,
       "metadata": {
         "openrouter": {
@@ -15562,6 +15820,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -15609,6 +15868,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -15632,6 +15892,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -15644,6 +15905,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15658,6 +15920,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -15703,7 +15966,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "qwen",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -15754,6 +16018,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -15806,6 +16071,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -15857,6 +16123,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -15909,6 +16176,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -15961,6 +16229,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -16006,6 +16275,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -16058,6 +16328,7 @@
         "api-key"
       ],
       "context_window": 256000,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -16106,6 +16377,7 @@
         "api-key"
       ],
       "context_window": 256000,
+      "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -16166,6 +16438,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -16226,6 +16499,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -16286,7 +16560,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": 262144,
+      "family": "qwen",
+      "max_output_tokens": 81920,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -16346,6 +16621,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -16406,6 +16682,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen3.5",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -16459,6 +16736,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -16512,6 +16790,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -16565,6 +16844,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen3.5",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -16625,6 +16905,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 262140,
       "metadata": {
         "openrouter": {
@@ -16652,7 +16933,6 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
-          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -16666,7 +16946,6 @@
           "tool_choice",
           "tools",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16685,6 +16964,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -16738,6 +17018,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen3.6",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -16787,6 +17068,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -16840,6 +17122,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -16889,6 +17172,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -16941,6 +17225,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -17366,6 +17651,7 @@
         "api-key"
       ],
       "context_window": 16384,
+      "family": "reka",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -17410,6 +17696,7 @@
         "api-key"
       ],
       "context_window": 65536,
+      "family": "reka",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -17535,6 +17822,7 @@
         "api-key"
       ],
       "context_window": 8192,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -17580,7 +17868,8 @@
         "api-key"
       ],
       "context_window": 16000,
-      "max_output_tokens": null,
+      "family": "llama",
+      "max_output_tokens": 16000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -17629,6 +17918,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -17675,6 +17965,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "llama",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -18407,7 +18698,7 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -18450,6 +18741,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "hunyuan",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -18502,7 +18794,8 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
+      "family": "Hy",
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -18869,7 +19162,8 @@
         "api-key"
       ],
       "context_window": 128000,
-      "max_output_tokens": null,
+      "family": "solar-pro",
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -18908,6 +19202,7 @@
         "api-key"
       ],
       "context_window": 1040000,
+      "family": "palmyra",
       "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
@@ -18960,7 +19255,8 @@
         "api-key"
       ],
       "context_window": 2000000,
-      "max_output_tokens": null,
+      "family": "grok",
+      "max_output_tokens": 2000000,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file->text"
@@ -19015,7 +19311,8 @@
         "api-key"
       ],
       "context_window": 2000000,
-      "max_output_tokens": null,
+      "family": "grok",
+      "max_output_tokens": 2000000,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file->text"
@@ -19074,7 +19371,8 @@
         "api-key"
       ],
       "context_window": 1000000,
-      "max_output_tokens": null,
+      "family": "grok",
+      "max_output_tokens": 1000000,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -19126,7 +19424,8 @@
         "api-key"
       ],
       "context_window": 256000,
-      "max_output_tokens": null,
+      "family": "grok-build",
+      "max_output_tokens": 256000,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -19215,7 +19514,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -19312,10 +19611,12 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "mimo",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "Xiaomi: MiMo-V2-Flash"
@@ -19367,10 +19668,12 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "mimo",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+audio+video->text"
+          "modality": "text+image+audio+video->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "Xiaomi: MiMo-V2.5"
@@ -19419,10 +19722,12 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "mimo",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "Xiaomi: MiMo-V2.5-Pro"
@@ -19504,6 +19809,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "glm",
       "max_output_tokens": 98304,
       "metadata": {
         "openrouter": {
@@ -19528,7 +19834,6 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -19536,12 +19841,10 @@
           "response_format",
           "seed",
           "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -19556,6 +19859,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "glm-air",
       "max_output_tokens": 131070,
       "metadata": {
         "openrouter": {
@@ -19646,6 +19950,7 @@
         "api-key"
       ],
       "context_window": 65536,
+      "family": "glm",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
@@ -19697,6 +20002,7 @@
         "api-key"
       ],
       "context_window": 202752,
+      "family": "glm",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -19751,6 +20057,7 @@
         "api-key"
       ],
       "context_window": 131072,
+      "family": "glm",
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
@@ -19804,10 +20111,12 @@
         "api-key"
       ],
       "context_window": 202752,
+      "family": "glm",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "Z.ai: GLM 4.7"
@@ -19855,10 +20164,12 @@
         "api-key"
       ],
       "context_window": 202752,
+      "family": "glm-flash",
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "Z.ai: GLM 4.7 Flash"
@@ -19906,10 +20217,12 @@
         "api-key"
       ],
       "context_window": 202752,
-      "max_output_tokens": null,
+      "family": "glm",
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "Z.ai: GLM 5"
@@ -19956,10 +20269,12 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "glm",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "Z.ai: GLM 5 Turbo"
@@ -20011,10 +20326,12 @@
         "api-key"
       ],
       "context_window": 202752,
-      "max_output_tokens": null,
+      "family": "glm",
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "Z.ai: GLM 5.1"
@@ -20216,6 +20533,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-fable",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -20269,6 +20587,7 @@
         "api-key"
       ],
       "context_window": 200000,
+      "family": "claude-haiku",
       "max_output_tokens": 64000,
       "metadata": {
         "openrouter": {
@@ -20326,6 +20645,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-opus",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -20386,6 +20706,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-sonnet",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -20450,6 +20771,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-flash",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -20513,6 +20835,7 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini-pro",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -20571,6 +20894,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "kimi",
       "max_output_tokens": 262142,
       "metadata": {
         "openrouter": {
@@ -20628,6 +20952,7 @@
         "api-key"
       ],
       "context_window": 1050000,
+      "family": "gpt",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -20685,6 +21010,7 @@
         "api-key"
       ],
       "context_window": 400000,
+      "family": "gpt-mini",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
