@@ -1,0 +1,10 @@
+{
+  "models": {
+    "deepseek/deepseek-v4-pro": {
+      "canonical": "deepseek/deepseek-v4-pro"
+    },
+    "vendor-x/clean-mapped": {
+      "canonical": "deepseek/deepseek-v4-pro"
+    }
+  }
+}

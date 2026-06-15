@@ -566,7 +566,11 @@ class TestModelRegistryLoad:
         assert registry_second is not registry_first
         assert registry_second.get("test_provider", "model-a").name == "Updated"
 
-    def test_load_ignores_colocated_override_files(self, tmp_path: Path):
+    def test_override_file_is_not_loaded_as_its_own_provider(self, tmp_path: Path):
+        """``<provider>.overrides.json`` is a hand layer, not a provider file: it
+        is excluded from the provider-file glob and applied during assembly. It
+        does not spawn a phantom ``openrouter.overrides`` provider."""
+
         models_dir = tmp_path / "models"
         models_dir.mkdir()
         models_dir.joinpath("openrouter.json").write_text(
@@ -593,10 +597,8 @@ class TestModelRegistryLoad:
         models_dir.joinpath("openrouter.overrides.json").write_text(
             """
                         {
-                            "provider_id": "openrouter",
                             "models": {
-                                "model-a": {"name": "Corrected Model A"},
-                                "override-only": {"name": "Override Only"}
+                                "model-a": {"name": "Corrected Model A"}
                             }
                         }
                         """,
@@ -605,9 +607,98 @@ class TestModelRegistryLoad:
 
         registry = ModelRegistry.load(tmp_path)
 
-        assert registry.get("openrouter", "model-a").name == "Model A"
-        with pytest.raises(KeyError):
-            registry.get("openrouter", "override-only")
+        # No phantom provider derived from the override filename.
+        assert registry.list_for_provider("openrouter.overrides") == []
+
+    def test_provider_override_applies_field_level_at_load(self, tmp_path: Path):
+        """Overrides are merged at LOAD now (they used to only apply at refresh):
+        the override's ``name`` wins, the provider's other fields survive."""
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("openrouter.json").write_text(
+            """
+            {
+              "provider_id": "openrouter",
+              "models": {
+                "model-a": {
+                  "name": "Model A",
+                  "capabilities": {
+                    "vision": false, "tools": false, "json_mode": false,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 1000,
+                  "max_output_tokens": 100
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+        models_dir.joinpath("openrouter.overrides.json").write_text(
+            """
+            {
+              "models": {
+                "model-a": {"name": "Corrected Model A"}
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+        model = registry.get("openrouter", "model-a")
+
+        assert model.name == "Corrected Model A"
+        assert model.context_window == 1000
+
+    def test_override_only_model_loads_at_load(self, tmp_path: Path):
+        """A wire-id present only in the override file (a manual override-only
+        model with the full shape) is assembled and loaded."""
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("openrouter.json").write_text(
+            """
+            {
+              "provider_id": "openrouter",
+              "models": {
+                "model-a": {
+                  "name": "Model A",
+                  "capabilities": {
+                    "vision": false, "tools": false, "json_mode": false,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 1000,
+                  "max_output_tokens": 100
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+        models_dir.joinpath("openrouter.overrides.json").write_text(
+            """
+            {
+              "models": {
+                "override-only": {
+                  "name": "Override Only",
+                  "capabilities": {
+                    "vision": false, "tools": false, "json_mode": false,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 2000,
+                  "max_output_tokens": 200
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("openrouter", "override-only").name == "Override Only"
 
     def test_load_ignores_colocated_raw_files(self, tmp_path: Path):
         models_dir = tmp_path / "models"
@@ -1071,6 +1162,31 @@ class TestModelRegistryRealResources:
             assert isinstance(model.capabilities.reasoning.levels, tuple)
             assert model.capabilities.reasoning.control in (None, "levels", "on_off", "budget")
             assert isinstance(model.family, str)
+
+    def test_real_resources_load_without_a_canonical_models_json(self):
+        """The shipped ``resources/`` has no ``models.json`` yet (Phase 3 writes
+        it). The assembly load path must treat the canonical layer as empty and
+        still load every provider model on provider + override data alone."""
+
+        assert not (RESOURCES_DIR / "models" / "models.json").exists()
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        # A provider-only model with no canonical join loads fine.
+        deepseek = registry.get("opencode-go", "deepseek-v4-pro")
+        assert deepseek.capabilities.reasoning.supported is True
+
+    def test_overrides_are_applied_at_load(self):
+        """``<provider>.overrides.json`` is now merged at LOAD (it used to only
+        apply at refresh). The openai overrides add override-only task models —
+        they must be present in the loaded registry."""
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        # ``tts-1`` lives only in ``openai.overrides.json`` (the provider file
+        # carries the chat models). It loads because overrides apply at load.
+        tts = registry.get("openai", "tts-1")
+        assert tts.capabilities.task_types == ("text_to_speech", "audio_generation")
 
     @pytest.mark.parametrize(
         "provider_id",

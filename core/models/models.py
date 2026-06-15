@@ -19,8 +19,40 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from core.models.assembly import (
+    CANONICAL_FILE_NAME,
+    CANONICAL_OVERRIDES_FILE_NAME,
+    assemble_provider_model,
+    load_canonical_layer,
+)
+
 if TYPE_CHECKING:
     from core.models.query import ModelQuery
+
+# Provider-layer files under ``models/`` are ``<provider>.json``; these siblings
+# are never provider files and are excluded from the provider-file glob loop.
+# ``*.raw.json`` is an inspection dump; ``*.overrides.json`` is a hand layer
+# applied during assembly (not its own provider file); the canonical files are
+# loaded by the dedicated canonical loader. The suffixes/classifier are public
+# so the offline validator shares one definition of "what is a provider file".
+RAW_FILE_SUFFIX = ".raw.json"
+OVERRIDES_FILE_SUFFIX = ".overrides.json"
+_NON_PROVIDER_FILE_NAMES = frozenset({CANONICAL_FILE_NAME, CANONICAL_OVERRIDES_FILE_NAME})
+
+
+def is_provider_file(file_name: str) -> bool:
+    """Return whether ``file_name`` is a provider-layer ``<provider>.json``.
+
+    Excludes the inspection ``*.raw.json`` dump, the ``*.overrides.json`` hand
+    layer (applied during assembly, not its own provider file), and the canonical
+    ``models.json`` / ``models.overrides.json`` (loaded separately). Shared by the
+    registry loader and the offline validator so the classification can't drift.
+    """
+
+    if file_name.endswith(RAW_FILE_SUFFIX) or file_name.endswith(OVERRIDES_FILE_SUFFIX):
+        return False
+    return file_name not in _NON_PROVIDER_FILE_NAMES
+
 
 MODEL_TASK_ORDER = (
     "chat",
@@ -239,9 +271,12 @@ class Model:
 class ModelRegistry:
     """Registry of model data, indexed by (provider_id, model_id).
 
-    Loads model data from JSON files in a ``models/`` subdirectory.  Caches
-    after first load — subsequent calls with the same path return the cached
-    instance.
+    The single public read surface for model data. ``load()`` assembles each
+    effective model at load time from the canonical, provider, and override
+    layers (see :mod:`core.models.assembly`); ``get()`` / ``list_for_provider()``
+    / ``query()`` read the assembled result. Caches after first load —
+    subsequent calls with the same ``resources_dir`` return the cached instance
+    until ``invalidate()`` clears it (e.g. after a refresh writes new layer data).
     """
 
     _cache: ClassVar[dict[Path, ModelRegistry]] = {}
@@ -251,11 +286,18 @@ class ModelRegistry:
 
     @classmethod
     def load(cls, resources_dir: Path) -> ModelRegistry:
-        """Load model data from all ``<resources_dir>/models/*.json`` files.
+        """Assemble the registry from the canonical, provider, and override layers.
+
+        Each effective model is built at load time from up to three layers — the
+        provider-agnostic canonical base (joined deterministically), the
+        ``<provider>.json`` provider layer, and the ``<provider>.overrides.json``
+        hand layer — by :mod:`core.models.assembly`. The canonical files may be
+        absent (Phase 3 generates them); assembly then runs on provider + override
+        data alone. No network and no key are involved.
 
         Args:
             resources_dir: Path to the resources directory containing a
-                ``models/`` subdirectory with JSON model data files.
+                ``models/`` subdirectory with the layer JSON files.
 
         Returns:
             A populated ModelRegistry instance.
@@ -265,49 +307,61 @@ class ModelRegistry:
             return cls._cache[resolved]
 
         models_dir = resolved / "models"
+        canonical_layer = load_canonical_layer(models_dir)
         models: dict[tuple[str, str], Model] = {}
 
         for json_file in sorted(models_dir.glob("*.json")):
-            if json_file.name.endswith(".overrides.json") or json_file.name.endswith(".raw.json"):
+            if not is_provider_file(json_file.name):
                 continue
 
             data = json.loads(json_file.read_text(encoding="utf-8"))
             provider_id = data["provider_id"]
-            for model_id, model_data in data["models"].items():
-                caps = model_data["capabilities"]
-                reasoning_data = caps["reasoning"]
-                reasoning = ReasoningCapabilities(
-                    supported=reasoning_data["supported"],
-                    control=reasoning_data.get("control"),
-                    levels=tuple(reasoning_data.get("levels", ())),
-                    budget_max=reasoning_data.get("budget_max"),
+            override_models = cls._read_override_models(models_dir, provider_id)
+
+            for wire_id, provider_model in data["models"].items():
+                record = assemble_provider_model(
+                    wire_id,
+                    provider_model,
+                    override_models.get(wire_id),
+                    canonical_layer,
                 )
-                capabilities = Capabilities(
-                    vision=caps["vision"],
-                    tools=caps["tools"],
-                    json_mode=caps["json_mode"],
-                    reasoning=reasoning,
-                    input_modalities=tuple(caps.get("input_modalities", ())),
-                    output_modalities=tuple(caps.get("output_modalities", ())),
-                    supported_parameters=tuple(caps.get("supported_parameters", ())),
-                    supported_voices=tuple(caps.get("supported_voices", ())),
-                    task_types=tuple(caps.get("task_types", ())),
+                models[(provider_id, wire_id)] = _model_from_record(wire_id, record)
+
+            # An override file may carry a wire-id absent from the provider file
+            # (a manual override-only model). Assemble those too, since the old
+            # refresh-time path also supported override-only models.
+            for wire_id, override_model in override_models.items():
+                if wire_id in data["models"]:
+                    continue
+                record = assemble_provider_model(
+                    wire_id,
+                    {},
+                    override_model,
+                    canonical_layer,
                 )
-                model = Model(
-                    model_id=model_id,
-                    name=model_data["name"],
-                    capabilities=capabilities,
-                    context_window=model_data["context_window"],
-                    max_output_tokens=model_data["max_output_tokens"],
-                    family=model_data.get("family", ""),
-                    metadata=model_data.get("metadata", {}),
-                    connections=tuple(model_data.get("connections", ())),
-                )
-                models[(provider_id, model_id)] = model
+                models[(provider_id, wire_id)] = _model_from_record(wire_id, record)
 
         registry = cls(models)
         cls._cache[resolved] = registry
         return registry
+
+    @staticmethod
+    def _read_override_models(models_dir: Path, provider_id: str) -> dict[str, Any]:
+        """Return the ``models`` map of ``<provider>.overrides.json``, or ``{}``.
+
+        The override file may omit ``provider_id`` — the provider id is derived
+        from the filename — so it is keyed only by wire-id here. An absent file
+        contributes no overrides.
+        """
+
+        overrides_path = models_dir / f"{provider_id}{OVERRIDES_FILE_SUFFIX}"
+        if not overrides_path.exists():
+            return {}
+        data = json.loads(overrides_path.read_text(encoding="utf-8"))
+        override_models = data.get("models", {})
+        if not isinstance(override_models, dict):
+            raise ValueError(f"Override file '{overrides_path}' must contain a 'models' object")
+        return override_models
 
     @classmethod
     def invalidate(cls, resources_dir: Path) -> None:
@@ -365,6 +419,48 @@ class ModelRegistry:
             if model_query.matches(model):
                 matches.append((provider_id, model))
         return sorted(matches, key=lambda item: (item[0], item[1].model_id))
+
+
+def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
+    """Construct a typed ``Model`` from an assembled effective-model record.
+
+    The record is the field-level merge of the canonical, provider, and override
+    layers (see :mod:`core.models.assembly`) with the internal ``canonical``
+    pointer already stripped. It must carry the loader's required fields; a layer
+    set that fails to supply one (e.g. a model with no provider entry and no
+    canonical join missing ``context_window``) surfaces as a ``KeyError`` here,
+    which is the correct "the data is incomplete" signal.
+    """
+
+    caps = record["capabilities"]
+    reasoning_data = caps["reasoning"]
+    reasoning = ReasoningCapabilities(
+        supported=reasoning_data["supported"],
+        control=reasoning_data.get("control"),
+        levels=tuple(reasoning_data.get("levels", ())),
+        budget_max=reasoning_data.get("budget_max"),
+    )
+    capabilities = Capabilities(
+        vision=caps["vision"],
+        tools=caps["tools"],
+        json_mode=caps["json_mode"],
+        reasoning=reasoning,
+        input_modalities=tuple(caps.get("input_modalities", ())),
+        output_modalities=tuple(caps.get("output_modalities", ())),
+        supported_parameters=tuple(caps.get("supported_parameters", ())),
+        supported_voices=tuple(caps.get("supported_voices", ())),
+        task_types=tuple(caps.get("task_types", ())),
+    )
+    return Model(
+        model_id=model_id,
+        name=record["name"],
+        capabilities=capabilities,
+        context_window=record["context_window"],
+        max_output_tokens=record["max_output_tokens"],
+        family=record.get("family", ""),
+        metadata=record.get("metadata", {}),
+        connections=tuple(record.get("connections", ())),
+    )
 
 
 def _freeze_metadata_value(value: Any) -> Any:
