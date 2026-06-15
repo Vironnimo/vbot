@@ -195,6 +195,38 @@ describe('ChatView', () => {
     ).toBe(expectedBadge);
   });
 
+  it('tolerates a null context window in the token badge', async () => {
+    // A model whose context window is unknown sends context_window: null in the
+    // agent payload. The badge must show just the tokens — never "/ NaN" or a
+    // crash (Phase 6 honest-gap contract).
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        usage: { input_tokens: 3886, output_tokens: 92 },
+        contextWindow: null,
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    const numberFormat = new Intl.NumberFormat();
+    const expectedBadge = `${numberFormat.format(3978)} tok`;
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.token-badge')?.textContent?.trim() ===
+        expectedBadge,
+      100,
+    );
+
+    const badgeText = document.body
+      .querySelector('.token-badge')
+      ?.textContent?.trim();
+    expect(badgeText).toBe(expectedBadge);
+    expect(badgeText).not.toContain('NaN');
+    expect(badgeText).not.toContain('/');
+  });
+
   it('shows the usage breakdown with cache tokens in the token badge tooltip', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({

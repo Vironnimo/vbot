@@ -304,6 +304,7 @@ class Runtime:
             sessions=self._chat_sessions,
             models=self._models,
             started_at=self._started_at,
+            providers=self._providers,
         )
         self.chat_runs = self._chat_run_manager
         if self._attachment_store is None:
@@ -355,6 +356,7 @@ class Runtime:
             self._models,
             self._chat_run_manager,
             self._started_at,
+            self._providers,
         )
         # Built-ins are all registered now; apply extension tools last so a
         # collision with any built-in name is skipped (built-in wins), right

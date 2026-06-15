@@ -37,7 +37,6 @@ from core.providers.github_copilot_responses import (
     normalize_responses_response,
 )
 from core.providers.openai_compatible import (
-    DEFAULT_CONTEXT_WINDOW,
     OpenAICompatibleAdapter,
     _read_mapping,
     _read_non_empty_string,
@@ -362,11 +361,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                     )
                 ),
             ),
-            context_window=_read_token_limit_or_default(
-                limits,
-                "max_context_window_tokens",
-                DEFAULT_CONTEXT_WINDOW,
-            ),
+            # Absent → ``None`` (honest "unknown"), resolved at use time by the
+            # read-side default chain; no fake ``0`` baked into the catalog.
+            context_window=_read_optional_token_limit(limits, "max_context_window_tokens"),
             max_output_tokens=_read_optional_token_limit(limits, "max_output_tokens"),
             metadata=_copilot_runtime_metadata(raw, capabilities, supports),
         )
@@ -458,15 +455,6 @@ def _read_optional_token_limit(
     if isinstance(value, str) and value.isdecimal():
         return int(value)
     return None
-
-
-def _read_token_limit_or_default(
-    data: Mapping[str, Any],
-    key: str,
-    fallback: int,
-) -> int:
-    value = _read_optional_token_limit(data, key)
-    return value if value is not None else fallback
 
 
 def _normalize_copilot_chat_response(response: dict[str, Any]) -> dict[str, Any]:

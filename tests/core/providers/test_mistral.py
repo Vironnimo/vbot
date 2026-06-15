@@ -223,13 +223,15 @@ def test_normalize_catalog_entry_rejects_archived_models() -> None:
         )
 
 
-def test_normalize_catalog_entry_defaults_missing_context_window_to_zero() -> None:
+def test_normalize_catalog_entry_leaves_missing_context_window_unknown() -> None:
+    # A missing max_context_length is honestly unknown (None), not a fake 0
+    # (Phase 6); the read-side default chain fills it at use time.
     model = MistralAdapter.normalize_catalog_entry(
         raw_mistral_model(max_context_length=None),
         {"max_tokens": 8192},
     )
 
-    assert model.context_window == 0
+    assert model.context_window is None
 
 
 def test_normalize_catalog_entry_preserves_unknown_max_output_tokens() -> None:

@@ -20,6 +20,16 @@ from typing import Any
 
 from core.utils.errors import ConfigError
 
+# Last-resort context-window floor, used when neither the model nor the
+# provider config supplies a window (e.g. custom models and thin providers
+# whose endpoint reports no window). Deliberately small and conservative:
+# better to under-promise the budget — compaction triggers a little early,
+# the token badge reads a little low — than to over-promise and let a real
+# request blow past the model's true window. 8192 is a safe floor every
+# modern chat model clears. This is a read-side FLOOR, never written into the
+# catalog as a discovered fact (see ``resolve_context_window``).
+GLOBAL_CONTEXT_WINDOW_FLOOR = 8192
+
 # ---------------------------------------------------------------------------
 # Nested dataclass for auth configuration
 # ---------------------------------------------------------------------------
@@ -119,6 +129,15 @@ class ProviderConfig:
             case). Used by the refresh-time lift mechanism to find a provider's
             section inside the models.dev catalog; the at-load canonical join
             does *not* depend on it. Read via :meth:`effective_models_dev_id`.
+        context_window: Optional per-provider read-side default context window,
+            applied when a model on this provider has no window of its own
+            (``Model.context_window is None``). This is a READ-SIDE FACT
+            default, not a request-shaping default — a provider whose endpoint
+            reliably reports no window (e.g. a thin gateway) can name one sane
+            window here so its models resolve a usable budget instead of falling
+            all the way to the global floor. Distinct from ``defaults`` (which
+            holds request-shaping params like ``max_tokens``). Consumed by
+            :func:`resolve_context_window`.
     """
 
     id: str
@@ -130,6 +149,7 @@ class ProviderConfig:
     extra_headers: dict[str, str] | None = None
     models_endpoint: str | None = None
     models_dev_id: str | None = None
+    context_window: int | None = None
 
     def effective_models_dev_id(self) -> str:
         """Return the models.dev provider key for this provider.
@@ -150,6 +170,47 @@ class ProviderConfig:
             f"No connection config found for id '{local_id}' on provider '{self.id}'. "
             f"Available: {', '.join(connection.id for connection in self.connections)}"
         )
+
+
+def resolve_context_window(
+    model_context_window: int | None,
+    provider_config: ProviderConfig | None,
+) -> int:
+    """Resolve a usable context window through the read-side default chain.
+
+    The single source of truth for "what window do we actually use" so no
+    read-side caller (compaction, token budget, ``/status``, the agent payload)
+    re-implements the chain. A missing fact stays missing in the data
+    (``Model.context_window is None``); this fills the gap at use time only:
+
+    1. The model's own window when it is a positive int (the discovered fact).
+    2. Else the provider config's ``context_window`` default when positive
+       (a per-provider read-side default for thin/window-less endpoints).
+    3. Else :data:`GLOBAL_CONTEXT_WINDOW_FLOOR` — the conservative last resort
+       that keeps custom and window-less models alive.
+
+    Non-positive values at any layer (a stray ``0`` from an old catalog, a
+    misconfigured provider default) are treated as "unknown" and skipped, so a
+    fake ``0`` can never reach a caller as a real budget. The return is always a
+    positive int, so callers never divide by zero or render a NaN.
+
+    Args:
+        model_context_window: The model's ``context_window`` (``None`` / a
+            non-positive stray means "unknown").
+        provider_config: The provider config of the model's provider, or
+            ``None`` when it cannot be resolved (custom/unknown provider).
+
+    Returns:
+        A positive context window to use downstream.
+    """
+
+    if model_context_window is not None and model_context_window > 0:
+        return model_context_window
+    if provider_config is not None:
+        provider_default = provider_config.context_window
+        if provider_default is not None and provider_default > 0:
+            return provider_default
+    return GLOBAL_CONTEXT_WINDOW_FLOOR
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +328,15 @@ class ProviderRegistry:
                 f"Provider '{provider_id}' models_dev_id must be a string when set, "
                 f"got {type(models_dev_id).__name__}"
             )
+        context_window = data.get("context_window")
+        if context_window is not None and (
+            isinstance(context_window, bool)
+            or not isinstance(context_window, int)
+            or context_window <= 0
+        ):
+            raise ConfigError(
+                f"Provider '{provider_id}' context_window must be a positive integer when set"
+            )
         return ProviderConfig(
             id=provider_id,
             name=data["name"],
@@ -277,6 +347,7 @@ class ProviderRegistry:
             extra_headers=data.get("extra_headers"),
             models_endpoint=data.get("models_endpoint"),
             models_dev_id=models_dev_id,
+            context_window=context_window,
         )
 
     @staticmethod

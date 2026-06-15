@@ -119,6 +119,7 @@ from core.chat.tool_dispatch import (
 from core.debug import DebugContext
 from core.extensions import HookContext
 from core.providers.errors import NetworkError
+from core.providers.providers import resolve_context_window
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
 from core.runs import (
     COMPACTION_COMPLETED_EVENT,
@@ -960,7 +961,15 @@ class ChatLoop:
         )
 
     def _resolve_context_window(self, agent: Any) -> int | None:
-        """Resolve context window for the active agent model from model registry."""
+        """Resolve the usable context window for the active agent model.
+
+        Returns ``None`` only when the model string is unusable (no
+        ``provider/model`` form). Otherwise the value always resolves through the
+        shared default chain (model window → provider-config default → global
+        floor, see :func:`resolve_context_window`), so a model whose window is
+        ``None`` still gets a usable budget and auto-compaction keeps working
+        instead of silently disabling itself.
+        """
         bare_model = parse_bare_model(agent.model)
         if "/" not in bare_model:
             return None
@@ -974,9 +983,21 @@ class ChatLoop:
         except (KeyError, AttributeError):
             return None
 
+        return resolve_context_window(
+            model_entry.context_window,
+            self._lookup_provider_config(provider_id),
+        )
+
+    def _lookup_provider_config(self, provider_id: str) -> Any:
+        """Return the ProviderConfig for the read-side window default, or None.
+
+        Tolerant of a missing/partial runtime (the registry may be absent for a
+        custom provider): the resolver treats ``None`` as "no provider default"
+        and falls back to the global floor.
+        """
         try:
-            return int(model_entry.context_window)
-        except (TypeError, ValueError, AttributeError):
+            return self._runtime.providers.get(provider_id)
+        except (KeyError, AttributeError):
             return None
 
     def _resolve_summary_adapter(

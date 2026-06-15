@@ -488,3 +488,50 @@ Leftovers (deliberately NOT done):
    (the expected dict omits the typed `control`/`levels` fields the model.list serializer now emits).
    Reproduces with all Phase-5 changes stashed → it is an earlier-phase test-snapshot debt, flagged as a
    spawned task. The model.list serializer is correct; only the test fixture is stale.
+
+---
+
+## 2026-06-15 — Phase 6 (context_window optional) — resolved + cross-provider leftovers
+
+Phase 6 landed: `Model.context_window` is now `int | None`; a missing window stays missing
+(`null`/absent) and is filled read-side by the shared chain `resolve_context_window(model_window,
+provider_config)` (model value -> provider-config `context_window` default -> named global floor
+`GLOBAL_CONTEXT_WINDOW_FLOOR` ~8k, in `core/providers/providers.py`). Every read site routes through it
+(compaction/token-budget in `core/chat/chat.py`, `/status` in `core/chat/commands.py` +
+`core/tools/status.py`, the agent payload in `server/rpc/payloads.py`; `model.list` keeps the honest raw
+`null`; the WebUI token badge already tolerates `null`).
+
+**RESOLVES the prior leftover #1 above** ("Generated-only opencode-go models keep `context_window: 0`"):
+opencode-go was re-refreshed with the fixed normalization, so its generated layer now carries
+`context_window: null` for every model (the 16 override-backed models still get their real windows from
+the override layer at load; `kimi-k2.7-code`/`minimax-m3`/`qwen3.7-max` are honestly `null` and resolve to
+the global floor). No fake `0` remains in opencode-go.
+
+New leftovers (deliberately NOT done — out of Phase 6 scope, safe meanwhile):
+
+1. **Stale `context_window: 0` in `github-copilot.json` (3 embedding models) and `openrouter.json` (23
+   non-chat STT/image/video models)** — these generated catalogs predate the Phase-6 normalization fix
+   (GitHub Copilot now emits `null` for an absent window; OpenRouter now normalizes its `context_length:
+   0` for non-chat models to `null`). The fix is in the adapter code and unit-tested; the on-disk files
+   self-correct on the next `model refresh github-copilot` / `model refresh openrouter`. github-copilot
+   is OAuth/credential-gated; openrouter was not re-refreshed this phase. Runtime is unaffected: a stray
+   `0` is treated as "unknown" by `resolve_context_window` and resolves to the floor, and these are
+   non-chat models anyway.
+
+2. **`core/recall/vector_store.py` `_DEFAULT_CONTEXT_WINDOW = 8192` is a SEPARATE concept** (the
+   embedding-model input-truncation budget, with its own documented justification), NOT the chat
+   `Model.context_window`. Left untouched on purpose; it already treats an unknown window as "assume this
+   floor" and is not a fake fact masquerading as a discovered catalog value. Noted so a future reader does
+   not conflate the two `_DEFAULT_CONTEXT_WINDOW` names.
+
+## 2026-06-15 — Model DB Phase 6 (orchestrator note): metadata wholesale-merge interaction
+
+At load the `metadata` blob is a top-level field replaced WHOLESALE by the highest layer (assembly
+contract — only `capabilities` merges one level deep). So a model that has metadata in BOTH the
+generated `<provider>.json` AND the hand `<provider>.overrides.json` keeps only the override's. Real
+case: opencode-go's override carries `metadata.opencode_go.protocol`, which shadows the generated
+`metadata.opencode_go.reasoning_response_field` (projected from models.dev `interleaved`). No
+functional harm today — opencode-go speaks the OpenAI protocol, so `normalize_response`'s graceful
+fallback finds `reasoning_content` anyway (Phase 5). If a future need requires both to coexist, either
+deep-merge the provider-scoped `metadata` sub-object at load (a Phase-2 assembly change) or carry both
+keys in the override. Recorded so the final review treats this as a known design choice, not a bug.

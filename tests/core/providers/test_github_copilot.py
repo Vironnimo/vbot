@@ -262,7 +262,8 @@ def test_missing_optional_copilot_limits_fall_back_without_dropping_model() -> N
     model = GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
 
     assert model.model_id == "partial-copilot-model"
-    assert model.context_window == 0
+    # Absent context window → honest None, not a fake 0 (Phase 6).
+    assert model.context_window is None
     assert model.max_output_tokens == 2048
 
 
@@ -281,7 +282,7 @@ def test_non_integer_optional_copilot_output_limit_is_unknown() -> None:
 
     model = GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
 
-    assert model.context_window == 0
+    assert model.context_window is None
     assert model.max_output_tokens is None
 
 
@@ -315,9 +316,9 @@ def test_missing_or_non_object_copilot_output_limits_are_unknown() -> None:
         {"max_tokens": 8192},
     )
 
-    assert missing_limits_model.context_window == 0
+    assert missing_limits_model.context_window is None
     assert missing_limits_model.max_output_tokens is None
-    assert null_limits_model.context_window == 0
+    assert null_limits_model.context_window is None
     assert null_limits_model.max_output_tokens is None
 
 

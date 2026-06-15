@@ -113,6 +113,7 @@ class StubConnection:
 @dataclass(frozen=True)
 class StubProviderConfig:
     connections: list[StubConnection]
+    context_window: int | None = None
 
 
 class StubPrompts:
@@ -375,11 +376,11 @@ class StubProviderCredentials:
 
 @dataclass(frozen=True)
 class StubModelEntry:
-    context_window: int
+    context_window: int | None
 
 
 class StubModels:
-    def __init__(self, entries: dict[tuple[str, str], int]) -> None:
+    def __init__(self, entries: dict[tuple[str, str], int | None]) -> None:
         self._entries = {
             (provider_id, model_id): StubModelEntry(context_window=context_window)
             for (provider_id, model_id), context_window in entries.items()
@@ -1014,6 +1015,46 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
     assert result == messages
     assert compaction_service.should_auto_calls == [(20, 100, 0.95)]
     assert compaction_service.compact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_compaction_resolves_floor_for_null_window_model(tmp_path: Path) -> None:
+    # A model with no context window (None) must still drive auto-compaction:
+    # the read-side default chain resolves the global floor so should_auto_compact
+    # is called with a usable positive window instead of silently disabling.
+    from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2::subscription", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    compaction_service = StubCompactionService(should_auto=False)
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): None}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    messages = await ChatLoop(runtime)._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await ChatLoop(
+        runtime,
+        compaction_service=cast(Any, compaction_service),
+    )._maybe_auto_compact(
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 20},
+        run=run,
+    )
+
+    assert compaction_service.should_auto_calls == [(20, GLOBAL_CONTEXT_WINDOW_FLOOR, 0.8)]
 
 
 @pytest.mark.asyncio
