@@ -93,7 +93,7 @@ CODEX_EXTRA_HEADERS = {"OpenAI-Beta": "responses=experimental", "originator": "v
 - `models_endpoint` is `/codex/models`; the `subscription` connection participates in `model.refresh_db` after OAuth is usable.
 - Discovery sends the same account-routing and beta/originator headers as runtime requests. `/codex/models` also requires `client_version=0.136.0`; older values such as `0.1.0` can return a valid but empty model list.
 - `/codex/models` may return entries in a top-level `models` list rather than `data`, with ids/names exposed as `slug` and `display_name`.
-- Sparse `/codex/models` entries remain usable as text Codex Responses models: tools, structured output, and reasoning default to supported unless the catalog explicitly says otherwise. Unknown context-window and max-output-token facts stay `0`/`null`.
+- Sparse `/codex/models` entries remain usable as text Codex Responses models: tools, structured output, and reasoning default to supported unless the catalog explicitly says otherwise. Unknown context-window and max-output-token facts stay `null` (the OpenAI-compatible base normalizer the Codex path delegates to emits honest `None`, never a placeholder `0`); the read-side `resolve_context_window` chain fills a window when needed.
 - Do not hand-edit `resources/models/openai.json` for Codex entries; model refresh owns that file.
 
 ## Per-Model `connections` Allowlist
