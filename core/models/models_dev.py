@@ -599,6 +599,105 @@ def reasoning_response_field(
     return field_name if isinstance(field_name, str) and field_name else None
 
 
+def provider_limits(
+    catalog: ModelsDevCatalog,
+    *,
+    models_dev_id: str,
+    wire_id: str,
+) -> tuple[int | None, int | None]:
+    """Return ``(context_window, max_output_tokens)`` from the provider's section.
+
+    A gateway/aggregator endpoint often returns bare ids with NO limits (e.g.
+    opencode-go's ``/models`` reports neither a context window nor an output cap),
+    but models.dev carries the per-provider section with the real limits THAT
+    PROVIDER offers — which may legitimately differ from the canonical base, since
+    a provider can cap the window or the output (e.g. opencode-go ``glm-5`` output
+    32768 vs the canonical 131072). Refresh projects these into the provider layer
+    so the on-disk ``<provider>.json`` carries the provider's own limits rather
+    than a hand-guessed override. Returns ``(None, None)`` when the provider
+    section has no entry for ``wire_id`` or no ``limit`` block.
+    """
+
+    provider_model = catalog.provider_model(models_dev_id, wire_id)
+    if provider_model is None:
+        return None, None
+    raw_limit = provider_model.get("limit")
+    limit: Mapping[str, Any] = raw_limit if isinstance(raw_limit, Mapping) else {}
+    return _optional_int(limit.get("context")), _optional_int(limit.get("output"))
+
+
+def provider_modalities(
+    catalog: ModelsDevCatalog,
+    *,
+    models_dev_id: str,
+    wire_id: str,
+) -> tuple[list[str], list[str]] | None:
+    """Return ``(input_modalities, output_modalities)`` from the provider section.
+
+    A bare gateway endpoint reports no modalities, so the adapter falls back to a
+    text-only default; models.dev's per-provider section carries the real ones
+    (e.g. opencode-go ``minimax-m3`` is ``text/image/video``). The caller applies
+    these only when they are a strict SUPERSET of what the endpoint reported, so
+    enrichment can only ADD modalities, never drop a real one the endpoint knew.
+    Returns ``None`` when the provider section has no entry or no modalities.
+    """
+
+    provider_model = catalog.provider_model(models_dev_id, wire_id)
+    if provider_model is None:
+        return None
+    modalities = provider_model.get("modalities")
+    if not isinstance(modalities, Mapping):
+        return None
+    input_modalities = [m for m in _string_list(modalities.get("input")) if m]
+    output_modalities = [m for m in _string_list(modalities.get("output")) if m]
+    if not input_modalities and not output_modalities:
+        return None
+    return input_modalities, output_modalities
+
+
+def provider_reasoning_supported(
+    catalog: ModelsDevCatalog,
+    *,
+    models_dev_id: str,
+    wire_id: str,
+) -> bool | None:
+    """Return the bare ``reasoning`` capability flag from the provider's section.
+
+    models.dev marks each provider model reasoning-capable with a top-level
+    ``reasoning`` boolean (independent of whether it publishes a control ladder in
+    ``reasoning_options``). A gateway model whose wire-id cannot reach the
+    canonical layer would otherwise keep the endpoint's default ``supported:
+    false`` even when the feed says it can reason; the caller projects this flag so
+    the capability survives without a hand override. Returns ``None`` when the
+    provider section has no entry for ``wire_id``.
+    """
+
+    provider_model = catalog.provider_model(models_dev_id, wire_id)
+    if provider_model is None:
+        return None
+    return bool(provider_model.get("reasoning"))
+
+
+def provider_family(
+    catalog: ModelsDevCatalog,
+    *,
+    models_dev_id: str,
+    wire_id: str,
+) -> str | None:
+    """Return the model ``family`` from the provider's models.dev section, or ``None``.
+
+    A bare gateway endpoint reports no family; models.dev's per-provider section
+    carries one. Projected into the provider layer so ``Model.family`` is populated
+    without the canonical join (which a gateway wire-id usually cannot reach).
+    """
+
+    provider_model = catalog.provider_model(models_dev_id, wire_id)
+    if provider_model is None:
+        return None
+    family = provider_model.get("family")
+    return family if isinstance(family, str) and family else None
+
+
 # ---------------------------------------------------------------------------
 # Canonical projection internals
 # ---------------------------------------------------------------------------

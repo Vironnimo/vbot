@@ -24,7 +24,11 @@ from core.models.models import (
 from core.models.models_dev import (
     ModelsDevCatalog,
     auto_canonical_pointer,
+    provider_family,
+    provider_limits,
+    provider_modalities,
     provider_reasoning_block,
+    provider_reasoning_supported,
     reasoning_response_field,
 )
 from core.providers._http_shared import classify_http_status, wrap_network_error
@@ -300,6 +304,11 @@ def _enrich_provider_model(
 
     * adds a top-level ``canonical`` pointer for an exact lab-section wire-id
       match;
+    * fills ``context_window`` / ``max_output_tokens`` / ``family`` from the
+      provider's models.dev section when the endpoint left them empty — a
+      gateway endpoint (opencode-go) returns bare ids with no limits, but
+      models.dev carries the provider-specific limits; "fill, don't overwrite",
+      so a provider that DID report a limit keeps its own;
     * projects the models.dev ``interleaved`` response field into
       ``metadata.<provider>.reasoning_response_field`` (Phase 5) when present;
     * when models.dev reports a ladder that *deviates* from the lab spec, sets
@@ -315,6 +324,36 @@ def _enrich_provider_model(
     pointer = auto_canonical_pointer(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
     if pointer is not None:
         data["canonical"] = pointer
+
+    # Fill the limits the endpoint did not report from the provider's models.dev
+    # section (the gateway's own limits). "Fill, don't overwrite": a falsy value
+    # (None / 0) means the endpoint gave nothing, so the models.dev value wins; a
+    # real endpoint limit is kept.
+    context_window, max_output_tokens = provider_limits(
+        catalog, models_dev_id=models_dev_id, wire_id=wire_id
+    )
+    if context_window is not None and not data.get("context_window"):
+        data["context_window"] = context_window
+    if max_output_tokens is not None and not data.get("max_output_tokens"):
+        data["max_output_tokens"] = max_output_tokens
+    if not data.get("family"):
+        family = provider_family(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
+        if family is not None:
+            data["family"] = family
+
+    # Widen the modalities from the provider's models.dev section, but only as a
+    # strict SUPERSET of what the endpoint reported (add, never drop) — a bare
+    # gateway endpoint defaults to text-only while models.dev knows the real
+    # image/video inputs; ``vision`` is kept consistent with the input list.
+    modalities = provider_modalities(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
+    capabilities = data.get("capabilities")
+    if modalities is not None and isinstance(capabilities, dict):
+        md_input, md_output = modalities
+        if md_input and set(capabilities.get("input_modalities") or []) < set(md_input):
+            capabilities["input_modalities"] = md_input
+            capabilities["vision"] = "image" in md_input
+        if md_output and set(capabilities.get("output_modalities") or []) < set(md_output):
+            capabilities["output_modalities"] = md_output
 
     response_field = reasoning_response_field(
         catalog,
@@ -344,6 +383,19 @@ def _enrich_provider_model(
     # inherit from (an explicit pointer, or the wire-id is itself a canonical id).
     if _has_canonical_join(catalog, pointer, wire_id):
         capabilities.pop("reasoning", None)
+        return
+    # No deviating control AND no canonical base to inherit from (a gateway model
+    # whose wire-id cannot reach the canonical layer): still project the bare
+    # models.dev ``reasoning`` flag, so a model the feed marks reasoning-capable
+    # but with no published control ladder is not flattened to the endpoint's
+    # default ``supported: false``. The effort then snaps against the adapter floor.
+    md_reasoning = provider_reasoning_supported(
+        catalog, models_dev_id=models_dev_id, wire_id=wire_id
+    )
+    current = capabilities.get("reasoning")
+    current_supported = current.get("supported") if isinstance(current, dict) else False
+    if md_reasoning and not current_supported:
+        capabilities["reasoning"] = {"supported": True}
 
 
 def _has_canonical_join(catalog: ModelsDevCatalog, pointer: str | None, wire_id: str) -> bool:
