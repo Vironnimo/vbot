@@ -1387,7 +1387,9 @@ class TestRefreshModels:
             raise AssertionError("fatal status must not trigger a retry sleep")
 
         monkeypatch.setattr("core.utils.retry.asyncio.sleep", _fail_if_called)
-        route = respx.get(_SIMPLE_MODELS_URL).mock(return_value=httpx.Response(404, text="Not Found"))
+        route = respx.get(_SIMPLE_MODELS_URL).mock(
+            return_value=httpx.Response(404, text="Not Found")
+        )
 
         with pytest.raises(ModelDiscoveryError, match="Model discovery failed"):
             await refresh_models(_simple_compatible_config(), API_KEY, tmp_path / "resources")
@@ -1408,7 +1410,7 @@ class TestRefreshModels:
 
         monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
 
-        responses = [
+        responses: list[httpx.Response | Exception] = [
             httpx.ConnectError("connection reset"),
             httpx.Response(200, json={"data": [{"id": "model-a", "name": "Model A"}]}),
         ]
@@ -1811,6 +1813,59 @@ class TestRefreshModelsDevEnrichment:
             (resources_dir / "models" / "deepseek.json").read_text(encoding="utf-8")
         )
         assert written["models"]["deepseek-v4-pro"]["canonical"] == "deepseek/deepseek-v4-pro"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_fills_limits_modalities_family_from_models_dev(self, tmp_path: Path):
+        """A bare endpoint (id only) gets context_window / max_output_tokens /
+        family and widened modalities from the provider's models.dev section —
+        the facts a gateway endpoint omits. Modalities widen as a strict superset
+        of what the endpoint reported (add, never drop)."""
+        provider_config = ProviderConfig(
+            id="alibaba",
+            name="Alibaba",
+            adapter="openai_compatible",
+            base_url="https://example.test/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="ALIBABA_KEY",
+                    ),
+                )
+            ],
+            defaults={},
+            models_endpoint="/models",
+        )
+        respx.get("https://example.test/v1/models").mock(
+            return_value=httpx.Response(
+                200, json={"data": [{"id": "qwen3.5-plus", "name": "Qwen3.5 Plus"}]}
+            )
+        )
+        resources_dir = tmp_path / "resources"
+
+        # Act
+        await refresh_models(
+            provider_config,
+            API_KEY,
+            resources_dir,
+            models_dev_catalog=_fixture_catalog(),
+        )
+
+        # Assert — limits, family, and the widened modalities all come from
+        # the alibaba models.dev section (the endpoint reported only id + name).
+        model = json.loads((resources_dir / "models" / "alibaba.json").read_text(encoding="utf-8"))[
+            "models"
+        ]["qwen3.5-plus"]
+        assert model["context_window"] == 1000000
+        assert model["max_output_tokens"] == 65536
+        assert model["family"] == "qwen"
+        assert model["capabilities"]["input_modalities"] == ["text", "image", "video"]
+        assert model["capabilities"]["vision"] is True
 
     @respx.mock
     @pytest.mark.asyncio

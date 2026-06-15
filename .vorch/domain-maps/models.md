@@ -15,7 +15,13 @@ The system splits cleanly into two moments:
   *projects* the results to disk. Needs network and, for provider catalogs, a
   credential. Rare and explicit (the `model.refresh_db` RPC / the regen script).
   It writes the **pure projection per file** — it does NOT merge across files and
-  does NOT join across providers.
+  does NOT join across providers. Where a provider's `/models` endpoint omits
+  facts (a bare gateway like opencode-go returns ids only), refresh **fills them
+  from that provider's own models.dev section** — `context_window`,
+  `max_output_tokens`, `family`, the bare `reasoning` flag, and modalities
+  (widened only as a strict superset) — so the provider layer carries the
+  provider's real facts instead of a hand-maintained override
+  (`discovery._enrich_provider_model`; "fill, don't overwrite").
 - **Load** (`assembly.py` behind `ModelRegistry.load`) — the SMART half. It
   *assembles* each effective model in memory from the on-disk layers, resolving
   the canonical join and the field-level merge. **No network, no key.** Frequent.
