@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -25,7 +26,11 @@ from core.models.models_dev import (
     fetch_catalog,
     lift_canonical_ladder,
     project_canonical_models,
+    provider_family,
+    provider_limits,
+    provider_modalities,
     provider_reasoning_block,
+    provider_reasoning_supported,
     reasoning_capability_block,
     reasoning_response_field,
     refresh_canonical_layer,
@@ -214,9 +219,7 @@ def test_project_canonical_temperature_false_is_a_signal(catalog: ModelsDevCatal
 
 def test_auto_canonical_pointer_for_lab_section(catalog: ModelsDevCatalog):
     # deepseek lab section has wire-id deepseek-v4-pro → pointer to the canonical id.
-    pointer = auto_canonical_pointer(
-        catalog, models_dev_id="deepseek", wire_id="deepseek-v4-pro"
-    )
+    pointer = auto_canonical_pointer(catalog, models_dev_id="deepseek", wire_id="deepseek-v4-pro")
     assert pointer == "deepseek/deepseek-v4-pro"
 
 
@@ -282,6 +285,65 @@ def test_reasoning_response_field_unknown_model_returns_none(catalog: ModelsDevC
 
 
 # ---------------------------------------------------------------------------
+# Per-provider section projection — limits, modalities, family, reasoning flag
+# (the facts a bare gateway endpoint omits; pulled into the provider layer)
+# ---------------------------------------------------------------------------
+
+
+def test_provider_limits_returns_context_and_output(catalog: ModelsDevCatalog):
+    assert provider_limits(
+        catalog, models_dev_id="openrouter", wire_id="deepseek/deepseek-v4-pro"
+    ) == (1048576, 384000)
+
+
+def test_provider_limits_unknown_model_returns_none_pair(catalog: ModelsDevCatalog):
+    assert provider_limits(catalog, models_dev_id="openrouter", wire_id="does/not-exist") == (
+        None,
+        None,
+    )
+
+
+def test_provider_modalities_returns_input_and_output(catalog: ModelsDevCatalog):
+    assert provider_modalities(
+        catalog, models_dev_id="openrouter", wire_id="google/gemini-2.5-flash"
+    ) == (["text", "image", "audio", "video", "pdf"], ["text"])
+
+
+def test_provider_modalities_unknown_model_returns_none(catalog: ModelsDevCatalog):
+    assert (
+        provider_modalities(catalog, models_dev_id="openrouter", wire_id="does/not-exist") is None
+    )
+
+
+def test_provider_family_returns_family(catalog: ModelsDevCatalog):
+    assert (
+        provider_family(catalog, models_dev_id="deepseek", wire_id="deepseek-v4-pro")
+        == "deepseek-thinking"
+    )
+
+
+def test_provider_family_unknown_model_returns_none(catalog: ModelsDevCatalog):
+    assert provider_family(catalog, models_dev_id="deepseek", wire_id="nope") is None
+
+
+def test_provider_reasoning_supported_true_and_false(catalog: ModelsDevCatalog):
+    assert (
+        provider_reasoning_supported(catalog, models_dev_id="deepseek", wire_id="deepseek-v4-pro")
+        is True
+    )
+    assert (
+        provider_reasoning_supported(
+            catalog, models_dev_id="xai", wire_id="grok-4.20-0309-non-reasoning"
+        )
+        is False
+    )
+
+
+def test_provider_reasoning_supported_unknown_model_returns_none(catalog: ModelsDevCatalog):
+    assert provider_reasoning_supported(catalog, models_dev_id="deepseek", wire_id="nope") is None
+
+
+# ---------------------------------------------------------------------------
 # Raw dump + canonical refresh orchestration
 # ---------------------------------------------------------------------------
 
@@ -315,7 +377,9 @@ async def test_refresh_canonical_layer_does_not_clobber_existing_overrides(
     # Arrange — a hand-edited overrides file must survive a refresh.
     models_dir = tmp_path / "models"
     models_dir.mkdir(parents=True)
-    hand = {"models": {"meta/llama-4-scout-17b-instruct": {"capabilities": {"reasoning": {}}}}}
+    hand: dict[str, Any] = {
+        "models": {"meta/llama-4-scout-17b-instruct": {"capabilities": {"reasoning": {}}}}
+    }
     (models_dir / "models.overrides.json").write_text(json.dumps(hand), encoding="utf-8")
     # Act
     await refresh_canonical_layer(tmp_path, catalog=catalog)
