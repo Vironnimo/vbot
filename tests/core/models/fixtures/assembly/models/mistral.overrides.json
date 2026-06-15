@@ -1,0 +1,15 @@
+{
+  "models": {
+    "thin-deepseek": {
+      "name": "Thin DeepSeek (hand-corrected)",
+      "canonical": "deepseek/deepseek-v4-pro",
+      "capabilities": {
+        "reasoning": {
+          "supported": true,
+          "control": "levels",
+          "levels": ["medium", "high", "max"]
+        }
+      }
+    }
+  }
+}

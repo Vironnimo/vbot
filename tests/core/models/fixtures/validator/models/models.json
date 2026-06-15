@@ -1,0 +1,17 @@
+{
+  "models": {
+    "deepseek/deepseek-v4-pro": {
+      "name": "DeepSeek V4 Pro",
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {"supported": true, "control": "levels", "levels": ["high", "max"]},
+        "input_modalities": ["text"],
+        "output_modalities": ["text"]
+      },
+      "context_window": 1000000,
+      "max_output_tokens": 384000
+    }
+  }
+}

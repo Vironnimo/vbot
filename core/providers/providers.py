@@ -113,6 +113,12 @@ class ProviderConfig:
         extra_headers: Optional provider-specific HTTP headers.
         models_endpoint: Optional path to the models listing endpoint
             (e.g. ``"/models"``).  Reserved for future dynamic model refresh.
+        models_dev_id: Optional models.dev provider key for this vBot provider
+            (e.g. vBot ``"opencode-go"`` may map to models.dev ``"opencode"``).
+            When absent, the vBot provider id is the models.dev id (the common
+            case). Used by the refresh-time lift mechanism to find a provider's
+            section inside the models.dev catalog; the at-load canonical join
+            does *not* depend on it. Read via :meth:`effective_models_dev_id`.
     """
 
     id: str
@@ -123,6 +129,16 @@ class ProviderConfig:
     defaults: dict[str, Any] | None = None
     extra_headers: dict[str, str] | None = None
     models_endpoint: str | None = None
+    models_dev_id: str | None = None
+
+    def effective_models_dev_id(self) -> str:
+        """Return the models.dev provider key for this provider.
+
+        Falls back to ``self.id`` when ``models_dev_id`` is not set — the
+        common case where the vBot provider id already matches models.dev.
+        """
+
+        return self.models_dev_id or self.id
 
     def get_connection(self, local_id: str) -> ConnectionConfig:
         """Return a connection by its local provider-scoped ID."""
@@ -245,6 +261,12 @@ class ProviderRegistry:
         if ":" in provider_id:
             raise ConfigError(f"Provider id '{provider_id}' must not contain ':'")
         connections = ProviderRegistry._parse_connections(data)
+        models_dev_id = data.get("models_dev_id")
+        if models_dev_id is not None and not isinstance(models_dev_id, str):
+            raise ConfigError(
+                f"Provider '{provider_id}' models_dev_id must be a string when set, "
+                f"got {type(models_dev_id).__name__}"
+            )
         return ProviderConfig(
             id=provider_id,
             name=data["name"],
@@ -254,6 +276,7 @@ class ProviderRegistry:
             defaults=data.get("defaults"),
             extra_headers=data.get("extra_headers"),
             models_endpoint=data.get("models_endpoint"),
+            models_dev_id=models_dev_id,
         )
 
     @staticmethod

@@ -1,0 +1,22 @@
+{
+  "provider_id": "mistral",
+  "models": {
+    "thin-deepseek": {
+      "name": "Thin DeepSeek (mistral)",
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": true,
+          "control": "levels",
+          "levels": ["low", "medium"]
+        },
+        "input_modalities": ["text"],
+        "output_modalities": ["text"]
+      },
+      "context_window": 128000,
+      "max_output_tokens": 16000
+    }
+  }
+}
