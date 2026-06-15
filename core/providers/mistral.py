@@ -27,7 +27,16 @@ from core.providers.reasoning import (
 )
 
 MISTRAL_REASONING_EFFORTS = {"none", "high"}
-MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES = ("magistral-medium",)
+
+# Provider-scoped metadata blob + field carrying the magistral reasoning-mode
+# wire fact (Phase 5). The decision "this model engages reasoning via
+# ``prompt_mode: reasoning`` instead of ``reasoning_effort``" is a published
+# per-model FACT, so it lives in data (``metadata.mistral.prompt_mode ==
+# "reasoning"`` in ``mistral.overrides.json``), not in a name-prefix guess. The
+# adapter still owns the MECHANICS — building the wire request from that fact.
+MISTRAL_METADATA_KEY = "mistral"
+PROMPT_MODE_METADATA_KEY = "prompt_mode"
+PROMPT_MODE_REASONING = "reasoning"
 
 
 def _flatten_thinking(value: Any) -> str:
@@ -121,9 +130,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
             payload.pop("prompt_mode", None)
             return payload
 
-        use_prompt_mode_reasoning = any(
-            model_id.startswith(prefix) for prefix in MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES
-        )
+        use_prompt_mode_reasoning = self._uses_prompt_mode_reasoning(model_id)
 
         # Snap against the effective per-model ladder when present; the binary
         # ``{none, high}`` constant is the floor for a model without a feed
@@ -148,6 +155,27 @@ class MistralAdapter(OpenAICompatibleAdapter):
                 payload["reasoning_effort"] = "none"
 
         return payload
+
+    def _uses_prompt_mode_reasoning(self, model_id: str) -> bool:
+        """Return whether this model engages reasoning via ``prompt_mode``.
+
+        Reads the per-model wire fact ``metadata.mistral.prompt_mode ==
+        "reasoning"`` from the injected catalog (Phase 5) instead of guessing
+        from a ``magistral-medium`` name prefix. A model with no such metadata
+        (every non-magistral model) uses the default ``reasoning_effort`` wire.
+        The connection-pin suffix is stripped before lookup, mirroring the
+        shared reasoning helpers.
+        """
+
+        if self._model_lookup is None:
+            return False
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return False
+        mistral_metadata = model.metadata.get(MISTRAL_METADATA_KEY)
+        if not isinstance(mistral_metadata, Mapping):
+            return False
+        return mistral_metadata.get(PROMPT_MODE_METADATA_KEY) == PROMPT_MODE_REASONING
 
     def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
         """Replay reasoning across runs — Mistral requires it and the API accepts it.
@@ -186,11 +214,13 @@ class MistralAdapter(OpenAICompatibleAdapter):
         wire["content"] = content_chunks
         return wire
 
-    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
+    def normalize_response(
+        self, response: dict[str, Any], *, model_id: str | None = None
+    ) -> dict[str, Any]:
         message = _first_choice_message(response)
         content = message.get("content")
         if not isinstance(content, list):
-            return super().normalize_response(response)
+            return super().normalize_response(response, model_id=model_id)
 
         content_parts: list[str] = []
         reasoning_parts: list[str] = []

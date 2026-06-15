@@ -31,7 +31,9 @@ class StubAdapter:
             await self.release.wait()
         return {"content": "ok", "tool_calls": None}
 
-    def normalize_response(self, response: JsonObject) -> JsonObject:
+    def normalize_response(
+        self, response: JsonObject, *, model_id: str | None = None
+    ) -> JsonObject:
         return response
 
     async def stream(self, _messages: list[JsonObject], *, model_id: str, **_kwargs: Any) -> Any:

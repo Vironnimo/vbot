@@ -1052,7 +1052,7 @@ class ChatLoop:
             thinking_effort=agent.thinking_effort,
             tools=tools,
         )
-        normalized = adapter.normalize_response(response)
+        normalized = adapter.normalize_response(response, model_id=model_id)
         return _assistant_message_from_response(agent.model, normalized)
 
     async def _send_streaming_assistant_request(

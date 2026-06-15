@@ -13,9 +13,19 @@ OpenAI-compatible gateway with full-history reasoning replay and a small set of 
 ## Runtime Behavior
 
 - OpenAI-routed assistant messages with non-empty visible `reasoning` are echoed on the wire as `reasoning_content`.
-- Only `minimax-m2.7`, `minimax-m2.5`, and `qwen3.5-plus` route through the internal Anthropic Messages adapter. `qwen3.6-plus` and all other models use the default OpenAI-compatible path unless code adds them to the Anthropic routing set.
+- **Protocol routing is DATA, not a hardcoded set.** The adapter routes each model by the per-model wire fact `metadata.opencode_go.protocol` (`"anthropic"` → internal Messages adapter, `"openai"`/anything-else → default OpenAI `/chat/completions`), resolved via the injected `model_lookup`. The endpoint returns bare ids with no protocol, so the facts live in the opencode-go **override** (`resources/models/opencode-go.overrides.json`), keyed by wire-id under `metadata.opencode_go.protocol`. A model the override does not mark (no metadata / no `protocol`) is **unknown**: it takes the safe OpenAI default AND the adapter logs a `warn` (`vbot.providers.opencode_go`) so a newly added model is never silently misrouted. The stale `_ANTHROPIC_MESSAGES_MODELS` frozenset was removed in Phase 5. Published protocol table (the override's source of truth): openai → `glm-5.1, glm-5, kimi-k2.7, kimi-k2.6, deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, mimo-v2.5-pro`; anthropic → `minimax-m3, minimax-m2.7, minimax-m2.5, qwen3.7-max, qwen3.7-plus, qwen3.6-plus`.
 - The internal Anthropic adapter uses `x-api-key` with no prefix while sharing the selected runtime base URL, selected credential key, `model_lookup`, and debug recorder.
 - When a catalog entry has a positive `max_output_tokens`, OpenCode Go uses it as request `max_tokens` unless the caller supplied `max_tokens`, `max_completion_tokens`, or `max_output_tokens`.
+
+## Override Reconciliation (Phase 5)
+
+The generated `opencode-go.json` carries the models.dev reasoning ladders but `context_window: 0` (the bare endpoint reports no window); the **override** carries the real `context_window`/`max_output_tokens` plus the per-model `metadata.opencode_go.protocol`. Per-model reasoning in the override:
+
+- `deepseek-v4-flash` / `deepseek-v4-pro`: the override carries **no** `capabilities` block, so the generated `{control: levels, levels: [high, max]}` ladder is inherited at load. Effective `deepseek-v4-pro` reasoning == `{supported: true, control: "levels", levels: ["high", "max"]}`.
+- The other override models: keep `capabilities.reasoning: {supported: true}` — a verified hand fact the bare endpoint and the models.dev feed (`reasoning: false`) lack. They snap against the adapter floor (empty `levels`), which is expected.
+- `minimax-m3` / `qwen3.7-max` have an override entry carrying **only** `metadata.opencode_go.protocol: "anthropic"` (their required fields come from the generated provider layer); they still load with `context_window: 0` (a Phase-6 concern). The 3 generated-only models with no override (`kimi-k2.7-code`, …) also keep `context_window: 0` and route the OpenAI default + warn.
+
+Since `metadata` is replaced **wholesale** by the highest layer at load (assembly contract), the override's `metadata.opencode_go` becomes the effective metadata.
 
 ## Reasoning Replay
 
