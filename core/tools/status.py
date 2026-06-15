@@ -13,6 +13,7 @@ from core.chat.commands import (
 )
 from core.chat.errors import ChatSessionError
 from core.models.models import ModelRegistry
+from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
 from core.tools.tools import (
@@ -57,6 +58,7 @@ def make_status_handler(
     models: ModelRegistry,
     chat_runs: ChatRunManager,
     started_at: datetime | None,
+    providers: ProviderRegistry | None = None,
 ):
     """Create a status tool handler bound to runtime services."""
 
@@ -90,7 +92,7 @@ def make_status_handler(
             )
 
         activity = resolve_status_activity(chat_runs, agent_id, session_id)
-        model_details = resolve_status_model_details(agent, models)
+        model_details = resolve_status_model_details(agent, models, providers)
 
         try:
             text = build_status_reply(
@@ -131,13 +133,14 @@ def register_status_tool(
     models: ModelRegistry,
     chat_runs: ChatRunManager,
     started_at: datetime | None,
+    providers: ProviderRegistry | None = None,
 ) -> None:
     """Register the status tool with a vBot tool registry."""
     registry.register(
         STATUS_TOOL_NAME,
         STATUS_TOOL_DESCRIPTION,
         STATUS_TOOL_PARAMETERS,
-        make_status_handler(agents, sessions, models, chat_runs, started_at),
+        make_status_handler(agents, sessions, models, chat_runs, started_at, providers),
         display=ToolDisplay(),
     )
 

@@ -576,7 +576,7 @@ def _tag_fresh_models(
 
 def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(model, Model):
-        data = {
+        data: dict[str, Any] = {
             "name": model.name,
             "capabilities": {
                 "vision": model.capabilities.vision,
@@ -667,7 +667,7 @@ def _validate_model_data(model_id: str, model_data: Mapping[str, Any]) -> None:
     _read_string_list(caps, "output_modalities")
     _read_string_list(caps, "supported_parameters")
     _read_string_list(caps, "task_types")
-    _read_int(model_data, "context_window")
+    _read_optional_int(model_data, "context_window")
     _read_optional_int(model_data, "max_output_tokens")
     _read_optional_string(model_data, "family")
     if not model_id:
@@ -766,13 +766,6 @@ def _read_optional_string(data: Mapping[str, Any], key: str) -> str | None:
         return None
     if not isinstance(value, str):
         raise ValueError(f"Expected '{key}' to be a string or absent")
-    return value
-
-
-def _read_int(data: Mapping[str, Any], key: str) -> int:
-    value = data.get(key)
-    if not isinstance(value, int):
-        raise ValueError(f"Expected '{key}' to be an integer")
     return value
 
 

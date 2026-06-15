@@ -116,8 +116,13 @@ class ModelQuery:
         if any(modality not in output_modalities for modality in self.output_modalities):
             return False
 
+        # A model whose context window is unknown (``None``) cannot be proven to
+        # meet a minimum, so it is excluded when a ``min_context_window`` filter is
+        # set — the ``None`` is checked before the comparison so the filter never
+        # raises on a window-less model (Phase 6: context_window optional).
         return not (
-            self.min_context_window is not None and model.context_window < self.min_context_window
+            self.min_context_window is not None
+            and (model.context_window is None or model.context_window < self.min_context_window)
         )
 
 
