@@ -19,11 +19,11 @@ OpenAI-compatible gateway with full-history reasoning replay and a small set of 
 
 ## Override Reconciliation (Phase 5)
 
-The generated `opencode-go.json` carries the models.dev reasoning ladders but `context_window: 0` (the bare endpoint reports no window); the **override** carries the real `context_window`/`max_output_tokens` plus the per-model `metadata.opencode_go.protocol`. Per-model reasoning in the override:
+The generated `opencode-go.json` carries the models.dev reasoning ladders but no context window — the bare endpoint reports none, so `context_window` is honestly `null` (Phase 6); the **override** carries the real `context_window`/`max_output_tokens` plus the per-model `metadata.opencode_go.protocol`. Per-model reasoning in the override:
 
 - `deepseek-v4-flash` / `deepseek-v4-pro`: the override carries **no** `capabilities` block, so the generated `{control: levels, levels: [high, max]}` ladder is inherited at load. Effective `deepseek-v4-pro` reasoning == `{supported: true, control: "levels", levels: ["high", "max"]}`.
 - The other override models: keep `capabilities.reasoning: {supported: true}` — a verified hand fact the bare endpoint and the models.dev feed (`reasoning: false`) lack. They snap against the adapter floor (empty `levels`), which is expected.
-- `minimax-m3` / `qwen3.7-max` have an override entry carrying **only** `metadata.opencode_go.protocol: "anthropic"` (their required fields come from the generated provider layer); they still load with `context_window: 0` (a Phase-6 concern). The 3 generated-only models with no override (`kimi-k2.7-code`, …) also keep `context_window: 0` and route the OpenAI default + warn.
+- `minimax-m3` / `qwen3.7-max` have an override entry carrying **only** `metadata.opencode_go.protocol: "anthropic"` (their required fields come from the generated provider layer); their `context_window` is honestly `null` (no override window), resolved read-side to the global floor (Phase 6). The other generated-only models with no override (e.g. `kimi-k2.7-code`) are likewise `context_window: null` and route the OpenAI default + warn.
 
 Since `metadata` is replaced **wholesale** by the highest layer at load (assembly contract), the override's `metadata.opencode_go` becomes the effective metadata.
 
