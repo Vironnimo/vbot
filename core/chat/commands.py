@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.providers.providers import resolve_context_window
 from core.providers.reasoning import closest_supported_effort, normalize_thinking_effort
 from core.runs import ChatRunManager, RunNotFoundError
 from core.utils.logging import get_logger
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from core.agents.agents import Agent, AgentStore
     from core.chat.chat import ChatMessage
     from core.models.models import ModelRegistry
+    from core.providers.providers import ProviderRegistry
     from core.sessions import ChatSessionManager
 else:
     Agent = Any
@@ -23,6 +25,7 @@ else:
     ChatMessage = Any
     ChatSessionManager = Any
     ModelRegistry = Any
+    ProviderRegistry = Any
 
 CommandActionName = Literal["compact", "handoff", "new_session", "retry_last_turn"]
 StatusActivityName = Literal["idle", "running"]
@@ -190,12 +193,14 @@ class CommandDispatcher:
         sessions: ChatSessionManager | None = None,
         models: ModelRegistry | None = None,
         started_at: datetime | None = None,
+        providers: ProviderRegistry | None = None,
     ) -> None:
         self._chat_runs = chat_runs
         self._agents = agents
         self._sessions = sessions
         self._models = models
         self._started_at = started_at
+        self._providers = providers
         self._commands: dict[str, CommandHandler] = {
             "compact": self._handle_compact,
             "handoff": self._handle_handoff,
@@ -321,7 +326,7 @@ class CommandDispatcher:
             )
             messages = []
 
-        model_details = resolve_status_model_details(agent, self._models)
+        model_details = resolve_status_model_details(agent, self._models, self._providers)
         activity = resolve_status_activity(self._chat_runs, agent_id, session_id)
         text = build_status_reply(
             agent,
@@ -355,12 +360,19 @@ class StatusModelDetails:
 def resolve_status_model_details(
     agent: Agent | None,
     models: ModelRegistry | None,
+    providers: ProviderRegistry | None = None,
 ) -> StatusModelDetails:
     """Resolve model facts for status output from the model registry.
 
     Returns context window, display name, and the effective reasoning-effort
     ladder. A missing agent/registry/model yields empty details so status
     rendering degrades to placeholders instead of failing.
+
+    ``context_window`` is the *resolved* window through the read-side default
+    chain (model window → provider-config default → global floor, see
+    :func:`resolve_context_window`), so ``/status`` reports the budget compaction
+    actually uses rather than ``unknown`` for a window-less model. It stays
+    ``None`` only when no model could be resolved at all.
     """
     if agent is None or models is None:
         return StatusModelDetails(context_window=None, display_name=None)
@@ -388,10 +400,23 @@ def resolve_status_model_details(
         return StatusModelDetails(context_window=None, display_name=None)
 
     return StatusModelDetails(
-        context_window=model.context_window,
+        context_window=resolve_context_window(
+            model.context_window,
+            _status_provider_config(providers, provider_id),
+        ),
         display_name=model.name,
         reasoning_levels=tuple(model.capabilities.reasoning.levels),
     )
+
+
+def _status_provider_config(providers: ProviderRegistry | None, provider_id: str) -> Any:
+    """Return the ProviderConfig for the read-side window default, or None."""
+    if providers is None:
+        return None
+    try:
+        return providers.get(provider_id)
+    except (KeyError, AttributeError):
+        return None
 
 
 def resolve_actual_thinking_effort(

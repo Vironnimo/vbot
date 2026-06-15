@@ -2663,7 +2663,9 @@ class TestNormalizeCatalogEntry:
         model = OpenAICompatibleAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
 
         assert model.name == "minimal-model"
-        assert model.context_window == 0
+        # A window-less endpoint leaves context_window honestly None — no fake 0
+        # masquerading as a discovered fact (Phase 6).
+        assert model.context_window is None
         assert model.max_output_tokens is None
         assert model.capabilities.tools is True
         assert model.capabilities.json_mode is False
