@@ -21,6 +21,11 @@ from core.models.models import (
     ModelRegistry,
     ReasoningCapabilities,
 )
+from core.models.models_dev import (
+    ModelsDevCatalog,
+    auto_canonical_pointer,
+    provider_reasoning_block,
+)
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -79,13 +84,29 @@ async def refresh_models(
     raw_filter: RawModelFilter | None = None,
     model_filter: ModelFilter | None = None,
     credential_connection: ConnectionConfig | None = None,
+    models_dev_catalog: ModelsDevCatalog | None = None,
 ) -> dict[str, Any]:
-    """Fetch, normalize, override-merge, write, and invalidate one provider catalog.
+    """Fetch, normalize, project, write, and invalidate one provider catalog.
+
+    Refresh stays DUMB: it writes the PURE provider projection — wire facts plus
+    a models.dev-derived **auto canonical pointer** and a **deviating reasoning
+    ladder** where the provider's own ``reasoning_options`` differ from the lab
+    spec. It does NOT bake ``<provider>.overrides.json`` into ``<provider>.json``
+    (that cross-file merge is LOAD's job, Phase 2) and does NOT join across
+    providers.
 
     Discovery targets the selected connection: the connection's
     ``models_endpoint``/``base_url`` override the provider-level values, and
     written models are tagged with the connection's local id so future
     refreshes of other connections can replace only their own entries.
+
+    Args:
+        models_dev_catalog: An optional pre-fetched models.dev catalog used to
+            enrich each model with a canonical pointer / deviating ladder. When
+            ``None``, enrichment is skipped and the pure wire-fact projection is
+            written (the join is enrichment, not a dependency). Fetching the
+            catalog ONCE per refresh is the caller's job (the RPC refresh path
+            and the regen script) so it is not re-fetched per provider.
     """
 
     base_url, models_endpoint = _resolve_discovery_target(provider_config, credential_connection)
@@ -162,6 +183,8 @@ async def refresh_models(
             json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
 
+        catalog = models_dev_catalog
+
         normalized_models: dict[str, Model] = {}
         for raw_model in raw_models:
             if not raw_filter.accepts(raw_model):
@@ -178,13 +201,19 @@ async def refresh_models(
             if model_filter.accepts(model):
                 normalized_models[model.model_id] = model
 
-        overrides_path = _overrides_path(resources_dir, provider_config.id)
-        merged_models = apply_overrides(normalized_models, overrides_path)
+        # Refresh writes the PURE provider projection — NO override baking (that
+        # cross-file merge moved to LOAD in Phase 2). Each model is serialized to
+        # data and enriched with a models.dev canonical pointer / deviating ladder.
+        projected_models = _project_provider_models(
+            normalized_models,
+            provider_config,
+            catalog,
+        )
 
         output_path = models_dir / f"{provider_config.id}.json"
         existing_models = _read_existing_provider_models(output_path)
         connection_id = credential_connection.id if credential_connection is not None else None
-        tagged_fresh = _tag_fresh_models(merged_models, connection_id)
+        tagged_fresh = _tag_fresh_models(projected_models, connection_id)
         final_models = _merge_models_by_connection(existing_models, tagged_fresh, connection_id)
         output_data = {
             "provider_id": provider_config.id,
@@ -221,10 +250,98 @@ async def refresh_models(
     }
 
 
+def _project_provider_models(
+    normalized_models: Mapping[str, Model],
+    provider_config: ProviderConfig,
+    catalog: ModelsDevCatalog | None,
+) -> dict[str, dict[str, Any]]:
+    """Serialize provider models to data and enrich each from models.dev.
+
+    Each model's wire facts are serialized (``_model_to_data``). When the
+    models.dev catalog is available, the provider's section (looked up by
+    ``models_dev_id``) supplies an **auto canonical pointer** for an exact
+    wire-id match and a **deviating reasoning ladder** when the provider's own
+    ``reasoning_options`` differ from the lab spec. No cross-file merge — this is
+    the pure provider projection.
+    """
+
+    projected: dict[str, dict[str, Any]] = {}
+    models_dev_id = provider_config.effective_models_dev_id()
+    for wire_id, model in normalized_models.items():
+        data = _model_to_data(model)
+        if catalog is not None:
+            _enrich_provider_model(data, models_dev_id, wire_id, catalog)
+        projected[wire_id] = data
+    return projected
+
+
+def _enrich_provider_model(
+    data: dict[str, Any],
+    models_dev_id: str,
+    wire_id: str,
+    catalog: ModelsDevCatalog,
+) -> None:
+    """Stamp the auto canonical pointer + deviating ladder onto one model dict.
+
+    Mutates ``data`` in place:
+
+    * adds a top-level ``canonical`` pointer for an exact lab-section wire-id
+      match;
+    * when models.dev reports a ladder that *deviates* from the lab spec, sets
+      ``capabilities.reasoning`` to that deviating block (provider layer wins at
+      load);
+    * when the model joins the canonical layer and does NOT deviate, REMOVES the
+      provider's bare ``reasoning`` sub-field so the canonical lifted ladder is
+      inherited at load (the assembly merges ``capabilities`` one level deep, so
+      a present-but-bare provider ``reasoning`` would otherwise shadow the
+      canonical one — handoff: non-deviating provider layer is empty).
+    """
+
+    pointer = auto_canonical_pointer(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
+    if pointer is not None:
+        data["canonical"] = pointer
+
+    deviating = provider_reasoning_block(
+        catalog,
+        models_dev_id=models_dev_id,
+        wire_id=wire_id,
+    )
+    capabilities = data.get("capabilities")
+    if not isinstance(capabilities, dict):
+        return
+    if deviating is not None:
+        capabilities["reasoning"] = deviating
+        return
+    # No deviation: let the canonical ladder flow through at load by dropping the
+    # provider's own reasoning block — but only when a canonical join exists to
+    # inherit from (an explicit pointer, or the wire-id is itself a canonical id).
+    if _has_canonical_join(catalog, pointer, wire_id):
+        capabilities.pop("reasoning", None)
+
+
+def _has_canonical_join(catalog: ModelsDevCatalog, pointer: str | None, wire_id: str) -> bool:
+    """Return whether the model resolves to a canonical record at load.
+
+    Mirrors the at-load deterministic join: an explicit auto pointer, or the
+    wire-id being itself an exact canonical-id key. Used to decide whether it is
+    safe to drop the provider's bare reasoning block for inheritance.
+    """
+
+    if pointer is not None:
+        return True
+    return wire_id in catalog.models
+
+
 def apply_overrides(
     models: Mapping[str, Model | Mapping[str, Any]], overrides_path: Path
 ) -> dict[str, dict[str, Any]]:
-    """Apply optional field-level model overrides to normalized model data."""
+    """Apply optional field-level model overrides to normalized model data.
+
+    Retained for callers/tests that still want the explicit merge helper.
+    Refresh itself no longer bakes overrides into ``<provider>.json`` — that
+    cross-file merge moved to LOAD (Phase 2). The override file is now read at
+    load time, not at refresh time.
+    """
 
     merged = {model_id: _model_to_data(model) for model_id, model in models.items()}
     if not overrides_path.exists():

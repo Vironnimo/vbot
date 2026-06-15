@@ -37,6 +37,8 @@ RUN_COMPLETED_EVENT = core_runs.RUN_COMPLETED_EVENT
 RUN_FAILED_EVENT = core_runs.RUN_FAILED_EVENT
 OAuthTokenGetter = provider_access.OAuthTokenGetter
 refresh_models = connection_methods.refresh_models
+fetch_catalog = connection_methods.fetch_catalog
+refresh_canonical_layer = connection_methods.refresh_canonical_layer
 datetime = automation_methods.datetime
 ZoneInfo = automation_methods.ZoneInfo
 _LOGGER = event_bridge._LOGGER
@@ -52,6 +54,8 @@ async def dispatch_rpc(state: Any, request: Any) -> JsonObject:
 def _sync_legacy_aliases() -> None:
     """Propagate transitional facade monkeypatches into split handler modules."""
     connection_methods.refresh_models = refresh_models
+    connection_methods.fetch_catalog = fetch_catalog
+    connection_methods.refresh_canonical_layer = refresh_canonical_layer
     _set_module_attr(provider_access, "OAuthTokenGetter", OAuthTokenGetter)
     connection_methods._LOGGER = _LOGGER
     event_bridge._LOGGER = _LOGGER

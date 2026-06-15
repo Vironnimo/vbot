@@ -7,8 +7,16 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
+from core.models.models_dev import (
+    ModelsDevCatalog,
+    ModelsDevError,
+    fetch_catalog,
+    refresh_canonical_layer,
+)
 from core.models.query import ModelQuery
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
@@ -17,6 +25,7 @@ from core.providers.accounts import (
     split_connection_id,
     validate_account_id,
 )
+from core.providers.errors import NetworkError, ProviderError
 from core.utils.errors import ConfigError
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -367,7 +376,29 @@ def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
+async def _fetch_catalog_for_refresh() -> ModelsDevCatalog | None:
+    """Fetch the models.dev catalog once for a refresh — best-effort.
+
+    Shared by both refresh entry points so the public catalog is fetched a
+    single time and threaded to every per-provider refresh + the canonical
+    projection. A fetch failure logs and returns ``None``: the canonical join is
+    enrichment, not a dependency, so refresh still writes pure provider wire
+    facts without it.
+    """
+
+    try:
+        return await fetch_catalog()
+    except (ModelsDevError, ProviderError, NetworkError, httpx.HTTPError) as exc:
+        _LOGGER.warning(
+            "models.dev catalog unavailable for this refresh; "
+            "writing provider catalogs without canonical enrichment: %s",
+            exc,
+        )
+        return None
+
+
 async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObject:
+    catalog = await _fetch_catalog_for_refresh()
     refreshed_providers: list[JsonObject] = []
     for provider_id in runtime.providers.list_ids():
         provider = runtime.providers.get(provider_id)
@@ -379,15 +410,33 @@ async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObj
             provider_id,
             provider,
             resources_dir,
+            catalog,
         )
         refreshed_providers.extend(provider_results)
 
+    canonical_result = await _refresh_canonical_layer_if_possible(catalog, resources_dir)
     _reload_runtime_model_registry(runtime, resources_dir)
     return {
         "providers": refreshed_providers,
         "refreshed_count": len(refreshed_providers),
         "model_count": sum(_model_count(result) for result in refreshed_providers),
+        "canonical": canonical_result,
     }
+
+
+async def _refresh_canonical_layer_if_possible(
+    catalog: ModelsDevCatalog | None,
+    resources_dir: Path,
+) -> JsonObject | None:
+    """Project the canonical layer when a catalog is available; else ``None``.
+
+    Writes ``models.json`` + the raw dump + seeds ``models.overrides.json``.
+    Skipped (returns ``None``) when the catalog could not be fetched.
+    """
+
+    if catalog is None:
+        return None
+    return await refresh_canonical_layer(resources_dir, catalog=catalog)
 
 
 async def _refresh_provider_model_db(
@@ -402,12 +451,15 @@ async def _refresh_provider_model_db(
             f"provider '{provider_id}' does not support model refresh",
         )
 
+    catalog = await _fetch_catalog_for_refresh()
     provider_results = await _refresh_provider_connections(
         runtime,
         provider_id,
         provider,
         resources_dir,
+        catalog,
     )
+    await _refresh_canonical_layer_if_possible(catalog, resources_dir)
     _reload_runtime_model_registry(runtime, resources_dir)
     if not provider_results:
         raise RpcError(
@@ -445,12 +497,15 @@ async def _refresh_provider_connections(
     provider_id: str,
     provider: Any,
     resources_dir: Path,
+    models_dev_catalog: ModelsDevCatalog | None = None,
 ) -> list[JsonObject]:
     """Refresh every connection on *provider* that supports it.
 
     Connections without an effective ``models_endpoint`` or without
     credentials are skipped. Successful refreshes accumulate into the
-    shared ``<provider>.json`` catalog via discovery's merge logic.
+    shared ``<provider>.json`` catalog via discovery's merge logic. The
+    pre-fetched ``models_dev_catalog`` is threaded into each refresh so the
+    public catalog is fetched once per refresh, not once per connection.
     """
 
     results: list[JsonObject] = []
@@ -477,6 +532,7 @@ async def _refresh_provider_connections(
             credential_value,
             resources_dir,
             credential_connection=connection,
+            models_dev_catalog=models_dev_catalog,
         )
         results.append(result)
     return results

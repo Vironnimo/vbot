@@ -20,7 +20,14 @@ from core.models.discovery import (
     apply_overrides,
     refresh_models,
 )
-from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.models.models import (
+    Capabilities,
+    Model,
+    ModelRegistry,
+    ReasoningCapabilities,
+    is_provider_file,
+)
+from core.models.models_dev import ModelsDevCatalog, refresh_canonical_layer
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
@@ -1004,11 +1011,16 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_refresh_models_reads_colocated_overrides_without_writing_override_catalog(
+    async def test_refresh_writes_pure_projection_and_overrides_apply_at_load(
         self,
         tmp_path: Path,
         openrouter_config: ProviderConfig,
     ):
+        """Refresh stays DUMB: it no longer bakes ``<provider>.overrides.json``
+        into ``<provider>.json``. The pure provider projection is written (only
+        the fetched model), and the override correction + the override-only model
+        come in at LOAD (Phase 2 assembly) instead — proving the move."""
+
         resources_dir = tmp_path / "resources"
         models_dir = resources_dir / "models"
         models_dir.mkdir(parents=True)
@@ -1036,12 +1048,18 @@ class TestRefreshModels:
 
         output_path = models_dir / "openrouter.json"
         raw_output_path = models_dir / "openrouter.raw.json"
-        registry = ModelRegistry.load(resources_dir)
-        assert result["model_count"] == 2
-        assert output_path.exists()
+        # Refresh wrote the PURE provider projection: only the fetched model, no
+        # override baking. The override-only model is absent from the file.
+        assert result["model_count"] == 1
+        written = json.loads(output_path.read_text(encoding="utf-8"))
+        assert set(written["models"]) == {"model-a"}
+        assert written["models"]["model-a"]["name"] == "Model A"
+        assert "override-only" not in written["models"]
         assert raw_output_path.exists()
         assert overrides_path.exists()
-        assert not (resources_dir / "model-overrides" / "openrouter.json").exists()
+        # The overrides apply at LOAD: the correction wins, the override-only
+        # model appears in the assembled registry.
+        registry = ModelRegistry.load(resources_dir)
         assert registry.get("openrouter", "model-a").name == "Corrected Model A"
         assert registry.get("openrouter", "override-only").name == "Override Only"
 
@@ -1672,3 +1690,200 @@ class TestRefreshModels:
         # The supplementary STT model must not be duplicated in the raw payload.
         assert raw_ids.count("openai/whisper-1") == 1
         assert sorted(raw_ids) == ["openai/gpt-4o", "openai/whisper-1"]
+
+
+CATALOG_FIXTURE = Path(__file__).parent / "fixtures" / "models_dev_catalog.json"
+
+
+def _fixture_catalog() -> ModelsDevCatalog:
+    raw = json.loads(CATALOG_FIXTURE.read_text(encoding="utf-8"))
+    return ModelsDevCatalog(raw)
+
+
+class TestRefreshModelsDevEnrichment:
+    """Refresh stamps the models.dev canonical pointer + deviating ladder, and
+    the deepseek-v4-pro worked example round-trips refresh → load."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_stamps_auto_canonical_pointer(
+        self,
+        tmp_path: Path,
+    ):
+        # Arrange — a lab-section provider (deepseek) whose wire-id matches a
+        # canonical provider section gets an auto canonical pointer.
+        provider_config = ProviderConfig(
+            id="deepseek",
+            name="DeepSeek",
+            adapter="openai_compatible",
+            base_url="https://api.deepseek.com/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="DEEPSEEK_KEY",
+                    ),
+                )
+            ],
+            defaults={},
+            models_endpoint="/models",
+        )
+        respx.get("https://api.deepseek.com/v1/models").mock(
+            return_value=httpx.Response(
+                200, json={"data": [{"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"}]}
+            )
+        )
+        resources_dir = tmp_path / "resources"
+
+        # Act
+        await refresh_models(
+            provider_config,
+            API_KEY,
+            resources_dir,
+            models_dev_catalog=_fixture_catalog(),
+        )
+
+        # Assert — the provider file carries the auto canonical pointer.
+        written = json.loads(
+            (resources_dir / "models" / "deepseek.json").read_text(encoding="utf-8")
+        )
+        assert written["models"]["deepseek-v4-pro"]["canonical"] == "deepseek/deepseek-v4-pro"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_deepseek_v4_pro_canonical_and_openrouter_deviation_round_trip(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        """The worked example end-to-end: canonical [high, max] (lab spec),
+        OpenRouter [high, xhigh] (provider deviation), via refresh → load."""
+
+        resources_dir = tmp_path / "resources"
+        catalog = _fixture_catalog()
+
+        # Canonical layer (models.json) with the lifted lab ladder.
+        await refresh_canonical_layer(resources_dir, catalog=catalog)
+
+        # OpenRouter provider refresh: wire-id is the canonical id deepseek/deepseek-v4-pro.
+        respx.get(OPENROUTER_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        raw_openrouter_model(
+                            model_id="deepseek/deepseek-v4-pro",
+                            name="DeepSeek V4 Pro",
+                            input_modalities=["text"],
+                            supported_parameters=["tools", "reasoning"],
+                        )
+                    ]
+                },
+            )
+        )
+        await refresh_models(
+            openrouter_config,
+            API_KEY,
+            resources_dir,
+            models_dev_catalog=catalog,
+        )
+
+        registry = ModelRegistry.load(resources_dir)
+        model = registry.get("openrouter", "deepseek/deepseek-v4-pro")
+        # The effective ladder is OpenRouter's deviation (provider layer wins).
+        assert model.capabilities.reasoning.control == "levels"
+        assert model.capabilities.reasoning.levels == ("high", "xhigh")
+
+        # The canonical base itself holds the lab spec [high, max].
+        canonical = json.loads(
+            (resources_dir / "models" / "models.json").read_text(encoding="utf-8")
+        )
+        canonical_reasoning = canonical["models"]["deepseek/deepseek-v4-pro"]["capabilities"][
+            "reasoning"
+        ]
+        assert canonical_reasoning == {
+            "supported": True,
+            "control": "levels",
+            "levels": ["high", "max"],
+        }
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_non_deviating_provider_inherits_canonical_ladder_at_load(
+        self,
+        tmp_path: Path,
+    ):
+        """A provider whose ladder equals the lab spec gets NO provider-layer
+        ladder stamped; it inherits the canonical ladder at load."""
+
+        resources_dir = tmp_path / "resources"
+        catalog = _fixture_catalog()
+        await refresh_canonical_layer(resources_dir, catalog=catalog)
+
+        provider_config = ProviderConfig(
+            id="deepseek",
+            name="DeepSeek",
+            adapter="openai_compatible",
+            base_url="https://api.deepseek.com/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="DEEPSEEK_KEY",
+                    ),
+                )
+            ],
+            defaults={},
+            models_endpoint="/models",
+        )
+        respx.get("https://api.deepseek.com/v1/models").mock(
+            return_value=httpx.Response(
+                200, json={"data": [{"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"}]}
+            )
+        )
+        await refresh_models(
+            provider_config,
+            API_KEY,
+            resources_dir,
+            models_dev_catalog=catalog,
+        )
+
+        # The provider file must carry NO reasoning block at all (dropped so the
+        # canonical ladder flows through at load — handoff: non-deviating provider
+        # layer is empty).
+        written = json.loads(
+            (resources_dir / "models" / "deepseek.json").read_text(encoding="utf-8")
+        )
+        assert "reasoning" not in written["models"]["deepseek-v4-pro"]["capabilities"]
+
+        # At load, it inherits the canonical lab ladder [high, max].
+        registry = ModelRegistry.load(resources_dir)
+        model = registry.get("deepseek", "deepseek-v4-pro")
+        assert model.capabilities.reasoning.levels == ("high", "max")
+
+    @pytest.mark.asyncio
+    async def test_raw_catalog_dump_is_written_and_not_read_at_runtime(
+        self,
+        tmp_path: Path,
+    ):
+        """The raw catalog.json dump is written by the canonical refresh and is
+        NOT read by the registry read path."""
+
+        resources_dir = tmp_path / "resources"
+        await refresh_canonical_layer(resources_dir, catalog=_fixture_catalog())
+
+        raw_path = resources_dir / "models" / "models.dev.catalog.raw.json"
+        assert raw_path.exists()
+        # The registry classifier rejects the raw dump as a provider file.
+        assert is_provider_file(raw_path.name) is False
+        # Loading the registry must not surface any raw-dump model.
+        registry = ModelRegistry.load(resources_dir)
+        assert registry.list_for_provider("models.dev.catalog.raw") == []
