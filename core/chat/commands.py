@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.models.models import REASONING_CONTROL_BUDGET, REASONING_CONTROL_ON_OFF
 from core.providers.providers import resolve_context_window
 from core.providers.reasoning import closest_supported_effort, normalize_thinking_effort
 from core.runs import ChatRunManager, RunNotFoundError
@@ -44,6 +45,11 @@ CommandHandler = Callable[[str, str, "str | None"], "CommandHandled | CommandAct
 _LOGGER = get_logger("chat.commands")
 
 STATUS_PLACEHOLDER = "—"
+# Reported "actual" reasoning state for a model steered by a thinking toggle or a
+# token budget rather than an effort ladder: there is no effort level to show, so
+# ``/status`` reports whether reasoning is on or off for the selection.
+REASONING_STATE_ON = "on"
+REASONING_STATE_OFF = "off"
 _STATUS_TIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
 _STATUS_MODEL_DISPLAY_OVERRIDE: ContextVar[str | None] = ContextVar(
     "status_model_display_override",
@@ -338,6 +344,7 @@ class CommandDispatcher:
             actual_thinking_effort=resolve_actual_thinking_effort(
                 agent.thinking_effort if agent is not None else None,
                 model_details.reasoning_levels,
+                model_details.reasoning_control,
             ),
         )
         return CommandHandled(reply=text, output="transient")
@@ -348,13 +355,16 @@ class StatusModelDetails:
     """Model facts needed to render a status reply.
 
     ``reasoning_levels`` is the model's effective effort ladder (empty when the
-    model has no feed ladder); ``build_status_text`` snaps the agent's selected
-    effort against it to report the *actual* effort sent on the wire.
+    model has no feed ladder) and ``reasoning_control`` its wire control kind
+    (``levels`` / ``on_off`` / ``budget`` / ``None``); together they let
+    ``resolve_actual_thinking_effort`` report the *actual* reasoning sent on the
+    wire — a snapped effort for a ladder, or on/off for a toggle/budget model.
     """
 
     context_window: int | None
     display_name: str | None
     reasoning_levels: tuple[str, ...] = ()
+    reasoning_control: str | None = None
 
 
 def resolve_status_model_details(
@@ -406,6 +416,7 @@ def resolve_status_model_details(
         ),
         display_name=model.name,
         reasoning_levels=tuple(model.capabilities.reasoning.levels),
+        reasoning_control=model.capabilities.reasoning.control,
     )
 
 
@@ -422,20 +433,28 @@ def _status_provider_config(providers: ProviderRegistry | None, provider_id: str
 def resolve_actual_thinking_effort(
     selected_effort: str | None,
     reasoning_levels: tuple[str, ...],
+    reasoning_control: str | None = None,
 ) -> str | None:
-    """Return the effort actually sent on the wire, snapped to the model's ladder.
+    """Return the reasoning actually sent on the wire for the selected effort.
 
-    The actual effort is ``closest_supported_effort(selected, effective_ladder)``
-    — the same pure snapping the adapters apply — so ``/status`` reports what
-    really reaches the provider. Returns ``None`` (unknown / not applicable) when
-    no effort is selected (provider default) or the model has no feed ladder to
-    snap against (the adapter then applies its own provider-specific floor, which
-    is not visible here).
+    * ``levels`` control (any model exposing a non-empty effort ladder): the
+      selection is snapped with ``closest_supported_effort`` — the same pure
+      snapping the adapters apply — so ``/status`` reports the effort that really
+      reaches the provider.
+    * ``on_off`` / ``budget`` control: there is no effort ladder, only a thinking
+      toggle or token budget, so report the resulting state — ``"off"`` for a
+      ``none`` selection, ``"on"`` for any other effort (vBot requests reasoning
+      for the turn).
+    * Otherwise ``None`` (unknown / not applicable): no effort selected (provider
+      default), or a model with neither a ladder nor a known control to report
+      (the adapter then applies its own floor, which is not visible here).
     """
-    if not reasoning_levels:
-        return None
     effort = normalize_thinking_effort(selected_effort)
     if not effort:
+        return None
+    if reasoning_control in (REASONING_CONTROL_ON_OFF, REASONING_CONTROL_BUDGET):
+        return REASONING_STATE_OFF if effort == "none" else REASONING_STATE_ON
+    if not reasoning_levels:
         return None
     return closest_supported_effort(effort, reasoning_levels)
 

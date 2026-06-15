@@ -621,6 +621,21 @@ def test_resolve_actual_thinking_effort_none_without_ladder_or_selection() -> No
     assert resolve_actual_thinking_effort(None, ("low", "high")) is None
 
 
+def test_resolve_actual_thinking_effort_on_off_reports_state() -> None:
+    """A toggle/budget model has no effort ladder, so report on/off instead of '—'.
+
+    This is the minimax-m3 (opencode-go, on_off control) case the user hit: any
+    non-``none`` selection means reasoning is on; ``none`` means off; no selection
+    stays unresolved (provider default)."""
+    assert resolve_actual_thinking_effort("high", (), "on_off") == "on"
+    assert resolve_actual_thinking_effort("minimal", (), "on_off") == "on"
+    assert resolve_actual_thinking_effort("none", (), "on_off") == "off"
+    assert resolve_actual_thinking_effort("", (), "on_off") is None
+    # A budget-controlled model reports the same on/off state.
+    assert resolve_actual_thinking_effort("medium", (), "budget") == "on"
+    assert resolve_actual_thinking_effort("none", (), "budget") == "off"
+
+
 def test_build_status_text_reports_selected_and_actual_effort_split() -> None:
     """When the model ladder snaps the selection, both lines show distinct values."""
     text = build_status_text(
@@ -666,6 +681,7 @@ def test_resolve_status_model_details_returns_reasoning_ladder() -> None:
     assert details.context_window == 200_000
     assert details.display_name == "GPT-5.2"
     assert details.reasoning_levels == ("low", "medium", "high")
+    assert details.reasoning_control == "levels"
 
 
 def test_resolve_status_model_details_resolves_window_through_default_chain() -> None:

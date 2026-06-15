@@ -578,3 +578,26 @@ are already flagged above under the Phase-3 entries and are not repeated here.)
    `_validate_override_model_data`/`_overrides_path` helpers, if unused elsewhere) is
    retained only for legacy callers/tests. Deferred because removing it is a
    test-refactor, not a behavior change; do it when those tests are touched anyway.
+
+## 2026-06-15 - Model DB live-test follow-ups (opencode-go minimax-m3)
+
+Found while the user live-tested the refreshed DB in the worktree. Both user-visible
+symptoms are fixed in this change; the notes below are the residual cleanup/scope.
+
+1. **opencode-go override mixes two enrichment styles.** 16 models carry explicit
+   hand `context_window`/`max_output_tokens` (the gateway's own limits, which can
+   deviate from the lab), while `minimax-m3` / `qwen3.7-max` carry a `canonical`
+   pointer and inherit those fields from the canonical base (the gateway matches the
+   lab for them). Both are correct, but the split is inconsistent. A future cleanup
+   could convert every opencode-go model whose gateway limits equal the lab's to a
+   pointer (DRY, single source) and keep explicit numbers only where the gateway
+   genuinely deviates. Deferred: it is an audit of all ~18 entries against canonical,
+   not a behavior fix.
+
+2. **Native `on_off`/`budget` reasoning wiring still pending (see Phase-7 item 1
+   above).** `/status` now reports the on/off state for a toggle/budget model
+   (`resolve_actual_thinking_effort`) instead of a bare "-", which resolved the UI
+   symptom the user hit on `minimax-m3`. The underlying wire still sends a generic
+   effort (or Anthropic adaptive thinking), not the model's native toggle/budget
+   parameter. Wiring those request shapes remains deferred until a reachable model
+   needs the native shape.
