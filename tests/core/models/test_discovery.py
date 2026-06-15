@@ -447,6 +447,222 @@ class TestApplyOverrides:
         ]
 
 
+class TestTypedReasoningSerialization:
+    """The discovery serializer + validator round-trip the typed reasoning
+    shape and ``family``, and reject malformed reasoning blocks."""
+
+    def test_model_to_data_omits_unset_reasoning_control_fields(self) -> None:
+        """A supported model with no projected ladder serializes back to the
+        bare ``{"supported": true}`` form — control/levels/budget_max are
+        omitted when unset, matching how connections/metadata are omitted."""
+
+        from core.models.discovery import _model_to_data
+
+        model = Model(
+            model_id="minimal",
+            name="Minimal",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=32000,
+            max_output_tokens=4096,
+        )
+
+        data = _model_to_data(model)
+
+        assert data["capabilities"]["reasoning"] == {"supported": True}
+        assert "family" not in data
+
+    def test_model_to_data_emits_typed_reasoning_and_family(self) -> None:
+        from core.models.discovery import _model_to_data
+
+        model = Model(
+            model_id="levels-model",
+            name="Levels Model",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(
+                    supported=True,
+                    control="levels",
+                    levels=("low", "medium", "high"),
+                ),
+            ),
+            context_window=128000,
+            max_output_tokens=16000,
+            family="gpt-5.2",
+        )
+
+        data = _model_to_data(model)
+
+        assert data["capabilities"]["reasoning"] == {
+            "supported": True,
+            "control": "levels",
+            "levels": ["low", "medium", "high"],
+        }
+        assert data["family"] == "gpt-5.2"
+
+    def test_model_to_data_emits_budget_max(self) -> None:
+        from core.models.discovery import _model_to_data
+
+        model = Model(
+            model_id="budget-model",
+            name="Budget Model",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(
+                    supported=True,
+                    control="budget",
+                    budget_max=32000,
+                ),
+            ),
+            context_window=200000,
+            max_output_tokens=64000,
+        )
+
+        data = _model_to_data(model)
+
+        assert data["capabilities"]["reasoning"] == {
+            "supported": True,
+            "control": "budget",
+            "budget_max": 32000,
+        }
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_round_trips_typed_reasoning_shape(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A normalized model carrying the typed reasoning ladder survives
+        serialize → write → ``ModelRegistry.load`` with the control fields
+        intact. The adapter is stubbed so the test is pure (no network)."""
+
+        class _TypedReasoningAdapter:
+            @staticmethod
+            def normalize_catalog_entry(raw_model: dict, defaults: dict | None) -> Model:
+                return Model(
+                    model_id=str(raw_model["id"]),
+                    name=str(raw_model.get("name", "Typed")),
+                    capabilities=Capabilities(
+                        vision=False,
+                        tools=True,
+                        json_mode=True,
+                        reasoning=ReasoningCapabilities(
+                            supported=True,
+                            control="levels",
+                            levels=("low", "medium", "high"),
+                        ),
+                    ),
+                    context_window=128000,
+                    max_output_tokens=16000,
+                    family="deepseek-v4",
+                )
+
+        provider_config = ProviderConfig(
+            id="stub-provider",
+            name="Stub Provider",
+            adapter="stub_typed_adapter",
+            base_url="https://stub-provider.example/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="STUB_PROVIDER_KEY",
+                    ),
+                )
+            ],
+            defaults={},
+            models_endpoint="/models",
+        )
+        monkeypatch.setitem(
+            discovery_module._DISCOVERY_ADAPTER_MAP,
+            "stub_typed_adapter",
+            _TypedReasoningAdapter,
+        )
+        respx.get(STUB_DISCOVERY_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200, json={"data": [{"id": "typed-model", "name": "Typed Model"}]}
+            )
+        )
+        resources_dir = tmp_path / "resources"
+
+        await refresh_models(provider_config, API_KEY, resources_dir)
+
+        registry = ModelRegistry.load(resources_dir)
+        model = registry.get("stub-provider", "typed-model")
+        assert model.capabilities.reasoning.control == "levels"
+        assert model.capabilities.reasoning.levels == ("low", "medium", "high")
+        assert model.family == "deepseek-v4"
+
+    def test_override_rejects_bad_reasoning_control(self, tmp_path: Path) -> None:
+        overrides_path = tmp_path / "openrouter.overrides.json"
+        override = model_data("Bad Control")
+        override["capabilities"]["reasoning"] = {"supported": True, "control": "bogus"}
+        overrides_path.write_text(
+            json.dumps({"provider_id": "openrouter", "models": {"model-x": override}}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="control"):
+            apply_overrides({}, overrides_path)
+
+    def test_override_rejects_bad_reasoning_level_value(self, tmp_path: Path) -> None:
+        overrides_path = tmp_path / "openrouter.overrides.json"
+        override = model_data("Bad Levels")
+        override["capabilities"]["reasoning"] = {
+            "supported": True,
+            "control": "levels",
+            "levels": ["low", "ultra"],
+        }
+        overrides_path.write_text(
+            json.dumps({"provider_id": "openrouter", "models": {"model-y": override}}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="levels"):
+            apply_overrides({}, overrides_path)
+
+    def test_override_accepts_minimal_supported_reasoning(self, tmp_path: Path) -> None:
+        """The validator keeps accepting the bare ``{"supported": true}`` form
+        — Phase 1 has no ladder data, so this must stay valid."""
+
+        overrides_path = tmp_path / "openrouter.overrides.json"
+        override = model_data("Minimal Reasoning")
+        override["capabilities"]["reasoning"] = {"supported": True}
+        overrides_path.write_text(
+            json.dumps({"provider_id": "openrouter", "models": {"model-z": override}}),
+            encoding="utf-8",
+        )
+
+        merged = apply_overrides({}, overrides_path)
+
+        assert merged["model-z"]["capabilities"]["reasoning"] == {"supported": True}
+
+    def test_override_rejects_non_string_family(self, tmp_path: Path) -> None:
+        overrides_path = tmp_path / "openrouter.overrides.json"
+        override = model_data("Bad Family")
+        override["family"] = 123
+        overrides_path.write_text(
+            json.dumps({"provider_id": "openrouter", "models": {"model-f": override}}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="family"):
+            apply_overrides({}, overrides_path)
+
+
 class TestPassthroughFilters:
     def test_raw_filter_accepts_everything(self):
         assert PassthroughRawFilter().accepts({"anything": object()}) is True

@@ -41,10 +41,50 @@ class TestReasoningCapabilities:
         caps = ReasoningCapabilities(supported=True)
         assert caps.supported is True
 
+    def test_typed_control_fields_default_to_absent(self):
+        """The minimal ``supported``-only form leaves the control fields unset,
+        so a ``{"supported": true}`` model with no projected ladder is valid."""
+
+        caps = ReasoningCapabilities(supported=True)
+
+        assert caps.control is None
+        assert caps.levels == ()
+        assert caps.budget_max is None
+
+    def test_levels_control_carries_ladder(self):
+        caps = ReasoningCapabilities(
+            supported=True,
+            control="levels",
+            levels=("low", "medium", "high"),
+        )
+
+        assert caps.control == "levels"
+        assert caps.levels == ("low", "medium", "high")
+        assert caps.budget_max is None
+
+    def test_budget_control_carries_max(self):
+        caps = ReasoningCapabilities(supported=True, control="budget", budget_max=32000)
+
+        assert caps.control == "budget"
+        assert caps.budget_max == 32000
+        assert caps.levels == ()
+
+    def test_on_off_control(self):
+        caps = ReasoningCapabilities(supported=True, control="on_off")
+
+        assert caps.control == "on_off"
+        assert caps.levels == ()
+        assert caps.budget_max is None
+
     def test_frozen(self):
         caps = ReasoningCapabilities(supported=True)
         with pytest.raises(FrozenInstanceError):
             caps.supported = False  # type: ignore[misc]
+
+    def test_typed_control_fields_frozen(self):
+        caps = ReasoningCapabilities(supported=True, control="levels", levels=("high",))
+        with pytest.raises(FrozenInstanceError):
+            caps.control = "on_off"  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +227,39 @@ class TestModel:
         assert model.context_window == 128000
         assert model.max_output_tokens == 16384
         assert model.metadata == {}
+
+    def test_family_defaults_to_empty_string(self):
+        model = Model(
+            model_id="gpt-5.2",
+            name="GPT-5.2",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=128000,
+            max_output_tokens=16384,
+        )
+
+        assert model.family == ""
+
+    def test_family_is_first_class_field(self):
+        model = Model(
+            model_id="gpt-5.2",
+            name="GPT-5.2",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=128000,
+            max_output_tokens=16384,
+            family="gpt-5.2",
+        )
+
+        assert model.family == "gpt-5.2"
 
     def test_metadata_field_is_optional_and_immutable(self):
         capabilities = Capabilities(
@@ -581,6 +654,230 @@ class TestModelRegistryLoad:
 
 
 # ---------------------------------------------------------------------------
+# ModelRegistry — typed reasoning + family on the load path
+# ---------------------------------------------------------------------------
+
+
+class TestModelRegistryTypedReasoning:
+    def test_loads_levels_control_model(self, tmp_path: Path):
+        """A model with ``control: levels`` and a ladder loads with the typed
+        fields populated."""
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("typed.json").write_text(
+            """
+            {
+              "provider_id": "typed",
+              "models": {
+                "levels-model": {
+                  "name": "Levels Model",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {
+                      "supported": true,
+                      "control": "levels",
+                      "levels": ["low", "medium", "high"]
+                    }
+                  },
+                  "context_window": 128000,
+                  "max_output_tokens": 16000
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+        reasoning = registry.get("typed", "levels-model").capabilities.reasoning
+
+        assert reasoning.supported is True
+        assert reasoning.control == "levels"
+        assert reasoning.levels == ("low", "medium", "high")
+        assert reasoning.budget_max is None
+
+    def test_loads_on_off_control_model(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("typed.json").write_text(
+            """
+            {
+              "provider_id": "typed",
+              "models": {
+                "on-off-model": {
+                  "name": "On Off Model",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": true, "control": "on_off"}
+                  },
+                  "context_window": 64000,
+                  "max_output_tokens": 8000
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+        reasoning = registry.get("typed", "on-off-model").capabilities.reasoning
+
+        assert reasoning.supported is True
+        assert reasoning.control == "on_off"
+        assert reasoning.levels == ()
+        assert reasoning.budget_max is None
+
+    def test_loads_budget_control_model(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("typed.json").write_text(
+            """
+            {
+              "provider_id": "typed",
+              "models": {
+                "budget-model": {
+                  "name": "Budget Model",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": true, "control": "budget", "budget_max": 32000}
+                  },
+                  "context_window": 200000,
+                  "max_output_tokens": 64000
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+        reasoning = registry.get("typed", "budget-model").capabilities.reasoning
+
+        assert reasoning.supported is True
+        assert reasoning.control == "budget"
+        assert reasoning.budget_max == 32000
+        assert reasoning.levels == ()
+
+    def test_loads_unsupported_reasoning_model(self, tmp_path: Path):
+        """``{"supported": false}`` loads with no control fields set."""
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("typed.json").write_text(
+            """
+            {
+              "provider_id": "typed",
+              "models": {
+                "plain-model": {
+                  "name": "Plain Model",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 32000,
+                  "max_output_tokens": 4096
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+        reasoning = registry.get("typed", "plain-model").capabilities.reasoning
+
+        assert reasoning.supported is False
+        assert reasoning.control is None
+        assert reasoning.levels == ()
+        assert reasoning.budget_max is None
+
+    def test_loads_minimal_supported_reasoning_without_control(self, tmp_path: Path):
+        """A supported model with no projected ladder yet loads as the bare
+        ``{"supported": true}`` form — Phase 1 has no ladder data."""
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("typed.json").write_text(
+            """
+            {
+              "provider_id": "typed",
+              "models": {
+                "minimal-reasoning": {
+                  "name": "Minimal Reasoning",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": true}
+                  },
+                  "context_window": 32000,
+                  "max_output_tokens": 4096
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+        reasoning = registry.get("typed", "minimal-reasoning").capabilities.reasoning
+
+        assert reasoning.supported is True
+        assert reasoning.control is None
+
+    def test_loads_family_field(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("typed.json").write_text(
+            """
+            {
+              "provider_id": "typed",
+              "models": {
+                "with-family": {
+                  "name": "With Family",
+                  "family": "gpt-5.2",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 32000,
+                  "max_output_tokens": 4096
+                },
+                "without-family": {
+                  "name": "Without Family",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 32000,
+                  "max_output_tokens": 4096
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("typed", "with-family").family == "gpt-5.2"
+        assert registry.get("typed", "without-family").family == ""
+
+
+# ---------------------------------------------------------------------------
 # Model.connections parsing
 # ---------------------------------------------------------------------------
 
@@ -754,6 +1051,26 @@ class TestModelRegistryRealResources:
         ModelRegistry._cache.clear()
         yield
         ModelRegistry._cache.clear()
+
+    def test_every_committed_catalog_file_loads(self):
+        """Every ``resources/models/<provider>.json`` loads under the new typed
+        shape without error — the binding requirement for Phase 1's all-seeds
+        conversion. ``*.raw.json`` and ``*.overrides.json`` are skipped by the
+        loader, so the registry must end up non-empty across all real catalogs.
+        """
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        # Sanity: at least the hand-maintained anthropic seed and the
+        # refresh-backed openrouter catalog are present, and every loaded
+        # model's reasoning carries a boolean ``supported`` flag.
+        assert registry.list_for_provider("anthropic")
+        assert registry.list_for_provider("opencode-go")
+        for _, model in registry._models.items():
+            assert isinstance(model.capabilities.reasoning.supported, bool)
+            assert isinstance(model.capabilities.reasoning.levels, tuple)
+            assert model.capabilities.reasoning.control in (None, "levels", "on_off", "budget")
+            assert isinstance(model.family, str)
 
     @pytest.mark.parametrize(
         "provider_id",
