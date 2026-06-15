@@ -15,7 +15,12 @@ from typing import Any, Protocol
 
 import httpx
 
-from core.models.models import Model, ModelRegistry
+from core.models.models import (
+    REASONING_CONTROLS,
+    Model,
+    ModelRegistry,
+    ReasoningCapabilities,
+)
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -26,6 +31,7 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
+from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
@@ -432,7 +438,7 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
                 "vision": model.capabilities.vision,
                 "tools": model.capabilities.tools,
                 "json_mode": model.capabilities.json_mode,
-                "reasoning": {"supported": model.capabilities.reasoning.supported},
+                "reasoning": _reasoning_to_data(model.capabilities.reasoning),
                 "input_modalities": list(model.capabilities.input_modalities),
                 "output_modalities": list(model.capabilities.output_modalities),
                 "supported_parameters": list(model.capabilities.supported_parameters),
@@ -442,6 +448,10 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
             "context_window": model.context_window,
             "max_output_tokens": model.max_output_tokens,
         }
+        # ``family`` is written only when known, mirroring how connections /
+        # metadata are omitted when empty so generated catalogs stay clean.
+        if model.family:
+            data["family"] = model.family
         if model.connections:
             data["connections"] = list(model.connections)
         metadata = _plain_data(model.metadata)
@@ -454,6 +464,25 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("connections must be a list when set")
     if isinstance(connections, list) and not connections:
         data.pop("connections", None)
+    return data
+
+
+def _reasoning_to_data(reasoning: ReasoningCapabilities) -> dict[str, Any]:
+    """Serialize the typed reasoning block, omitting unset control fields.
+
+    ``control``/``levels``/``budget_max`` are emitted only when present so the
+    on-disk form stays minimal — a model with no projected ladder serializes
+    back to the bare ``{"supported": bool}`` shape, matching "absent when not
+    supported (or not yet known)".
+    """
+
+    data: dict[str, Any] = {"supported": reasoning.supported}
+    if reasoning.control is not None:
+        data["control"] = reasoning.control
+    if reasoning.levels:
+        data["levels"] = list(reasoning.levels)
+    if reasoning.budget_max is not None:
+        data["budget_max"] = reasoning.budget_max
     return data
 
 
@@ -489,15 +518,46 @@ def _validate_model_data(model_id: str, model_data: Mapping[str, Any]) -> None:
     _read_bool(caps, "vision")
     _read_bool(caps, "tools")
     _read_bool(caps, "json_mode")
-    _read_bool(reasoning, "supported")
+    _validate_reasoning(reasoning)
     _read_string_list(caps, "input_modalities")
     _read_string_list(caps, "output_modalities")
     _read_string_list(caps, "supported_parameters")
     _read_string_list(caps, "task_types")
     _read_int(model_data, "context_window")
     _read_optional_int(model_data, "max_output_tokens")
+    _read_optional_string(model_data, "family")
     if not model_id:
         raise ValueError("Override-only model id must not be empty")
+
+
+def _validate_reasoning(reasoning: Mapping[str, Any]) -> None:
+    """Validate the typed reasoning block, accepting the minimal form.
+
+    ``supported`` is required; ``control``/``levels``/``budget_max`` are all
+    optional (Phase 1 carries no ladder data, so ``{"supported": true}`` with
+    no control is valid). When present, ``control`` must be one of the allowed
+    kinds, every ``levels`` value must be a known thinking effort, and
+    ``budget_max`` must be an int.
+    """
+
+    _read_bool(reasoning, "supported")
+    control = reasoning.get("control")
+    if control is not None and (not isinstance(control, str) or control not in REASONING_CONTROLS):
+        allowed = ", ".join(REASONING_CONTROLS)
+        raise ValueError(f"Expected 'control' to be one of [{allowed}] or null")
+    levels = reasoning.get("levels")
+    if levels is not None:
+        if not isinstance(levels, list) or not all(isinstance(item, str) for item in levels):
+            raise ValueError("Expected 'levels' to be a list of strings")
+        unknown = [level for level in levels if level not in THINKING_EFFORT_ORDER]
+        if unknown:
+            allowed = ", ".join(THINKING_EFFORT_ORDER)
+            raise ValueError(
+                f"Expected 'levels' values to be thinking efforts [{allowed}]; "
+                f"got unknown {unknown}"
+            )
+    if "budget_max" in reasoning:
+        _read_optional_int(reasoning, "budget_max")
 
 
 def _adapter_class_for_discovery(adapter: str):
@@ -553,6 +613,15 @@ def _read_string(data: Mapping[str, Any], key: str) -> str:
     value = data.get(key)
     if not isinstance(value, str):
         raise ValueError(f"Expected '{key}' to be a string")
+    return value
+
+
+def _read_optional_string(data: Mapping[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Expected '{key}' to be a string or absent")
     return value
 
 
