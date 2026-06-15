@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-15T17:08:55.101967+00:00",
+  "fetched_at": "2026-06-15T22:10:36.145593+00:00",
   "models": {
     "codex-auto-review": {
       "capabilities": {
@@ -72,7 +72,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -98,7 +99,8 @@
         "subscription"
       ],
       "context_window": 272000,
-      "max_output_tokens": null,
+      "family": "gpt",
+      "max_output_tokens": 128000,
       "name": "GPT-5.4"
     },
     "gpt-5.4-mini": {
@@ -132,7 +134,8 @@
         "subscription"
       ],
       "context_window": 272000,
-      "max_output_tokens": null,
+      "family": "gpt-mini",
+      "max_output_tokens": 128000,
       "name": "GPT-5.4-Mini"
     },
     "gpt-5.5": {
@@ -140,7 +143,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -166,7 +170,8 @@
         "subscription"
       ],
       "context_window": 272000,
-      "max_output_tokens": null,
+      "family": "gpt",
+      "max_output_tokens": 128000,
       "name": "GPT-5.5"
     }
   },
