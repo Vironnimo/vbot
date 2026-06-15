@@ -112,6 +112,29 @@ class TestMergeLayers:
         assert merged["context_window"] == 2000
         assert merged["family"] == "base"
 
+    def test_higher_null_does_not_clobber_lower_value(self):
+        """A ``null`` in a higher layer means "unknown", not "erase": it must not
+        overwrite a value a lower layer supplied (fill, don't un-fill). This is the
+        opencode-go case — a provider's ``context_window: null`` lets the canonical
+        window flow through the join."""
+
+        merged = merge_layers(
+            [
+                {"context_window": 512000, "max_output_tokens": 128000},
+                {"context_window": None, "max_output_tokens": None, "name": "provider"},
+            ]
+        )
+        assert merged["context_window"] == 512000
+        assert merged["max_output_tokens"] == 128000
+        assert merged["name"] == "provider"
+
+    def test_higher_null_still_fills_absent_field(self):
+        """When no lower layer defines the field, a higher ``null`` is kept (the
+        field is genuinely unknown, not inherited from anywhere)."""
+
+        merged = merge_layers([{"name": "base"}, {"context_window": None}])
+        assert merged["context_window"] is None
+
     def test_capabilities_merged_one_level_deep(self):
         """Each capability sub-field is taken from its highest definer; sub-fields
         a higher layer omits are inherited from below."""
