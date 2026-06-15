@@ -95,6 +95,8 @@ def _model_response(provider_id: str, model: Any) -> JsonObject:
             "json_mode": model.capabilities.json_mode,
             "reasoning": {
                 "supported": model.capabilities.reasoning.supported,
+                "control": model.capabilities.reasoning.control,
+                "levels": list(model.capabilities.reasoning.levels),
             },
             "input_modalities": list(model.capabilities.input_modalities),
             "output_modalities": list(model.capabilities.output_modalities),

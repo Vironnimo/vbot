@@ -251,6 +251,8 @@ export const englishCatalog = Object.freeze({
   'agents.form.thinkingEffortOption.high': 'high',
   'agents.form.thinkingEffortOption.xhigh': 'xhigh',
   'agents.form.thinkingEffortOption.max': 'max',
+  'agents.form.thinkingEffortUnsupported':
+    'This model does not support reasoning.',
   'agents.form.memoryPromptModeOption.off': 'Off',
   'agents.form.memoryPromptModeOption.agent': 'MEMORY.md',
   'agents.form.memoryPromptModeOption.agent_user': 'MEMORY.md + USER.md',

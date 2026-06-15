@@ -363,5 +363,55 @@ def test_status_tool_strips_pinned_suffix_before_registry_lookup(tmp_path: Path)
     assert recording_models.calls == [("openai", "gpt-5.2")]
 
 
+def test_status_tool_splits_selected_and_actual_thinking_effort(tmp_path: Path) -> None:
+    """The tool reports the selection and the ladder-snapped wire effort separately."""
+    agent = Agent(
+        id="coder",
+        name="Coder",
+        model="openai/gpt-5.2",
+        fallback_model="openai/gpt-5.1",
+        workspace="workspace",
+        temperature=0.3,
+        thinking_effort="max",
+        allowed_tools=["*"],
+        allowed_skills=["*"],
+        created_at="2026-05-18T10:00:00+00:00",
+        updated_at="2026-05-18T10:00:00+00:00",
+    )
+    model = Model(
+        model_id="gpt-5.2",
+        name="GPT-5.2",
+        capabilities=Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(
+                supported=True,
+                control="levels",
+                levels=("low", "medium", "high"),
+            ),
+        ),
+        context_window=200_000,
+        max_output_tokens=8_192,
+    )
+
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentStore, _StubAgents(agent)),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, _StubModels(model)),
+        ChatRunManager(),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path))
+
+    data = cast(dict[str, Any], result["data"])
+    text = cast(str, data["text"])
+    assert "Selected thinking effort: max" in text
+    assert "Actual model thinking effort: high" in text
+
+
 def test_build_status_text_is_single_source_of_truth() -> None:
     assert status_tool_module.build_status_reply.__module__ == build_status_text.__module__
