@@ -1,11 +1,22 @@
 """Tests for shared provider reasoning helpers."""
 
+from __future__ import annotations
+
+import logging
+from typing import Any
+
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.reasoning import (
     REASONING_REPLAY_POLICIES,
     closest_supported_effort,
+    detail_names_rejected_effort,
     model_reasoning_supported,
+    reasoning_token_count,
+    warn_effort_swallowed,
+    warn_rejected_effort,
 )
+
+_REASONING_LOGGER = "vbot.providers.reasoning"
 
 
 def test_reasoning_replay_policy_axis_is_pinned() -> None:
@@ -44,3 +55,131 @@ def test_model_reasoning_supported_strips_connection_suffix() -> None:
         )
 
     assert model_reasoning_supported(model_lookup, "gpt-4o::api-key") is False
+
+
+# ---------------------------------------------------------------------------
+# Observability — rejected reasoning effort (HTTP 400)
+# ---------------------------------------------------------------------------
+
+
+def test_detail_names_rejected_effort_matches_known_field_spellings() -> None:
+    assert detail_names_rejected_effort("400 invalid value for 'reasoning_effort'") is True
+    assert detail_names_rejected_effort("Unsupported reasoning effort: ultra") is True
+
+
+def test_detail_names_rejected_effort_is_conservative() -> None:
+    assert detail_names_rejected_effort("400 model is overloaded") is False
+    assert detail_names_rejected_effort("") is False
+
+
+def test_warn_rejected_effort_emits_on_400_naming_effort(caplog: Any) -> None:
+    """A 400 whose body names a rejected effort emits a structured warning."""
+    # Arrange / Act
+    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
+        warn_rejected_effort(
+            status_code=400,
+            detail="400 invalid value for 'reasoning_effort': 'ultra'",
+            model_id="gpt-5.2",
+            selected_effort="max",
+        )
+
+    # Assert
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "gpt-5.2" in message
+    assert "max" in message
+
+
+def test_warn_rejected_effort_silent_when_status_is_not_400(caplog: Any) -> None:
+    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
+        warn_rejected_effort(
+            status_code=500,
+            detail="500 invalid value for 'reasoning_effort'",
+            model_id="gpt-5.2",
+            selected_effort="max",
+        )
+
+    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+
+
+def test_warn_rejected_effort_silent_when_detail_unrelated(caplog: Any) -> None:
+    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
+        warn_rejected_effort(
+            status_code=400,
+            detail="400 context length exceeded",
+            model_id="gpt-5.2",
+            selected_effort="max",
+        )
+
+    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+
+
+# ---------------------------------------------------------------------------
+# Observability — swallowed reasoning effort (0 reasoning tokens)
+# ---------------------------------------------------------------------------
+
+
+def test_reasoning_token_count_reads_openai_and_responses_shapes() -> None:
+    assert reasoning_token_count({"completion_tokens_details": {"reasoning_tokens": 7}}) == 7
+    assert reasoning_token_count({"output_tokens_details": {"reasoning_tokens": 0}}) == 0
+
+
+def test_reasoning_token_count_unknown_when_absent_or_malformed() -> None:
+    assert reasoning_token_count(None) is None
+    assert reasoning_token_count({}) is None
+    assert reasoning_token_count({"completion_tokens_details": {}}) is None
+    # A boolean is not a token count.
+    assert reasoning_token_count({"completion_tokens_details": {"reasoning_tokens": True}}) is None
+
+
+def test_warn_effort_swallowed_emits_on_nonzero_effort_with_zero_tokens(caplog: Any) -> None:
+    """Effort sent but 0 reasoning tokens back emits a structured warning."""
+    # Arrange / Act
+    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
+        warn_effort_swallowed(
+            selected_effort="high",
+            usage={"completion_tokens_details": {"reasoning_tokens": 0}},
+            model_id="gpt-5.2",
+        )
+
+    # Assert
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "gpt-5.2" in message
+    assert "high" in message
+
+
+def test_warn_effort_swallowed_silent_when_reasoning_tokens_nonzero(caplog: Any) -> None:
+    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
+        warn_effort_swallowed(
+            selected_effort="high",
+            usage={"completion_tokens_details": {"reasoning_tokens": 42}},
+            model_id="gpt-5.2",
+        )
+
+    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+
+
+def test_warn_effort_swallowed_silent_for_none_effort(caplog: Any) -> None:
+    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
+        warn_effort_swallowed(
+            selected_effort="none",
+            usage={"completion_tokens_details": {"reasoning_tokens": 0}},
+            model_id="gpt-5.2",
+        )
+
+    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+
+
+def test_warn_effort_swallowed_silent_when_token_count_unknown(caplog: Any) -> None:
+    """Sparse usage (no reasoning-token counter) is unknown, not swallowed."""
+    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
+        warn_effort_swallowed(
+            selected_effort="high",
+            usage={"prompt_tokens": 10, "completion_tokens": 5},
+            model_id="gpt-5.2",
+        )
+
+    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
