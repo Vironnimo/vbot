@@ -40,12 +40,47 @@ MODEL_TASK_ORDER = (
     "video_generation",
 )
 
+# How the provider exposes the reasoning control on the wire. ``levels`` is an
+# effort ladder (e.g. low/medium/high), ``on_off`` a binary thinking toggle,
+# ``budget`` a token budget. Derived from models.dev ``reasoning_options`` at
+# refresh; see ``stuff/HANDOFF-model-db.md`` → "Reasoning — Steuerung".
+REASONING_CONTROL_LEVELS = "levels"
+REASONING_CONTROL_ON_OFF = "on_off"
+REASONING_CONTROL_BUDGET = "budget"
+REASONING_CONTROLS = (
+    REASONING_CONTROL_LEVELS,
+    REASONING_CONTROL_ON_OFF,
+    REASONING_CONTROL_BUDGET,
+)
+
 
 @dataclass(frozen=True)
 class ReasoningCapabilities:
-    """Whether a model supports reasoning through a specific provider."""
+    """How a model exposes reasoning through a specific provider.
+
+    ``supported`` is the only required field and stays the load-bearing flag
+    that runtime/snapping read (``model_reasoning_supported``). The typed
+    control fields describe *how* the provider steers reasoning and are all
+    optional:
+
+    * ``control`` — the wire control kind (one of ``REASONING_CONTROLS``), or
+      ``None`` when not yet known. It is absent when ``supported`` is ``False``
+      and may also be absent when ``supported`` is ``True`` but no ladder data
+      has been projected yet (effort ladders arrive from models.dev
+      ``reasoning_options`` in a later refresh phase).
+    * ``levels`` — the effort ladder for ``control == "levels"`` (a subset of
+      ``THINKING_EFFORT_ORDER``), empty otherwise.
+    * ``budget_max`` — the maximum thinking-token budget for
+      ``control == "budget"``, ``None`` otherwise.
+
+    The fields are ordered so existing ``ReasoningCapabilities(supported=...)``
+    construction sites keep working unchanged.
+    """
 
     supported: bool
+    control: str | None = None
+    levels: tuple[str, ...] = ()
+    budget_max: int | None = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +203,24 @@ class Model:
 
     The ``model_id`` is the exact string sent in API requests — no remapping.
     For example, ``"anthropic/claude-sonnet-4"`` at OpenRouter is sent as-is.
+
+    ``family`` is the model lineage as the provider/feed reports it (e.g.
+    ``"gpt-5.2"``, ``"claude-sonnet-4"``). It is a first-class fact on the model
+    — the handoff places it here ("eigenes Feld am Modell"), replacing per-adapter
+    family-from-name guessing. Optional; defaults to ``""`` when unknown.
+
+    ``metadata`` is the sanctioned home for provider-scoped per-model wire facts.
+    Conventions (keep them tight — this is not a dumping ground):
+
+    * **Provider-scoped:** keys are provider ids (e.g.
+      ``metadata.github_copilot.supported_endpoints``,
+      ``metadata.opencode_go.protocol``), so one provider's wire quirk never
+      pollutes the schema for every model.
+    * **Small and immutable after load:** nested mappings/lists are frozen on
+      construction (see ``__post_init__``); loaded ``Model`` instances never
+      mutate.
+    * **Wire facts only — never raw payloads, provider policy text, credentials,
+      or secrets.** Mirrors today's ``metadata.github_copilot`` usage.
     """
 
     model_id: str
@@ -175,6 +228,7 @@ class Model:
     capabilities: Capabilities
     context_window: int
     max_output_tokens: int | None
+    family: str = ""
     metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     connections: tuple[str, ...] = ()
 
@@ -221,8 +275,12 @@ class ModelRegistry:
             provider_id = data["provider_id"]
             for model_id, model_data in data["models"].items():
                 caps = model_data["capabilities"]
+                reasoning_data = caps["reasoning"]
                 reasoning = ReasoningCapabilities(
-                    supported=caps["reasoning"]["supported"],
+                    supported=reasoning_data["supported"],
+                    control=reasoning_data.get("control"),
+                    levels=tuple(reasoning_data.get("levels", ())),
+                    budget_max=reasoning_data.get("budget_max"),
                 )
                 capabilities = Capabilities(
                     vision=caps["vision"],
@@ -241,6 +299,7 @@ class ModelRegistry:
                     capabilities=capabilities,
                     context_window=model_data["context_window"],
                     max_output_tokens=model_data["max_output_tokens"],
+                    family=model_data.get("family", ""),
                     metadata=model_data.get("metadata", {}),
                     connections=tuple(model_data.get("connections", ())),
                 )
