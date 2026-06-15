@@ -9,7 +9,7 @@
 **Not:** An event loop or game loop. Not a separate process — it runs in the same async context.
 
 ## Provider
-**Definition:** An external API service that hosts AI models (OpenAI, Anthropic, Groq, OpenRouter, local models via Ollama, etc.). A provider consists of two parts: an **Adapter** (code) that speaks the wire protocol, and a **JSON config** (`resources/providers/<name>.json`) that describes base URL, authentication, and provider-specific settings. Each provider also has a **model list** (`resources/models/<provider>.json`) containing all models available through that provider, with their real IDs, capabilities, and metadata. The model ID in the file is the exact ID sent to the API — no remapping.
+**Definition:** An external API service that hosts AI models (OpenAI, Anthropic, Groq, OpenRouter, local models via Ollama, etc.). A provider consists of two parts: an **Adapter** (code) that speaks the wire protocol, and a **JSON config** (`resources/providers/<name>.json`) that describes base URL, authentication, and provider-specific settings. Each provider's models come from the layered Model DB under `resources/models/` — a generated per-provider file plus optional hand overrides, assembled at load over a shared canonical base. The model ID in those files is the exact ID sent to the API — no remapping (the canonical base is reached by an internal join; see Canonical id).
 **Not:** A Model. The provider is the infrastructure that routes the request; the model is the endpoint that processes it.
 
 ## Adapter
@@ -34,16 +34,32 @@
 ## Model
 **Definition:** A specific AI model at a specific provider. Models are always provider-specific — the same underlying model (e.g., Claude Sonnet 4) appears as different entries in different provider model lists, with different IDs, capabilities, and context windows. The model ID is the exact string sent in the API request (e.g., `anthropic/claude-sonnet-4` at OpenRouter, `claude-sonnet-4-20250219` at Anthropic). The user selects a model as `<provider>/<model-id>` (e.g., `openrouter/anthropic/claude-sonnet-4`).
 
-Model data includes: name, capabilities (vision, tools, reasoning, etc.), context window, max output tokens. All of these are provider-specific facts about the model at that provider — not canonical claims that need overrides.
-**Not:** A Provider. The model is the cognitive endpoint; the provider is the service that routes the request to it. Not a canonical entity that exists independently of providers.
+Model data — name, typed capabilities (vision, tools, reasoning, …), context window (optional), max output tokens — is assembled at load from up to three layers: a shared canonical base, the provider layer, and hand overrides. The same underlying model stays a distinct entry per provider, now optionally enriched from the canonical base via the deterministic join.
+**Not:** A Provider, and not the same thing as its Canonical id. The model is the cognitive endpoint the provider routes to; the wire `model-id` goes on the wire, while the canonical id is an internal join key that never does.
+
+## Canonical id
+**Definition:** A models.dev-style `lab/model` identifier (e.g. `deepseek/deepseek-v4-pro`) that names a model independent of any provider. It is a purely internal join/DB key used during at-load assembly to inherit shared base facts onto a provider model — it is **never sent on the wire**. A provider model reaches its canonical base by an explicit `canonical` pointer (hand or auto) or an exact wire-id match; resolution is deterministic only, never fuzzy.
+**Not:** A wire `model-id` (the exact string an API expects). The canonical id never leaves assembly; the model-id is what providers receive. A missed join is not an error — the model runs on provider + override data.
+
+## Refresh
+**Definition:** The DUMB half of the Model DB: fetch provider `/models` and the public models.dev `catalog.json`, then project the results onto disk per file. Needs network and (for provider catalogs) a credential; rare and explicit (`model.refresh_db`). It writes the pure per-file projection — no merge across files, no join across providers.
+**Not:** Load. Refresh writes disk from the network; a hand-edit to an override file takes effect on the next **Load**, with no refresh.
+
+## Load
+**Definition:** The SMART half of the Model DB (`ModelRegistry.load` → `assembly.py`): assemble each effective model in memory from the on-disk layers — resolving the canonical join and the field-level merge — with no network and no key. Frequent (startup, after cache invalidation).
+**Not:** Refresh, and not generic file loading. Load does the cross-file assembly Refresh deliberately avoids; it reads the layer files but fetches nothing.
 
 ## Embedding Model
 **Definition:** A specialized model that converts text into numerical vectors (embeddings) for semantic comparison. In vBot, this is a configurable `text_embedding` task-model binding used by the recall `vector` backend to find meaning-related past sessions (e.g. "car" and "vehicle" are nearby in embedding space).
 **Not:** A chat model, a TTS model, or an image generation model. The embedding model produces vectors, not text, speech, or images.
 
 ## Reasoning
-**Definition:** A model capability indicating whether the model can perform an internal reasoning step before producing its final answer. In the model data, this is a boolean: `reasoning.supported: true` or `false`. At runtime, the agent's `thinking_effort` field (`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, or empty for provider default) controls how much reasoning the model does. Each adapter translates this into its provider's wire format.
+**Definition:** A model capability for an internal reasoning step before the final answer. In the model data it is a typed block, not a bare boolean: `reasoning.supported` (bool) plus, when supported, a `control` (see Reasoning control) and its parameters (a `levels` effort ladder or a `budget_max`). At runtime the agent's `thinking_effort` field (`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, or empty for provider default) is snapped against the model's effective `levels` ladder and translated to the provider's wire format by the adapter. Only `levels` is wired today; `on_off`/`budget` are captured in the data but not yet sent.
 **Not:** Chain of Thought. Reasoning is the capability and its configuration; CoT is the opaque output that reasoning produces.
+
+## Reasoning control
+**Definition:** How a provider steers a model's reasoning on the wire — one of `levels` (an effort ladder), `on_off` (a thinking toggle), or `budget` (a token budget, with `budget_max`). vBot derives it at refresh from the models.dev `reasoning_options` source field (an `effort` option wins → `levels`; else `budget_tokens` → `budget`; else `toggle` → `on_off`) and stores it in `capabilities.reasoning.control`.
+**Not:** The `thinking_effort` the agent selects. `control` is the model's wire capability; `thinking_effort` is the per-agent setting that gets snapped against the model's `levels` ladder.
 
 ## Chain of Thought (CoT)
 **Definition:** The opaque output produced during reasoning — both readable text and provider-specific data (signatures, encrypted content) that must be preserved unchanged for round-tripping. How far persisted CoT replays into later requests is the adapter's per-provider reasoning-replay policy (`none` / `current_run` / `full_history`): within tool-use loops dropping it breaks model continuity, and providers like Anthropic expect it back unchanged across the whole same-model conversation. The adapter handles all serialization and round-trip preservation; the chat layer owns history shaping (which entries keep CoT) but never interprets CoT data.
