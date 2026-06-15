@@ -21,6 +21,8 @@ from core.chat.commands import (
     HandoffArgument,
     build_status_text,
     parse_handoff_argument,
+    resolve_actual_thinking_effort,
+    resolve_status_model_details,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.runs import ChatRunManager, Run, RunCancelledError
@@ -545,7 +547,8 @@ def test_build_status_text_degraded_with_no_data() -> None:
     assert f"Agent: {STATUS_PLACEHOLDER}" in text
     assert f"Model display name: {STATUS_PLACEHOLDER}" in text
     assert f"Fallback model: {STATUS_PLACEHOLDER}" in text
-    assert f"Thinking effort: {STATUS_PLACEHOLDER}" in text
+    assert f"Selected thinking effort: {STATUS_PLACEHOLDER}" in text
+    assert f"Actual model thinking effort: {STATUS_PLACEHOLDER}" in text
     assert f"Temperature: {STATUS_PLACEHOLDER}" in text
     assert f"Context usage: {STATUS_PLACEHOLDER}" in text
     assert f"Activity: {STATUS_PLACEHOLDER}" in text
@@ -579,7 +582,8 @@ def test_build_status_text_with_full_data() -> None:
     assert "Agent: Coder (openai/gpt-5.2)" in text
     assert "Model display name: gpt-5.2" in text
     assert "Fallback model: openai/gpt-5.1" in text
-    assert "Thinking effort: none" in text
+    assert "Selected thinking effort: none" in text
+    assert f"Actual model thinking effort: {STATUS_PLACEHOLDER}" in text
     assert "Temperature: 0.3" in text
     assert f"Activity: {STATUS_PLACEHOLDER}" in text
     assert f"Run created at: {STATUS_PLACEHOLDER}" in text
@@ -599,5 +603,65 @@ def test_build_status_text_handles_unresolved_nullable_defaults() -> None:
         started_at=None,
     )
 
-    assert "Thinking effort: default" in text
+    assert "Selected thinking effort: default" in text
     assert "Temperature: default" in text
+
+
+def test_resolve_actual_thinking_effort_snaps_to_ladder() -> None:
+    """The actual effort is the selection snapped against the model's ladder."""
+    assert resolve_actual_thinking_effort("max", ("low", "medium", "high")) == "high"
+    assert resolve_actual_thinking_effort("medium", ("low", "high")) == "low"
+
+
+def test_resolve_actual_thinking_effort_none_without_ladder_or_selection() -> None:
+    """No ladder or no selection means the wire effort is not resolvable here."""
+    assert resolve_actual_thinking_effort("high", ()) is None
+    assert resolve_actual_thinking_effort("", ("low", "high")) is None
+    assert resolve_actual_thinking_effort(None, ("low", "high")) is None
+
+
+def test_build_status_text_reports_selected_and_actual_effort_split() -> None:
+    """When the model ladder snaps the selection, both lines show distinct values."""
+    text = build_status_text(
+        _make_agent(thinking_effort="max"),
+        messages=[],
+        context_window=200_000,
+        started_at=None,
+        actual_thinking_effort=resolve_actual_thinking_effort("max", ("low", "medium", "high")),
+    )
+
+    assert "Selected thinking effort: max" in text
+    assert "Actual model thinking effort: high" in text
+
+
+def test_resolve_status_model_details_returns_reasoning_ladder() -> None:
+    """The model resolver surfaces the effective ladder for the actual-effort split."""
+    model = Model(
+        model_id="gpt-5.2",
+        name="GPT-5.2",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(
+                supported=True,
+                control="levels",
+                levels=("low", "medium", "high"),
+            ),
+        ),
+        context_window=200_000,
+        max_output_tokens=8_192,
+    )
+
+    class _Models:
+        def get(self, _provider_id: str, _model_id: str) -> Model:
+            return model
+
+    details = resolve_status_model_details(
+        _make_agent(model="openai/gpt-5.2"),
+        cast(ModelRegistry, _Models()),
+    )
+
+    assert details.context_window == 200_000
+    assert details.display_name == "GPT-5.2"
+    assert details.reasoning_levels == ("low", "medium", "high")

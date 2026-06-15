@@ -10,7 +10,7 @@ provider-specific behavior can subclass this adapter.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -32,6 +32,7 @@ from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
     closest_supported_effort,
+    model_reasoning_levels,
     model_reasoning_supported,
     normalize_thinking_effort,
     remove_reasoning_kwargs,
@@ -239,7 +240,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             payload,
             request_kwargs,
             reasoning_supported=self._model_reasoning_supported(model_id),
-            supported_efforts=self._supported_reasoning_efforts(),
+            supported_efforts=self._supported_reasoning_efforts(model_id),
         )
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
@@ -252,7 +253,21 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     def _model_reasoning_supported(self, model_id: str) -> bool | None:
         return model_reasoning_supported(self._model_lookup, model_id)
 
-    def _supported_reasoning_efforts(self) -> set[str]:
+    def _supported_reasoning_efforts(self, model_id: str) -> set[str] | tuple[str, ...]:
+        """Return the effort ladder to snap against for one model.
+
+        The effective per-model ladder from the DB
+        (``capabilities.reasoning.levels``) wins when present, so snapping
+        follows what this provider actually supports for this model. The
+        hardcoded adapter constant is only the floor for a model with no feed
+        ladder (e.g. opencode-go, whose ladder is clobbered upstream — Phase 5).
+        """
+        ladder = model_reasoning_levels(self._model_lookup, model_id)
+        if ladder is not None:
+            return ladder
+        return self._reasoning_efforts_floor()
+
+    def _reasoning_efforts_floor(self) -> set[str]:
         if self._config.id in OPENAI_NONE_REASONING_PROVIDER_IDS:
             return OPENAI_REASONING_EFFORTS_WITH_NONE
         return OPENAI_REASONING_EFFORTS
@@ -711,7 +726,7 @@ def _apply_openai_reasoning(
     kwargs: dict[str, Any],
     *,
     reasoning_supported: bool | None,
-    supported_efforts: set[str],
+    supported_efforts: Iterable[str],
 ) -> None:
     thinking_effort = kwargs.pop("thinking_effort", "")
     reasoning_effort = kwargs.pop("reasoning_effort", "")

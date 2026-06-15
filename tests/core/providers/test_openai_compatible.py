@@ -222,7 +222,12 @@ def test_reasoning_replay_policy_stays_current_run(openai_adapter):
     assert openai_adapter.reasoning_replay_policy("gpt-4o") == "current_run"
 
 
-def _openai_test_model(model_id: str, *, reasoning: bool) -> Model:
+def _openai_test_model(
+    model_id: str,
+    *,
+    reasoning: bool,
+    levels: tuple[str, ...] = (),
+) -> Model:
     return Model(
         model_id=model_id,
         name=model_id,
@@ -230,7 +235,11 @@ def _openai_test_model(model_id: str, *, reasoning: bool) -> Model:
             vision=False,
             tools=True,
             json_mode=True,
-            reasoning=ReasoningCapabilities(supported=reasoning),
+            reasoning=ReasoningCapabilities(
+                supported=reasoning,
+                control="levels" if levels else None,
+                levels=levels,
+            ),
         ),
         context_window=128000,
         max_output_tokens=4096,
@@ -590,6 +599,65 @@ class TestSendRequestFormat:
         assert request_body["reasoning_effort"] == expected_reasoning_effort
         assert "reasoning" not in request_body
         assert "include_reasoning" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("thinking_effort", "expected_reasoning_effort"),
+        [("low", "high"), ("medium", "high"), ("max", "xhigh")],
+    )
+    async def test_send_snaps_against_effective_model_ladder(
+        self,
+        thinking_effort,
+        expected_reasoning_effort,
+    ):
+        """Snapping follows the per-model feed ladder, not the adapter constant.
+
+        A model whose effective ladder is ``[high, xhigh]`` snaps ``low``/``medium``
+        up to ``high`` and ``max`` to ``xhigh`` — values the hardcoded
+        ``OPENAI_REASONING_EFFORTS`` (``low``/``medium``/``high``) cannot reach.
+        """
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = OpenAICompatibleAdapter(
+            OPENAI_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _openai_test_model(
+                model_id, reasoning=True, levels=("high", "xhigh")
+            ),
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="gpt-5.2",
+            thinking_effort=thinking_effort,
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["reasoning_effort"] == expected_reasoning_effort
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_falls_back_to_constant_without_feed_ladder(self):
+        """A reasoning model with no feed ladder snaps against the adapter floor.
+
+        ``xhigh`` is outside the ``OPENAI_REASONING_EFFORTS`` floor, so it must snap
+        down to ``high`` — proving the constant is used when no ladder is present.
+        """
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = OpenAICompatibleAdapter(
+            OPENAI_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _openai_test_model(model_id, reasoning=True),
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="gpt-5.2",
+            thinking_effort="xhigh",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["reasoning_effort"] == "high"
 
     @respx.mock
     @pytest.mark.asyncio

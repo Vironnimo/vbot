@@ -102,8 +102,17 @@
   let fallbackModelSelectValue = $derived(
     selectModelValue(formValues.fallback_model, fallbackModelOptions),
   );
+  let selectedModelReasoning = $derived(
+    reasoningForModelValue(formValues.model, availableModels),
+  );
+  // A non-reasoning model has no effort to steer — the control is disabled.
+  // Reasoning support is treated as enabled unless the catalog says ``false``
+  // (an unknown/custom model stays editable).
+  let effortDropdownDisabled = $derived(
+    selectedModelReasoning?.supported === false,
+  );
   let thinkingEffortOptions = $derived(
-    THINKING_EFFORT_OPTIONS.map((option) => ({
+    effortOptionsForReasoning(selectedModelReasoning).map((option) => ({
       value: option,
       label: thinkingEffortLabel(option),
     })),
@@ -497,6 +506,31 @@
     return t(`agents.form.thinkingEffortOption.${option}`, option);
   }
 
+  function reasoningForModelValue(modelValue, models) {
+    const { model } = parseModelSelectionValue(modelValue);
+    if (!model) {
+      return null;
+    }
+    const match = models.find((candidate) => candidate.id === model);
+    return match?.capabilities?.reasoning ?? null;
+  }
+
+  function effortOptionsForReasoning(reasoning) {
+    // No catalog reasoning info (unknown/custom model) or no feed ladder: keep
+    // the full ladder — the adapter applies a provider-specific floor the UI
+    // cannot see, so it must not hide options that may be valid.
+    const levels = Array.isArray(reasoning?.levels) ? reasoning.levels : [];
+    if (levels.length === 0) {
+      return THINKING_EFFORT_OPTIONS;
+    }
+    // A model with a published ladder shows only its possible efforts: the
+    // default (provider default) and "none" (turn reasoning off) always apply;
+    // the remaining options are exactly the model's levels, kept in canonical
+    // order so the dropdown reads consistently.
+    const allowed = new Set(['', 'none', ...levels]);
+    return THINKING_EFFORT_OPTIONS.filter((option) => allowed.has(option));
+  }
+
   function memoryPromptLabel(option) {
     return t(`agents.form.memoryPromptModeOption.${option}`, option);
   }
@@ -717,6 +751,7 @@
             id="agent-thinking-effort"
             value={formValues.thinking_effort}
             options={thinkingEffortOptions}
+            disabled={effortDropdownDisabled}
             ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
             triggerClass="agents-view__dropdown"
             listClass="agents-view__thinking-list"
@@ -724,6 +759,17 @@
               formValues.thinking_effort = selectedValue;
             }}
           />
+          {#if effortDropdownDisabled}
+            <small
+              class="agents-view__field-help"
+              data-testid="thinking-effort-disabled-hint"
+            >
+              {t(
+                'agents.form.thinkingEffortUnsupported',
+                'This model does not support reasoning.',
+              )}
+            </small>
+          {/if}
         </label>
 
         <label class="f">

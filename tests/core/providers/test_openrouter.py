@@ -181,6 +181,91 @@ async def test_openrouter_suppresses_reasoning_when_catalog_disables_it(
     assert "reasoning_effort" not in request_body
 
 
+def _ladder_lookup(levels: tuple[str, ...]):
+    def model_lookup(model_id: str) -> Model:
+        return Model(
+            model_id=model_id,
+            name=model_id,
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(
+                    supported=True,
+                    control="levels",
+                    levels=levels,
+                ),
+            ),
+            context_window=128000,
+            max_output_tokens=4096,
+        )
+
+    return model_lookup
+
+
+@pytest.mark.parametrize(
+    ("thinking_effort", "expected_effort"),
+    [("max", "xhigh"), ("medium", "high"), ("high", "high")],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_snaps_against_effective_model_ladder(
+    openrouter_config: ProviderConfig,
+    thinking_effort: str,
+    expected_effort: str,
+) -> None:
+    """A model with a feed ladder snaps within that ladder, not the provider constant.
+
+    ``deepseek/deepseek-v4-pro`` at OpenRouter publishes ``[high, xhigh]``; every
+    selection must land inside it (``max`` -> ``xhigh``, ``medium`` -> ``high``).
+    The provider constant (which includes ``low``/``medium``) is bypassed.
+    """
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+    adapter = OpenRouterAdapter(
+        openrouter_config,
+        API_KEY,
+        model_lookup=_ladder_lookup(("high", "xhigh")),
+    )
+
+    await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="deepseek/deepseek-v4-pro",
+        thinking_effort=thinking_effort,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning"] == {"effort": expected_effort}
+    assert request_body["include_reasoning"] is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_falls_back_to_constant_without_ladder(
+    openrouter_config: ProviderConfig,
+) -> None:
+    """A model with an empty feed ladder snaps against the provider constant (floor).
+
+    The constant carries ``low`` (the ladder above does not), so a ``low``
+    selection surviving as ``low`` proves the floor path is taken when the
+    looked-up model has no ladder.
+    """
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+    adapter = OpenRouterAdapter(
+        openrouter_config,
+        API_KEY,
+        model_lookup=_ladder_lookup(()),
+    )
+
+    await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="some/model-without-ladder",
+        thinking_effort="low",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning"] == {"effort": "low"}
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_openrouter_stream_requests_usage(openrouter_adapter: OpenRouterAdapter) -> None:

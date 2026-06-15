@@ -14,7 +14,7 @@ from core.providers.openai_compatible import (
     _read_string,
     _read_string_list,
 )
-from core.providers.reasoning import closest_supported_effort
+from core.providers.reasoning import closest_supported_effort, model_reasoning_levels
 
 OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 
@@ -121,9 +121,15 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             payload.pop("include_reasoning", None)
             return payload
 
+        # Snap against the effective per-model ladder when the DB carries one;
+        # the provider-global constant is only the floor for a model without a
+        # feed ladder.
+        ladder = (
+            model_reasoning_levels(self._model_lookup, model_id) or OPENROUTER_REASONING_EFFORTS
+        )
         supported_effort = closest_supported_effort(
             thinking_effort or reasoning_effort,
-            OPENROUTER_REASONING_EFFORTS,
+            ladder,
         )
         if supported_effort is not None:
             payload["reasoning"] = {"effort": supported_effort}

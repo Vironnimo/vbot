@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.providers.reasoning import closest_supported_effort, normalize_thinking_effort
 from core.runs import ChatRunManager, RunNotFoundError
 from core.utils.logging import get_logger
 
@@ -320,30 +321,53 @@ class CommandDispatcher:
             )
             messages = []
 
-        context_window, model_display_name = resolve_status_model_details(agent, self._models)
+        model_details = resolve_status_model_details(agent, self._models)
         activity = resolve_status_activity(self._chat_runs, agent_id, session_id)
         text = build_status_reply(
             agent,
             messages,
-            context_window,
+            model_details.context_window,
             self._started_at,
-            model_display_name,
+            model_details.display_name,
             activity,
+            actual_thinking_effort=resolve_actual_thinking_effort(
+                agent.thinking_effort if agent is not None else None,
+                model_details.reasoning_levels,
+            ),
         )
         return CommandHandled(reply=text, output="transient")
+
+
+@dataclass(frozen=True)
+class StatusModelDetails:
+    """Model facts needed to render a status reply.
+
+    ``reasoning_levels`` is the model's effective effort ladder (empty when the
+    model has no feed ladder); ``build_status_text`` snaps the agent's selected
+    effort against it to report the *actual* effort sent on the wire.
+    """
+
+    context_window: int | None
+    display_name: str | None
+    reasoning_levels: tuple[str, ...] = ()
 
 
 def resolve_status_model_details(
     agent: Agent | None,
     models: ModelRegistry | None,
-) -> tuple[int | None, str | None]:
-    """Resolve context window and display name for status output from the model registry."""
+) -> StatusModelDetails:
+    """Resolve model facts for status output from the model registry.
+
+    Returns context window, display name, and the effective reasoning-effort
+    ladder. A missing agent/registry/model yields empty details so status
+    rendering degrades to placeholders instead of failing.
+    """
     if agent is None or models is None:
-        return None, None
+        return StatusModelDetails(context_window=None, display_name=None)
 
     provider_id, model_id = _parse_registry_model_key(agent.model)
     if provider_id is None or model_id is None:
-        return None, None
+        return StatusModelDetails(context_window=None, display_name=None)
 
     try:
         model = models.get(provider_id, model_id)
@@ -353,7 +377,7 @@ def resolve_status_model_details(
             provider_id,
             model_id,
         )
-        return None, None
+        return StatusModelDetails(context_window=None, display_name=None)
     except Exception:
         _LOGGER.error(
             "Failed model registry lookup for %r/%r while building status",
@@ -361,9 +385,34 @@ def resolve_status_model_details(
             model_id,
             exc_info=True,
         )
-        return None, None
+        return StatusModelDetails(context_window=None, display_name=None)
 
-    return model.context_window, model.name
+    return StatusModelDetails(
+        context_window=model.context_window,
+        display_name=model.name,
+        reasoning_levels=tuple(model.capabilities.reasoning.levels),
+    )
+
+
+def resolve_actual_thinking_effort(
+    selected_effort: str | None,
+    reasoning_levels: tuple[str, ...],
+) -> str | None:
+    """Return the effort actually sent on the wire, snapped to the model's ladder.
+
+    The actual effort is ``closest_supported_effort(selected, effective_ladder)``
+    — the same pure snapping the adapters apply — so ``/status`` reports what
+    really reaches the provider. Returns ``None`` (unknown / not applicable) when
+    no effort is selected (provider default) or the model has no feed ladder to
+    snap against (the adapter then applies its own provider-specific floor, which
+    is not visible here).
+    """
+    if not reasoning_levels:
+        return None
+    effort = normalize_thinking_effort(selected_effort)
+    if not effort:
+        return None
+    return closest_supported_effort(effort, reasoning_levels)
 
 
 def build_status_reply(
@@ -373,11 +422,19 @@ def build_status_reply(
     started_at: datetime | None,
     model_display_name: str | None,
     activity: StatusActivity | None = None,
+    actual_thinking_effort: str | None = None,
 ) -> str:
     """Build status text while applying an optional model-display override."""
     token = _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name)
     try:
-        return build_status_text(agent, messages, context_window, started_at, activity)
+        return build_status_text(
+            agent,
+            messages,
+            context_window,
+            started_at,
+            activity,
+            actual_thinking_effort=actual_thinking_effort,
+        )
     finally:
         _STATUS_MODEL_DISPLAY_OVERRIDE.reset(token)
 
@@ -388,8 +445,14 @@ def build_status_text(
     context_window: int | None,
     started_at: datetime | None,
     activity: StatusActivity | None = None,
+    actual_thinking_effort: str | None = None,
 ) -> str:
-    """Build human-readable status text for the current session and runtime state."""
+    """Build human-readable status text for the current session and runtime state.
+
+    ``actual_thinking_effort`` is what reaches the wire after the model's ladder
+    snaps the agent's selection (see :func:`resolve_actual_thinking_effort`); it
+    is rendered alongside the selected effort so the two can differ visibly.
+    """
     now_utc = datetime.now(UTC)
     now_local = now_utc.astimezone()
 
@@ -397,16 +460,17 @@ def build_status_text(
         agent_summary = STATUS_PLACEHOLDER
         model_display = STATUS_PLACEHOLDER
         fallback_model = STATUS_PLACEHOLDER
-        thinking_effort = STATUS_PLACEHOLDER
+        selected_thinking_effort = STATUS_PLACEHOLDER
         temperature = STATUS_PLACEHOLDER
     else:
         model_string = agent.model.strip() or STATUS_PLACEHOLDER
         agent_summary = f"{agent.name} ({model_string})"
         model_display = _STATUS_MODEL_DISPLAY_OVERRIDE.get() or _model_display_name(model_string)
         fallback_model = agent.fallback_model.strip() or STATUS_PLACEHOLDER
-        thinking_effort = _thinking_effort_text(agent.thinking_effort)
+        selected_thinking_effort = _thinking_effort_text(agent.thinking_effort)
         temperature = _temperature_text(agent.temperature)
 
+    actual_thinking_effort_text = _actual_thinking_effort_text(actual_thinking_effort)
     context_usage = _context_usage_text(messages, context_window)
     session_started = _session_started_text(messages, now_utc)
     turn_count = _turn_count_text(messages)
@@ -419,7 +483,8 @@ def build_status_text(
         f"Agent: {agent_summary}",
         f"Model display name: {model_display}",
         f"Fallback model: {fallback_model}",
-        f"Thinking effort: {thinking_effort}",
+        f"Selected thinking effort: {selected_thinking_effort}",
+        f"Actual model thinking effort: {actual_thinking_effort_text}",
         f"Temperature: {temperature}",
         f"Activity: {activity_name}",
         f"Run created at: {run_created_at or STATUS_PLACEHOLDER}",
@@ -466,6 +531,18 @@ def _thinking_effort_text(value: str | None) -> str:
     if value is None:
         return "default"
     return value.strip() or "default"
+
+
+def _actual_thinking_effort_text(value: str | None) -> str:
+    """Render the snapped wire effort, or a placeholder when it is not resolvable.
+
+    ``None`` means there is nothing to report: no effort was selected (provider
+    default) or the model exposes no ladder to snap against (the adapter floor is
+    not visible here). The selected-effort line still shows the agent's choice.
+    """
+    if not value:
+        return STATUS_PLACEHOLDER
+    return value
 
 
 def _temperature_text(value: float | None) -> str:

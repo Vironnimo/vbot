@@ -230,6 +230,50 @@ async def test_build_payload_maps_active_reasoning_efforts_to_high(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_build_payload_snaps_against_effective_model_ladder(
+    mistral_config: ProviderConfig,
+) -> None:
+    """A feed ladder is consulted; any active snapped effort engages thinking.
+
+    With an effective ladder of ``[low, medium, high]`` a ``medium`` selection
+    snaps to ``medium`` (in-ladder) — a value the binary ``{none, high}`` floor
+    could never produce — and the wire still engages Mistral's single thinking
+    mode (``reasoning_effort: high``) rather than silently dropping it.
+    """
+
+    def _model_lookup(model_id: str) -> Model:
+        return Model(
+            model_id=model_id,
+            name=model_id,
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(
+                    supported=True,
+                    control="levels",
+                    levels=("low", "medium", "high"),
+                ),
+            ),
+            context_window=128000,
+            max_output_tokens=8192,
+        )
+
+    adapter = MistralAdapter(mistral_config, API_KEY, model_lookup=_model_lookup)
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="mistral-medium-3-5",
+        thinking_effort="medium",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning_effort"] == "high"
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_build_payload_sets_reasoning_effort_none_when_disabled(
     mistral_adapter: MistralAdapter,
 ) -> None:

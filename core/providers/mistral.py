@@ -23,6 +23,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_FULL_HISTORY,
     ReasoningReplayPolicy,
     closest_supported_effort,
+    model_reasoning_levels,
 )
 
 MISTRAL_REASONING_EFFORTS = {"none", "high"}
@@ -124,8 +125,16 @@ class MistralAdapter(OpenAICompatibleAdapter):
             model_id.startswith(prefix) for prefix in MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES
         )
 
-        supported_effort = closest_supported_effort(thinking_effort, MISTRAL_REASONING_EFFORTS)
-        if supported_effort == "high":
+        # Snap against the effective per-model ladder when present; the binary
+        # ``{none, high}`` constant is the floor for a model without a feed
+        # ladder (all Mistral models today — their ladder is not yet projected).
+        ladder = model_reasoning_levels(self._model_lookup, model_id) or MISTRAL_REASONING_EFFORTS
+        supported_effort = closest_supported_effort(thinking_effort, ladder)
+        # Mistral's wire reasoning is a binary thinking toggle: any active
+        # (non-``none``) snapped effort engages thinking, ``none`` disables it.
+        # Mapping every active effort to Mistral's single thinking mode keeps a
+        # multi-level feed ladder from silently dropping a mid-level selection.
+        if supported_effort is not None and supported_effort != "none":
             if use_prompt_mode_reasoning:
                 payload["prompt_mode"] = "reasoning"
                 payload.pop("reasoning_effort", None)

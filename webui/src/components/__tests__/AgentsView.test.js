@@ -126,6 +126,74 @@ describe('AgentsView', () => {
     );
   });
 
+  it('disables the thinking-effort dropdown for a non-reasoning model', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          { ...baseAgent(), model: 'openai/gpt-5.2', thinking_effort: '' },
+        ],
+        models: [
+          {
+            id: 'openai/gpt-5.2',
+            provider_id: 'openai',
+            model_id: 'gpt-5.2',
+            name: 'GPT-5.2',
+            capabilities: { reasoning: { supported: false, levels: [] } },
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
+
+    const trigger = getSimpleTrigger('agent-thinking-effort');
+    expect(trigger.disabled).toBe(true);
+    expect(
+      document.body.querySelector(
+        '[data-testid="thinking-effort-disabled-hint"]',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('shows only the model ladder options for a reasoning model', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          { ...baseAgent(), model: 'openai/gpt-5.2', thinking_effort: '' },
+        ],
+        models: [
+          {
+            id: 'openai/gpt-5.2',
+            provider_id: 'openai',
+            model_id: 'gpt-5.2',
+            name: 'GPT-5.2',
+            capabilities: {
+              reasoning: { supported: true, levels: ['high', 'xhigh'] },
+            },
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
+
+    const trigger = getSimpleTrigger('agent-thinking-effort');
+    expect(trigger.disabled).toBe(false);
+
+    openSimpleDropdown('agent-thinking-effort');
+    const labels = simpleOptionLabels('agent-thinking-effort');
+    // Default (—) and "none" always apply; the rest are exactly the ladder.
+    expect(labels).toEqual(['—', 'none', 'high', 'xhigh']);
+    expect(labels).not.toContain('low');
+    expect(labels).not.toContain('medium');
+  });
+
   it('preserves a saved unavailable model value in the searchable dropdown', async () => {
     rpcMock.mockImplementation(async (method) => {
       if (method === 'model.list') {

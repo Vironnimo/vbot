@@ -10,6 +10,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_POLICIES,
     closest_supported_effort,
     detail_names_rejected_effort,
+    model_reasoning_levels,
     model_reasoning_supported,
     reasoning_token_count,
     warn_effort_swallowed,
@@ -17,6 +18,21 @@ from core.providers.reasoning import (
 )
 
 _REASONING_LOGGER = "vbot.providers.reasoning"
+
+
+def _model_with_reasoning(reasoning: ReasoningCapabilities) -> Model:
+    return Model(
+        model_id="m",
+        name="m",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=reasoning,
+        ),
+        context_window=128000,
+        max_output_tokens=4096,
+    )
 
 
 def test_reasoning_replay_policy_axis_is_pinned() -> None:
@@ -55,6 +71,35 @@ def test_model_reasoning_supported_strips_connection_suffix() -> None:
         )
 
     assert model_reasoning_supported(model_lookup, "gpt-4o::api-key") is False
+
+
+# ---------------------------------------------------------------------------
+# Effective per-model reasoning ladder
+# ---------------------------------------------------------------------------
+
+
+def test_model_reasoning_levels_returns_effective_ladder() -> None:
+    """A model with a feed ladder returns it as a tuple, suffix-stripped."""
+
+    def model_lookup(model_id: str) -> Model | None:
+        assert model_id == "deepseek/deepseek-v4-pro"
+        return _model_with_reasoning(
+            ReasoningCapabilities(supported=True, control="levels", levels=("high", "xhigh"))
+        )
+
+    assert model_reasoning_levels(
+        model_lookup, "deepseek/deepseek-v4-pro::api-key"
+    ) == ("high", "xhigh")
+
+
+def test_model_reasoning_levels_none_without_ladder() -> None:
+    """No lookup, unknown model, or empty ladder all signal 'fall back to floor'."""
+    assert model_reasoning_levels(None, "anything") is None
+    assert model_reasoning_levels(lambda _model_id: None, "missing") is None
+    empty_ladder_lookup = lambda _model_id: _model_with_reasoning(  # noqa: E731
+        ReasoningCapabilities(supported=True)
+    )
+    assert model_reasoning_levels(empty_ladder_lookup, "budget-only") is None
 
 
 # ---------------------------------------------------------------------------
