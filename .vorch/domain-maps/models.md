@@ -1,93 +1,227 @@
 # Models
 
-`core/models/` owns provider-specific model facts, the registry read path, and the sanitized catalog format used by runtime and accessors. A model is always a model at one provider; vBot has no canonical cross-provider model entity and never remaps model IDs.
+`core/models/` owns the Model DB: the layered on-disk model facts, the **at-load
+assembly** that turns those layers into effective models, the registry read path,
+and the typed model contract runtime and accessors consume. A loaded model is
+always a model at one provider; the *canonical* id (`lab/model`) is an internal
+join key used only during assembly — it never goes on the wire.
 
-## Overview
+## Overview — two times, one rule
 
-The model registry loads sanitized JSON catalogs from `resources/models/` and indexes them by `(provider_id, model_id)`. Dynamic discovery fetches provider model catalogs, lets the selected provider adapter normalize raw entries into vBot `Model` objects, applies optional human overrides, writes the generated catalog, and invalidates the registry cache. Runtime and server code read model data through `ModelRegistry`; CLI and WebUI access model data through server RPC. Provider APIs and raw discovery files stay outside the normal runtime read path.
+The system splits cleanly into two moments:
+
+- **Refresh** (`discovery.py` + `models_dev.py`) — the DUMB half. It *fetches*
+  (provider `/models` endpoints + the public models.dev `catalog.json`) and
+  *projects* the results to disk. Needs network and, for provider catalogs, a
+  credential. Rare and explicit (the `model.refresh_db` RPC / the regen script).
+  It writes the **pure projection per file** — it does NOT merge across files and
+  does NOT join across providers.
+- **Load** (`assembly.py` behind `ModelRegistry.load`) — the SMART half. It
+  *assembles* each effective model in memory from the on-disk layers, resolving
+  the canonical join and the field-level merge. **No network, no key.** Frequent.
+
+The rule that ties them: **a hand-edit to an override takes effect on the next
+LOAD, not on a refresh.** Override files are read at load time, so correcting a
+fact is "edit the override, reload the registry" — never "re-run refresh".
+
+## The three layers under `resources/models/`
+
+Each layer is a different home with a clear responsibility (assembly file-format
+contract in `assembly.py`'s module docstring — the source of truth):
+
+| Layer | Files | Keyed by | Written by | Holds |
+|---|---|---|---|---|
+| Canonical | `models.json` (+ `models.overrides.json`) | canonical id `lab/model` | refresh (`models_dev.py`); overrides by hand | provider-agnostic base: `name`, `family`, `capabilities` (incl. the lifted lab-spec `reasoning` ladder), `context_window`, `max_output_tokens`. **No `provider_id`.** |
+| Provider | `<provider>.json` (generated) + `<provider>.overrides.json` (hand) | wire-id (exact id sent on the wire) | `<provider>.json` by refresh; `.overrides.json` by hand | what the provider/endpoint authoritatively reports, incl. a `capabilities.reasoning` ladder that *deviates* from the lab spec; an optional `canonical` pointer; per-model wire `metadata` |
+| Adapter fallbacks | (in adapter code) | — | — | send-time defaults (out of scope for the registry) |
+
+Both canonical files may be **absent** — assembly then runs on provider +
+override data alone and still loads every model without error
+(`load_canonical_layer` returns an empty layer for a missing file). The raw
+safety-net dump `models.dev.catalog.raw.json` is kept so a later wanted field is a
+projection edit, not a re-fetch; the runtime never reads it.
+
+The `canonical` pointer (JSON key `"canonical"` on a provider/override model
+entry) is an **internal join key only**. It is stripped from the assembled record;
+it is never a `Model` attribute and never goes on the wire.
+
+## At-load assembly (`assembly.py`)
+
+`ModelRegistry.load` is the single public read surface; everything in
+`assembly.py` is hidden behind it. Per provider model it does two things:
+
+**The deterministic join** (`resolve_canonical_id`) — resolves the canonical id
+for a wire-id, **no fuzzy matching, ever**:
+
+1. **Explicit `canonical` pointer wins.** A manual pointer (override layer) beats
+   an auto pointer (provider layer); both are the JSON key `"canonical"`.
+2. **Else exact canonical-id match** — the wire-id is itself a key in the
+   canonical layer (covers OpenRouter/Mistral-style `lab/model` wire-ids that
+   already equal the canonical id).
+3. **Else no join** — the model runs on provider + override data only. A missed
+   join is NOT an error; the join is enrichment, not a dependency.
+
+**The 3-layer field-level merge** (`merge_layers` / `_merge_two`) — "fill, don't
+overwrite", highest layer wins per top-level field. Precedence highest first:
+
+1. `<provider>.overrides.json` (hand) — always wins
+2. `<provider>.json` (provider) — what the provider reports
+3. canonical record (base/default, reached via the join)
+
+- `capabilities` is the one field merged **one level deep**: each sub-field
+  (`vision`, `tools`, `reasoning`, modality lists, …) is taken from the highest
+  layer that defines THAT sub-field, so a provider model can inherit `reasoning`
+  from canonical while keeping its own other capabilities.
+- Every other nested object or list is taken **wholesale** from the highest layer
+  that defines it — never deep-merged or concatenated. In particular the whole
+  `reasoning` object and the whole `metadata` blob are replaced wholesale (the
+  `metadata` wholesale rule has a known interaction — see Constraints).
+
+The merged record (pointer stripped) is constructed into a typed `Model` by
+`_model_from_record`; a layer set that fails to supply a required field (`name`,
+`capabilities`, `reasoning.supported`) surfaces as a `KeyError` — the correct
+"data is incomplete" signal.
+
+**The standalone validator** (`validation.py`, run via
+`scripts/validate_model_db.py`) is an offline integrity check — NOT hooked into
+the read path. It reports two findings: a **dead `canonical` pointer** (target
+absent from the canonical layer — models.dev likely renamed the slug) and a
+**redundant manual join** (a manual override pointer equal to the wire-id where
+the wire-id is itself a canonical key, so the exact-match auto-join already covers
+it). Exit 0 clean, 1 on findings.
+
+## Typed reasoning
+
+`capabilities.reasoning` is a typed block, **no longer a bare boolean**
+(`ReasoningCapabilities` in `models.py`):
+
+- `supported: bool` — the only required field; the load-bearing flag runtime and
+  snapping read (`model_reasoning_supported`).
+- `control: "levels" | "on_off" | "budget" | None` — how the provider steers
+  reasoning on the wire (`REASONING_CONTROLS`). Absent when `supported` is false,
+  and may be absent for a supported model with no projected ladder yet.
+- `levels: tuple[str, ...]` — the effort ladder for `control == "levels"`
+  (a subset of `THINKING_EFFORT_ORDER`).
+- `budget_max: int | None` — the max thinking-token budget for
+  `control == "budget"`.
+
+**Derived at refresh** from models.dev `reasoning_options`
+(`derive_reasoning_control`): an `effort` option → `levels` (**effort wins** when
+multiple types are present), else `budget_tokens` → `budget`, else `toggle` →
+`on_off`. The **canonical ladder is LIFTED from the lab provider only**
+(`lift_canonical_ladder`) — the lab's own models.dev section, **no union across
+providers**. A canonical model whose ladder can't be lifted deterministically
+(lab keys it differently, or no lab provider) keeps the bare `{supported: true}`
+and is a hand-path candidate for `models.overrides.json` (see FLAGGED). A provider
+that *deviates* from the lab ladder gets its own block stamped on `<provider>.json`
+(`provider_reasoning_block`); a non-deviating provider drops its bare `reasoning`
+so the canonical ladder is inherited at load.
+
+**Snapping is per-model against the effective ladder.** Adapters resolve the
+assembled `capabilities.reasoning.levels` via `model_reasoning_levels` and snap
+the selected effort with `closest_supported_effort`; the hardcoded per-adapter
+constant survives only as the **floor** when a model has no feed ladder
+(empty `levels`). Details in `providers.md` → Conventions.
+
+## Wire selectors as data
+
+Per-model wire **facts** live in a **provider-scoped** `metadata` blob keyed by
+the underscored provider id, so one provider's quirk never pollutes the schema for
+all: `metadata.opencode_go.protocol` (Anthropic vs OpenAI routing),
+`metadata.mistral.prompt_mode`, `metadata.<provider>.reasoning_response_field`
+(projected at refresh from models.dev `interleaved`). The wire **mechanics** stay
+in the adapter — it reads the fact via its injected `model_lookup` and owns only
+the *how*. Generalizes the original `metadata.github_copilot` pattern. The full
+convention lives in `providers.md` → "Per-model wire SELECTORS are data".
+
+## Optional `context_window`
+
+`context_window` and `max_output_tokens` are both `int | None`. `None`/absent
+means the fact is honestly **unknown** (a thin/window-less endpoint, a custom
+model) — a missing window **stays missing** in the data, never faked with a
+constant (no fake-fact constants in catalogs). Read-side callers resolve a usable
+window through the shared chain `resolve_context_window(model.context_window,
+provider_config)` (`core/providers/providers.py`): model value → provider-config
+`context_window` default → the named global floor `GLOBAL_CONTEXT_WINDOW_FLOOR`.
+Non-positive values at any layer (a stray `0` from an old catalog) are treated as
+unknown and skipped. The chain is the single source of truth and lives at the
+provider-config level, **not** in an adapter. See `providers.md` → "Context-window
+resolution is read-side and shared".
 
 ## Interfaces
 
-- Data classes live in `core/models/models.py`: `Model`, `Capabilities`, and `ReasoningCapabilities` are frozen. Keep the map at the contract level; the exact field list belongs in the dataclasses.
-- `Model.model_id` is the exact string sent to the provider API. `context_window`, `max_output_tokens`, and `capabilities` are provider-specific facts, not canonical claims about an underlying model family.
-- `context_window` and `max_output_tokens` are both `int | None`. `None`/absent means the fact is honestly unknown (a thin/window-less endpoint, a custom model), not zero — a missing fact stays missing in the data, never faked with a constant. Read-side callers resolve a usable window through the shared default chain `resolve_context_window(model.context_window, provider_config)` (model value → provider-config `context_window` default → the named global floor `GLOBAL_CONTEXT_WINDOW_FLOOR`), so nothing downstream crashes or divides by zero. The chain is the single source of truth — `core/providers/providers.py` — and is *not* in an adapter (read-side facts resolve at the provider-config level; only request-shaping defaults live in adapters).
-- `Model.connections: tuple[str, ...]` binds a model to a subset of its provider's connection ids. Empty tuple means the model is valid on every connection of its provider; a non-empty tuple restricts the model to the listed connection ids. Connection-restricted models do not cross-product against other usable connections during target expansion (see `model_tasks.md`). Refresh tags every discovered model with `connections: [<credential_connection.id>]` so each connection's models stay isolated to that connection in the catalog.
-- `Model.metadata` is optional sanitized runtime data for provider adapters. It must stay small, immutable after load, and limited to provider runtime facts the adapter policy needs. Do not store raw provider payloads, provider policy text, credentials, or secrets there.
-- `ModelRegistry.load(resources_dir)` reads `resources/models/*.json`, skips `*.raw.json` and `*.overrides.json`, and caches by resolved `resources_dir`.
-- `ModelRegistry.get(provider_id, model_id)` raises `KeyError` when the exact provider/model pair is missing. `list_for_provider(provider_id)` returns models sorted by `model_id` and returns an empty list for unknown providers.
-- `ModelRegistry.query(model_query: ModelQuery) -> list[tuple[str, Model]]` is the filtered read path. It evaluates capability, task, modality, and context-window filters against every model in the registry, returning matching `(provider_id, model)` tuples sorted by `(provider_id, model_id)`. The query is pure — no credential awareness — and lives in `core/models/query.py`. Callers that need credential gating (e.g. RPC `model.list`, `core/model_tasks/` target discovery) apply it outside the query.
-- `ModelRegistry.invalidate(resources_dir)` clears the cached registry for that resource path after refresh.
-- `Runtime.models` and `Runtime.get_model(provider_id, model_id)` are available only after `Runtime.start()`; before startup they raise `RuntimeError`. `Runtime.get_model()` delegates to the registry.
-
-## Model IDs
-
-The model ID stored in a catalog is the ID sent on the wire. There is no lookup table, alias layer, canonical ID, or provider-specific rewrite between registry lookup and adapter request.
-
-- OpenRouter example: `anthropic/claude-sonnet-4` is sent as `"model": "anthropic/claude-sonnet-4"`.
-- Anthropic example: `claude-sonnet-4-20250219` is sent as `"model": "claude-sonnet-4-20250219"`.
-- OpenAI example: `gpt-5.2` is sent as `"model": "gpt-5.2"`.
-- User-facing selectors use `<provider>/<model-id-at-provider>`, such as `openrouter/anthropic/claude-sonnet-4`. The provider prefix selects the provider config; the remainder is the exact registry key and provider model ID.
-
-## Catalog Files
-
-The model system uses up to three sibling files under `resources/models/`; only the generated catalog/raw files are written by refresh:
-
-| File | Written by | Read by | Purpose |
-|---|---|---|---|
-| `<provider>.json` | `refresh_models()` or bundled static data | `ModelRegistry.load()` | Sanitized app catalog |
-| `<provider>.raw.json` | `refresh_models()` | Nobody at runtime | Inspection/debugging copy of parsed provider response data |
-| `<provider>.overrides.json` | Human research | `refresh_models()` only | Narrow corrections for externally verified facts provider APIs do not expose |
-
-`<provider>.raw.json` preserves the parsed provider response data before `raw_filter`, adapter normalization, `model_filter`, or overrides are applied. Use raw files to debug missing catalog entries: if a model is present in raw output but absent from `<provider>.json`, the fix belongs in filtering, adapter normalization, or override validation, not in the registry read path.
-
-Critical: `resources/models/<provider>.json` is a generated catalog for refresh-backed providers. Every successful model refresh rewrites the whole `resources/models/<provider>.json` file from the current normalized discovery result plus optional overrides. Do not hand-edit that file for lasting fixes; the next refresh can delete, replace, reorder, or recompute any entry in it.
-
-`resources/models/<provider>.overrides.json` is never created by refresh. It is a manually maintained input file: if it exists, refresh reads it and applies those overrides while generating `<provider>.json`; if it does not exist, refresh simply uses normalized discovery output.
-
-Lasting model-catalog fixes belong in adapter catalog normalization, adapter runtime policy, or a manual `resources/models/<provider>.overrides.json` only when the fact is durable, externally verified, and not discoverable from provider catalog APIs or probe requests. The app, runtime, and UI use only the sanitized `<provider>.json` files; raw files are for humans, and override files are applied during refresh but skipped by the registry.
-
-`ModelRegistry.load()` reads only top-level `provider_id` and `models` from sanitized catalogs and ignores top-level metadata such as `source` or `fetched_at`. Generated catalogs may include optional per-model `metadata`; the registry freezes nested metadata mappings/lists so loaded model data remains immutable. `max_output_tokens: null` means discovery did not expose a trustworthy per-model output limit; it is not the same thing as a runtime request default. `context_window: null`/absent is the same kind of honest gap — discovery did not expose a window — and is read-side-resolved through the default chain (see Interfaces). Adapter normalizers emit `null` (never a placeholder `0`) when an endpoint reports no window; discovery validation reads both limits with `_read_optional_int`.
+- Data classes live in `models.py`: `Model`, `Capabilities`,
+  `ReasoningCapabilities` are frozen. Keep the map at the contract level; the exact
+  field list belongs in the dataclasses.
+- `Model.model_id` is the exact string sent to the provider API — no remapping,
+  no alias layer between registry lookup and adapter request. `family` is a
+  first-class fact on the model (the provider/feed lineage), replacing per-adapter
+  family-from-name guessing.
+- `Model.metadata` is the sanctioned home for provider-scoped per-model wire facts
+  (see Wire selectors). It is frozen on construction (immutable after load), small,
+  and limited to wire facts — never raw payloads, policy text, credentials, or
+  secrets.
+- `Model.connections: tuple[str, ...]` binds a model to a subset of its provider's
+  connection ids; empty means "all connections". Refresh tags each discovered model
+  with `connections: [<connection.id>]` and merges per connection (see
+  `providers.md` / `model_tasks.md` for the read-side filter).
+- `ModelRegistry.load(resources_dir)` assembles from the layers and caches by
+  resolved `resources_dir`. `is_provider_file` decides what counts as a provider
+  file — it excludes `*.raw.json`, `*.overrides.json`, and the canonical
+  `models.json`/`models.overrides.json` (shared with the offline validator so the
+  classification can't drift).
+- `ModelRegistry.get(provider_id, model_id)` raises `KeyError` on a missing pair;
+  `list_for_provider` returns models sorted by `model_id`, empty for an unknown
+  provider; `invalidate(resources_dir)` clears the cache after a refresh.
+- `ModelRegistry.query(model_query)` is the filtered read path — pure, no
+  credential awareness, lives in `core/models/query.py`. Capability/task/modality/
+  context-window matching happens once there; callers that need credential gating
+  (RPC `model.list`, `core/model_tasks/` discovery) apply it outside the query.
+- `Runtime.models` / `Runtime.get_model(...)` are available only after
+  `Runtime.start()`; `get_model` delegates to the registry.
 
 ## Capabilities & Tasks
 
-Capabilities are facts about one model through one provider. The same underlying model family can have different tools, reasoning, modalities, context window, and output limits depending on provider.
+Capabilities are facts about one model through one provider — the same underlying
+family can differ per provider. `task_types` is a coarse filtering/routing
+projection derived from modalities (`derive_model_task_types`), aligned with
+`MODEL_TASK_ORDER` in `models.py` and `.vorch/domain-maps/model_tasks.md`. Sparse
+catalogs stay usable: missing modality data defaults to text-in/text-out, and
+conservative-optional-fact providers must not vanish from selection.
 
-`reasoning.supported` is a boolean only. It says whether the provider advertises some reasoning/thinking capability for that model; effort levels, budgets, endpoint choice, and request payload shape remain adapter responsibilities. A catalog entry saying reasoning is supported does not by itself authorize sending a specific control field such as OpenAI-style `reasoning_effort`.
-
-`input_modalities`, `output_modalities`, `supported_parameters`, `supported_voices`, and `task_types` preserve sanitized provider-catalog facts when available. `supported_voices` is a tuple of plain voice-id strings (e.g. `["af_alloy", "af_aoede", ...]`), read defensively from provider catalog responses. It is provider-specific — different providers expose different voice lists for the same underlying TTS model family. `task_types` is a coarse filtering and routing projection used by accessors and task-model discovery; it is not provider request shaping. The authoritative task ordering and derivation logic live in `core/models/models.py`, and task-model bindings must stay aligned with `.vorch/domain-maps/model_tasks.md`.
-
-Known `task_types` currently follow `MODEL_TASK_ORDER`: `chat`, `text_output`, `image_input`, `image_understanding`, `file_input`, `file_understanding`, `audio_input`, `speech_to_text`, `video_input`, `video_understanding`, `image_generation`, `audio_generation`, `text_to_speech`, `text_embedding`, and `video_generation`.
-
-Sparse catalogs remain usable. Missing modality data defaults to text-in/text-out, and local or OpenAI-compatible providers with conservative optional facts should not disappear from model selection merely because fields such as `tools` or large `context_window` are missing.
-
-Speech/audio modality aliases are intentionally strict: `transcription` output counts as text output and enables STT filtering; `speech` output enables TTS and audio-generation filtering; generic `audio` output enables `audio_generation` only and does not imply `text_to_speech`.
-
-### ModelQuery — the shared capability/task filter
-
-`core/models/query.py` owns the reusable `ModelQuery` dataclass and its `from_filters` builder. It is the single place where model capability, task type, modality, and context-window matching happens. Every caller that needs to filter models by these criteria routes through `ModelRegistry.query()` — including the RPC `model.list` handler and `core/model_tasks/` provider target discovery. The query is pure: it takes no credentials or runtime state, only filter criteria.
-
-`ModelQuery.from_filters(raw_params)` normalizes raw filter values (lowercase, trim, dedupe, expand alias field names such as `task`/`task_type`) into a frozen query object. Callers that need credential gating, connection expansion, or response shaping apply those outside the query. This layering keeps the core reusable without coupling it to server or credentials concerns.
-
-## Discovery & Refresh
-
-`core/models/discovery.py` owns fetch, normalization, override application, generated file writes, and registry invalidation. The registry remains the read path and does not call provider APIs.
-
-`refresh_models()` writes files and invalidates the class-level registry cache, but it does not mutate an already-held `ModelRegistry` instance. The server `model.refresh_db` RPC reloads `runtime._models = ModelRegistry.load(resources_dir)` after refresh; any new live-refresh entry point must also replace/reload the runtime registry or require a runtime restart.
-
-Discovery dispatches by `ProviderConfig.adapter` to `adapter_class.normalize_catalog_entry(raw, defaults)`. Provider-specific catalog schemas belong in provider adapters and provider maps, not in provider-ID branches inside discovery. Examples: OpenRouter-specific catalog behavior lives in `OpenRouterAdapter` and `.vorch/domain-maps/providers/openrouter.md`; GitHub Copilot catalog metadata and runtime policy live in `GitHubCopilotAdapter` and `.vorch/domain-maps/providers/github-copilot.md`.
-
-Discovery builds auth headers from the selected connection plus provider `extra_headers`, then calls optional adapter hooks such as `discovery_headers(provider_config, credential_value, headers)`, `discovery_params()`, and `supplementary_discovery_params()`. Use these hooks for catalog-only requirements such as OpenAI Subscription account headers/client version parameters or OpenRouter supplementary speech/image-generation fetches.
-
-Supplementary discovery fetches append adapter-provided query parameters to the main models endpoint, merge new models by ID, and log warnings on supplementary failure without blocking the main catalog save. This keeps task-specific models discoverable when a provider's default `/models` response omits them.
-
-Override fields replace fetched top-level model fields; nested objects are replaced wholesale rather than deep-merged. Override-only models are exceptional and must provide the full current `Model` shape because the app does not support legacy catalog schemas.
+Speech/audio aliases are intentionally strict: `transcription` output → text
+output + STT; `speech` output → TTS + audio-generation; generic `audio` output →
+`audio_generation` only (NOT `text_to_speech`); `embeddings` output →
+`text_embedding` (vector, not chat/text).
 
 ## Constraints & Gotchas
 
-- Model facts are provider-specific. Do not treat one provider's context window, output limit, modality list, or reasoning behavior as canonical for another provider.
-- No model ID remapping. The model ID in `resources/models/<provider>.json` is exactly what goes on the wire.
-- Generated model catalogs are refreshable artifacts, not durable fix locations. A refresh recreates `resources/models/<provider>.json` from discovery output plus overrides, so hand edits to generated catalogs are temporary at best.
-- Overrides are for research-only gaps. If a fact can be obtained from provider catalogs or by probing a provider endpoint, implement it in adapter normalization or runtime behavior instead.
-- Capability facts are not always runtime-control permissions. Adapters decide which optional request parameters are safe for the selected provider/model/endpoint.
-- GitHub Copilot is dynamic-first: when `metadata.github_copilot` exists, endpoint selection and optional request-feature gating use those catalog facts; static policy entries are fallback or exact-model override rules only.
-- Model objects are immutable after load. Change catalog generation or input files, then invalidate/reload the registry instead of mutating loaded `Model` instances.
+- **Code wins.** When this map and the code disagree, the code (`assembly.py`'s
+  module docstring is the load contract) wins; fix the map.
+- **Refresh is dumb, load is smart.** Do not push merge/join logic into refresh,
+  and do not make load fetch anything. Refresh writes the pure per-file
+  projection; load does the cross-file assembly with no I/O beyond reading the
+  layer files.
+- **The full canonical mirror is intentionally unfiltered — no discovery
+  defaults.** Many canonical entries join to no configured provider; that is
+  wanted. Do not add a filter to drop them.
+- **`metadata` is replaced wholesale at load**, unlike `capabilities` (one level
+  deep). A model with `metadata` in BOTH `<provider>.json` and its override keeps
+  only the override's blob — e.g. opencode-go's override `metadata.opencode_go`
+  shadows the generated `reasoning_response_field`. No harm today (graceful
+  fallback); recorded in FLAGGED as a known design choice.
+- **Override-only models** are supported: an override file may carry a wire-id
+  absent from the provider file; assembly builds it from override + the join. It
+  must supply the loader's required fields.
+- **`apply_overrides` in `discovery.py` is dead** — refresh no longer bakes
+  overrides into `<provider>.json` (that merge moved to load). The helper is
+  retained only for legacy callers/tests and is flagged for removal.
+- Model objects are immutable after load. Change a layer file or the projection,
+  then `invalidate`/reload — never mutate a loaded `Model`.
+
+## References
+
+Read these only when your task matches — not by default.
+
+- The exact on-disk file-format contract + merge/join semantics →
+  `core/models/assembly.py` module docstring (source of truth).

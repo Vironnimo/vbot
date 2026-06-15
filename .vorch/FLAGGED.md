@@ -535,3 +535,46 @@ functional harm today — opencode-go speaks the OpenAI protocol, so `normalize_
 fallback finds `reasoning_content` anyway (Phase 5). If a future need requires both to coexist, either
 deep-merge the provider-scoped `metadata` sub-object at load (a Phase-2 assembly change) or carry both
 keys in the override. Recorded so the final review treats this as a known design choice, not a bug.
+
+## 2026-06-15 — Model DB Phase 7 (docs): consciously deferred rebuild items
+
+Gathered while making the living docs describe the as-built Model DB. None block a
+configured provider today; recorded so the deliberate scope-outs have a trail. (The
+unseeded canonical ladders and the github-copilot/minimax not-regenerated blockers
+are already flagged above under the Phase-3 entries and are not repeated here.)
+
+1. **`budget` / `on_off` reasoning control — no WIRE support yet.** The typed
+   `reasoning.control` projects `"budget"` and `"on_off"` at refresh
+   (`derive_reasoning_control` in `core/models/models_dev.py`), and the data model
+   carries `budget_max`, but no adapter currently *sends* a token budget or a
+   binary thinking toggle on the wire — only `"levels"` (effort) is wired through
+   snapping (`closest_supported_effort`). A `budget`/`on_off` model still works
+   (effort snaps against the adapter floor); it just can't use its native control
+   shape. Wiring those request shapes is deferred until a reachable model needs it.
+
+2. **Native `pdf` / `video` input modalities have no wire path.** The canonical
+   projection stores modality lists VERBATIM (incl. `pdf`/`video`) from models.dev,
+   and `task_types` derivation understands `file`/`video` inputs, but no provider
+   adapter builds a native PDF or video request part — these modalities are carried
+   as facts/filters only, not yet sent. Deferred until a target provider + use case
+   exists.
+
+3. **No second model-DB read-root for custom user providers.** `ModelRegistry.load`
+   reads exactly one `<resources_dir>/models` tree and caches by that resolved path.
+   A user-defined provider whose model files live outside the bundled `resources/`
+   (e.g. under the data dir) has no read root and no invalidation hook. Adding a
+   second root + cache-invalidation across both is deferred until custom providers
+   are a feature.
+
+4. **Anthropic is an untested stub.** `resources/models/anthropic.json` exists but
+   there is no Anthropic normalizer registered in `discovery._DISCOVERY_ADAPTER_MAP`,
+   so Anthropic catalogs cannot be refreshed through the pipeline. Anthropic was
+   deliberately skipped in the Phase-3 regeneration (no normalizer, no key). Building
+   the normalizer is deferred.
+
+5. **`apply_overrides` in `core/models/discovery.py` is dead and should be removed.**
+   Refresh no longer bakes `<provider>.overrides.json` into `<provider>.json` — that
+   cross-file merge moved to LOAD (`assembly.py`). `apply_overrides` (and its private
+   `_validate_override_model_data`/`_overrides_path` helpers, if unused elsewhere) is
+   retained only for legacy callers/tests. Deferred because removing it is a
+   test-refactor, not a behavior change; do it when those tests are touched anyway.
