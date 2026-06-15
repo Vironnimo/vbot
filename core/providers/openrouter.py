@@ -9,7 +9,6 @@ from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
     _parse_optional_int,
-    _read_int,
     _read_mapping,
     _read_string,
     _read_string_list,
@@ -100,7 +99,11 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 supported_parameters=tuple(supported_parameters),
                 supported_voices=tuple(supported_voices),
             ),
-            context_window=_read_int(raw, "context_length"),
+            # OpenRouter reports ``context_length: 0`` for non-chat models
+            # (transcription, image/video generation). A ``0`` is no usable
+            # window, so it normalizes to ``None`` (honest "unknown") rather than
+            # a fake fact; the read-side default chain fills it at use time.
+            context_window=_parse_optional_int(raw.get("context_length")) or None,
             max_output_tokens=_parse_optional_int(top_provider.get("max_completion_tokens")),
             metadata=_openrouter_runtime_metadata(architecture),
         )

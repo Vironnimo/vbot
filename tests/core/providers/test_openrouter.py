@@ -513,6 +513,19 @@ def test_normalize_catalog_entry_tags_embedding_models_with_text_embedding_task(
     assert "text_output" not in model.capabilities.task_types
 
 
+def test_normalize_catalog_entry_zero_context_length_becomes_unknown() -> None:
+    """OpenRouter reports ``context_length: 0`` for non-chat models (STT,
+    image/video generation). A 0 is no usable window, so it normalizes to None
+    (honest unknown) rather than a fake fact (Phase 6)."""
+
+    raw = raw_openrouter_model()
+    raw["context_length"] = 0
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    assert model.context_window is None
+
+
 def test_registry_query_returns_embedding_models_for_text_embedding_task() -> None:
     """A registry built from normalized embedding entries returns those entries
     when queried with ``tasks=("text_embedding",)`` and excludes them from

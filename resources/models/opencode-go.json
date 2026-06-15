@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-15T17:25:31.883555+00:00",
+  "fetched_at": "2026-06-15T18:40:10.660256+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -30,8 +30,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "deepseek-v4-flash"
     },
     "deepseek-v4-pro": {
@@ -63,8 +68,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "deepseek-v4-pro"
     },
     "glm-5": {
@@ -91,8 +101,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "glm-5"
     },
     "glm-5.1": {
@@ -119,8 +134,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "glm-5.1"
     },
     "hy3-preview": {
@@ -147,7 +167,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "name": "hy3-preview"
     },
@@ -175,8 +195,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "kimi-k2.5"
     },
     "kimi-k2.6": {
@@ -203,8 +228,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "kimi-k2.6"
     },
     "kimi-k2.7-code": {
@@ -231,8 +261,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "kimi-k2.7-code"
     },
     "mimo-v2-omni": {
@@ -259,8 +294,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "mimo-v2-omni"
     },
     "mimo-v2-pro": {
@@ -287,8 +327,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "mimo-v2-pro"
     },
     "mimo-v2.5": {
@@ -315,8 +360,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "mimo-v2.5"
     },
     "mimo-v2.5-pro": {
@@ -343,8 +393,13 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
       "name": "mimo-v2.5-pro"
     },
     "minimax-m2.5": {
@@ -371,7 +426,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "name": "minimax-m2.5"
     },
@@ -399,7 +454,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "name": "minimax-m2.7"
     },
@@ -428,7 +483,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "name": "minimax-m3"
     },
@@ -456,7 +511,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "name": "qwen3.5-plus"
     },
@@ -484,7 +539,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "name": "qwen3.6-plus"
     },
@@ -512,7 +567,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "name": "qwen3.7-max"
     },
@@ -540,7 +595,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 0,
+      "context_window": null,
       "max_output_tokens": null,
       "name": "qwen3.7-plus"
     }

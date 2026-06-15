@@ -258,7 +258,7 @@ class Model:
     model_id: str
     name: str
     capabilities: Capabilities
-    context_window: int
+    context_window: int | None
     max_output_tokens: int | None
     family: str = ""
     metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
@@ -427,9 +427,15 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
     The record is the field-level merge of the canonical, provider, and override
     layers (see :mod:`core.models.assembly`) with the internal ``canonical``
     pointer already stripped. It must carry the loader's required fields; a layer
-    set that fails to supply one (e.g. a model with no provider entry and no
-    canonical join missing ``context_window``) surfaces as a ``KeyError`` here,
-    which is the correct "the data is incomplete" signal.
+    set that fails to supply one (e.g. a model missing ``name`` or
+    ``capabilities``) surfaces as a ``KeyError`` here, which is the correct "the
+    data is incomplete" signal.
+
+    ``context_window`` and ``max_output_tokens`` are the deliberate exceptions:
+    an absent value is the honest "this fact is unknown" signal, not a load
+    error. It stays ``None`` in the data (the read-side default chain — model
+    value → provider-config default → global floor — fills the gap at use time,
+    see :func:`core.providers.providers.resolve_context_window`).
     """
 
     caps = record["capabilities"]
@@ -455,8 +461,8 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
         model_id=model_id,
         name=record["name"],
         capabilities=capabilities,
-        context_window=record["context_window"],
-        max_output_tokens=record["max_output_tokens"],
+        context_window=record.get("context_window"),
+        max_output_tokens=record.get("max_output_tokens"),
         family=record.get("family", ""),
         metadata=record.get("metadata", {}),
         connections=tuple(record.get("connections", ())),

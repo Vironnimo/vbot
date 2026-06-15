@@ -228,6 +228,24 @@ class TestModel:
         assert model.max_output_tokens == 16384
         assert model.metadata == {}
 
+    def test_context_window_is_optional(self):
+        # A missing context window stays missing in the data rather than being
+        # faked with a constant; the read-side default chain fills it at use time.
+        model = Model(
+            model_id="custom-model",
+            name="Custom Model",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=False,
+                reasoning=ReasoningCapabilities(supported=False),
+            ),
+            context_window=None,
+            max_output_tokens=None,
+        )
+
+        assert model.context_window is None
+
     def test_family_defaults_to_empty_string(self):
         model = Model(
             model_id="gpt-5.2",
@@ -499,6 +517,72 @@ class TestModelRegistryLoad:
         model = registry.get("test-provider", "minimal-model")
 
         assert model.max_output_tokens is None
+
+    def test_load_preserves_null_context_window(self, tmp_path: Path):
+        # Arrange: a model whose catalog carries an explicit null context window
+        # (an honestly missing fact, e.g. a thin/window-less endpoint).
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("test-provider.json").write_text(
+            """
+            {
+              "provider_id": "test-provider",
+              "models": {
+                "window-less": {
+                  "name": "Window-less Model",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": false,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": null,
+                  "max_output_tokens": null
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        # Act
+        registry = ModelRegistry.load(tmp_path)
+        model = registry.get("test-provider", "window-less")
+
+        # Assert: the gap stays a gap — not faked with a constant.
+        assert model.context_window is None
+
+    def test_load_preserves_absent_context_window(self, tmp_path: Path):
+        # Arrange: a catalog entry that omits context_window entirely.
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("test-provider.json").write_text(
+            """
+            {
+              "provider_id": "test-provider",
+              "models": {
+                "no-window": {
+                  "name": "No Window Model",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": false,
+                    "reasoning": {"supported": false}
+                  },
+                  "max_output_tokens": null
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        # Act
+        registry = ModelRegistry.load(tmp_path)
+        model = registry.get("test-provider", "no-window")
+
+        # Assert
+        assert model.context_window is None
 
     def test_load_catalog_without_metadata_keeps_empty_mapping(self):
         registry = ModelRegistry.load(FIXTURES_DIR)
@@ -1210,8 +1294,9 @@ class TestModelRegistryRealResources:
             assert isinstance(model.capabilities.output_modalities, tuple)
             assert isinstance(model.capabilities.supported_parameters, tuple)
             assert isinstance(model.capabilities.task_types, tuple)
-            assert isinstance(model.context_window, int)
-            assert model.context_window >= 0
+            if model.context_window is not None:
+                assert isinstance(model.context_window, int)
+                assert model.context_window >= 0
             if model.max_output_tokens is not None:
                 assert isinstance(model.max_output_tokens, int)
                 assert model.max_output_tokens >= 0

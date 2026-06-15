@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from core.chat import ChatMessage, parse_bare_model
+from core.providers.providers import resolve_context_window
 from core.runs import QueuedRunItem, Run
 
 JsonObject = dict[str, Any]
@@ -46,9 +47,14 @@ def _is_visible_history_message(message: ChatMessage) -> bool:
 
 
 def _resolve_context_window(state: Any, model: str) -> int | None:
-    """Resolve a model string (provider/model-id) to its context_window from the registry.
+    """Resolve a model string (provider/model-id) to the usable context window.
 
-    Returns None if the model format is invalid or the model is not found.
+    This is the *active agent's* window for the WebUI token badge, so it
+    resolves through the shared default chain (model window → provider-config
+    default → global floor, see :func:`resolve_context_window`): a model whose
+    window is unknown still yields a usable number instead of ``None``/NaN.
+    Returns ``None`` only when the model string is unusable or the model/provider
+    cannot be found in the registry.
     """
     bare_model = parse_bare_model(model)
     if "/" not in bare_model:
@@ -60,7 +66,18 @@ def _resolve_context_window(state: Any, model: str) -> int | None:
         model_entry = state.runtime.models.get(provider_id, model_id)
     except (KeyError, AttributeError):
         return None
-    return int(model_entry.context_window)
+    return resolve_context_window(
+        model_entry.context_window,
+        _provider_config(state, provider_id),
+    )
+
+
+def _provider_config(state: Any, provider_id: str) -> Any:
+    """Return the ProviderConfig for the read-side window default, or None."""
+    try:
+        return state.runtime.providers.get(provider_id)
+    except (KeyError, AttributeError):
+        return None
 
 
 def _agent_response(state: Any, agent: Any) -> JsonObject:

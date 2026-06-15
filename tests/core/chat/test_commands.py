@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -25,6 +25,7 @@ from core.chat.commands import (
     resolve_status_model_details,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.providers.providers import ProviderConfig
 from core.runs import ChatRunManager, Run, RunCancelledError
 from core.sessions import ChatSessionManager
 
@@ -665,3 +666,73 @@ def test_resolve_status_model_details_returns_reasoning_ladder() -> None:
     assert details.context_window == 200_000
     assert details.display_name == "GPT-5.2"
     assert details.reasoning_levels == ("low", "medium", "high")
+
+
+def test_resolve_status_model_details_resolves_window_through_default_chain() -> None:
+    """A null-window model reports a usable window via the provider-config default,
+    so /status shows the budget compaction actually uses rather than 'unknown'."""
+    model = Model(
+        model_id="thin-model",
+        name="Thin Model",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+        ),
+        context_window=None,
+        max_output_tokens=None,
+    )
+
+    class _Models:
+        def get(self, _provider_id: str, _model_id: str) -> Model:
+            return model
+
+    class _Providers:
+        def get(self, _provider_id: str) -> Any:
+            return ProviderConfig(
+                id="thin",
+                name="Thin",
+                adapter="openai_compatible",
+                base_url="https://example.test/v1",
+                context_window=64_000,
+            )
+
+    details = resolve_status_model_details(
+        _make_agent(model="thin/thin-model"),
+        cast(ModelRegistry, _Models()),
+        cast(Any, _Providers()),
+    )
+
+    assert details.context_window == 64_000
+
+
+def test_resolve_status_model_details_falls_back_to_global_floor() -> None:
+    """With neither a model window nor a provider default, /status reports the
+    conservative global floor instead of failing or showing nothing."""
+    from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
+
+    model = Model(
+        model_id="custom",
+        name="Custom",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+        ),
+        context_window=None,
+        max_output_tokens=None,
+    )
+
+    class _Models:
+        def get(self, _provider_id: str, _model_id: str) -> Model:
+            return model
+
+    details = resolve_status_model_details(
+        _make_agent(model="custom/custom"),
+        cast(ModelRegistry, _Models()),
+        None,
+    )
+
+    assert details.context_window == GLOBAL_CONTEXT_WINDOW_FLOOR

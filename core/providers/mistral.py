@@ -80,7 +80,9 @@ class MistralAdapter(OpenAICompatibleAdapter):
         if raw.get("archived") is True or capabilities_raw.get("completion_chat") is not True:
             raise CatalogEntrySkipped(f"Skipped non-chat model: {raw.get('id')}")
 
-        context_window = _parse_optional_int(raw.get("max_context_length")) or 0
+        # Absent → ``None`` (honest "unknown"), filled by the read-side default
+        # chain at use time — no fake ``0`` written into the catalog.
+        context_window = _parse_optional_int(raw.get("max_context_length"))
         reasoning_supported = capabilities_raw.get("reasoning", False) is True
         vision_supported = capabilities_raw.get("vision", False) is True
         tools_supported = capabilities_raw.get("function_calling", False) is True

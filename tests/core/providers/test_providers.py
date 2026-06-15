@@ -14,12 +14,14 @@ from typing import Any
 import pytest
 
 from core.providers.providers import (
+    GLOBAL_CONTEXT_WINDOW_FLOOR,
     AuthConfig,
     ConnectionConfig,
     OAuthConfig,
     ProviderConfig,
     ProviderRegistry,
     _registry_cache,
+    resolve_context_window,
 )
 from core.utils.errors import ConfigError
 
@@ -1065,3 +1067,86 @@ class TestProviderRegistryEmpty:
 
         # Assert
         assert registry.list_ids() == []
+
+
+# ---------------------------------------------------------------------------
+# context_window — per-provider read-side default + global floor (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+class TestProviderContextWindowDefault:
+    """The optional per-provider ``context_window`` read-side default field."""
+
+    def test_defaults_to_none(self) -> None:
+        config = ProviderConfig(
+            id="p",
+            name="P",
+            adapter="openai_compatible",
+            base_url="https://example.test/v1",
+        )
+
+        assert config.context_window is None
+
+    def test_registry_parses_context_window_from_json(self, tmp_path: Path) -> None:
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENROUTER_DATA)
+        data["context_window"] = 128000
+        (prov_dir / "openrouter.json").write_text(json.dumps(data), encoding="utf-8")
+
+        registry = ProviderRegistry.load(tmp_path)
+
+        assert registry.get("openrouter").context_window == 128000
+
+    def test_registry_defaults_context_window_to_none_when_absent(self, tmp_path: Path) -> None:
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        (prov_dir / "openrouter.json").write_text(json.dumps(OPENROUTER_DATA), encoding="utf-8")
+
+        assert ProviderRegistry.load(tmp_path).get("openrouter").context_window is None
+
+    @pytest.mark.parametrize("bad_value", [0, -1, "128000", 1.5, True])
+    def test_non_positive_or_non_int_context_window_raises(
+        self, tmp_path: Path, bad_value: Any
+    ) -> None:
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENROUTER_DATA)
+        data["context_window"] = bad_value
+        (prov_dir / "openrouter.json").write_text(json.dumps(data), encoding="utf-8")
+
+        with pytest.raises(ConfigError, match="context_window must be a positive integer"):
+            ProviderRegistry.load(tmp_path)
+
+
+class TestResolveContextWindow:
+    """The shared read-side resolution chain: model → provider default → floor."""
+
+    def _provider(self, context_window: int | None) -> ProviderConfig:
+        return ProviderConfig(
+            id="p",
+            name="P",
+            adapter="openai_compatible",
+            base_url="https://example.test/v1",
+            context_window=context_window,
+        )
+
+    def test_model_window_wins(self) -> None:
+        assert resolve_context_window(262144, self._provider(50000)) == 262144
+
+    def test_provider_default_used_when_model_window_is_none(self) -> None:
+        assert resolve_context_window(None, self._provider(50000)) == 50000
+
+    def test_global_floor_when_neither_supplies_one(self) -> None:
+        assert resolve_context_window(None, self._provider(None)) == GLOBAL_CONTEXT_WINDOW_FLOOR
+
+    def test_global_floor_when_provider_config_is_none(self) -> None:
+        assert resolve_context_window(None, None) == GLOBAL_CONTEXT_WINDOW_FLOOR
+
+    def test_stray_zero_model_window_treated_as_unknown(self) -> None:
+        # A fake 0 from an old catalog must never reach a caller as a budget.
+        assert resolve_context_window(0, self._provider(50000)) == 50000
+        assert resolve_context_window(0, None) == GLOBAL_CONTEXT_WINDOW_FLOOR
+
+    def test_return_is_always_positive(self) -> None:
+        assert resolve_context_window(None, None) > 0

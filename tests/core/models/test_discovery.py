@@ -296,6 +296,41 @@ class TestApplyOverrides:
 
         assert merged["model-c"]["max_output_tokens"] is None
 
+    def test_override_full_model_definition_allows_null_context_window(
+        self,
+        tmp_path: Path,
+    ):
+        # Validation must accept a null context_window exactly like a null
+        # max_output_tokens — an honestly missing fact, not a validation error.
+        overrides_path = tmp_path / "openrouter.overrides.json"
+        full_override = model_data("Full Override")
+        full_override["context_window"] = None
+        overrides_path.write_text(
+            json.dumps({"provider_id": "openrouter", "models": {"model-c": full_override}}),
+            encoding="utf-8",
+        )
+
+        merged = apply_overrides({}, overrides_path)
+
+        assert merged["model-c"]["context_window"] is None
+
+    def test_override_full_model_definition_allows_absent_context_window(
+        self,
+        tmp_path: Path,
+    ):
+        # Absent context_window is as valid as an explicit null.
+        overrides_path = tmp_path / "openrouter.overrides.json"
+        full_override = model_data("Full Override")
+        del full_override["context_window"]
+        overrides_path.write_text(
+            json.dumps({"provider_id": "openrouter", "models": {"model-c": full_override}}),
+            encoding="utf-8",
+        )
+
+        merged = apply_overrides({}, overrides_path)
+
+        assert "context_window" not in merged["model-c"]
+
     def test_override_validation_tolerates_optional_metadata(self, tmp_path: Path):
         overrides_path = tmp_path / "github-copilot.overrides.json"
         override = model_data("GPT-5.2")
@@ -452,6 +487,30 @@ class TestApplyOverrides:
             "af_sky",
             "am_adam",
         ]
+
+    def test_model_to_data_serializes_null_context_window(self) -> None:
+        """A ``None`` context window serializes to JSON ``null`` (mirroring
+        ``max_output_tokens``) so the honest gap round-trips through the catalog
+        instead of being faked with a constant."""
+
+        from core.models.discovery import _model_to_data
+
+        model = Model(
+            model_id="window-less",
+            name="Window-less",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=False,
+                reasoning=ReasoningCapabilities(supported=False),
+            ),
+            context_window=None,
+            max_output_tokens=None,
+        )
+
+        data = _model_to_data(model)
+
+        assert data["context_window"] is None
 
 
 class TestTypedReasoningSerialization:

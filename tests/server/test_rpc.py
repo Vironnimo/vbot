@@ -216,6 +216,7 @@ class StubProviders:
                 defaults={"max_tokens": 4096},
                 extra_headers={},
                 models_endpoint=None,
+                context_window=None,
                 connections=[
                     SimpleNamespace(
                         id="oauth",
@@ -3628,6 +3629,63 @@ async def test_agent_list_includes_null_context_window_for_model_without_provide
     agent = response["result"]["agents"][0]
     assert agent["model"] == "bare-model-id"
     assert agent["context_window"] is None
+
+
+@pytest.mark.asyncio
+async def test_agent_list_resolves_window_for_null_window_model(tmp_path: Path) -> None:
+    # The agent payload drives the WebUI token badge, so a null-window model
+    # resolves through the default chain to a usable window (here the global
+    # floor — the openai provider stub carries no context_window default).
+    from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
+
+    state = make_state(tmp_path, StubAdapter())
+    # Register a window-less model on this test's state only (avoid mutating the
+    # shared catalog stub that other model.list tests assert against).
+    state.runtime.models._models["openai"].append(
+        Model(
+            model_id="gpt-5.2-thin",
+            name="GPT-5.2 Thin",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=False),
+            ),
+            context_window=None,
+            max_output_tokens=None,
+        )
+    )
+    state.runtime.agents.update("coder", model="openai/gpt-5.2-thin")
+
+    response = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+
+    assert response["ok"] is True
+    agent = response["result"]["agents"][0]
+    assert agent["context_window"] == GLOBAL_CONTEXT_WINDOW_FLOOR
+
+
+@pytest.mark.asyncio
+async def test_model_list_carries_null_context_window_verbatim(tmp_path: Path) -> None:
+    # model.list is the honest catalog: a null window stays null (the WebUI
+    # tolerates it), it is NOT resolved through the default chain.
+    from server.rpc.payloads import _model_response
+
+    model = Model(
+        model_id="gpt-5.2-thin",
+        name="GPT-5.2 Thin",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=False),
+        ),
+        context_window=None,
+        max_output_tokens=None,
+    )
+
+    payload = _model_response("openai", model)
+
+    assert payload["context_window"] is None
 
 
 @pytest.mark.asyncio

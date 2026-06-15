@@ -66,7 +66,6 @@ REASONING_RESPONSE_FIELD_METADATA_KEY = "reasoning_response_field"
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
 OPENAI_STOP_FINISH_REASONS = {"stop", "length", "content_filter"}
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
-DEFAULT_CONTEXT_WINDOW = 0
 CONTEXT_WINDOW_KEYS = ("context_length", "context_window", "contextWindow")
 MAX_OUTPUT_TOKEN_KEYS = (
     "max_output_tokens",
@@ -179,9 +178,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 output_modalities=output_modalities or ("text",),
                 supported_parameters=tuple(supported_parameters),
             ),
+            # A window-less endpoint leaves this ``None`` (honest "unknown") —
+            # never a fake ``0`` masquerading as a discovered fact. The read-side
+            # default chain (``resolve_context_window``) fills the gap at use time.
             context_window=_read_first_optional_int(raw, CONTEXT_WINDOW_KEYS)
-            or _read_first_optional_int(architecture, CONTEXT_WINDOW_KEYS)
-            or DEFAULT_CONTEXT_WINDOW,
+            or _read_first_optional_int(architecture, CONTEXT_WINDOW_KEYS),
             max_output_tokens=_read_first_optional_int(top_provider, MAX_OUTPUT_TOKEN_KEYS)
             or _read_first_optional_int(raw, MAX_OUTPUT_TOKEN_KEYS)
             or _read_first_optional_int(architecture, MAX_OUTPUT_TOKEN_KEYS),
@@ -1028,13 +1029,6 @@ def _read_first_optional_string_tuple(
             if isinstance(value, list) and all(isinstance(item, str) for item in value):
                 return tuple(value)
     return ()
-
-
-def _read_int(data: Mapping[str, Any], key: str) -> int:
-    value = data.get(key)
-    if not isinstance(value, int):
-        raise ValueError(f"Expected '{key}' to be an integer")
-    return value
 
 
 def _read_first_optional_int(data: Mapping[str, Any], keys: tuple[str, ...]) -> int | None:

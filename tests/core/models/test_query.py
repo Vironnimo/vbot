@@ -57,7 +57,7 @@ def _make_capabilities(
 def _make_model(
     model_id: str,
     *,
-    context_window: int = 32000,
+    context_window: int | None = 32000,
     max_output_tokens: int | None = 4096,
     **capability_kwargs: Any,
 ) -> Model:
@@ -376,6 +376,13 @@ class TestMatchesMinContextWindow:
         query = ModelQuery(min_context_window=None)
         model = _make_model("zero", context_window=0)
         assert query.matches(model) is True
+
+    def test_unknown_window_excluded_when_minimum_set(self):
+        # A model with an unknown (``None``) context window cannot be proven to
+        # meet a minimum → excluded, and the comparison must not raise on ``None``.
+        query = ModelQuery(min_context_window=1000)
+        model = _make_model("unknown", context_window=None)
+        assert query.matches(model) is False
 
 
 # ---------------------------------------------------------------------------
