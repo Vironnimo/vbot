@@ -29,7 +29,11 @@ from core.providers.github_copilot_responses import (
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
 from core.providers.providers import ProviderConfig
-from core.providers.reasoning import closest_supported_effort, normalize_thinking_effort
+from core.providers.reasoning import (
+    closest_supported_effort,
+    model_reasoning_levels,
+    normalize_thinking_effort,
+)
 from core.utils.retry import retry_async
 
 CODEX_RESPONSES_MODE = "codex_responses"
@@ -279,8 +283,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         supports_tools = capabilities.tools if capabilities is not None else True
         supports_structured_outputs = capabilities.json_mode if capabilities is not None else True
         return OpenAISubscriptionResponsesPolicy(
-            allowed_reasoning_efforts=(
-                OPENAI_SUBSCRIPTION_REASONING_EFFORTS if reasoning_supported else frozenset()
+            allowed_reasoning_efforts=self._allowed_reasoning_efforts(
+                model_id, reasoning_supported
             ),
             supports_tools=supports_tools,
             supports_parallel_tool_calls=(
@@ -293,6 +297,26 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             ),
             supports_structured_outputs=supports_structured_outputs,
         )
+
+    def _allowed_reasoning_efforts(
+        self,
+        model_id: str,
+        reasoning_supported: bool,
+    ) -> frozenset[str]:
+        """Return the effort ladder the Responses policy snaps against for a model.
+
+        The effective per-model ladder from the DB wins when present, so a
+        subscription model that publishes its own ladder snaps against it. The
+        ``OPENAI_SUBSCRIPTION_REASONING_EFFORTS`` constant is only the floor for a
+        reasoning model without a feed ladder. A non-reasoning model gets an empty
+        set, which suppresses every reasoning control downstream.
+        """
+        if not reasoning_supported:
+            return frozenset()
+        ladder = model_reasoning_levels(self._model_lookup, model_id)
+        if ladder is not None:
+            return frozenset(ladder)
+        return OPENAI_SUBSCRIPTION_REASONING_EFFORTS
 
     async def _post_json(self, endpoint_path: str, payload: dict[str, Any]) -> dict[str, Any]:
         async def _do_request() -> dict[str, Any]:

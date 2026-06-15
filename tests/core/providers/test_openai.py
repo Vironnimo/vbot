@@ -15,6 +15,7 @@ import httpx
 import pytest
 import respx
 
+from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.errors import ProviderAuthError
 from core.providers.openai import (
     CODEX_EXTRA_HEADERS,
@@ -25,6 +26,28 @@ from core.providers.openai import (
 )
 from core.providers.openai_compatible import CHAT_COMPLETIONS_ENDPOINT
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+
+
+def _subscription_model_lookup(levels: tuple[str, ...]):
+    def model_lookup(model_id: str) -> Model:
+        return Model(
+            model_id=model_id,
+            name=model_id,
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(
+                    supported=True,
+                    control="levels" if levels else None,
+                    levels=levels,
+                ),
+            ),
+            context_window=128000,
+            max_output_tokens=4096,
+        )
+
+    return model_lookup
 
 OPENAI_API_KEY_URL = f"https://api.openai.com/v1{CHAT_COMPLETIONS_ENDPOINT}"
 OPENAI_SUBSCRIPTION_URL = f"https://chatgpt.com/backend-api{CODEX_RESPONSES_ENDPOINT}"
@@ -194,6 +217,58 @@ async def test_codex_send_preserves_xhigh_reasoning_effort() -> None:
         _subscription_config(),
         access_token,
         connection_mode=CODEX_RESPONSES_MODE,
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+    )
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5", thinking_effort="xhigh")
+
+    payload = json.loads(route.calls.last.request.content)
+    assert payload["reasoning"] == {"effort": "xhigh", "summary": "auto"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_codex_send_snaps_against_effective_model_ladder() -> None:
+    """A subscription model with a feed ladder snaps within it, not the constant.
+
+    A model whose effective ladder is ``[low, medium]`` snaps ``xhigh`` down to
+    ``medium`` — the ``OPENAI_SUBSCRIPTION_REASONING_EFFORTS`` constant (which
+    carries ``xhigh``) is bypassed in favor of the per-model ladder.
+    """
+    access_token = _jwt_with_account("acct_openai")
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        access_token,
+        connection_mode=CODEX_RESPONSES_MODE,
+        model_lookup=_subscription_model_lookup(("low", "medium")),
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+    )
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5", thinking_effort="xhigh")
+
+    payload = json.loads(route.calls.last.request.content)
+    assert payload["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_codex_send_falls_back_to_constant_without_feed_ladder() -> None:
+    """A subscription reasoning model with no feed ladder uses the constant floor.
+
+    ``xhigh`` is inside ``OPENAI_SUBSCRIPTION_REASONING_EFFORTS`` but outside a
+    narrow ladder; with an empty ladder it survives as ``xhigh``, proving the
+    constant floor is used when the looked-up model has no ladder.
+    """
+    access_token = _jwt_with_account("acct_openai")
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        access_token,
+        connection_mode=CODEX_RESPONSES_MODE,
+        model_lookup=_subscription_model_lookup(()),
     )
     route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
         return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
