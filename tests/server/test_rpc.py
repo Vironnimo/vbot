@@ -52,6 +52,22 @@ STUB_SUBAGENT_SETTING_FIELDS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_models_dev_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop ``model.refresh_db`` from hitting the live models.dev endpoint.
+
+    The refresh path fetches the public catalog once for canonical enrichment.
+    These RPC tests exercise routing, not projection, so the fetch is stubbed to
+    ``None`` (no network, no enrichment); the canonical-layer write is then
+    skipped and the refresh result carries ``canonical: None``.
+    """
+
+    async def _none_catalog() -> None:
+        return None
+
+    monkeypatch.setattr(delegates, "fetch_catalog", _none_catalog)
+
+
 @dataclass(frozen=True)
 class StubAgent:
     id: str
@@ -2567,6 +2583,7 @@ async def test_model_refresh_db_without_params_refreshes_only_eligible_providers
             ],
             "refreshed_count": 2,
             "model_count": 2,
+            "canonical": None,
         },
     }
     assert FAKE_REFRESH_MODEL_PROVIDER_IDS == ["openrouter", "refreshable-secondary"]
