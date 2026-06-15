@@ -2,11 +2,32 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, MutableMapping
+from collections.abc import Callable, Iterable, Mapping, MutableMapping
 from typing import Any, Literal
+
+from core.utils.logging import get_logger
+
+_LOGGER = get_logger("providers.reasoning")
 
 THINKING_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 THINKING_EFFORT_RANKS = {effort: rank for rank, effort in enumerate(THINKING_EFFORT_ORDER)}
+
+# Substrings that, in an HTTP 400 response detail, conservatively identify the
+# rejected control as a reasoning/effort field. Strict providers (e.g. direct
+# OpenAI) return 400 when an effort value is invalid for the model; the wording
+# varies, so we keep the match conservative — a missed signal (no warning) is
+# acceptable, a wrong reclassification is not. Detection only emits a warning;
+# it never changes status classification or retry policy.
+_BAD_EFFORT_DETAIL_SUBSTRINGS = ("reasoning_effort", "reasoning effort", "reasoning.effort")
+
+# Where OpenAI-compatible ``usage`` reports the model's reasoning-token count.
+_REASONING_TOKEN_DETAILS_KEYS = ("completion_tokens_details", "output_tokens_details")
+_REASONING_TOKENS_KEY = "reasoning_tokens"
+
+# HTTP status a strict provider returns when a reasoning effort is invalid.
+_BAD_EFFORT_STATUS_CODE = 400
+# The one effort value that means "do not reason"; never flagged as swallowed.
+_NONE_EFFORT = "none"
 
 ReasoningReplayPolicy = Literal["none", "current_run", "full_history"]
 """How persisted assistant ``reasoning``/``reasoning_meta`` replays into provider requests.
@@ -102,3 +123,107 @@ def remove_reasoning_kwargs(
 
     for parameter_name in parameter_names:
         kwargs.pop(parameter_name, None)
+
+
+# ---------------------------------------------------------------------------
+# Observability — surface reasoning feedback signals providers return
+# ---------------------------------------------------------------------------
+
+
+def detail_names_rejected_effort(detail: str) -> bool:
+    """Return whether an HTTP 400 detail names a rejected reasoning/effort control.
+
+    Conservative substring match against known reasoning-effort field spellings.
+    A false negative (no match) is acceptable; the caller must never let a match
+    change status classification or retry policy — it only gates a warning.
+    """
+
+    if not detail:
+        return False
+    lowered = detail.lower()
+    return any(token in lowered for token in _BAD_EFFORT_DETAIL_SUBSTRINGS)
+
+
+def warn_rejected_effort(
+    *,
+    status_code: int,
+    detail: str,
+    model_id: str,
+    selected_effort: str,
+    provider_logger: Any | None = None,
+) -> None:
+    """Log a structured warning when a 400 rejected the request's reasoning effort.
+
+    Emits only when *status_code* is 400 and *detail* conservatively names a
+    reasoning/effort control. Does not raise and does not change classification:
+    the caller still classifies the status exactly as before, so 400 stays fatal
+    and non-retryable. Secrets are never part of *detail* on this path (the body
+    is a provider validation message), and no token values are logged.
+    """
+
+    if status_code != _BAD_EFFORT_STATUS_CODE:
+        return
+    if not detail_names_rejected_effort(detail):
+        return
+    logger = provider_logger if provider_logger is not None else _LOGGER
+    effort = normalize_thinking_effort(selected_effort) or "(unspecified)"
+    logger.warning(
+        "Provider rejected reasoning effort with HTTP 400 "
+        "(model=%s, selected_effort=%s); effort was not applied",
+        model_id,
+        effort,
+    )
+
+
+def reasoning_token_count(usage: Mapping[str, Any] | None) -> int | None:
+    """Return the reasoning-token count from a normalized-or-raw ``usage`` mapping.
+
+    Reads the OpenAI-compatible ``completion_tokens_details.reasoning_tokens``
+    (or Responses-style ``output_tokens_details.reasoning_tokens``). Returns
+    ``None`` when the counter is absent or not an int — "unknown", not "zero" —
+    so callers do not treat a sparse usage block as a swallowed effort.
+    """
+
+    if not isinstance(usage, Mapping):
+        return None
+    for details_key in _REASONING_TOKEN_DETAILS_KEYS:
+        details = usage.get(details_key)
+        if not isinstance(details, Mapping):
+            continue
+        value = details.get(_REASONING_TOKENS_KEY)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def warn_effort_swallowed(
+    *,
+    selected_effort: str,
+    usage: Mapping[str, Any] | None,
+    model_id: str,
+    provider_logger: Any | None = None,
+) -> None:
+    """Log a structured warning when a non-``none`` effort yielded 0 reasoning tokens.
+
+    The selected effort asked the model to think, but the response's reasoning
+    token counter came back as exactly ``0`` — the effort was effectively
+    swallowed. Stays silent when no effort was selected, when the effort was
+    ``none``, or when the reasoning-token count is unknown (sparse usage) or
+    non-zero. No token values beyond the count are logged.
+    """
+
+    effort = normalize_thinking_effort(selected_effort)
+    if not effort or effort == _NONE_EFFORT:
+        return
+    reasoning_tokens = reasoning_token_count(usage)
+    if reasoning_tokens != 0:
+        return
+    logger = provider_logger if provider_logger is not None else _LOGGER
+    logger.warning(
+        "Reasoning effort was swallowed: response reported 0 reasoning tokens "
+        "(model=%s, selected_effort=%s)",
+        model_id,
+        effort,
+    )
