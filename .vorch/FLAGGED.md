@@ -381,3 +381,70 @@ Outstanding once credentials exist:
 
 **Why deferred:** blocked on credentials, not on code; documented behavior + unit tests pin the
 implementation, and the same-model gate prevents cross-model leakage.
+
+## 2026-06-15 — Model DB Phase 3: unseeded canonical reasoning ladders (hand path)
+
+The canonical reasoning ladder lift (refresh) pulls each canonical model's effort ladder from its
+**lab** provider's own models.dev section. Of 215 canonical models, 184 lift 1:1; the rest are the
+hand path the handoff describes. After projecting the live catalog (2026-06-15), **18
+reasoning-capable** canonical models could not lift a ladder deterministically — the lab keys the
+model differently or there is no lab provider — so their canonical reasoning is the bare
+`{supported: true}` (no fabricated ladder). They are listed here for optional hand-seeding into
+`resources/models/models.overrides.json` (keyed by canonical id, `capabilities.reasoning` block):
+
+- **No lab provider:** `tencent/hy3-preview`
+- **Lab keys it differently (17):** `deepseek/deepseek-r1`,
+  `nvidia/llama-3.1-nemotron-ultra-253b`, `nvidia/llama-3.3-nemotron-super-49b-v1`,
+  `nvidia/llama-3.3-nemotron-super-49b-v1.5`, `nvidia/nemotron-3-nano-30b-a3b`,
+  `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`, `nvidia/nemotron-3-super-120b-a12b`,
+  `nvidia/nemotron-3-ultra-550b-a55b`, `nvidia/nemotron-3.5-content-safety`,
+  `nvidia/nemotron-cascade-2-30b-a3b`, `nvidia/nemotron-content-safety-reasoning-4b`,
+  `nvidia/nemotron-nano-12b-v2-vl`, `nvidia/nemotron-nano-9b-v2`, `openai/gpt-5.5-instant`,
+  `stepfun/step-3.7-flash`, `zhipuai/glm-5-turbo`, `zhipuai/glm-5.2`
+
+A further ~37 reasoning-capable models carry the bare `reasoning: true` boolean at their lab with no
+published `reasoning_options` (e.g. most Alibaba Qwen). Those are **expected**, not a defect — the
+adapter effort floor handles snapping at runtime (Phase 4); no seeding needed.
+
+**Why deferred:** seeding requires externally verifying each model's real effort ladder; fabricating
+values is forbidden ("Keine Phantasiewerte"). None blocks a configured provider today — the only
+reachable ones (`deepseek/deepseek-r1`, `openai/gpt-5.5-instant` via OpenRouter) still run on their
+provider-layer ladder when models.dev publishes one for that provider.
+
+## 2026-06-15 — Model DB Phase 3: GitHub Copilot catalog not regenerated (OAuth expired)
+
+During the Phase 3 live regeneration the GitHub Copilot model catalog could not be refreshed: the
+stored OAuth token failed to refresh ("OAuth token refresh failed — please reconnect"). Per the
+"capture what succeeds, leave the file as-is, flag it" rule, `resources/models/github-copilot.json`
+was left at its prior (Phase 1) state and not regenerated with the new canonical-pointer / deviating-
+ladder enrichment. MiniMax was also not regenerated — no `MINIMAX_API_KEY` is provisioned in this
+environment. Both are pure-credential blockers, not code: re-running `model refresh github-copilot`
+(after reconnecting Copilot) and `model refresh minimax` (once a key exists) will pick up the new
+projection. Anthropic was deliberately skipped (untested stub, no normalizer).
+
+Note also confirmed during Phase 3: every configured provider's vBot id already equals its models.dev
+id (verified against the fetched `catalog.providers` keys, incl. `opencode-go` which is literally
+`opencode-go` there), so **no `models_dev_id` overrides were needed** on any provider config.
+
+## 2026-06-15 — Model DB Phase 3 (orchestrator review): opencode-go override ↔ feed reconciliation
+
+Two things surfaced reviewing the Phase 3 regeneration:
+
+1. **Fixed in Phase 3 (code):** the per-provider reasoning projection sourced `supported` from the
+   adapter's bare-endpoint normalization while taking control/levels from models.dev — for thin
+   providers this produced invalid `reasoning: {supported: false, control: levels, levels: [...]}`
+   blocks (3 opencode-go models). `provider_reasoning_block` now sources `supported` from the same
+   models.dev provider section as the control, so the block is always internally consistent.
+
+2. **Deferred to Phase 5 (opencode-go override owner):** opencode-go's `/models` endpoint returns
+   bare ids with **no context window** (generated `context_window: 0`), so
+   `resources/models/opencode-go.overrides.json` is still required — it carries the real
+   `context_window`/`max_output_tokens` for all 16 models. But its stale `reasoning: {supported: true}`
+   blocks now clobber the regenerated ladders at load. Reconciliation is per-model, not a blanket
+   strip: for `deepseek-v4-flash`/`deepseek-v4-pro` models.dev publishes the `[high, max]` ladder and
+   the override should inherit it (drop the override's bare `reasoning`); for the other 14 the feed
+   reports `reasoning: false` while the hand curation asserts `supported: true` — a deliberate override
+   fact that must be KEPT. Phase 5 (which already rewrites this file for the `protocol` field) should
+   reconcile so effective opencode-go models keep the real context window AND the correct reasoning
+   ladder. Net effect today: opencode-go reasoning still works (override `supported: true`) but snaps
+   against the adapter floor instead of `[high, max]` — no regression, just not yet enriched.

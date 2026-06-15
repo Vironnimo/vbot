@@ -1163,16 +1163,18 @@ class TestModelRegistryRealResources:
             assert model.capabilities.reasoning.control in (None, "levels", "on_off", "budget")
             assert isinstance(model.family, str)
 
-    def test_real_resources_load_without_a_canonical_models_json(self):
-        """The shipped ``resources/`` has no ``models.json`` yet (Phase 3 writes
-        it). The assembly load path must treat the canonical layer as empty and
-        still load every provider model on provider + override data alone."""
+    def test_real_resources_load_with_generated_canonical_layer(self):
+        """Phase 3 generated the canonical ``models.json``; the assembly load
+        path must still load a provider model whose wire-id does NOT join the
+        canonical layer (opencode-go keys ``deepseek-v4-pro`` bare, while the
+        canonical id is ``deepseek/deepseek-v4-pro`` — no auto join), on
+        provider + override data alone."""
 
-        assert not (RESOURCES_DIR / "models" / "models.json").exists()
+        assert (RESOURCES_DIR / "models" / "models.json").exists()
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
-        # A provider-only model with no canonical join loads fine.
+        # A provider-only model with no canonical join still loads fine.
         deepseek = registry.get("opencode-go", "deepseek-v4-pro")
         assert deepseek.capabilities.reasoning.supported is True
 
