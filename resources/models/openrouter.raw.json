@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-15T17:07:32.600334+00:00",
+  "fetched_at": "2026-06-15T22:10:37.424110+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
@@ -3081,7 +3081,6 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
-          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -3095,7 +3094,6 @@
           "tool_choice",
           "tools",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": null,
@@ -5607,9 +5605,9 @@
         "name": "xAI: Grok 4.20 Multi-Agent",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.000006",
+          "completion": "0.0000025",
           "input_cache_read": "0.0000002",
-          "prompt": "0.000002",
+          "prompt": "0.00000125",
           "web_search": "0.005"
         },
         "supported_parameters": [
@@ -7352,7 +7350,7 @@
         "top_provider": {
           "context_length": 262144,
           "is_moderated": false,
-          "max_completion_tokens": 262144
+          "max_completion_tokens": 81920
         }
       },
       {
@@ -15894,6 +15892,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -15906,6 +15905,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": null,
@@ -18087,7 +18087,6 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -18095,12 +18094,10 @@
           "response_format",
           "seed",
           "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": null,

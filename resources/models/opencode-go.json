@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-15T18:40:10.660256+00:00",
+  "fetched_at": "2026-06-15T22:10:36.757347+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -30,8 +30,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 1000000,
+      "family": "deepseek-flash",
+      "max_output_tokens": 384000,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -68,8 +69,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 1000000,
+      "family": "deepseek-thinking",
+      "max_output_tokens": 384000,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -87,7 +89,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -101,8 +103,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 202752,
+      "family": "glm",
+      "max_output_tokens": 32768,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -120,7 +123,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -134,8 +137,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 202752,
+      "family": "glm",
+      "max_output_tokens": 32768,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -174,14 +178,16 @@
     "kimi-k2.5": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -190,13 +196,14 @@
           "text_output"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 262144,
+      "family": "kimi-k2",
+      "max_output_tokens": 65536,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -207,14 +214,16 @@
     "kimi-k2.6": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -223,13 +232,14 @@
           "text_output"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 262144,
+      "family": "kimi-k2",
+      "max_output_tokens": 65536,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -240,14 +250,16 @@
     "kimi-k2.7-code": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -256,13 +268,14 @@
           "text_output"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 262144,
+      "family": "kimi-k2",
+      "max_output_tokens": 262144,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -273,14 +286,17 @@
     "mimo-v2-omni": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "audio",
+          "pdf"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -289,13 +305,14 @@
           "text_output"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 262144,
+      "family": "mimo-v2-omni",
+      "max_output_tokens": 128000,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -313,7 +330,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -327,8 +344,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 1048576,
+      "family": "mimo-v2-pro",
+      "max_output_tokens": 128000,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -339,14 +357,17 @@
     "mimo-v2.5": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "audio",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -355,13 +376,14 @@
           "text_output"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 1000000,
+      "family": "mimo-v2.5",
+      "max_output_tokens": 128000,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -379,7 +401,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -393,8 +415,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 1048576,
+      "family": "mimo-v2.5-pro",
+      "max_output_tokens": 128000,
       "metadata": {
         "opencode_go": {
           "reasoning_response_field": "reasoning_content"
@@ -412,7 +435,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -426,8 +449,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 204800,
+      "family": "minimax-m2.5",
+      "max_output_tokens": 65536,
       "name": "minimax-m2.5"
     },
     "minimax-m2.7": {
@@ -440,7 +464,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -454,14 +478,17 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 204800,
+      "family": "minimax-m2.7",
+      "max_output_tokens": 131072,
       "name": "minimax-m2.7"
     },
     "minimax-m3": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -478,26 +505,29 @@
           "text_output"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 512000,
+      "family": "minimax-m3",
+      "max_output_tokens": 131072,
       "name": "minimax-m3"
     },
     "qwen3.5-plus": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -506,26 +536,29 @@
           "text_output"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 262144,
+      "family": "qwen3.5",
+      "max_output_tokens": 65536,
       "name": "qwen3.5-plus"
     },
     "qwen3.6-plus": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -534,13 +567,14 @@
           "text_output"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 1000000,
+      "family": "qwen3.6",
+      "max_output_tokens": 65536,
       "name": "qwen3.6-plus"
     },
     "qwen3.7-max": {
@@ -553,7 +587,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -567,21 +601,24 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 1000000,
+      "family": "qwen3.7-max",
+      "max_output_tokens": 65536,
       "name": "qwen3.7-max"
     },
     "qwen3.7-plus": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -590,13 +627,14 @@
           "text_output"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
+      "context_window": 1000000,
+      "family": "qwen3.7-plus",
+      "max_output_tokens": 65536,
       "name": "qwen3.7-plus"
     }
   },

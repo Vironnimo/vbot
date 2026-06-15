@@ -17,13 +17,18 @@ OpenAI-compatible gateway with full-history reasoning replay and a small set of 
 - The internal Anthropic adapter uses `x-api-key` with no prefix while sharing the selected runtime base URL, selected credential key, `model_lookup`, and debug recorder.
 - When a catalog entry has a positive `max_output_tokens`, OpenCode Go uses it as request `max_tokens` unless the caller supplied `max_tokens`, `max_completion_tokens`, or `max_output_tokens`.
 
-## Override Reconciliation (Phase 5)
+## Provider facts come from the models.dev section (rebuilt 2026-06-16)
 
-The generated `opencode-go.json` carries the models.dev reasoning ladders but no context window — the bare endpoint reports none, so `context_window` is honestly `null` (Phase 6). The **override** supplies the missing base facts two ways: most models carry explicit hand `context_window`/`max_output_tokens` (the gateway's own limits, which may deviate from the lab), while `minimax-m3` / `qwen3.7-max` instead carry a `canonical` pointer and inherit `context_window`/`max_output_tokens`/`family` from the canonical base at load (the gateway matches the lab for those, so a pointer avoids duplicating the numbers). Every override entry also carries the per-model `metadata.opencode_go.protocol`. Per-model reasoning in the override:
+The opencode-go endpoint returns **bare ids** — no context window, output cap, modalities, family, or reasoning info. But models.dev carries a per-provider **`opencode-go` section** with all of those, so refresh pulls them into the generated `opencode-go.json` (`discovery._enrich_provider_model` via `models_dev.provider_limits` / `provider_modalities` / `provider_family` / `provider_reasoning_supported`):
 
-- `deepseek-v4-flash` / `deepseek-v4-pro`: the override carries **no** `capabilities` block, so the generated `{control: levels, levels: [high, max]}` ladder is inherited at load. Effective `deepseek-v4-pro` reasoning == `{supported: true, control: "levels", levels: ["high", "max"]}`.
-- The other override models: keep `capabilities.reasoning: {supported: true}` — a verified hand fact the bare endpoint and the models.dev feed (`reasoning: false`) lack. They snap against the adapter floor (empty `levels`), which is expected.
-- `minimax-m3`: its `canonical` pointer joins `minimax/MiniMax-M3` (effective `context_window: 512000`, `on_off` reasoning), proven against the live gateway 2026-06-15. The canonical join only fills fields the provider layer leaves `null`/absent — the provider layer still wins every capability sub-field it defines (e.g. text-only modalities), because the at-load merge ignores a higher layer's `null` (fill, don't overwrite). The other generated-only models with no override (e.g. `kimi-k2.7-code`) are `context_window: null` → resolved read-side to the global floor, and route the OpenAI default + warn.
+- **Limits**: the gateway's own `context.window` / `output` — which legitimately deviate from the lab (e.g. `glm-5` output **32768** vs the canonical 131072; `minimax-m3` **512000/131072**). "Fill, don't overwrite": a provider that *did* report a limit keeps it.
+- **Modalities**: widened to the models.dev set as a strict **superset** of what the endpoint reported (add, never drop) — so `minimax-m3`/`kimi`/`qwen*-plus` are correctly image/video-capable; `vision` is kept consistent.
+- **Family** when the entry has none, and the bare **`reasoning: true`** flag (independent of a control ladder), so a model the feed marks reasoning-capable is not flattened to `supported: false`. Where models.dev publishes `reasoning_options`, the typed control is stamped too (`deepseek-v4-*` → `levels [high, max]`, `minimax-m3` → `on_off`); the rest are `{supported: true}` and snap against the adapter floor.
+
+The **override** (`resources/models/opencode-go.overrides.json`) therefore carries ONLY what neither the endpoint nor models.dev provides — no hand-guessed numbers:
+
+- **The per-model wire `protocol`** (`metadata.opencode_go.protocol: anthropic|openai`) — a vBot-internal routing fact models.dev does not express. (models.dev *hints* it via `provider.npm: @ai-sdk/anthropic`, which matches every model's protocol — kept as an explicit override for safety, since a wrong protocol breaks the request.)
+- **`hy3-preview`**: a `canonical` pointer to `tencent/hy3-preview`, because the opencode-go models.dev section has **no limit block** for it; the canonical base fills `context_window`/`max_output_tokens` at load (the at-load merge ignores the provider layer's `null`, so the canonical window flows through).
 
 Since `metadata` is replaced **wholesale** by the highest layer at load (assembly contract), the override's `metadata.opencode_go` becomes the effective metadata.
 
