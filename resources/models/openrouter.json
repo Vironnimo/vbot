@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-08T12:47:45.202299+00:00",
+  "fetched_at": "2026-06-15T17:07:32.600334+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -30,6 +30,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": 4096,
       "metadata": {
@@ -66,6 +69,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
@@ -102,6 +108,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
@@ -138,6 +147,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
@@ -172,6 +184,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": 32768,
       "metadata": {
@@ -207,6 +222,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -242,6 +260,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -287,6 +308,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": 65536,
       "metadata": {
@@ -336,6 +360,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65535,
       "metadata": {
@@ -376,6 +403,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 300000,
       "max_output_tokens": 5120,
       "metadata": {
@@ -413,6 +443,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 5120,
       "metadata": {
@@ -453,6 +486,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 32000,
       "metadata": {
@@ -493,6 +529,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 300000,
       "max_output_tokens": 5120,
       "metadata": {
@@ -539,6 +578,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": 2048,
       "metadata": {
@@ -580,6 +622,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 4096,
       "metadata": {
@@ -621,6 +666,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 8192,
       "metadata": {
@@ -629,6 +677,64 @@
         }
       },
       "name": "Anthropic: Claude 3.5 Haiku"
+    },
+    "anthropic/claude-fable-5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Fable 5"
     },
     "anthropic/claude-haiku-4.5": {
       "capabilities": {
@@ -642,6 +748,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 63999,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -669,6 +777,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 64000,
       "metadata": {
@@ -690,6 +801,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 31999,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -714,6 +827,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 32000,
       "metadata": {
@@ -735,6 +851,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 31999,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -762,6 +880,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 32000,
       "metadata": {
@@ -783,6 +904,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -810,6 +937,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 64000,
       "metadata": {
@@ -831,6 +961,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -860,6 +997,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -881,6 +1021,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -908,6 +1055,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -929,6 +1079,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -954,6 +1112,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -975,6 +1136,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -1000,6 +1169,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -1021,6 +1193,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -1046,6 +1226,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -1067,6 +1250,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -1092,6 +1283,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -1113,6 +1307,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 63999,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -1138,6 +1334,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 64000,
       "metadata": {
@@ -1159,6 +1358,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 63999,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -1186,6 +1387,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 64000,
       "metadata": {
@@ -1207,6 +1411,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -1236,6 +1447,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -1277,6 +1491,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "metadata": {
@@ -1365,6 +1582,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262144,
       "metadata": {
@@ -1407,6 +1627,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 131072,
       "metadata": {
@@ -1450,6 +1673,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 64000,
       "metadata": {
@@ -1491,6 +1717,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -1532,6 +1761,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -1574,6 +1806,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -1619,6 +1854,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16000,
       "metadata": {
@@ -1652,6 +1890,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 67344,
       "max_output_tokens": null,
       "metadata": {
@@ -1685,6 +1926,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 40960,
       "max_output_tokens": null,
       "metadata": {
@@ -1718,6 +1962,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 46864,
       "max_output_tokens": null,
       "metadata": {
@@ -1751,6 +1998,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 46864,
       "max_output_tokens": null,
       "metadata": {
@@ -1799,6 +2049,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -1847,6 +2100,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -1895,6 +2151,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 131072,
       "metadata": {
@@ -1916,6 +2175,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -1943,6 +2209,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 131072,
       "metadata": {
@@ -1979,6 +2248,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4096,
       "max_output_tokens": null,
       "metadata": {
@@ -2012,6 +2284,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -2045,6 +2320,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -2078,6 +2356,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -2122,6 +2403,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 2048,
       "metadata": {
@@ -2172,6 +2456,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4096,
       "max_output_tokens": null,
       "metadata": {
@@ -2212,6 +2499,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "metadata": {
@@ -2253,6 +2543,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": 8192,
       "metadata": {
@@ -2271,9 +2564,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "max_tokens",
@@ -2296,6 +2586,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 4000,
       "metadata": {
@@ -2314,9 +2607,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "max_tokens",
@@ -2339,6 +2629,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 4000,
       "metadata": {
@@ -2357,9 +2650,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "max_tokens",
@@ -2380,6 +2670,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 4000,
       "metadata": {
@@ -2425,6 +2718,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -2443,9 +2739,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -2471,6 +2764,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16000,
       "metadata": {
@@ -2517,6 +2813,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 163840,
       "max_output_tokens": 16384,
       "metadata": {
@@ -2536,6 +2835,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -2565,6 +2865,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 163840,
       "max_output_tokens": 32768,
       "metadata": {
@@ -2583,9 +2886,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -2612,6 +2912,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 163840,
       "max_output_tokens": 16000,
       "metadata": {
@@ -2660,6 +2963,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 163840,
       "max_output_tokens": 32768,
       "metadata": {
@@ -2674,7 +2980,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -2684,13 +2990,10 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
-          "response_format",
           "seed",
           "stop",
           "temperature",
@@ -2705,8 +3008,11 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 131072,
-      "max_output_tokens": 16384,
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 128000,
+      "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -2750,6 +3056,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 32768,
       "metadata": {
@@ -2769,6 +3078,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -2798,6 +3108,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 163840,
       "max_output_tokens": 32768,
       "metadata": {
@@ -2817,6 +3130,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -2846,6 +3160,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 64000,
       "metadata": {
@@ -2865,6 +3182,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -2894,6 +3212,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 163840,
       "max_output_tokens": 65536,
       "metadata": {
@@ -2913,6 +3234,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -2944,8 +3270,11 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
-      "max_output_tokens": 131072,
+      "max_output_tokens": null,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -2963,6 +3292,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -2994,6 +3328,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 384000,
       "metadata": {
@@ -3039,6 +3376,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "metadata": {
@@ -3076,6 +3416,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -3099,6 +3442,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 24576,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -3130,6 +3475,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65535,
       "metadata": {
@@ -3150,9 +3498,6 @@
           "image",
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "max_tokens",
           "response_format",
@@ -3173,6 +3518,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": 32768,
       "metadata": {
@@ -3196,6 +3544,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 24576,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -3227,6 +3577,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65535,
       "metadata": {
@@ -3250,6 +3603,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 24576,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -3281,6 +3636,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65535,
       "metadata": {
@@ -3304,6 +3662,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 32768,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -3335,6 +3695,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -3357,6 +3720,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 32768,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -3386,6 +3751,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -3409,6 +3777,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 32768,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -3440,6 +3810,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65535,
       "metadata": {
@@ -3463,6 +3836,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -3494,6 +3874,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -3514,9 +3897,6 @@
           "image",
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "include_reasoning",
           "max_tokens",
@@ -3539,6 +3919,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": 32768,
       "metadata": {
@@ -3560,6 +3943,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -3584,6 +3972,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 65536,
       "metadata": {
@@ -3607,6 +3998,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -3638,6 +4036,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -3661,6 +4062,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -3692,6 +4100,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -3759,6 +4170,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -3782,6 +4196,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -3813,6 +4233,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -3836,6 +4259,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -3867,6 +4296,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048756,
       "max_output_tokens": 65536,
       "metadata": {
@@ -3890,6 +4322,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -3921,6 +4360,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -3939,9 +4381,6 @@
         "output_modalities": [
           "embeddings"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "max_tokens",
           "response_format",
@@ -3956,6 +4395,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 20000,
       "max_output_tokens": null,
       "metadata": {
@@ -3999,6 +4441,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -4042,6 +4487,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -4083,6 +4531,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": 2048,
       "metadata": {
@@ -4132,6 +4583,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -4181,6 +4635,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -4228,6 +4685,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -4269,6 +4729,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "metadata": {
@@ -4290,6 +4753,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -4325,6 +4789,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "metadata": {
@@ -4346,17 +4813,23 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
+          "frequency_penalty",
           "include_reasoning",
           "max_tokens",
+          "presence_penalty",
           "reasoning",
+          "repetition_penalty",
           "response_format",
           "seed",
+          "stop",
           "temperature",
           "tool_choice",
           "tools",
+          "top_k",
           "top_p"
         ],
         "supported_voices": [],
@@ -4371,6 +4844,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -4392,6 +4868,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -4427,8 +4904,11 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
-      "max_output_tokens": 8192,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -4448,6 +4928,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -4474,6 +4955,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -4515,6 +4999,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -4556,6 +5043,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -4593,6 +5083,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -4630,6 +5123,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -4667,6 +5163,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -4714,6 +5213,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4096,
       "max_output_tokens": 4096,
       "metadata": {
@@ -4811,6 +5313,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4096,
       "max_output_tokens": null,
       "metadata": {
@@ -4853,6 +5358,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131000,
       "max_output_tokens": 131000,
       "metadata": {
@@ -4897,6 +5405,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 131072,
       "metadata": {
@@ -4937,6 +5448,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 50000,
       "metadata": {
@@ -4981,6 +5495,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -5025,6 +5542,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -5070,6 +5590,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 65536,
       "metadata": {
@@ -5105,6 +5628,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8000,
       "max_output_tokens": 1024,
       "metadata": {
@@ -5140,6 +5666,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8000,
       "max_output_tokens": 1024,
       "metadata": {
@@ -5181,6 +5710,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -5222,6 +5754,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -5263,6 +5798,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -5309,6 +5847,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": 80000,
       "metadata": {
@@ -5344,6 +5885,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -5379,6 +5923,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -5414,6 +5961,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -5455,6 +6005,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -5496,6 +6049,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "metadata": {
@@ -5539,6 +6095,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "metadata": {
@@ -5585,6 +6144,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8000,
       "max_output_tokens": 2000,
       "metadata": {
@@ -5626,6 +6188,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": 8000,
       "metadata": {
@@ -5667,6 +6232,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -5713,6 +6281,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -5759,6 +6330,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -5805,6 +6379,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -5847,6 +6424,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 60000,
       "metadata": {
@@ -5889,6 +6469,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 80000,
       "metadata": {
@@ -5927,6 +6510,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -5973,6 +6559,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -6013,6 +6602,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -6062,6 +6654,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 16384,
       "metadata": {
@@ -6111,6 +6706,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 10000000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -6199,6 +6797,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 163840,
       "max_output_tokens": 16384,
       "metadata": {
@@ -6234,6 +6835,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4096,
       "max_output_tokens": 1024,
       "metadata": {
@@ -6270,6 +6874,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -6310,6 +6917,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -6356,6 +6966,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 16384,
       "max_output_tokens": 16384,
       "metadata": {
@@ -6398,6 +7011,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 128000,
       "metadata": {
@@ -6439,6 +7055,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": 8000,
       "metadata": {
@@ -6474,6 +7093,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -6511,6 +7133,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000192,
       "max_output_tokens": 1000192,
       "metadata": {
@@ -6555,6 +7180,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 40000,
       "metadata": {
@@ -6603,6 +7231,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 204800,
       "max_output_tokens": 196608,
       "metadata": {
@@ -6637,6 +7268,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": 2048,
       "metadata": {
@@ -6685,6 +7319,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 204800,
       "max_output_tokens": 196608,
       "metadata": {
@@ -6737,6 +7374,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 204800,
       "max_output_tokens": 196608,
       "metadata": {
@@ -6787,8 +7427,11 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 204800,
-      "max_output_tokens": 196608,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6811,13 +7454,24 @@
           "supported": true
         },
         "supported_parameters": [
+          "frequency_penalty",
           "include_reasoning",
+          "logit_bias",
+          "logprobs",
           "max_tokens",
+          "min_p",
+          "presence_penalty",
           "reasoning",
+          "repetition_penalty",
           "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
+          "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -6832,6 +7486,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 512000,
       "metadata": {
@@ -6877,6 +7534,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": null,
       "metadata": {
@@ -6916,6 +7576,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -6961,6 +7624,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "metadata": {
@@ -7009,6 +7675,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "metadata": {
@@ -7057,6 +7726,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -7105,6 +7777,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "metadata": {
@@ -7144,6 +7819,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -7189,6 +7867,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -7234,6 +7915,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -7282,6 +7966,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "metadata": {
@@ -7330,6 +8017,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -7380,6 +8070,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "metadata": {
@@ -7428,6 +8121,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -7474,6 +8170,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -7519,6 +8218,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "metadata": {
@@ -7563,6 +8265,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": 16384,
       "metadata": {
@@ -7611,6 +8316,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "metadata": {
@@ -7656,6 +8364,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -7705,6 +8416,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -7750,6 +8464,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -7791,6 +8508,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -7862,6 +8582,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4096,
       "max_output_tokens": null,
       "metadata": {
@@ -7910,6 +8633,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32000,
       "max_output_tokens": null,
       "metadata": {
@@ -7952,6 +8678,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
@@ -7998,6 +8727,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262144,
       "metadata": {
@@ -8016,9 +8748,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -8046,6 +8775,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262144,
       "metadata": {
@@ -8065,9 +8797,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -8099,8 +8828,11 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
-      "max_output_tokens": 262144,
+      "max_output_tokens": null,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -8118,9 +8850,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -8154,6 +8883,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262142,
       "metadata": {
@@ -8201,6 +8933,59 @@
       },
       "name": "MoonshotAI: Kimi K2.6 (free)"
     },
+    "moonshotai/kimi-k2.7-code": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 262144,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "MoonshotAI: Kimi K2.7 Code"
+    },
     "morph/morph-v3-fast": {
       "capabilities": {
         "input_modalities": [
@@ -8226,6 +9011,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 81920,
       "max_output_tokens": 38000,
       "metadata": {
@@ -8260,6 +9048,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 131072,
       "metadata": {
@@ -8309,6 +9100,55 @@
       },
       "name": "Nex AGI: DeepSeek V3.1 Nex N1"
     },
+    "nex-agi/nex-n2-pro:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 262144,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Nex AGI: Nex-N2-Pro (free)"
+    },
     "nousresearch/hermes-3-llama-3.1-405b": {
       "capabilities": {
         "input_modalities": [
@@ -8344,6 +9184,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -8382,6 +9225,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -8426,6 +9272,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -8445,6 +9294,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -8467,6 +9317,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -8486,6 +9339,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -8508,6 +9362,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -8526,9 +9383,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -8555,6 +9409,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -8591,6 +9448,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -8609,9 +9469,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -8624,6 +9481,7 @@
           "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -8638,6 +9496,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 228000,
       "metadata": {
@@ -8677,6 +9538,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": null,
       "metadata": {
@@ -8725,6 +9589,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -8743,9 +9610,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -8759,6 +9623,7 @@
           "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -8774,6 +9639,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": null,
       "metadata": {
@@ -8815,6 +9683,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 262144,
       "metadata": {
@@ -8833,9 +9704,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -8863,6 +9731,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -8902,6 +9773,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -8942,6 +9816,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 8192,
       "metadata": {
@@ -8987,6 +9864,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -9075,6 +9955,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -9117,6 +10000,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -9135,9 +10021,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -9162,6 +10045,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 16385,
       "max_output_tokens": 4096,
       "metadata": {
@@ -9207,6 +10093,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4095,
       "max_output_tokens": 4096,
       "metadata": {
@@ -9253,6 +10142,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 16385,
       "max_output_tokens": 4096,
       "metadata": {
@@ -9296,6 +10188,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4095,
       "max_output_tokens": 4096,
       "metadata": {
@@ -9314,9 +10209,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -9342,6 +10234,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8191,
       "max_output_tokens": 4096,
       "metadata": {
@@ -9361,9 +10256,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -9390,6 +10282,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 4096,
       "metadata": {
@@ -9435,6 +10330,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 4096,
       "metadata": {
@@ -9455,9 +10353,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "max_completion_tokens",
           "max_tokens",
@@ -9481,6 +10376,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1047576,
       "max_output_tokens": null,
       "metadata": {
@@ -9501,9 +10399,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "max_completion_tokens",
           "max_tokens",
@@ -9527,6 +10422,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1047576,
       "max_output_tokens": 32768,
       "metadata": {
@@ -9547,9 +10445,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "max_completion_tokens",
           "max_tokens",
@@ -9573,6 +10468,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1047576,
       "max_output_tokens": 32768,
       "metadata": {
@@ -9593,9 +10491,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -9626,6 +10521,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -9646,9 +10544,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -9679,6 +10574,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 4096,
       "metadata": {
@@ -9699,9 +10597,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -9732,6 +10627,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -9752,9 +10650,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -9784,6 +10679,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -9804,9 +10702,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -9837,6 +10732,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -9889,6 +10787,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -9924,6 +10825,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -9968,6 +10872,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -10003,6 +10910,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -10047,6 +10957,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -10068,6 +10981,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10093,6 +11013,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10134,6 +11057,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -10154,6 +11080,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10176,6 +11108,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10229,6 +11164,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10282,6 +11220,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10303,6 +11244,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10328,6 +11276,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10349,6 +11300,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10374,6 +11332,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": null,
       "metadata": {
@@ -10394,9 +11355,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "include_reasoning",
           "max_tokens",
@@ -10419,6 +11377,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10440,6 +11401,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10465,6 +11433,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10509,6 +11480,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 32000,
       "metadata": {
@@ -10529,6 +11503,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10552,6 +11532,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10572,6 +11555,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10595,6 +11585,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10615,6 +11608,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10638,6 +11637,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -10659,6 +11661,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10684,6 +11694,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10728,6 +11741,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -10748,6 +11764,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10771,6 +11794,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10792,6 +11818,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10816,6 +11848,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10860,6 +11895,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -10881,6 +11919,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10906,6 +11951,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -10927,6 +11975,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10952,6 +12008,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1050000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -11003,6 +12062,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 272000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -11024,6 +12086,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11049,6 +12119,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -11070,6 +12143,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11095,6 +12176,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -11116,6 +12200,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11141,6 +12231,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1050000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -11162,6 +12255,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11187,6 +12288,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1050000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -11208,6 +12312,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11232,6 +12342,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1050000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -11282,6 +12395,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -11332,6 +12448,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 16384,
       "metadata": {
@@ -11381,6 +12500,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -11400,6 +12522,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11431,6 +12559,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -11450,6 +12581,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11470,6 +12607,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 131072,
       "metadata": {
@@ -11489,6 +12629,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11520,6 +12666,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -11534,22 +12683,35 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
+          "frequency_penalty",
           "include_reasoning",
           "max_tokens",
+          "presence_penalty",
           "reasoning",
+          "repetition_penalty",
+          "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
-          "tools"
+          "tools",
+          "top_k",
+          "top_p"
         ],
         "supported_voices": [],
         "task_types": [
@@ -11559,6 +12721,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 8192,
       "metadata": {
@@ -11578,6 +12743,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11600,6 +12771,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 65536,
       "metadata": {
@@ -11621,6 +12795,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11645,6 +12825,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -11665,9 +12848,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "include_reasoning",
           "max_tokens",
@@ -11688,6 +12868,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -11709,6 +12892,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11733,6 +12922,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -11753,9 +12945,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -11786,6 +12975,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -11806,6 +12998,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11828,6 +13026,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -11870,6 +13071,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -11891,6 +13095,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11915,6 +13125,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -11936,6 +13149,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11960,6 +13179,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -11980,9 +13202,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -12013,6 +13232,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -12058,6 +13280,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 100000,
       "metadata": {
@@ -12096,6 +13321,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -12139,6 +13367,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -12182,6 +13413,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -12224,6 +13458,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -12268,6 +13505,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -12312,6 +13552,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -12350,6 +13593,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -12416,6 +13662,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 2000000,
       "max_output_tokens": null,
       "metadata": {
@@ -12446,6 +13695,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -12471,6 +13723,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -12496,6 +13749,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": null,
       "metadata": {
@@ -12526,7 +13782,10 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 128000,
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
       "max_output_tokens": null,
       "metadata": {
         "openrouter": {
@@ -12570,6 +13829,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048756,
       "max_output_tokens": 262144,
       "metadata": {
@@ -12600,6 +13862,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 2000000,
       "max_output_tokens": null,
       "metadata": {
@@ -12646,6 +13911,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": 8192,
       "metadata": {
@@ -12683,6 +13951,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32000,
       "max_output_tokens": null,
       "metadata": {
@@ -12720,6 +13991,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32000,
       "max_output_tokens": null,
       "metadata": {
@@ -12739,9 +14013,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "max_tokens",
@@ -12761,6 +14032,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 127072,
       "max_output_tokens": null,
       "metadata": {
@@ -12801,6 +14075,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -12820,9 +14097,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "max_tokens",
@@ -12842,6 +14116,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 8000,
       "metadata": {
@@ -12886,6 +14163,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 8000,
       "metadata": {
@@ -12905,9 +14185,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -12929,6 +14206,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -12966,6 +14246,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -13003,6 +14286,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -13047,6 +14333,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 131072,
       "metadata": {
@@ -13093,6 +14382,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -13135,6 +14427,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
@@ -13177,6 +14472,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": 32768,
       "metadata": {
@@ -13216,6 +14514,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 32768,
       "metadata": {
@@ -13256,6 +14557,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 32768,
       "metadata": {
@@ -13275,6 +14579,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -13298,6 +14604,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 32768,
       "metadata": {
@@ -13344,8 +14653,11 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
-      "max_output_tokens": null,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -13363,6 +14675,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -13394,6 +14707,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131702,
       "max_output_tokens": 40960,
       "metadata": {
@@ -13413,6 +14729,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 38912,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -13435,6 +14753,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 8192,
       "metadata": {
@@ -13481,6 +14802,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 16384,
       "metadata": {
@@ -13529,6 +14853,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262144,
       "metadata": {
@@ -13548,6 +14875,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -13579,6 +14907,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -13625,6 +14956,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 32000,
       "metadata": {
@@ -13673,6 +15007,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 131072,
       "metadata": {
@@ -13692,6 +15029,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -13721,6 +15059,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -13740,6 +15081,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -13769,6 +15111,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 8192,
       "metadata": {
@@ -13807,6 +15152,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -13853,6 +15201,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -13897,6 +15248,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 160000,
       "max_output_tokens": 32768,
       "metadata": {
@@ -13936,6 +15290,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -13982,6 +15339,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262144,
       "metadata": {
@@ -14022,6 +15382,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -14062,6 +15425,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 262000,
       "metadata": {
@@ -14103,6 +15469,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": null,
       "metadata": {
@@ -14147,6 +15516,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32000,
       "max_output_tokens": 32000,
       "metadata": {
@@ -14186,6 +15558,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -14205,6 +15580,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -14228,6 +15605,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -14274,6 +15654,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 16384,
       "metadata": {
@@ -14316,6 +15699,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "metadata": {
@@ -14364,6 +15750,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -14413,6 +15802,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 16384,
       "metadata": {
@@ -14461,6 +15853,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
@@ -14510,6 +15905,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -14559,6 +15957,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
@@ -14601,6 +16002,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 32768,
       "metadata": {
@@ -14650,6 +16054,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": 32768,
       "metadata": {
@@ -14695,6 +16102,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": 32768,
       "metadata": {
@@ -14716,6 +16126,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -14751,6 +16162,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262144,
       "metadata": {
@@ -14772,6 +16186,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -14807,6 +16222,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 65536,
       "metadata": {
@@ -14828,6 +16246,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -14863,6 +16282,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262144,
       "metadata": {
@@ -14884,6 +16306,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -14919,6 +16342,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 65536,
       "metadata": {
@@ -14940,6 +16366,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -14975,6 +16402,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262144,
       "metadata": {
@@ -14996,6 +16426,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -15023,6 +16455,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -15044,6 +16479,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -15071,6 +16508,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -15092,6 +16532,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -15119,6 +16561,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -15140,6 +16585,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -15175,8 +16621,11 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
-      "max_output_tokens": 131072,
+      "max_output_tokens": 262140,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -15196,6 +16645,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -15231,8 +16681,11 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
-      "max_output_tokens": 262140,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -15252,6 +16705,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -15279,6 +16734,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -15298,6 +16756,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 131072,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -15323,6 +16783,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 65536,
       "metadata": {
@@ -15344,6 +16807,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -15371,6 +16836,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -15390,6 +16858,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 262144,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -15415,6 +16885,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -15435,6 +16908,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 262144,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -15462,6 +16937,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 65536,
       "metadata": {
@@ -15493,6 +16971,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15524,6 +17005,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15555,6 +17039,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15586,6 +17073,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15617,6 +17107,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15648,6 +17141,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15679,6 +17175,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15710,6 +17209,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15741,6 +17243,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15772,6 +17277,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15803,6 +17311,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -15851,6 +17362,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 16384,
       "max_output_tokens": 16384,
       "metadata": {
@@ -15892,6 +17406,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": 65536,
       "metadata": {
@@ -15926,6 +17443,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -15964,6 +17484,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -16008,6 +17531,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": 16384,
       "metadata": {
@@ -16050,6 +17576,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 16000,
       "max_output_tokens": null,
       "metadata": {
@@ -16096,6 +17625,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -16139,6 +17671,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 16384,
       "metadata": {
@@ -16180,6 +17715,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16221,6 +17759,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16262,6 +17803,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16303,6 +17847,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16344,6 +17891,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16394,6 +17944,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4096,
       "max_output_tokens": null,
       "metadata": {
@@ -16425,6 +17978,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16456,6 +18012,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16487,6 +18046,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16518,6 +18080,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16549,6 +18114,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -16557,6 +18125,43 @@
         }
       },
       "name": "Sourceful: Riverflow V2 Standard Preview"
+    },
+    "sourceful/riverflow-v2.5-fast": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 32768,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Sourceful: Riverflow V2.5 Fast"
     },
     "sourceful/riverflow-v2.5-fast:free": {
       "capabilities": {
@@ -16591,6 +18196,43 @@
         }
       },
       "name": "Sourceful: Riverflow V2.5 Fast (free)"
+    },
+    "sourceful/riverflow-v2.5-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 32768,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Sourceful: Riverflow V2.5 Pro"
     },
     "sourceful/riverflow-v2.5-pro:free": {
       "capabilities": {
@@ -16635,9 +18277,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -16664,6 +18303,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 16384,
       "metadata": {
@@ -16685,6 +18327,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -16713,6 +18361,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": 256000,
       "metadata": {
@@ -16752,6 +18403,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": null,
       "metadata": {
@@ -16792,6 +18446,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 131072,
       "metadata": {
@@ -16811,6 +18468,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -16835,6 +18498,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": null,
       "metadata": {
@@ -16876,6 +18542,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 131072,
       "metadata": {
@@ -16924,6 +18593,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": 32768,
       "metadata": {
@@ -16965,6 +18637,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": 32768,
       "metadata": {
@@ -17010,6 +18685,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 32768,
       "max_output_tokens": 32768,
       "metadata": {
@@ -17051,6 +18729,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -17092,6 +18773,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 8192,
       "max_output_tokens": null,
       "metadata": {
@@ -17139,6 +18823,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 6144,
       "max_output_tokens": 4096,
       "metadata": {
@@ -17178,6 +18865,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 128000,
       "max_output_tokens": null,
       "metadata": {
@@ -17214,6 +18904,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1040000,
       "max_output_tokens": 8192,
       "metadata": {
@@ -17263,6 +18956,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 2000000,
       "max_output_tokens": null,
       "metadata": {
@@ -17284,6 +18980,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -17310,6 +19011,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 2000000,
       "max_output_tokens": null,
       "metadata": {
@@ -17330,6 +19034,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -17359,6 +19070,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": null,
       "metadata": {
@@ -17408,6 +19122,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 256000,
       "max_output_tokens": null,
       "metadata": {
@@ -17450,6 +19167,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": null,
       "metadata": {
@@ -17492,6 +19212,9 @@
         "tools": false,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 0,
       "max_output_tokens": null,
       "metadata": {
@@ -17539,6 +19262,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 15000,
       "max_output_tokens": null,
       "metadata": {
@@ -17558,6 +19284,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -17581,6 +19308,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 65536,
       "metadata": {
@@ -17603,6 +19333,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -17632,6 +19363,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 131072,
       "metadata": {
@@ -17651,6 +19385,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -17680,6 +19415,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 131072,
       "metadata": {
@@ -17735,6 +19473,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -17761,6 +19500,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 98304,
       "metadata": {
@@ -17780,11 +19522,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -17792,10 +19536,12 @@
           "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -17806,6 +19552,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
       "max_output_tokens": 131070,
       "metadata": {
@@ -17864,6 +19613,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -17892,6 +19642,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 65536,
       "max_output_tokens": 16384,
       "metadata": {
@@ -17940,6 +19693,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 202752,
       "max_output_tokens": 131072,
       "metadata": {
@@ -17991,8 +19747,11 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 131072,
-      "max_output_tokens": 24000,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -18041,6 +19800,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 202752,
       "max_output_tokens": 131072,
       "metadata": {
@@ -18089,6 +19851,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 202752,
       "max_output_tokens": 16384,
       "metadata": {
@@ -18137,6 +19902,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 202752,
       "max_output_tokens": null,
       "metadata": {
@@ -18184,7 +19952,10 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 202752,
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -18236,6 +20007,9 @@
         "tools": true,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 202752,
       "max_output_tokens": null,
       "metadata": {
@@ -18329,6 +20103,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4096,
       "max_output_tokens": null,
       "metadata": {
@@ -18377,6 +20154,9 @@
         "tools": false,
         "vision": false
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 4096,
       "max_output_tokens": null,
       "metadata": {
@@ -18385,6 +20165,64 @@
         }
       },
       "name": "Zyphra: Zonos v0.1 Transformer"
+    },
+    "~anthropic/claude-fable-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Fable Latest"
     },
     "~anthropic/claude-haiku-latest": {
       "capabilities": {
@@ -18398,6 +20236,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 63999,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -18425,6 +20265,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
       "max_output_tokens": 64000,
       "metadata": {
@@ -18446,6 +20289,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -18471,6 +20322,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -18492,6 +20346,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -18521,6 +20382,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -18544,6 +20408,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -18575,6 +20446,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -18598,6 +20472,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -18629,6 +20509,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "metadata": {
@@ -18684,6 +20567,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 262144,
       "max_output_tokens": 262142,
       "metadata": {
@@ -18705,6 +20591,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -18730,6 +20624,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 1050000,
       "max_output_tokens": 128000,
       "metadata": {
@@ -18751,6 +20648,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -18776,6 +20681,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 400000,
       "max_output_tokens": 128000,
       "metadata": {
