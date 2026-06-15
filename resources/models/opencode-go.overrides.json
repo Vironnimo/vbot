@@ -1,52 +1,25 @@
 {
+  "_comment": "Hand layer for the opencode-go gateway. The endpoint returns bare ids with no context window and no wire protocol, so this file carries the real context_window/max_output_tokens AND the per-model wire protocol fact (metadata.opencode_go.protocol: anthropic|openai), routing the adapter. Per-model reasoning: deepseek-v4-flash/deepseek-v4-pro drop their capabilities so the generated [high,max] ladder is inherited at load; the other models keep capabilities.reasoning.supported:true (a verified hand fact the bare endpoint and models.dev feed lack). metadata is replaced wholesale by the highest layer at load (assembly contract), so this metadata becomes the effective metadata.",
   "models": {
     "deepseek-v4-flash": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
       "context_window": 1000000,
       "max_output_tokens": 384000,
-      "name": "DeepSeek V4 Flash"
+      "name": "DeepSeek V4 Flash",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "deepseek-v4-pro": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
       "context_window": 1000000,
       "max_output_tokens": 384000,
-      "name": "DeepSeek V4 Pro"
+      "name": "DeepSeek V4 Pro",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "glm-5": {
       "capabilities": {
@@ -70,7 +43,12 @@
       },
       "context_window": 200000,
       "max_output_tokens": 128000,
-      "name": "GLM 5"
+      "name": "GLM 5",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "glm-5.1": {
       "capabilities": {
@@ -94,7 +72,12 @@
       },
       "context_window": 200000,
       "max_output_tokens": 128000,
-      "name": "GLM 5.1"
+      "name": "GLM 5.1",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "hy3-preview": {
       "capabilities": {
@@ -118,7 +101,12 @@
       },
       "context_window": 256000,
       "max_output_tokens": 4096,
-      "name": "HY3 Preview"
+      "name": "HY3 Preview",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "kimi-k2.5": {
       "capabilities": {
@@ -145,7 +133,12 @@
       },
       "context_window": 262144,
       "max_output_tokens": 262144,
-      "name": "Kimi K2.5"
+      "name": "Kimi K2.5",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "kimi-k2.6": {
       "capabilities": {
@@ -172,7 +165,12 @@
       },
       "context_window": 262144,
       "max_output_tokens": 65536,
-      "name": "Kimi K2.6"
+      "name": "Kimi K2.6",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "mimo-v2-omni": {
       "capabilities": {
@@ -199,7 +197,12 @@
       },
       "context_window": 262144,
       "max_output_tokens": 128000,
-      "name": "MiMo V2 Omni"
+      "name": "MiMo V2 Omni",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "mimo-v2-pro": {
       "capabilities": {
@@ -223,7 +226,12 @@
       },
       "context_window": 1000000,
       "max_output_tokens": 128000,
-      "name": "MiMo V2 Pro"
+      "name": "MiMo V2 Pro",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "mimo-v2.5": {
       "capabilities": {
@@ -250,7 +258,12 @@
       },
       "context_window": 1000000,
       "max_output_tokens": 128000,
-      "name": "MiMo V2.5"
+      "name": "MiMo V2.5",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "mimo-v2.5-pro": {
       "capabilities": {
@@ -274,7 +287,12 @@
       },
       "context_window": 1000000,
       "max_output_tokens": 128000,
-      "name": "MiMo V2.5 Pro"
+      "name": "MiMo V2.5 Pro",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "minimax-m2.5": {
       "capabilities": {
@@ -298,7 +316,12 @@
       },
       "context_window": 204800,
       "max_output_tokens": 131072,
-      "name": "MiniMax M2.5"
+      "name": "MiniMax M2.5",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic"
+        }
+      }
     },
     "minimax-m2.7": {
       "capabilities": {
@@ -322,7 +345,19 @@
       },
       "context_window": 204800,
       "max_output_tokens": 131072,
-      "name": "MiniMax M2.7"
+      "name": "MiniMax M2.7",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic"
+        }
+      }
+    },
+    "minimax-m3": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic"
+        }
+      }
     },
     "qwen3.5-plus": {
       "capabilities": {
@@ -349,7 +384,12 @@
       },
       "context_window": 1000000,
       "max_output_tokens": 64000,
-      "name": "Qwen3.5 Plus"
+      "name": "Qwen3.5 Plus",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai"
+        }
+      }
     },
     "qwen3.6-plus": {
       "capabilities": {
@@ -376,7 +416,19 @@
       },
       "context_window": 1000000,
       "max_output_tokens": 65536,
-      "name": "Qwen3.6 Plus"
+      "name": "Qwen3.6 Plus",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic"
+        }
+      }
+    },
+    "qwen3.7-max": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic"
+        }
+      }
     },
     "qwen3.7-plus": {
       "capabilities": {
@@ -403,7 +455,12 @@
       },
       "context_window": 1000000,
       "max_output_tokens": 65536,
-      "name": "Qwen3.7 Plus"
+      "name": "Qwen3.7 Plus",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic"
+        }
+      }
     }
   }
 }

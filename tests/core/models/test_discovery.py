@@ -1887,3 +1887,87 @@ class TestRefreshModelsDevEnrichment:
         # Loading the registry must not surface any raw-dump model.
         registry = ModelRegistry.load(resources_dir)
         assert registry.list_for_provider("models.dev.catalog.raw") == []
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_projects_interleaved_to_reasoning_response_field(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        """models.dev ``interleaved`` projects to metadata.<provider>.reasoning_response_field."""
+
+        resources_dir = tmp_path / "resources"
+        respx.get(OPENROUTER_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        raw_openrouter_model(
+                            model_id="deepseek/deepseek-v4-pro",
+                            name="DeepSeek V4 Pro",
+                            input_modalities=["text"],
+                            supported_parameters=["tools", "reasoning"],
+                        )
+                    ]
+                },
+            )
+        )
+
+        await refresh_models(
+            openrouter_config,
+            API_KEY,
+            resources_dir,
+            models_dev_catalog=_fixture_catalog(),
+        )
+
+        written = json.loads(
+            (resources_dir / "models" / "openrouter.json").read_text(encoding="utf-8")
+        )
+        metadata = written["models"]["deepseek/deepseek-v4-pro"]["metadata"]
+        assert metadata["openrouter"]["reasoning_response_field"] == "reasoning_content"
+
+        # And it loads onto the effective Model's provider-scoped metadata.
+        registry = ModelRegistry.load(resources_dir)
+        model = registry.get("openrouter", "deepseek/deepseek-v4-pro")
+        assert model.metadata["openrouter"]["reasoning_response_field"] == "reasoning_content"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_omits_reasoning_response_field_without_interleaved(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        """A model with no models.dev ``interleaved`` gets no reasoning_response_field."""
+
+        resources_dir = tmp_path / "resources"
+        respx.get(OPENROUTER_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        raw_openrouter_model(
+                            model_id="google/gemini-2.5-flash",
+                            name="Gemini 2.5 Flash",
+                        )
+                    ]
+                },
+            )
+        )
+
+        await refresh_models(
+            openrouter_config,
+            API_KEY,
+            resources_dir,
+            models_dev_catalog=_fixture_catalog(),
+        )
+
+        written = json.loads(
+            (resources_dir / "models" / "openrouter.json").read_text(encoding="utf-8")
+        )
+        model_data = written["models"]["google/gemini-2.5-flash"]
+        metadata = model_data.get("metadata", {})
+        assert "openrouter" not in metadata or "reasoning_response_field" not in metadata.get(
+            "openrouter", {}
+        )

@@ -782,7 +782,9 @@ class _BlockingAdapter:
         await asyncio.Event().wait()
         return {"content": "unreachable", "tool_calls": None}
 
-    def normalize_response(self, response: dict[str, object]) -> dict[str, object]:
+    def normalize_response(
+        self, response: dict[str, object], *, model_id: str | None = None
+    ) -> dict[str, object]:
         return response
 
     async def aclose(self) -> None:

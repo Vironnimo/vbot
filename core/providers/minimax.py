@@ -183,8 +183,10 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         del model_id
         return REASONING_REPLAY_FULL_HISTORY
 
-    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
-        normalized = super().normalize_response(response)
+    def normalize_response(
+        self, response: dict[str, Any], *, model_id: str | None = None
+    ) -> dict[str, Any]:
+        normalized = super().normalize_response(response, model_id=model_id)
         if normalized.get("reasoning") is None:
             reasoning = _extract_reasoning_details_text(normalized.get("reasoning_meta"))
             if reasoning:

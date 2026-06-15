@@ -1,0 +1,19 @@
+{
+  "_comment": "Hand layer for Mistral. Carries the per-model wire fact that the (deprecated) magistral-medium reasoning models engage reasoning via prompt_mode: reasoning instead of reasoning_effort (metadata.mistral.prompt_mode). models.dev / the /models endpoint do not publish this wire detail. metadata is replaced wholesale by the highest layer at load (assembly contract). Drop these entries once the catalog refresh removes the deprecated magistral-medium models.",
+  "models": {
+    "magistral-medium-2509": {
+      "metadata": {
+        "mistral": {
+          "prompt_mode": "reasoning"
+        }
+      }
+    },
+    "magistral-medium-latest": {
+      "metadata": {
+        "mistral": {
+          "prompt_mode": "reasoning"
+        }
+      }
+    }
+  }
+}

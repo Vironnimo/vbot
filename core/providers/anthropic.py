@@ -167,8 +167,16 @@ class AnthropicAdapter(ProviderAdapter):
             headers.update(self._config.extra_headers)
         return headers
 
-    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
-        """Normalize an Anthropic response to canonical assistant fields."""
+    def normalize_response(
+        self, response: dict[str, Any], *, model_id: str | None = None
+    ) -> dict[str, Any]:
+        """Normalize an Anthropic response to canonical assistant fields.
+
+        ``model_id`` is accepted for interface parity with the data-driven
+        reasoning-response-field path (Phase 5) but unused — Anthropic's wire
+        reasoning shape is fixed (``thinking`` blocks).
+        """
+        del model_id
         content_blocks = response.get("content", [])
         normalized: dict[str, Any] = {
             "role": "assistant",

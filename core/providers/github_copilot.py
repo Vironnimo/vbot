@@ -178,22 +178,31 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         ):
             yield delta
 
-    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
+    def normalize_response(
+        self, response: dict[str, Any], *, model_id: str | None = None
+    ) -> dict[str, Any]:
         """Normalize any supported Copilot endpoint response."""
 
         if isinstance(response.get("output"), list):
             return normalize_responses_response(response)
         if isinstance(response.get("content"), list):
             return normalize_copilot_messages_response(response)
-        return _normalize_copilot_chat_response(super().normalize_response(response))
+        return _normalize_copilot_chat_response(
+            super().normalize_response(response, model_id=model_id)
+        )
 
     def _policy_for_model(self, model_id: str) -> GitHubCopilotModelPolicy:
         metadata = None
+        family = ""
         if self._model_lookup is not None:
             model = self._model_lookup(model_id)
             if model is not None:
                 metadata = model.metadata
-        return copilot_model_policy(model_id, metadata)
+                # ``Model.family`` (Phase 3) is the authoritative lineage fact;
+                # passing it lets the policy route by data instead of guessing
+                # the family from the model name.
+                family = model.family
+        return copilot_model_policy(model_id, metadata, family)
 
     def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         request_kwargs: dict[str, Any] = {}

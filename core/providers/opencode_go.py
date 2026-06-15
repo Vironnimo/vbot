@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -14,14 +14,24 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningReplayPolicy
 from core.providers.token_getter import TokenGetter
+from core.utils.logging import get_logger
 
-_ANTHROPIC_MESSAGES_MODELS: frozenset[str] = frozenset(
-    {
-        "minimax-m2.7",
-        "minimax-m2.5",
-        "qwen3.5-plus",
-    }
-)
+_LOGGER = get_logger("providers.opencode_go")
+
+# Provider-scoped metadata blob + field carrying the per-model wire protocol
+# (Phase 5). The published opencode-go protocol table is a per-model FACT, so it
+# lives in data (the opencode-go override's ``metadata.opencode_go.protocol``),
+# not in a hardcoded adapter set. The adapter only owns the MECHANICS — how to
+# build an Anthropic ``/messages`` vs an OpenAI ``/chat/completions`` request.
+OPENCODE_GO_METADATA_KEY = "opencode_go"
+PROTOCOL_METADATA_KEY = "protocol"
+PROTOCOL_ANTHROPIC = "anthropic"
+PROTOCOL_OPENAI = "openai"
+# The endpoint returns bare ids with no protocol, so a model the override does
+# not mark is unknown: route it the SAFE default (OpenAI chat/completions) and
+# warn, so a newly added model is never silently misrouted onto the wrong wire.
+_DEFAULT_PROTOCOL = PROTOCOL_OPENAI
+
 _OUTPUT_LIMIT_KEYS = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
 
 
@@ -104,7 +114,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
-        if _uses_anthropic_messages_path(model_id):
+        if self._uses_anthropic_messages_path(model_id):
             return await self._anthropic.send(
                 messages,
                 model_id=model_id,
@@ -120,7 +130,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
-        if _uses_anthropic_messages_path(model_id):
+        if self._uses_anthropic_messages_path(model_id):
             return self._anthropic.stream(
                 messages,
                 model_id=model_id,
@@ -137,10 +147,12 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
         return super()._build_payload(messages, model_id, **request_kwargs)
 
-    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
+    def normalize_response(
+        self, response: dict[str, Any], *, model_id: str | None = None
+    ) -> dict[str, Any]:
         if "choices" in response:
-            return super().normalize_response(response)
-        return self._anthropic.normalize_response(response)
+            return super().normalize_response(response, model_id=model_id)
+        return self._anthropic.normalize_response(response, model_id=model_id)
 
     def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
         wire = _to_openai_assistant_message(message)
@@ -177,6 +189,50 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 return model.max_output_tokens
         return None
 
+    def _uses_anthropic_messages_path(self, model_id: str) -> bool:
+        """Route by the per-model ``metadata.opencode_go.protocol`` wire fact.
+
+        ``"anthropic"`` → the internal Messages adapter; anything else →
+        the OpenAI ``/chat/completions`` default. A model the override does not
+        mark (no metadata, or no ``protocol`` key) is unknown: it takes the
+        safe OpenAI default AND logs a ``warn``, so a newly added model is never
+        silently misrouted onto the wrong wire.
+        """
+
+        return self._model_protocol(model_id) == PROTOCOL_ANTHROPIC
+
+    def _model_protocol(self, model_id: str) -> str:
+        protocol = self._lookup_protocol(model_id)
+        if protocol in (PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI):
+            return protocol
+        # Unknown model (or a malformed/absent protocol fact): default safe and
+        # warn so a misroute surfaces in logs instead of silently picking a wire.
+        _LOGGER.warning(
+            "OpenCode Go model '%s' has no metadata protocol; defaulting to '%s' "
+            "(chat/completions). Add metadata.opencode_go.protocol to its override "
+            "entry to route it explicitly.",
+            model_id,
+            _DEFAULT_PROTOCOL,
+        )
+        return _DEFAULT_PROTOCOL
+
+    def _lookup_protocol(self, model_id: str) -> str | None:
+        if self._model_lookup is None:
+            return None
+        for candidate in _model_lookup_candidates(model_id):
+            model = self._model_lookup(candidate)
+            if model is None:
+                continue
+            opencode_go = model.metadata.get(OPENCODE_GO_METADATA_KEY)
+            if isinstance(opencode_go, Mapping):
+                protocol = opencode_go.get(PROTOCOL_METADATA_KEY)
+                if isinstance(protocol, str):
+                    return protocol
+            # The model exists but carries no protocol fact — stop here so the
+            # caller warns and defaults rather than scanning weaker candidates.
+            return None
+        return None
+
 
 def _has_explicit_output_limit(kwargs: dict[str, Any]) -> bool:
     return any(key in kwargs for key in _OUTPUT_LIMIT_KEYS)
@@ -188,7 +244,3 @@ def _model_lookup_candidates(model_id: str) -> tuple[str, ...]:
     if "/" in without_connection_suffix:
         candidates.append(without_connection_suffix.rsplit("/", 1)[-1])
     return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
-
-
-def _uses_anthropic_messages_path(model_id: str) -> bool:
-    return model_id in _ANTHROPIC_MESSAGES_MODELS

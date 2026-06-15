@@ -78,14 +78,22 @@ class CopilotModelFacts:
         cls,
         model_id: str,
         metadata: Mapping[str, Any] | None,
+        family: str = "",
     ) -> CopilotModelFacts:
-        """Build facts from the sanitized metadata stored on ``Model``."""
+        """Build facts from the sanitized metadata stored on ``Model``.
+
+        ``family`` is the first-class ``Model.family`` fact (Phase 3); when
+        non-empty it is authoritative for the lineage and replaces the previous
+        family-from-name guessing. It falls back to the metadata's own
+        ``family`` only when ``Model.family`` is empty (e.g. a catalog not yet
+        regenerated with the projected field).
+        """
 
         copilot_metadata = _copilot_metadata(metadata)
         return cls(
             model_id=model_id,
             vendor=_read_string(copilot_metadata, "vendor"),
-            family=_read_string(copilot_metadata, "family"),
+            family=family or _read_string(copilot_metadata, "family"),
             version=_read_string(copilot_metadata, "version"),
             supported_endpoints=frozenset(
                 endpoint
@@ -165,8 +173,9 @@ class GitHubCopilotModelPolicy:
         cls,
         model_id: str,
         metadata: Mapping[str, Any] | None = None,
+        family: str = "",
     ) -> GitHubCopilotModelPolicy:
-        facts = CopilotModelFacts.from_metadata(model_id, metadata)
+        facts = CopilotModelFacts.from_metadata(model_id, metadata, family)
         if not facts.has_metadata:
             facts = _fallback_facts_for_model(model_id)
         policy = cls(
@@ -372,10 +381,17 @@ class GitHubCopilotModelPolicy:
 def copilot_model_policy(
     model_id: str,
     metadata: Mapping[str, Any] | None = None,
+    family: str = "",
 ) -> GitHubCopilotModelPolicy:
-    """Return the dynamic-first policy for one exact Copilot model ID."""
+    """Return the dynamic-first policy for one exact Copilot model ID.
 
-    return GitHubCopilotModelPolicy.from_metadata(model_id, metadata)
+    ``family`` is the first-class ``Model.family`` fact (Phase 3); the adapter
+    passes it so endpoint routing reads the model lineage from data instead of
+    guessing it from the name. It falls back to the metadata's own ``family``
+    when empty.
+    """
+
+    return GitHubCopilotModelPolicy.from_metadata(model_id, metadata, family)
 
 
 def _select_endpoint(facts: CopilotModelFacts) -> str:

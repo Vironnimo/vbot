@@ -446,6 +446,61 @@ def test_gemini_exact_override_clears_reasoning_efforts_and_stays_chat() -> None
     }
 
 
+def test_model_family_fact_routes_claude_when_metadata_family_is_blank() -> None:
+    """``Model.family`` (Phase 3) drives routing without guessing from the name."""
+
+    policy = copilot_model_policy(
+        "claude-sonnet-4.6",
+        {
+            "github_copilot": {
+                "vendor": "",
+                "supported_endpoints": [CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT],
+            }
+        },
+        family="claude-sonnet-4.6",
+    )
+
+    assert policy.endpoint_path == MESSAGES_ENDPOINT
+    assert policy.facts.family == "claude-sonnet-4.6"
+
+
+def test_model_family_fact_overrides_metadata_family() -> None:
+    """An explicit ``Model.family`` wins over the metadata's own family field."""
+
+    policy = copilot_model_policy(
+        "gpt-5.2",
+        copilot_metadata(
+            vendor="",
+            family="stale-metadata-family",
+            supported_endpoints=[CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT],
+        ),
+        family="claude-sonnet-4.6",
+    )
+
+    assert policy.facts.family == "claude-sonnet-4.6"
+    assert policy.endpoint_path == MESSAGES_ENDPOINT
+
+
+def test_metadata_family_used_when_model_family_fact_is_empty() -> None:
+    """Falls back to the metadata family when ``Model.family`` is empty.
+
+    Covers a catalog not yet regenerated with the projected top-level family
+    (e.g. github-copilot.json blocked on credentials) — routing still works.
+    """
+
+    policy = copilot_model_policy(
+        "claude-sonnet-4.6",
+        copilot_metadata(
+            vendor="",
+            family="claude-sonnet-4.6",
+            supported_endpoints=[CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT],
+        ),
+    )
+
+    assert policy.facts.family == "claude-sonnet-4.6"
+    assert policy.endpoint_path == MESSAGES_ENDPOINT
+
+
 def test_responses_policy_omits_temperature_for_partial_openai_like_metadata() -> None:
     policy = copilot_model_policy(
         "gpt-5.4",
