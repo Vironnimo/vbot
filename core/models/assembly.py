@@ -95,6 +95,9 @@ Precedence, highest first, applied PER top-level field:
 Rules (:func:`merge_layers`):
 
 * For each top-level field, take the value from the HIGHEST layer that defines it.
+  A ``null`` does NOT count as defining the field — it never overwrites a value a
+  lower layer already supplied (so a provider's ``context_window: null`` lets the
+  canonical window flow through, "fill, don't overwrite, don't un-fill").
 * ``capabilities`` is merged ONE LEVEL DEEP: each capability sub-field
   (``vision``, ``tools``, ``json_mode``, ``reasoning``, ``input_modalities``, …)
   is taken from the highest layer that defines THAT sub-field. This lets a
@@ -271,6 +274,12 @@ def _merge_two(low: Mapping[str, Any], high: Mapping[str, Any]) -> dict[str, Any
 
     result: dict[str, Any] = {key: _plain(value) for key, value in low.items()}
     for key, value in high.items():
+        if value is None and result.get(key) is not None:
+            # A higher layer's ``null`` means "unknown", not "erase": it must not
+            # clobber a value a lower layer already supplied. This keeps the merge
+            # "fill, don't overwrite" — e.g. a provider's ``context_window: null``
+            # never shadows the canonical base's real window (the join's purpose).
+            continue
         if (
             key == CAPABILITIES_FIELD
             and isinstance(value, Mapping)
