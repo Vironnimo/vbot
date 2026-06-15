@@ -62,7 +62,9 @@ class FakeAdapter(ProviderAdapter):
         raise NotImplementedError("streaming not implemented in this stub")
         yield {}
 
-    def normalize_response(self, response: JsonObject) -> JsonObject:
+    def normalize_response(
+        self, response: JsonObject, *, model_id: str | None = None
+    ) -> JsonObject:
         return response
 
 

@@ -19,11 +19,60 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 API_KEY = "test-opencode-go-key"
 OPENCODE_GO_URL = "https://opencode-go.example/v1/chat/completions"
 OPENCODE_GO_MESSAGES_URL = "https://opencode-go.example/v1/messages"
+# Per-model wire protocol is now DATA (metadata.opencode_go.protocol), not a
+# hardcoded adapter set. These ids carry "anthropic" in the protocol map below
+# and must route through the internal Messages adapter.
 ANTHROPIC_MESSAGES_MODELS: tuple[str, ...] = (
     "minimax-m2.7",
     "minimax-m2.5",
-    "qwen3.5-plus",
+    "qwen3.7-plus",
 )
+# A small per-model protocol map mirroring what the opencode-go override carries
+# on ``metadata.opencode_go.protocol`` (the published table). Models not listed
+# here are "unknown" to the adapter and route to the safe OpenAI default.
+_PROTOCOL_BY_MODEL: dict[str, str] = {
+    "minimax-m2.7": "anthropic",
+    "minimax-m2.5": "anthropic",
+    "minimax-m3": "anthropic",
+    "qwen3.7-plus": "anthropic",
+    "qwen3.7-max": "anthropic",
+    "qwen3.6-plus": "anthropic",
+    "deepseek-v4-flash": "openai",
+    "deepseek-v4-pro": "openai",
+    "qwen3.6-plus-openai": "openai",
+}
+
+
+def _model_with_protocol(model_id: str, protocol: str | None) -> Model:
+    metadata: dict[str, object] = {}
+    if protocol is not None:
+        metadata = {"opencode_go": {"protocol": protocol}}
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=True),
+        ),
+        context_window=1_000_000,
+        max_output_tokens=131_072,
+        metadata=metadata,
+    )
+
+
+def _protocol_lookup(model_id: str) -> Model | None:
+    """Resolve the metadata-carrying model for one bare or vendor-prefixed id."""
+
+    bare = model_id.split("::", 1)[0]
+    candidates = [model_id, bare]
+    if "/" in bare:
+        candidates.append(bare.rsplit("/", 1)[-1])
+    for candidate in candidates:
+        if candidate in _PROTOCOL_BY_MODEL:
+            return _model_with_protocol(candidate, _PROTOCOL_BY_MODEL[candidate])
+    return None
 
 
 def test_public_package_exports_opencode_go_adapter() -> None:
@@ -56,7 +105,9 @@ def opencode_go_config() -> ProviderConfig:
 
 @pytest.fixture()
 def opencode_go_adapter(opencode_go_config: ProviderConfig) -> OpenCodeGoAdapter:
-    return OpenCodeGoAdapter(opencode_go_config, API_KEY)
+    # The adapter routes on ``metadata.opencode_go.protocol`` resolved via
+    # ``model_lookup``; inject the protocol map so routing is data-driven.
+    return OpenCodeGoAdapter(opencode_go_config, API_KEY, model_lookup=_protocol_lookup)
 
 
 def model_with_output_limit(model_id: str, max_output_tokens: int) -> Model:
@@ -394,7 +445,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_qwen36_send_uses_openai_path(
+    async def test_openai_marked_model_send_uses_openai_path(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
@@ -425,11 +476,59 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
         await opencode_go_adapter.send(
             [{"role": "user", "content": "hello"}],
-            model_id="qwen3.6-plus",
+            model_id="deepseek-v4-flash",
         )
 
         assert chat_route.called
         assert not messages_route.called
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unknown_model_defaults_to_openai_path_and_warns(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A model with no protocol metadata routes the safe OpenAI default + logs a warn."""
+
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "messages"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+        )
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "chat"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )
+        )
+
+        with caplog.at_level("WARNING", logger="vbot.providers.opencode_go"):
+            await opencode_go_adapter.send(
+                [{"role": "user", "content": "hello"}],
+                model_id="brand-new-unlisted-model",
+            )
+
+        assert chat_route.called
+        assert not messages_route.called
+        assert any(
+            "no metadata protocol" in record.getMessage()
+            and "brand-new-unlisted-model" in record.getMessage()
+            for record in caplog.records
+        )
 
     @respx.mock
     @pytest.mark.asyncio

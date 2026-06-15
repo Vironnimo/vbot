@@ -49,6 +49,19 @@ def mistral_adapter(mistral_config: ProviderConfig) -> MistralAdapter:
     return MistralAdapter(mistral_config, API_KEY)
 
 
+def _prompt_mode_metadata(model_id: str) -> dict[str, object]:
+    """Return ``metadata.mistral.prompt_mode`` data for magistral-medium models.
+
+    Mirrors what ``mistral.overrides.json`` carries: the (deprecated)
+    magistral-medium reasoning models engage reasoning via ``prompt_mode``,
+    which is now a per-model wire FACT in data, not a name-prefix guess.
+    """
+
+    if model_id.startswith("magistral-medium"):
+        return {"mistral": {"prompt_mode": "reasoning"}}
+    return {}
+
+
 @pytest.fixture()
 def mistral_adapter_with_reasoning_lookup(mistral_config: ProviderConfig) -> MistralAdapter:
     def _model_lookup(model_id: str) -> Model | None:
@@ -70,6 +83,7 @@ def mistral_adapter_with_reasoning_lookup(mistral_config: ProviderConfig) -> Mis
             ),
             context_window=128000,
             max_output_tokens=8192,
+            metadata=_prompt_mode_metadata(model_id),
         )
 
     return MistralAdapter(
@@ -77,6 +91,33 @@ def mistral_adapter_with_reasoning_lookup(mistral_config: ProviderConfig) -> Mis
         API_KEY,
         model_lookup=_model_lookup,
     )
+
+
+@pytest.fixture()
+def mistral_adapter_with_prompt_mode_lookup(mistral_config: ProviderConfig) -> MistralAdapter:
+    """A reasoning-capable lookup that carries the magistral ``prompt_mode`` fact.
+
+    Unlike ``mistral_adapter_with_reasoning_lookup`` it reports every queried
+    model as reasoning-capable, so the prompt-mode wire branch is exercised
+    purely from the ``metadata.mistral.prompt_mode`` data.
+    """
+
+    def _model_lookup(model_id: str) -> Model:
+        return Model(
+            model_id=model_id,
+            name=model_id,
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=128000,
+            max_output_tokens=8192,
+            metadata=_prompt_mode_metadata(model_id),
+        )
+
+    return MistralAdapter(mistral_config, API_KEY, model_lookup=_model_lookup)
 
 
 def raw_mistral_model(
@@ -292,11 +333,11 @@ async def test_build_payload_sets_reasoning_effort_none_when_disabled(
 @respx.mock
 @pytest.mark.asyncio
 async def test_build_payload_magistral_medium_uses_prompt_mode_reasoning(
-    mistral_adapter: MistralAdapter,
+    mistral_adapter_with_prompt_mode_lookup: MistralAdapter,
 ) -> None:
     route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
-    await mistral_adapter.send(
+    await mistral_adapter_with_prompt_mode_lookup.send(
         SAMPLE_MESSAGES,
         model_id="magistral-medium-latest",
         thinking_effort="high",
@@ -310,11 +351,11 @@ async def test_build_payload_magistral_medium_uses_prompt_mode_reasoning(
 @respx.mock
 @pytest.mark.asyncio
 async def test_build_payload_magistral_medium_2509_uses_prompt_mode_reasoning(
-    mistral_adapter: MistralAdapter,
+    mistral_adapter_with_prompt_mode_lookup: MistralAdapter,
 ) -> None:
     route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
-    await mistral_adapter.send(
+    await mistral_adapter_with_prompt_mode_lookup.send(
         SAMPLE_MESSAGES,
         model_id="magistral-medium-2509",
         thinking_effort="high",
@@ -323,6 +364,26 @@ async def test_build_payload_magistral_medium_2509_uses_prompt_mode_reasoning(
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["prompt_mode"] == "reasoning"
     assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_build_payload_magistral_small_without_prompt_mode_metadata_uses_reasoning_effort(
+    mistral_adapter_with_prompt_mode_lookup: MistralAdapter,
+) -> None:
+    """A reasoning model lacking the prompt_mode fact uses the reasoning_effort wire."""
+
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter_with_prompt_mode_lookup.send(
+        SAMPLE_MESSAGES,
+        model_id="magistral-small-latest",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning_effort"] == "high"
+    assert "prompt_mode" not in request_body
 
 
 @respx.mock
@@ -400,11 +461,11 @@ async def test_build_payload_magistral_medium_lookup_keeps_prompt_mode_reasoning
 @respx.mock
 @pytest.mark.asyncio
 async def test_build_payload_magistral_medium_none_effort_sends_no_reasoning_params(
-    mistral_adapter: MistralAdapter,
+    mistral_adapter_with_prompt_mode_lookup: MistralAdapter,
 ) -> None:
     route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
-    await mistral_adapter.send(
+    await mistral_adapter_with_prompt_mode_lookup.send(
         SAMPLE_MESSAGES,
         model_id="magistral-medium-latest",
         thinking_effort="none",

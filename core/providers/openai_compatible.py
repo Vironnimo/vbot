@@ -56,6 +56,13 @@ OPENAI_REASONING_EFFORTS_WITH_NONE = {"none", *OPENAI_REASONING_EFFORTS}
 OPENAI_NONE_REASONING_PROVIDER_IDS = {"openai"}
 OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content", "thinking")
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
+# The provider-scoped metadata field naming WHICH wire field carries the
+# response reasoning (Phase 5, projected from models.dev ``interleaved``):
+# ``{field: "reasoning_content"}`` → visible text, ``{field: "reasoning_details"}``
+# → opaque meta. It is read GRACEFULLY: when present it makes the named field the
+# preferred source; when absent ``normalize_response`` falls back to today's
+# hardcoded default-key scan, so it works whether or not catalogs carry the field.
+REASONING_RESPONSE_FIELD_METADATA_KEY = "reasoning_response_field"
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
 OPENAI_STOP_FINISH_REASONS = {"stop", "length", "content_filter"}
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
@@ -190,21 +197,55 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             headers.update(self._config.extra_headers)
         return headers
 
-    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
-        """Normalize an OpenAI-compatible response to canonical assistant fields."""
+    def normalize_response(
+        self, response: dict[str, Any], *, model_id: str | None = None
+    ) -> dict[str, Any]:
+        """Normalize an OpenAI-compatible response to canonical assistant fields.
+
+        When the model's catalog metadata names a reasoning response field
+        (``metadata.<provider>.reasoning_response_field``), that field is the
+        PREFERRED source for the reasoning; otherwise the hardcoded default-key
+        scan applies, so this works whether or not catalogs carry the projected
+        field (Phase 5, graceful).
+        """
         message = _first_choice_message(response)
         content = message.get("content")
+        preferred_field = self._reasoning_response_field(model_id)
         normalized: dict[str, Any] = {
             "role": "assistant",
             "content": content if isinstance(content, str) or content is None else str(content),
-            "reasoning": _extract_openai_reasoning(message),
-            "reasoning_meta": _extract_openai_reasoning_meta(message),
+            "reasoning": _extract_openai_reasoning(message, preferred_field=preferred_field),
+            "reasoning_meta": _extract_openai_reasoning_meta(
+                message, preferred_field=preferred_field
+            ),
             "tool_calls": _extract_openai_tool_calls(message),
         }
         usage = _extract_openai_usage(response)
         if usage is not None:
             normalized["usage"] = usage
         return normalized
+
+    def _reasoning_response_field(self, model_id: str | None) -> str | None:
+        """Resolve the data-driven reasoning response field for ``model_id``.
+
+        Reads ``metadata.<provider>.reasoning_response_field`` from the injected
+        catalog, where ``<provider>`` is this adapter's id with hyphens
+        normalized to underscores (matching the provider-scoped metadata key
+        convention, e.g. ``opencode_go``). Returns ``None`` — falling back to the
+        hardcoded default-key scan — when there is no lookup, no model, or no
+        such metadata field.
+        """
+
+        if model_id is None or self._model_lookup is None:
+            return None
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return None
+        provider_metadata = model.metadata.get(self._config.id.replace("-", "_"))
+        if not isinstance(provider_metadata, Mapping):
+            return None
+        field_name = provider_metadata.get(REASONING_RESPONSE_FIELD_METADATA_KEY)
+        return field_name if isinstance(field_name, str) and field_name else None
 
     def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Convert an internal assistant message to its wire representation.
@@ -800,7 +841,22 @@ def _parse_tool_arguments(arguments: Any) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _extract_openai_reasoning(message: dict[str, Any]) -> str | None:
+def _extract_openai_reasoning(
+    message: dict[str, Any], *, preferred_field: str | None = None
+) -> str | None:
+    """Return the visible reasoning text from an assistant message.
+
+    When ``preferred_field`` names a visible-text reasoning field present as a
+    string on the message, it wins; otherwise the default key scan
+    (``OPENAI_REASONING_KEYS``) applies. A ``preferred_field`` that is actually a
+    meta field (e.g. ``reasoning_details``) carries no visible text, so it is
+    ignored here and surfaces through :func:`_extract_openai_reasoning_meta`.
+    """
+
+    if preferred_field is not None and preferred_field not in OPENAI_REASONING_META_KEYS:
+        value = message.get(preferred_field)
+        if isinstance(value, str):
+            return value
     for key in OPENAI_REASONING_KEYS:
         value = message.get(key)
         if isinstance(value, str):
@@ -808,11 +864,28 @@ def _extract_openai_reasoning(message: dict[str, Any]) -> str | None:
     return None
 
 
-def _extract_openai_reasoning_meta(message: dict[str, Any]) -> dict[str, Any] | None:
+def _extract_openai_reasoning_meta(
+    message: dict[str, Any], *, preferred_field: str | None = None
+) -> dict[str, Any] | None:
+    """Return the opaque reasoning-meta fields from an assistant message.
+
+    The default meta keys (``OPENAI_REASONING_META_KEYS``) are always collected;
+    a ``preferred_field`` that names a meta field not already in that set is also
+    collected when present, so a catalog-named meta field is preserved for replay
+    even if it is not a hardcoded default.
+    """
+
     meta: dict[str, Any] = {}
     for key in OPENAI_REASONING_META_KEYS:
         if key in message:
             meta[key] = message[key]
+    if (
+        preferred_field is not None
+        and preferred_field not in OPENAI_REASONING_KEYS
+        and preferred_field not in meta
+        and preferred_field in message
+    ):
+        meta[preferred_field] = message[preferred_field]
     return meta or None
 
 

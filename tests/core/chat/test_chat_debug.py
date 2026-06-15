@@ -62,7 +62,9 @@ class DebugTrackingStubAdapter:
             raise response
         return cast(JsonObject, response)
 
-    def normalize_response(self, response: JsonObject) -> JsonObject:
+    def normalize_response(
+        self, response: JsonObject, *, model_id: str | None = None
+    ) -> JsonObject:
         return response
 
     def set_debug_context(self, ctx: DebugContext) -> None:

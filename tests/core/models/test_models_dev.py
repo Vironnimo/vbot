@@ -27,6 +27,7 @@ from core.models.models_dev import (
     project_canonical_models,
     provider_reasoning_block,
     reasoning_capability_block,
+    reasoning_response_field,
     refresh_canonical_layer,
     write_raw_catalog,
 )
@@ -247,6 +248,37 @@ def test_provider_reasoning_block_no_deviation_returns_none(catalog: ModelsDevCa
         wire_id="deepseek-v4-pro",
     )
     assert block is None
+
+
+def test_reasoning_response_field_from_interleaved(catalog: ModelsDevCatalog):
+    # The OpenRouter section's deepseek-v4-pro carries interleaved:
+    # {field: reasoning_content} → that field name is projected.
+    field = reasoning_response_field(
+        catalog,
+        models_dev_id="openrouter",
+        wire_id="deepseek/deepseek-v4-pro",
+    )
+    assert field == "reasoning_content"
+
+
+def test_reasoning_response_field_absent_returns_none(catalog: ModelsDevCatalog):
+    # google/gemini-2.5-flash carries no ``interleaved`` → None (graceful: the
+    # adapter keeps its hardcoded default-key scan).
+    field = reasoning_response_field(
+        catalog,
+        models_dev_id="openrouter",
+        wire_id="google/gemini-2.5-flash",
+    )
+    assert field is None
+
+
+def test_reasoning_response_field_unknown_model_returns_none(catalog: ModelsDevCatalog):
+    field = reasoning_response_field(
+        catalog,
+        models_dev_id="openrouter",
+        wire_id="does/not-exist",
+    )
+    assert field is None
 
 
 # ---------------------------------------------------------------------------

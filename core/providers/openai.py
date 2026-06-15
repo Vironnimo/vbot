@@ -232,14 +232,16 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         async for delta in super().stream(messages, model_id=model_id, **kwargs):
             yield delta
 
-    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
+    def normalize_response(
+        self, response: dict[str, Any], *, model_id: str | None = None
+    ) -> dict[str, Any]:
         """Normalize a provider response to canonical assistant fields."""
 
         if self._connection_mode == CODEX_RESPONSES_MODE and isinstance(
             response.get("output"), list
         ):
             return normalize_responses_response(response)
-        return super().normalize_response(response)
+        return super().normalize_response(response, model_id=model_id)
 
     def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         request_kwargs: dict[str, Any] = {}

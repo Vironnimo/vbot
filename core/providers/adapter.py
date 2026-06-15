@@ -144,11 +144,19 @@ class ProviderAdapter(ABC):
             structure from callers.
         """
 
-    def normalize_response(self, response: JsonObject) -> JsonObject:
+    def normalize_response(
+        self, response: JsonObject, *, model_id: str | None = None
+    ) -> JsonObject:
         """Normalize a provider response into canonical assistant-message fields.
 
         Concrete adapters own provider-specific response parsing.  The default
         raises so subclasses can add this capability without making the legacy
         ABC constructor contract stricter during Phase 2.
+
+        ``model_id`` is optional and keyword-only: the chat layer passes it so an
+        adapter can read per-model wire facts (e.g. the data-driven reasoning
+        response field) from its ``model_lookup``; callers without it (and the
+        compaction summary path) omit it and the adapter falls back to its
+        hardcoded default behavior.
         """
         raise NotImplementedError("normalize_response must be implemented by provider adapters")
