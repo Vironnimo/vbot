@@ -4,6 +4,7 @@
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
   import Modal from './ui/Modal.svelte';
+  import StatusChip from './ui/StatusChip.svelte';
   import Toggle from './ui/Toggle.svelte';
   import {
     createCronJob,
@@ -324,16 +325,16 @@
     return t('cron.status.completed', 'Completed');
   }
 
-  function statusChipClass(status) {
+  function statusChipVariant(status) {
     if (status === CRON_STATUS_ACTIVE) {
-      return 'chip-green';
+      return 'success';
     }
 
     if (status === 'paused') {
-      return 'chip-amber';
+      return 'warn';
     }
 
-    return 'chip-red';
+    return 'error';
   }
 
   function errorMessageText(error, fallback) {
@@ -444,9 +445,9 @@
               </td>
               <td class="cron-view__mono">{timezoneLabel(job)}</td>
               <td>
-                <span class={`chip ${statusChipClass(job.status)}`}>
+                <StatusChip variant={statusChipVariant(job.status)}>
                   {statusLabel(job.status)}
-                </span>
+                </StatusChip>
               </td>
               <td class="cron-view__mono">
                 {displayValue(job.last_fired_at_display)}

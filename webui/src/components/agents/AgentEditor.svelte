@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import StatusChip from '../ui/StatusChip.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
   import {
@@ -991,9 +992,9 @@
                       </div>
                     {/if}
                   </div>
-                  <span class="chip chip-amber">
+                  <StatusChip variant="warn">
                     {t('agents.access.notLoadable', 'not loadable')}
-                  </span>
+                  </StatusChip>
                 </div>
               {/each}
             </div>

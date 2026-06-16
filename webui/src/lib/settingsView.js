@@ -255,20 +255,20 @@ export function mergeChannelStatuses(channels, statusResults) {
   });
 }
 
-export function channelEnabledChipClass(enabled) {
-  return enabled ? 'chip-green' : 'chip-amber';
+export function channelEnabledChipVariant(enabled) {
+  return enabled ? 'success' : 'warn';
 }
 
-export function channelRunningChipClass(running) {
+export function channelRunningChipVariant(running) {
   if (running === true) {
-    return 'chip-green';
+    return 'success';
   }
 
   if (running === false) {
-    return 'chip-amber';
+    return 'warn';
   }
 
-  return 'chip-orange';
+  return 'info';
 }
 
 export function formatAllowedChatIds(value) {
@@ -349,14 +349,14 @@ function normalizeExtensionCapabilities(capabilities) {
   };
 }
 
-export function extensionStatusChipClass(status) {
+export function extensionStatusChipVariant(status) {
   if (status === 'loaded') {
-    return 'chip-green';
+    return 'success';
   }
   if (status === 'failed') {
-    return 'chip-red';
+    return 'error';
   }
-  return 'chip-amber';
+  return 'warn';
 }
 
 export function summarizeExtensionCapabilities(capabilities, translate) {
