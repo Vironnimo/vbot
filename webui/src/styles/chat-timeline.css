@@ -261,6 +261,16 @@
   font-style: italic;
 }
 
+.interrupted-notice {
+  border-left: 2px solid rgba(232, 135, 10, 0.4);
+  margin: 4px 0 2px;
+  padding: 4px 0 4px 12px;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-style: italic;
+}
+
 .subagent-tool-event .tool-event-line {
   align-items: center;
 }
