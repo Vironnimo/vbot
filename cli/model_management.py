@@ -59,13 +59,33 @@ def _format_model_row(model: object) -> str:
 
 
 def _format_refresh_result(data: Mapping[str, Any], provider_id: str | None) -> str:
+    failures = _format_refresh_failures(data.get("errors"))
     if provider_id is not None:
         resolved_provider_id = _string_or_default(data.get("provider_id"), provider_id)
-        return f"refreshed {resolved_provider_id}"
+        return f"refreshed {resolved_provider_id}{failures}"
 
     refreshed_count = data.get("refreshed_count", "?")
     model_count = data.get("model_count", "?")
-    return f"refreshed {refreshed_count} providers ({model_count} models)"
+    return f"refreshed {refreshed_count} providers ({model_count} models){failures}"
+
+
+def _format_refresh_failures(errors: object) -> str:
+    """Render a "; N failed: …" suffix for connections discovery skipped.
+
+    A broken provider no longer aborts the refresh; it is reported instead so
+    an agent reading the CLI output knows which connections were left stale.
+    """
+
+    if not isinstance(errors, Sequence) or isinstance(errors, str | bytes) or not errors:
+        return ""
+    labels = []
+    for entry in errors:
+        if isinstance(entry, Mapping):
+            label = entry.get("connection_id") or entry.get("provider_id") or "unknown"
+        else:
+            label = "unknown"
+        labels.append(str(label))
+    return f"; {len(labels)} failed: {', '.join(labels)}"
 
 
 def _string_or_default(value: object, default: str) -> str:
