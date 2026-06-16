@@ -1,5 +1,7 @@
 """Tests for pinned memory file backend."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -59,6 +61,31 @@ def test_memory_service_replace_and_remove_entries(tmp_path: Path) -> None:
     assert replaced.content == "new fact"
     assert removed.content == "second fact"
     assert [entry.content for entry in service.list_entries(workspace, "agent")] == ["new fact"]
+
+
+def test_memory_service_concurrent_adds_do_not_lose_entries(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = MemoryService()
+
+    worker_count = 40
+    barrier = threading.Barrier(worker_count)
+
+    def add(index: int) -> None:
+        # Release every worker at once so their read-modify-write windows overlap —
+        # the exact condition that silently drops entries without a per-file lock.
+        barrier.wait(timeout=10)
+        service.add_entry(workspace, "agent", f"fact number {index}")
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for future in [executor.submit(add, index) for index in range(worker_count)]:
+            future.result()
+
+    entries = service.list_entries(workspace, "agent")
+    assert {entry.content for entry in entries} == {
+        f"fact number {index}" for index in range(worker_count)
+    }
+    assert len(entries) == worker_count
 
 
 def test_memory_service_rejects_invalid_entry_id(tmp_path: Path) -> None:
