@@ -306,6 +306,33 @@ class ModelRegistry:
         if resolved in cls._cache:
             return cls._cache[resolved]
 
+        registry = cls(cls._assemble_models(resolved))
+        cls._cache[resolved] = registry
+        return registry
+
+    def reload(self, resources_dir: Path) -> None:
+        """Re-assemble the registry in place from disk, keeping object identity.
+
+        ``load`` rebinds nothing here: refresh writes new layer files, then
+        reload swaps *this* registry's contents so every holder that captured the
+        instance at construction — task-model targets (speech/image/embeddings),
+        the ``/status`` display, and the recall backend — sees the new catalog
+        without re-wiring. The class cache entry is repointed at this same
+        (now-updated) instance, so a later ``load`` returns it too.
+        """
+
+        resolved = resources_dir.resolve()
+        self._models = self._assemble_models(resolved)
+        type(self)._cache[resolved] = self
+
+    @classmethod
+    def _assemble_models(cls, resolved: Path) -> dict[tuple[str, str], Model]:
+        """Assemble every effective model from the on-disk layers (no cache).
+
+        ``resolved`` must already be a resolved path. Shared by ``load`` (first
+        build) and ``reload`` (in-place refresh) so both paths assemble identically.
+        """
+
         models_dir = resolved / "models"
         canonical_layer = load_canonical_layer(models_dir)
         models: dict[tuple[str, str], Model] = {}
@@ -341,9 +368,7 @@ class ModelRegistry:
                 )
                 models[(provider_id, wire_id)] = _model_from_record(wire_id, record)
 
-        registry = cls(models)
-        cls._cache[resolved] = registry
-        return registry
+        return models
 
     @staticmethod
     def _read_override_models(models_dir: Path, provider_id: str) -> dict[str, Any]:

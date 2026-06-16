@@ -1,5 +1,6 @@
 """Tests for Model dataclass and ModelRegistry."""
 
+import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -649,6 +650,51 @@ class TestModelRegistryLoad:
 
         assert registry_second is not registry_first
         assert registry_second.get("test_provider", "model-a").name == "Updated"
+
+    def test_reload_swaps_contents_in_place_keeping_identity(self, tmp_path: Path):
+        """``reload`` re-reads disk into the same instance so holders that captured
+        the registry at construction see the new catalog without re-wiring."""
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        model_file = models_dir / "test_provider.json"
+
+        def write_model(name: str) -> None:
+            model_file.write_text(
+                json.dumps(
+                    {
+                        "provider_id": "test_provider",
+                        "models": {
+                            "model-a": {
+                                "name": name,
+                                "capabilities": {
+                                    "vision": False,
+                                    "tools": False,
+                                    "json_mode": False,
+                                    "reasoning": {"supported": False},
+                                },
+                                "context_window": 1000,
+                                "max_output_tokens": 100,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+        write_model("Original")
+        registry = ModelRegistry.load(tmp_path)
+        # A holder that captured the instance at construction.
+        held_reference = registry
+
+        write_model("Updated")
+        registry.reload(tmp_path)
+
+        # Same object, new contents: the captured reference sees the update.
+        assert held_reference is registry
+        assert held_reference.get("test_provider", "model-a").name == "Updated"
+        # The cache is repointed at this same instance, not a fresh one.
+        assert ModelRegistry.load(tmp_path) is registry
 
     def test_override_file_is_not_loaded_as_its_own_provider(self, tmp_path: Path):
         """``<provider>.overrides.json`` is a hand layer, not a provider file: it
