@@ -20,7 +20,12 @@ import {
 
 describe('statisticsView formatting', () => {
   it('exposes the four sub-views and three granularities', () => {
-    expect(STATISTICS_SUB_VIEWS).toEqual(['overview', 'usage', 'runs', 'tools']);
+    expect(STATISTICS_SUB_VIEWS).toEqual([
+      'overview',
+      'usage',
+      'runs',
+      'tools',
+    ]);
     expect(DAILY_GRANULARITIES).toEqual(['day', 'week', 'month']);
   });
 
@@ -156,8 +161,16 @@ describe('statisticsView chart geometry', () => {
       { key: 'cancelled', value: 0 },
     ]);
     expect(segments).toHaveLength(2);
-    expect(segments[0]).toMatchObject({ key: 'completed', fraction: 0.75, offset: 0 });
-    expect(segments[1]).toMatchObject({ key: 'failed', fraction: 0.25, offset: 0.75 });
+    expect(segments[0]).toMatchObject({
+      key: 'completed',
+      fraction: 0.75,
+      offset: 0,
+    });
+    expect(segments[1]).toMatchObject({
+      key: 'failed',
+      fraction: 0.25,
+      offset: 0.75,
+    });
   });
 
   it('returns no donut segments when the total is zero', () => {

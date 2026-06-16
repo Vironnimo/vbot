@@ -22,9 +22,7 @@ def _agent(model: str) -> Any:
 
 class TestModelInputModalities:
     def test_returns_model_input_modalities_on_success(self) -> None:
-        model = SimpleNamespace(
-            capabilities=SimpleNamespace(input_modalities=("text", "image"))
-        )
+        model = SimpleNamespace(capabilities=SimpleNamespace(input_modalities=("text", "image")))
         runtime = _runtime_with_models_get(lambda _provider, _model: model)
 
         modalities = _model_input_modalities(runtime, _agent("openai/gpt-5.2"))

@@ -87,9 +87,10 @@ def test_model_reasoning_levels_returns_effective_ladder() -> None:
             ReasoningCapabilities(supported=True, control="levels", levels=("high", "xhigh"))
         )
 
-    assert model_reasoning_levels(
-        model_lookup, "deepseek/deepseek-v4-pro::api-key"
-    ) == ("high", "xhigh")
+    assert model_reasoning_levels(model_lookup, "deepseek/deepseek-v4-pro::api-key") == (
+        "high",
+        "xhigh",
+    )
 
 
 def test_model_reasoning_levels_none_without_ladder() -> None:

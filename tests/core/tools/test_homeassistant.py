@@ -261,8 +261,7 @@ async def test_list_entities_http_error(
 
     assert_failure_envelope(result, "home_assistant_error")
     assert any(
-        record.levelno == logging.WARNING
-        and "Home Assistant request failed" in record.getMessage()
+        record.levelno == logging.WARNING and "Home Assistant request failed" in record.getMessage()
         for record in caplog.records
     )
 

@@ -216,7 +216,9 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() => document.body.textContent.includes('Per agent'));
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
 
     expect(rpcMock).toHaveBeenCalledWith('statistics.report');
     expect(document.body.textContent).toContain('Run status');
@@ -229,7 +231,9 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() => document.body.textContent.includes('Per agent'));
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
 
     const usageTab = [...document.querySelectorAll('.stats-view__tab')].find(
       (button) => button.textContent.trim() === 'Usage',
@@ -248,7 +252,9 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() => document.body.textContent.includes('Per agent'));
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
 
     const runsTab = [...document.querySelectorAll('.stats-view__tab')].find(
       (button) => button.textContent.trim() === 'Runs & errors',
@@ -265,7 +271,9 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() => document.body.textContent.includes('Per agent'));
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
 
     const toolsTab = [...document.querySelectorAll('.stats-view__tab')].find(
       (button) => button.textContent.trim() === 'Tools',
@@ -292,7 +300,9 @@ describe('StatisticsView', () => {
       (button) => button.textContent.trim() === 'Retry',
     );
     retryButton.click();
-    await waitForCondition(() => document.body.textContent.includes('Per agent'));
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
 
     expect(rpcMock).toHaveBeenCalledTimes(2);
   });
