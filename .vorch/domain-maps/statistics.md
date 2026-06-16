@@ -56,10 +56,16 @@ The report tree (frozen dataclasses in `statistics.py`, all JSON-native fields):
   `state` (mirrors `operations_methods._log_viewer`). Registered in
   [server/rpc/methods.py](../../server/rpc/methods.py).
 - **WebUI**: `webui/src/components/StatisticsView.svelte` calls
-  `rpc('statistics.report')` once on mount (plus manual refresh) and renders four
-  sub-views (Overview / Usage / Runs & errors / Tools). All formatting/rollup
+  `rpc('statistics.report')` once on mount (plus manual refresh) and renders five
+  sub-views (Overview / Usage / Runs & errors / Tools / Limits). All formatting/rollup
   logic is in the pure, unit-tested `webui/src/lib/statisticsView.js`; the nav
   entry (`navigation.statistics`) and route live in `webui/src/App.svelte`.
+- **The Limits sub-view is NOT part of this domain.** It is presentation-only: it
+  lazily calls the providers-domain `provider.usage` RPC (live subscription usage),
+  which never touches `StatisticsService` and adds no persistence — it only happens to
+  live behind the same tab. See `providers.md` → Provider Usage Probe and `webui.md`.
+  The read-only "no new backend storage, no network" invariant below applies to
+  `StatisticsService` only.
 
 ## Conventions
 

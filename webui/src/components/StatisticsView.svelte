@@ -8,12 +8,14 @@
     STATISTICS_SUB_VIEWS,
     DAILY_GRANULARITIES,
     barFractions,
+    clampUsagePercent,
     donutSegments,
     formatDateTime,
     formatDurationMs,
     formatHourLabel,
     formatInteger,
     formatPercent,
+    formatResetAt,
     formatShare,
     formatTokens,
     groupModelsByProvider,
@@ -21,6 +23,7 @@
     sparklinePoints,
     tokenSplit,
     topN,
+    usageSeverity,
   } from '$lib/statisticsView.js';
 
   const MESSAGE_ROLES = [
@@ -43,12 +46,27 @@
   let granularity = $state('day');
   let destroyed = false;
 
+  // The Limits sub-view loads live provider usage on its own (provider.usage),
+  // separate from the read-only statistics.report above. It is fetched lazily on
+  // first open so opening Statistics never pings provider usage endpoints.
+  let usageReport = $state(null);
+  let usageLoading = $state(false);
+  let usageError = $state('');
+  let usageLoaded = $state(false);
+
   const locale = $derived(activeLocaleTag());
   const overview = $derived(report?.overview ?? null);
   const usage = $derived(report?.usage ?? null);
   const runs = $derived(report?.runs ?? null);
   const errors = $derived(report?.errors ?? null);
   const tools = $derived(report?.tools ?? null);
+  const usageProviders = $derived(usageReport?.providers ?? []);
+
+  $effect(() => {
+    if (activeSubView === 'limits' && !usageLoaded) {
+      loadUsage();
+    }
+  });
 
   const statusSegments = $derived(
     overview
@@ -115,6 +133,34 @@
     }
   }
 
+  async function loadUsage() {
+    usageLoading = true;
+    usageError = '';
+    // Set before awaiting so the lazy-open effect never re-fires while a fetch
+    // is in flight; the refresh / retry buttons call loadUsage() directly.
+    usageLoaded = true;
+    try {
+      const result = await rpc('provider.usage');
+      if (destroyed) {
+        return;
+      }
+      usageReport = result;
+    } catch (error) {
+      if (destroyed) {
+        return;
+      }
+      usageReport = null;
+      usageError = errorMessageText(
+        error,
+        t('statistics.limits.loadError', 'Usage limits could not be loaded.'),
+      );
+    } finally {
+      if (!destroyed) {
+        usageLoading = false;
+      }
+    }
+  }
+
   function errorMessageText(error, fallback) {
     if (typeof error?.message === 'string' && error.message.trim()) {
       return error.message.trim();
@@ -130,6 +176,8 @@
         return t('statistics.subview.runs', 'Runs & errors');
       case 'tools':
         return t('statistics.subview.tools', 'Tools');
+      case 'limits':
+        return t('statistics.subview.limits', 'Limits');
       default:
         return t('statistics.subview.overview', 'Overview');
     }
@@ -227,6 +275,8 @@
       {@render runsPanel()}
     {:else if activeSubView === 'tools'}
       {@render toolsPanel()}
+    {:else if activeSubView === 'limits'}
+      {@render limitsPanel()}
     {/if}
   {/if}
 </section>
@@ -860,6 +910,104 @@
   </div>
 {/snippet}
 
+{#snippet limitWindow(window)}
+  {@const percent = clampUsagePercent(window.used_percent)}
+  {@const severity = usageSeverity(window.used_percent)}
+  {@const reset = formatResetAt(window.reset_at, locale)}
+  <li class="stats-limit-window">
+    <div class="stats-limit-window__head">
+      <span class="stats-limit-window__label">{window.label}</span>
+      <span class="stats-limit-window__used">
+        {t('statistics.limits.usedPercent', '{percent}% used', {
+          percent: Math.round(percent),
+        })}
+      </span>
+    </div>
+    <span class="stats-limit-window__track">
+      <span
+        class={`stats-limit-window__fill stats-limit-window__fill--${severity}`}
+        style={`width: ${percent}%`}
+      ></span>
+    </span>
+    {#if reset}
+      <span class="stats-limit-window__reset" title={reset.absolute}>
+        {reset.relative
+          ? t('statistics.limits.resetsIn', 'Resets in {duration}', {
+              duration: reset.relative,
+            })
+          : reset.absolute}
+      </span>
+    {/if}
+  </li>
+{/snippet}
+
+{#snippet limitCard(snapshot)}
+  <div class="stats-limit-card">
+    <div class="stats-limit-card__head">
+      <span class="stats-limit-card__name">{snapshot.display_name}</span>
+      {#if snapshot.plan}
+        <span class="stats-limit-card__plan">{snapshot.plan}</span>
+      {/if}
+    </div>
+    {#if snapshot.error || snapshot.windows.length === 0}
+      <p class="stats-limit-card__unavailable">
+        {snapshot.error ??
+          t('statistics.limits.unavailable', 'Usage unavailable')}
+      </p>
+    {:else}
+      <ul class="stats-limit-windows">
+        {#each snapshot.windows as window (window.label)}
+          {@render limitWindow(window)}
+        {/each}
+      </ul>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet limitsPanel()}
+  <div class="stats-panel">
+    {#if usageLoading && !usageReport}
+      <p class="stats-view__placeholder">
+        {t('statistics.limits.loading', 'Loading usage limits…')}
+      </p>
+    {:else}
+      <div class="stats-block__head">
+        <p class="stats-note">
+          {t(
+            'statistics.limits.note',
+            'Live subscription usage, fetched on demand — nothing is stored.',
+          )}
+        </p>
+        <Button variant="secondary" onClick={loadUsage}>
+          {t('common.refresh', 'Refresh')}
+        </Button>
+      </div>
+
+      {#if usageError}
+        <div
+          class="stats-view__feedback stats-view__feedback--error"
+          aria-live="polite"
+        >
+          <span>{usageError}</span>
+          <Button variant="secondary" onClick={loadUsage}>
+            {t('common.retry', 'Retry')}
+          </Button>
+        </div>
+      {:else if usageProviders.length === 0}
+        <p class="stats-empty">
+          {t('statistics.limits.empty', 'No subscription providers connected.')}
+        </p>
+      {:else}
+        <div class="stats-limits">
+          {#each usageProviders as snapshot (snapshot.connection)}
+            {@render limitCard(snapshot)}
+          {/each}
+        </div>
+      {/if}
+    {/if}
+  </div>
+{/snippet}
+
 <style>
   .stats-view {
     display: flex;
@@ -1303,5 +1451,95 @@
   }
   .stats-block--narrow .stats-table {
     font-size: 11.5px;
+  }
+  .stats-limits {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .stats-limit-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+  }
+  .stats-limit-card__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+  .stats-limit-card__name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-hi);
+  }
+  .stats-limit-card__plan {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-med);
+    border: 1px solid var(--border-2);
+    border-radius: 10px;
+    padding: 1px 8px;
+  }
+  .stats-limit-card__unavailable {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-lo);
+    font-style: italic;
+  }
+  .stats-limit-windows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .stats-limit-window {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .stats-limit-window__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .stats-limit-window__label {
+    color: var(--text-med);
+  }
+  .stats-limit-window__used {
+    font-family: var(--font-mono);
+    color: var(--text-hi);
+  }
+  .stats-limit-window__track {
+    height: 7px;
+    background: var(--surface-3);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+  }
+  .stats-limit-window__fill {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+  }
+  .stats-limit-window__fill--warn {
+    background: var(--amber);
+  }
+  .stats-limit-window__fill--critical {
+    background: var(--red);
+  }
+  .stats-limit-window__reset {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-lo);
   }
 </style>

@@ -9,11 +9,21 @@ export const STATISTICS_SUB_VIEWS = Object.freeze([
   'usage',
   'runs',
   'tools',
+  'limits',
 ]);
 
 export const DAILY_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
 
+// Percent-used thresholds at which a provider usage window turns warn / critical.
+export const USAGE_SEVERITY_THRESHOLDS = Object.freeze({
+  warn: 75,
+  critical: 90,
+});
+
 const EM_DASH = '—';
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 
 function toFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -84,6 +94,61 @@ export function formatDate(isoString, locale = 'en') {
 export function formatHourLabel(hour) {
   const safeHour = Math.max(0, Math.min(23, Math.round(toFiniteNumber(hour))));
   return `${String(safeHour).padStart(2, '0')}:00`;
+}
+
+// Clamp a provider usage percentage to [0, 100] so a bar width and severity can
+// never run off the track even if a provider over-reports.
+export function clampUsagePercent(value) {
+  return Math.max(0, Math.min(100, toFiniteNumber(value)));
+}
+
+// Map a usage percentage to a severity bucket for the bar color.
+export function usageSeverity(percent) {
+  const value = clampUsagePercent(percent);
+  if (value >= USAGE_SEVERITY_THRESHOLDS.critical) {
+    return 'critical';
+  }
+  if (value >= USAGE_SEVERITY_THRESHOLDS.warn) {
+    return 'warn';
+  }
+  return 'ok';
+}
+
+// Build a relative ("3h 12m") + absolute reset-time model for a usage window.
+// `now` is injectable so the relative part is deterministic in tests. Returns
+// null for a missing / unparseable timestamp so the component can omit it.
+export function formatResetAt(isoString, locale = 'en', now = Date.now()) {
+  const date = parseIso(isoString);
+  if (date === null) {
+    return null;
+  }
+  const deltaMs = date.getTime() - now;
+  return {
+    absolute: formatDateTime(isoString, locale),
+    relative: deltaMs > 0 ? formatRelativeDuration(deltaMs) : null,
+    isPast: deltaMs <= 0,
+  };
+}
+
+// Compact "2d 4h" / "3h 12m" / "45m" / "<1m" duration for a future instant.
+// Shows at most the two largest non-zero units.
+function formatRelativeDuration(milliseconds) {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+    return null;
+  }
+  if (milliseconds < MINUTE_MS) {
+    return '<1m';
+  }
+  const days = Math.floor(milliseconds / DAY_MS);
+  const hours = Math.floor((milliseconds % DAY_MS) / HOUR_MS);
+  const minutes = Math.floor((milliseconds % HOUR_MS) / MINUTE_MS);
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  return `${minutes}m`;
 }
 
 function parseIso(isoString) {

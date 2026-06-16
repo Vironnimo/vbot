@@ -153,3 +153,22 @@ Residual cleanup/scope noted while the user live-tested the refreshed DB in the 
    thinking), not the model's native toggle/budget parameter. Wiring those request
    shapes remains deferred until a reachable model needs the native shape.
 
+
+## 2026-06-16 - Provider usage probe: blind Copilot/MiniMax fetchers
+
+The live provider usage probe (`core/providers/usage.py`, Statistics → Limits subtab)
+ships with one live-verified fetcher and two blind ones.
+
+1. **OpenAI `openai:subscription` is live-verified** (2026-06-16, HTTP 200): the real
+   `/wham/usage` body matches openclaw's shape and the parser yields correct 5h +
+   weekly windows. No follow-up.
+
+2. **GitHub Copilot `github-copilot:oauth` is blind.** `copilot_internal/user` parsing
+   is implemented from openclaw's field names but not live-verified (no Copilot login in
+   this environment). Pinned by unit tests; degrades to an "unavailable" snapshot on
+   shape mismatch. Live-verify when a Copilot login exists.
+
+3. **MiniMax `minimax:api-key` is blind.** `token_plan/remains` parsing — especially the
+   remaining-vs-total count keys (MiniMax misnames "usage" as "remaining") — is an
+   assumption pinned only by unit tests. Live-verify when a MiniMax Token Plan key is
+   available; the percent could be inverted if the count semantics differ.

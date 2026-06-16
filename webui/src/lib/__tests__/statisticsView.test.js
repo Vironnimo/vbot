@@ -4,11 +4,13 @@ import {
   DAILY_GRANULARITIES,
   STATISTICS_SUB_VIEWS,
   barFractions,
+  clampUsagePercent,
   donutSegments,
   formatDurationMs,
   formatHourLabel,
   formatInteger,
   formatPercent,
+  formatResetAt,
   formatShare,
   formatTokens,
   groupModelsByProvider,
@@ -16,15 +18,17 @@ import {
   sparklinePoints,
   tokenSplit,
   topN,
+  usageSeverity,
 } from '../statisticsView.js';
 
 describe('statisticsView formatting', () => {
-  it('exposes the four sub-views and three granularities', () => {
+  it('exposes the five sub-views and three granularities', () => {
     expect(STATISTICS_SUB_VIEWS).toEqual([
       'overview',
       'usage',
       'runs',
       'tools',
+      'limits',
     ]);
     expect(DAILY_GRANULARITIES).toEqual(['day', 'week', 'month']);
   });
@@ -52,6 +56,50 @@ describe('statisticsView formatting', () => {
   it('formats hour labels zero-padded', () => {
     expect(formatHourLabel(0)).toBe('00:00');
     expect(formatHourLabel(13)).toBe('13:00');
+  });
+});
+
+describe('statisticsView provider usage helpers', () => {
+  it('clamps usage percentages into [0, 100]', () => {
+    expect(clampUsagePercent(42.5)).toBe(42.5);
+    expect(clampUsagePercent(150)).toBe(100);
+    expect(clampUsagePercent(-5)).toBe(0);
+    expect(clampUsagePercent('x')).toBe(0);
+  });
+
+  it('buckets severity at the warn / critical thresholds', () => {
+    expect(usageSeverity(10)).toBe('ok');
+    expect(usageSeverity(74.9)).toBe('ok');
+    expect(usageSeverity(75)).toBe('warn');
+    expect(usageSeverity(89.9)).toBe('warn');
+    expect(usageSeverity(90)).toBe('critical');
+    expect(usageSeverity(120)).toBe('critical');
+  });
+
+  it('formats a future reset into relative + absolute parts', () => {
+    const now = Date.parse('2026-06-16T12:00:00Z');
+    const reset = formatResetAt('2026-06-16T15:12:00Z', 'en', now);
+    expect(reset.relative).toBe('3h 12m');
+    expect(reset.isPast).toBe(false);
+    expect(reset.absolute).not.toBe('—');
+  });
+
+  it('marks a past reset and yields no relative part', () => {
+    const now = Date.parse('2026-06-16T12:00:00Z');
+    const reset = formatResetAt('2026-06-16T11:00:00Z', 'en', now);
+    expect(reset.isPast).toBe(true);
+    expect(reset.relative).toBeNull();
+  });
+
+  it('returns null for a missing reset timestamp', () => {
+    expect(formatResetAt(null, 'en', Date.now())).toBeNull();
+    expect(formatResetAt('not-a-date', 'en', Date.now())).toBeNull();
+  });
+
+  it('uses day granularity for resets more than a day out', () => {
+    const now = Date.parse('2026-06-16T12:00:00Z');
+    const reset = formatResetAt('2026-06-18T18:00:00Z', 'en', now);
+    expect(reset.relative).toBe('2d 6h');
   });
 });
 

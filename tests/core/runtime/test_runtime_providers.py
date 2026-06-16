@@ -20,6 +20,8 @@ from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
+from core.providers.token_store import OAuthToken
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
 from core.utils.errors import ConfigError
@@ -687,6 +689,74 @@ def test_runtime_wires_minimax_adapter(runtime: Runtime) -> None:
 
     # Assert
     assert isinstance(adapter, MiniMaxAdapter)
+
+
+# ------------------------------------------------------------------
+# Public per-connection token accessors
+# ------------------------------------------------------------------
+
+
+def test_get_connection_token_getter_returns_static_for_api_key(runtime: Runtime) -> None:
+    """An api-key connection yields a StaticTokenGetter."""
+    # Arrange
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"MINIMAX_API_KEY": "minimax-token"},
+    )
+
+    # Act
+    getter = runtime.get_connection_token_getter("minimax", "minimax:api-key")
+
+    # Assert
+    assert isinstance(getter, StaticTokenGetter)
+
+
+@pytest.mark.asyncio
+async def test_get_connection_token_getter_returns_oauth_for_subscription(
+    runtime: Runtime,
+) -> None:
+    """An OAuth connection yields a refresh-capable OAuthTokenGetter."""
+    # Arrange
+    runtime.token_store.save(
+        "openai",
+        "subscription",
+        OAuthToken(access_token="oauth-access-token"),
+    )
+
+    # Act
+    getter = runtime.get_connection_token_getter("openai", "openai:subscription")
+
+    # Assert
+    assert isinstance(getter, OAuthTokenGetter)
+    assert await getter() == "oauth-access-token"
+
+
+def test_get_connection_token_extra_returns_stored_extra(runtime: Runtime) -> None:
+    """Stored OAuth token extra metadata is returned for the connection."""
+    # Arrange
+    runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(
+            access_token="copilot-token",
+            extra={"github_oauth_token": "gho_example"},
+        ),
+    )
+
+    # Act
+    extra = runtime.get_connection_token_extra("github-copilot", "github-copilot:oauth")
+
+    # Assert
+    assert extra == {"github_oauth_token": "gho_example"}
+
+
+def test_get_connection_token_extra_returns_empty_when_absent(runtime: Runtime) -> None:
+    """A connection with no stored token yields an empty extra mapping."""
+    # Act
+    extra = runtime.get_connection_token_extra("github-copilot", "github-copilot:oauth")
+
+    # Assert
+    assert extra == {}
 
 
 # ------------------------------------------------------------------
