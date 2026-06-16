@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyExtensionsPanelList,
   buildExtensionsUpdatePayload,
-  extensionStatusChipClass,
+  extensionStatusChipVariant,
   formatExtensionConfig,
   parseExtensionConfigDraft,
   summarizeExtensionCapabilities,
@@ -80,11 +80,11 @@ describe('applyExtensionsPanelList', () => {
   });
 });
 
-describe('extensionStatusChipClass', () => {
-  it('maps status to chip color', () => {
-    expect(extensionStatusChipClass('loaded')).toBe('chip-green');
-    expect(extensionStatusChipClass('failed')).toBe('chip-red');
-    expect(extensionStatusChipClass('disabled')).toBe('chip-amber');
+describe('extensionStatusChipVariant', () => {
+  it('maps status to a status-chip variant', () => {
+    expect(extensionStatusChipVariant('loaded')).toBe('success');
+    expect(extensionStatusChipVariant('failed')).toBe('error');
+    expect(extensionStatusChipVariant('disabled')).toBe('warn');
   });
 });
 
@@ -92,9 +92,9 @@ describe('summarizeExtensionCapabilities', () => {
   it('summarizes hooks, tools, and lifecycle', () => {
     const [extension] = applyExtensionsPanelList(rawExtensions());
 
-    expect(summarizeExtensionCapabilities(extension.capabilities, translate)).toBe(
-      'Hooks: tool_call(1), run_end(2) · Tools: word_count · startup',
-    );
+    expect(
+      summarizeExtensionCapabilities(extension.capabilities, translate),
+    ).toBe('Hooks: tool_call(1), run_end(2) · Tools: word_count · startup');
   });
 
   it('returns an empty string when nothing is contributed', () => {
