@@ -174,7 +174,7 @@ def raw_openrouter_model(
 
 
 @pytest.fixture()
-def openai_subscription_config() -> ProviderConfig:
+def openai_subscription_connection_config() -> ProviderConfig:
     """Provider with one OAuth connection (subscription) for Codex discovery.
 
     After the openai-provider merge there is a single ``openai`` provider
@@ -481,7 +481,7 @@ class TestRefreshModels:
     async def test_refresh_models_tags_models_with_selected_connection_id(
         self,
         tmp_path: Path,
-        openai_subscription_config: ProviderConfig,
+        openai_subscription_connection_config: ProviderConfig,
     ):
         """Refresh of a connection stamps every catalog entry with its local id.
 
@@ -512,10 +512,10 @@ class TestRefreshModels:
         )
 
         result = await refresh_models(
-            openai_subscription_config,
+            openai_subscription_connection_config,
             access_token,
             resources_dir,
-            credential_connection=openai_subscription_config.connections[0],
+            credential_connection=openai_subscription_connection_config.connections[0],
         )
 
         registry = ModelRegistry.load(resources_dir)
@@ -534,7 +534,7 @@ class TestRefreshModels:
     async def test_refresh_models_merges_models_from_other_connection(
         self,
         tmp_path: Path,
-        openai_subscription_config: ProviderConfig,
+        openai_subscription_connection_config: ProviderConfig,
     ):
         """A second refresh of a different connection leaves earlier entries alone.
 
@@ -608,10 +608,10 @@ class TestRefreshModels:
         )
 
         result = await refresh_models(
-            openai_subscription_config,
+            openai_subscription_connection_config,
             access_token,
             resources_dir,
-            credential_connection=openai_subscription_config.connections[0],
+            credential_connection=openai_subscription_connection_config.connections[0],
         )
 
         registry = ModelRegistry.load(resources_dir)
@@ -637,7 +637,7 @@ class TestRefreshModels:
     async def test_refresh_models_uses_connection_endpoint_and_base_url(
         self,
         tmp_path: Path,
-        openai_subscription_config: ProviderConfig,
+        openai_subscription_connection_config: ProviderConfig,
     ):
         """The connection's ``base_url`` + ``models_endpoint`` drive the fetch URL.
 
@@ -667,10 +667,10 @@ class TestRefreshModels:
         )
 
         await refresh_models(
-            openai_subscription_config,
+            openai_subscription_connection_config,
             access_token,
             resources_dir,
-            credential_connection=openai_subscription_config.connections[0],
+            credential_connection=openai_subscription_connection_config.connections[0],
         )
 
         request = route.calls.last.request
