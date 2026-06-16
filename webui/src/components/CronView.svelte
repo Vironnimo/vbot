@@ -323,6 +323,10 @@
       return t('cron.status.paused', 'Paused');
     }
 
+    if (status === 'failed') {
+      return t('cron.status.failed', 'Failed');
+    }
+
     return t('cron.status.completed', 'Completed');
   }
 
@@ -335,7 +339,11 @@
       return 'warn';
     }
 
-    return 'error';
+    if (status === 'failed') {
+      return 'error';
+    }
+
+    return 'neutral';
   }
 
   function errorMessageText(error, fallback) {
