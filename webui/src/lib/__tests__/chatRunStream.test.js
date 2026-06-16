@@ -208,6 +208,9 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
 
   beforeEach(() => {
     vi.useFakeTimers();
+    // Pin reconnect jitter to its midpoint so the backoff delay equals the
+    // base delay exactly, keeping the timing assertions below deterministic.
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     chatState = createChatState();
     setAgents(chatState, [
       {
@@ -220,6 +223,7 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   function setupRunningStream() {

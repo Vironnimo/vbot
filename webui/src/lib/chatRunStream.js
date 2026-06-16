@@ -1,3 +1,4 @@
+import { reconnectBackoffDelay } from './backoff.js';
 import { createBoundedKeySet } from './clientCaches.js';
 import { t } from './i18n.js';
 import {
@@ -333,7 +334,9 @@ export function createChatRunStream({
             retryAttempt: retryAttempt + 1,
           });
         },
-        SSE_RECONNECT_DELAY_MS * 2 ** retryAttempt,
+        reconnectBackoffDelay(retryAttempt, {
+          initialDelayMs: SSE_RECONNECT_DELAY_MS,
+        }),
       );
       return;
     }
