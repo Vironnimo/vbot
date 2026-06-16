@@ -176,6 +176,9 @@ resolution is read-side and shared".
   connection ids; empty means "all connections". Refresh tags each discovered model
   with `connections: [<connection.id>]` and merges per connection (see
   `providers.md` / `model_tasks.md` for the read-side filter).
+  `Model.allows_connection(connection_id)` is the single source of the rule (empty
+  allowlist → all permitted, else membership) — read by task-target expansion, the
+  WebUI dropdown filter, and the server save-time guards so they cannot drift.
 - `ModelRegistry.load(resources_dir)` assembles from the layers and caches by
   resolved `resources_dir`. `is_provider_file` decides what counts as a provider
   file — it excludes `*.raw.json`, `*.overrides.json`, and the canonical

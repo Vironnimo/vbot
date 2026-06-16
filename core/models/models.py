@@ -267,6 +267,17 @@ class Model:
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", _freeze_metadata_value(self.metadata))
 
+    def allows_connection(self, connection_id: str) -> bool:
+        """Whether this model may run on ``connection_id`` of its provider.
+
+        An empty ``connections`` allowlist permits every connection; a non-empty
+        one restricts the model to the listed connection ids. This is the single
+        source of the per-model connection rule — target expansion and the
+        save-time guards read it so the catalog cannot offer a model on a
+        connection it forbids.
+        """
+        return not self.connections or connection_id in self.connections
+
 
 class ModelRegistry:
     """Registry of model data, indexed by (provider_id, model_id).
