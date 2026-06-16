@@ -1426,6 +1426,102 @@ async def test_inbound_text_document_triggers_text_block_with_content(
 
 
 @pytest.mark.asyncio
+async def test_inbound_audio_document_triggers_media_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    # An MP3 carries an ID3 header, so the store sniffs it as audio/mpeg even when Telegram
+    # delivers it as a generic document instead of an audio message.
+    bot.get_file.return_value = SimpleNamespace(
+        download_as_bytearray=AsyncMock(return_value=bytearray(b"ID3\x04\x00\x00\x00\x00\x00\x00"))
+    )
+
+    await adapter._handle_inbound_media(
+        make_document_update(
+            chat_id=12345,
+            user_id=50,
+            file_id="doc-audio",
+            file_unique_id="docuniq-audio",
+            file_name="song.mp3",
+        ),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    blocks = await_args.args[1]
+    assert isinstance(blocks, list)
+    assert len(blocks) == 1
+    assert isinstance(blocks[0], MediaBlock)
+    assert blocks[0].media_type == "audio/mpeg"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_inbound_video_document_triggers_media_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    # An MP4 carries an ftyp box, so the store sniffs it as video/mp4 even when Telegram
+    # delivers it as a generic document instead of a video message.
+    bot.get_file.return_value = SimpleNamespace(
+        download_as_bytearray=AsyncMock(
+            return_value=bytearray(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00")
+        )
+    )
+
+    await adapter._handle_inbound_media(
+        make_document_update(
+            chat_id=12345,
+            user_id=50,
+            file_id="doc-video",
+            file_unique_id="docuniq-video",
+            file_name="clip.mp4",
+        ),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    blocks = await_args.args[1]
+    assert isinstance(blocks, list)
+    assert len(blocks) == 1
+    assert isinstance(blocks[0], MediaBlock)
+    assert blocks[0].media_type == "video/mp4"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_disallowed_document_type_replies_instead_of_silent_drop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
