@@ -5,7 +5,7 @@ Sends proactive outbound messages through configured channels.
 ## Interfaces
 
 - Tool name: `channel_send`
-- Registration: `register_channel_send_tool(registry, channel_service, chat_sessions)`
+- Registration: `register_channel_send_tool(registry, channel_service, chat_sessions, *, max_attachment_size_bytes)` — the runtime passes the active `AttachmentStore.max_size_bytes` (the `attachment_max_size_bytes` setting).
 - Schema: required `channel_id`; optional `message`, `platform_target`, and `file_paths`.
 - Display: summary fields `channel_id` and `message`.
 
@@ -22,5 +22,6 @@ Sends proactive outbound messages through configured channels.
 
 - The target channel must belong to the calling Agent; a channel owned by another Agent returns `invalid_arguments` (`ChannelConfigError`).
 - `file_paths` are local paths (relative paths resolve from the workspace); the tool reads files, sniffs MIME type, and builds channel `FileData` payloads.
+- Each `file_paths` entry is size-checked against `max_attachment_size_bytes` via its on-disk size *before* the bytes are read, so an oversize file is rejected (`invalid_arguments`) without being loaded into memory. This is the outbound counterpart to the same limit enforced inbound by `AttachmentStore` and the upload endpoints.
 - Telegram-specific batching and media-group decisions stay inside the adapter layer.
 - Missing channel, missing target, config errors, and send failures return failure envelopes.
