@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -144,14 +145,13 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--number">
-    <input
-      class="s-input"
+    <TextField
       type="number"
       min="1"
       step="1"
       value={subAgentSettings.max_subagent_depth}
-      aria-label={t('settings.subagents.maxDepth', 'Max sub-agent depth')}
-      oninput={(event) =>
+      ariaLabel={t('settings.subagents.maxDepth', 'Max sub-agent depth')}
+      onInput={(_next, event) =>
         handleSubAgentSettingChange('max_subagent_depth', event)}
     />
   </div>
@@ -170,14 +170,13 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--number">
-    <input
-      class="s-input"
+    <TextField
       type="number"
       min="1"
       step="1"
       value={subAgentSettings.max_subagents_per_turn}
-      aria-label={t('settings.subagents.maxPerTurn', 'Max sub-agents per turn')}
-      oninput={(event) =>
+      ariaLabel={t('settings.subagents.maxPerTurn', 'Max sub-agents per turn')}
+      onInput={(_next, event) =>
         handleSubAgentSettingChange('max_subagents_per_turn', event)}
     />
   </div>
@@ -196,14 +195,13 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--number">
-    <input
-      class="s-input"
+    <TextField
       type="number"
       min="1"
       step="1"
       value={subAgentSettings.subagent_timeout_minutes}
-      aria-label={t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
-      oninput={(event) =>
+      ariaLabel={t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
+      onInput={(_next, event) =>
         handleSubAgentSettingChange('subagent_timeout_minutes', event)}
     />
   </div>

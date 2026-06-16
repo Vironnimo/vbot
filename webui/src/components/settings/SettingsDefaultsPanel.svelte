@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -315,15 +316,12 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--number">
-    <input
+    <TextField
       id="settings-defaults-temperature"
-      class="s-input"
-      type="text"
       inputmode="decimal"
       value={agentDefaults.temperature}
-      aria-label={t('settings.defaults.temperature', 'Temperature')}
-      oninput={(event) =>
-        handleAgentDefaultsChange('temperature', event.currentTarget.value)}
+      ariaLabel={t('settings.defaults.temperature', 'Temperature')}
+      onInput={(next) => handleAgentDefaultsChange('temperature', next)}
     />
   </div>
 </div>

@@ -3,6 +3,7 @@
 
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -225,14 +226,11 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--number">
-    <input
-      class="s-input"
-      type="text"
+    <TextField
       inputmode="decimal"
       value={compactionSettings.threshold}
-      aria-label={t('settings.compaction.threshold', 'Threshold')}
-      oninput={(event) =>
-        handleCompactionSettingChange('threshold', event.currentTarget.value)}
+      ariaLabel={t('settings.compaction.threshold', 'Threshold')}
+      onInput={(next) => handleCompactionSettingChange('threshold', next)}
     />
   </div>
 </div>
@@ -250,15 +248,13 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--number">
-    <input
-      class="s-input"
+    <TextField
       type="number"
       min="1"
       step="1000"
       value={compactionSettings.tail_tokens}
-      aria-label={t('settings.compaction.tailTokens', 'Tail tokens')}
-      oninput={(event) =>
-        handleCompactionSettingChange('tail_tokens', event.currentTarget.value)}
+      ariaLabel={t('settings.compaction.tailTokens', 'Tail tokens')}
+      onInput={(next) => handleCompactionSettingChange('tail_tokens', next)}
     />
   </div>
 </div>

@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -168,17 +169,16 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--number">
-    <input
+    <TextField
       id="settings-debug-trace-limit"
-      class="s-input"
       type="number"
       min="1"
       max="500"
       step="1"
       value={debugSettings.trace_limit}
-      aria-label={t('debug.traceLimit', 'Trace limit')}
-      oninput={(event) => {
-        const rawValue = event.currentTarget.value;
+      ariaLabel={t('debug.traceLimit', 'Trace limit')}
+      onInput={(next) => {
+        const rawValue = next;
         if (rawValue === '') {
           debugSettings = {
             ...debugSettings,

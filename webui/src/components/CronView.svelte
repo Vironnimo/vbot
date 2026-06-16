@@ -5,6 +5,7 @@
   import Button from './ui/Button.svelte';
   import Modal from './ui/Modal.svelte';
   import StatusChip from './ui/StatusChip.svelte';
+  import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
   import {
     createCronJob,
@@ -577,21 +578,15 @@
                 <span class="modal-label"
                   >{t('cron.form.cronExpression', 'Cron expression')}</span
                 >
-                <input
+                <TextField
                   id="cron-job-expression"
-                  class="s-input"
-                  type="text"
                   value={formValues.cron_expression}
                   placeholder={t(
                     'cron.form.cronExpressionPlaceholder',
                     '0 9 * * 1-5',
                   )}
                   disabled={submittingForm}
-                  oninput={(event) =>
-                    updateFormField(
-                      'cron_expression',
-                      event.currentTarget.value,
-                    )}
+                  onInput={(next) => updateFormField('cron_expression', next)}
                 />
                 {#if cronExpressionPreview}
                   <span class="cron-view__expression-preview">
@@ -603,14 +598,12 @@
               <label class="modal-field">
                 <span class="modal-label">{t('cron.form.runAt', 'Run at')}</span
                 >
-                <input
+                <TextField
                   id="cron-job-run-at"
-                  class="s-input"
                   type="datetime-local"
                   value={formValues.run_at}
                   disabled={submittingForm}
-                  oninput={(event) =>
-                    updateFormField('run_at', event.currentTarget.value)}
+                  onInput={(next) => updateFormField('run_at', next)}
                 />
               </label>
             {/if}
@@ -619,18 +612,15 @@
               <span class="modal-label"
                 >{t('cron.form.timezone', 'Timezone')}</span
               >
-              <input
+              <TextField
                 id="cron-job-timezone"
-                class="s-input"
-                type="text"
                 value={formValues.timezone}
                 placeholder={t(
                   'cron.form.timezonePlaceholder',
                   'System default',
                 )}
                 disabled={submittingForm}
-                oninput={(event) =>
-                  updateFormField('timezone', event.currentTarget.value)}
+                onInput={(next) => updateFormField('timezone', next)}
               />
             </label>
 
@@ -638,15 +628,12 @@
               <span class="modal-label"
                 >{t('cron.form.sessionId', 'Session ID')}</span
               >
-              <input
+              <TextField
                 id="cron-job-session"
-                class="s-input"
-                type="text"
                 value={formValues.session_id}
                 placeholder={t('cron.form.sessionIdPlaceholder', 'Optional')}
                 disabled={submittingForm}
-                oninput={(event) =>
-                  updateFormField('session_id', event.currentTarget.value)}
+                onInput={(next) => updateFormField('session_id', next)}
               />
             </label>
 

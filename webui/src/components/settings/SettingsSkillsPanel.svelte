@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -154,7 +155,7 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--input">
-    <div class="s-value-box">{defaultSkillDirectoryValue}</div>
+    <TextField readonly value={defaultSkillDirectoryValue} />
   </div>
 </div>
 
@@ -201,10 +202,9 @@
   </div>
 
   <div class="s-skill-directory-add">
-    <input
-      class="s-input"
-      type="text"
-      bind:value={newSkillDirectory}
+    <TextField
+      value={newSkillDirectory}
+      onInput={(next) => (newSkillDirectory = next)}
       placeholder={t('settings.skills.pathPlaceholder', 'C:/path/to/skills')}
       onkeydown={handleSkillDirectoryKeydown}
     />
