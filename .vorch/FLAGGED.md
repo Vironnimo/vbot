@@ -88,17 +88,6 @@ by their head alone. Neither is worth building yet.
 
 **Why deferred:** cleaning it up means rewriting the fixture, then chasing every test that depends on its specific shape (the `oauth` / `api-key` connection ids, the `OPENAI_OAUTH_TOKEN` env var, etc.). Pure test refactor, no production behavior. Out of scope for the merge, and the merge is a feature change, not a test-hygiene drive. Do it in a focused follow-up PR.
 
-### 2. Test function and fixture names still carry the old `subscription` / `codex` / `oauth` substrings
-
-Several test names and fixture names from earlier in the project still reference the pre-merge terminology. Functionally correct (they exercise the new code path), but reads weird next to the merged provider:
-
-- `tests/core/models/test_discovery.py:144` — fixture function `openai_subscription_config()` now builds a merged `openai` provider with a `subscription` connection. The name is misleading; the function itself is fine.
-- `tests/core/providers/test_providers.py:312` — `test_openai_subscription_oauth_device_flow_fields_parse` constructs a temp config with `id: "openai-subscription"` / `adapter: "openai_subscription"` and asserts generic OAuth device-flow parsing. The parser is provider-agnostic, so the test is valid; the name is the only thing that no longer reflects reality.
-- `tests/core/providers/test_providers.py:814` — `test_openai_subscription_connection_parses_mode_and_models_endpoint` now tests `id: "openai"` (correct, post-merge) but the function name still says `subscription` (technically accurate — the connection *id* is `subscription` — but easy to misread as the old provider id).
-- `webui/src/components/__tests__/DebugView.test.js:93,108` — literal string `openai-subscription-with-a-very-long-name` is a length-testing fixture, not a provider id; left alone on purpose.
-
-**Why deferred:** same as #1 — cosmetic, low risk of confusion in practice (the function body is what matters), and a follow-up rename touches many call sites that would each need re-verification. Not blocking.
-
 ## 2026-06-11 — Dead-code sweep: test-only public APIs left in place
 
 These candidates were deliberately **not** removed in the dead-code sweep because they are public
