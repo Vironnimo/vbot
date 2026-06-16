@@ -104,12 +104,6 @@ def normalize_responses_response(response: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def iter_responses_sse_deltas(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
-    """Parse Responses SSE lines and yield normalized vBot stream deltas."""
-
-    yield from iter_responses_sse_deltas_with_state(lines, ResponsesStreamState())
-
-
 def iter_responses_sse_deltas_with_state(
     lines: Iterable[str],
     state: ResponsesStreamState,
