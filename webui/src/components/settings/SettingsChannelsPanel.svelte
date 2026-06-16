@@ -3,6 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import StatusChip from '../ui/StatusChip.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -13,8 +14,8 @@
     applyChannelPanelList,
     buildChannelCreatePayload,
     buildChannelUpdatePayload,
-    channelEnabledChipClass,
-    channelRunningChipClass,
+    channelEnabledChipVariant,
+    channelRunningChipVariant,
     createChannelFormValues,
     createChannelPanelState,
     formatAllowedChatIds,
@@ -492,12 +493,12 @@
 
           <div class="s-channel-controls">
             <div class="s-channel-chips">
-              <span class={`chip ${channelEnabledChipClass(channel.enabled)}`}>
+              <StatusChip variant={channelEnabledChipVariant(channel.enabled)}>
                 {channelEnabledLabel(channel.enabled)}
-              </span>
-              <span class={`chip ${channelRunningChipClass(channel.running)}`}>
+              </StatusChip>
+              <StatusChip variant={channelRunningChipVariant(channel.running)}>
                 {channelRunningLabel(channel.running)}
-              </span>
+              </StatusChip>
             </div>
 
             <div class="s-row-actions s-row-actions--channel">

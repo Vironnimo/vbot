@@ -610,28 +610,32 @@ textarea::placeholder {
   padding: 3px 9px;
 }
 
-.chip-green,
+/* Canonical status-chip variants. `StatusChip` (`components/ui/StatusChip.svelte`)
+   emits `chip <variant>`; the color-named aliases (chip-green/amber/orange/red)
+   were collapsed into these semantic names. */
 .chip.success {
   color: var(--green);
   background: var(--green-dim);
 }
 
-.chip-amber,
 .chip.warn {
   color: var(--amber);
   background: rgba(245, 158, 11, 0.1);
 }
 
-.chip-orange,
 .chip.info {
   color: var(--accent);
   background: var(--accent-dim);
 }
 
-.chip-red,
 .chip.error {
   color: var(--red);
   background: rgba(252, 129, 129, 0.1);
+}
+
+.chip.neutral {
+  color: var(--text-med);
+  background: var(--surface-3);
 }
 
 .toggle,
