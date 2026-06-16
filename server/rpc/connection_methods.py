@@ -417,10 +417,11 @@ async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObj
 
     canonical_result = await _refresh_canonical_layer_if_possible(catalog, resources_dir)
     _reload_runtime_model_registry(runtime, resources_dir)
+    provider_count, model_count = _summarize_refreshed_providers(refreshed_providers)
     result: JsonObject = {
         "providers": refreshed_providers,
-        "refreshed_count": len(refreshed_providers),
-        "model_count": sum(_model_count(entry) for entry in refreshed_providers),
+        "refreshed_count": provider_count,
+        "model_count": model_count,
         "canonical": canonical_result,
     }
     if refresh_errors:
@@ -586,6 +587,29 @@ def _model_count(result: JsonObject) -> int:
     if isinstance(model_count, bool) or not isinstance(model_count, int):
         return 0
     return int(model_count)
+
+
+def _summarize_refreshed_providers(successes: list[JsonObject]) -> tuple[int, int]:
+    """Collapse per-connection refresh results to ``(providers, models)``.
+
+    ``_refresh_provider_connections`` emits one entry per refreshed *connection*,
+    and each entry's ``model_count`` is the size of the provider's full catalog
+    after that connection merged into it — not just the models that connection
+    contributed. Counting entries would overstate the provider total for a
+    provider with several connections, and summing every ``model_count`` would
+    count the shared catalog once per connection. Both collapse to one value per
+    provider: the provider total is the number of distinct providers, and a
+    provider's model total is the size it reported on its last (so most
+    complete) write, which is what the catalog file actually holds.
+    """
+
+    per_provider: dict[str, int] = {}
+    for entry in successes:
+        provider_id = entry.get("provider_id")
+        if not isinstance(provider_id, str):
+            continue
+        per_provider[provider_id] = _model_count(entry)
+    return len(per_provider), sum(per_provider.values())
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:
