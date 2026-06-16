@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -48,6 +49,7 @@ def _subscription_model_lookup(levels: tuple[str, ...]):
         )
 
     return model_lookup
+
 
 OPENAI_API_KEY_URL = f"https://api.openai.com/v1{CHAT_COMPLETIONS_ENDPOINT}"
 OPENAI_SUBSCRIPTION_URL = f"https://chatgpt.com/backend-api{CODEX_RESPONSES_ENDPOINT}"
@@ -130,6 +132,20 @@ def _jwt_with_account(account_id: str = "acct_vbot") -> str:
 # ------------------------------------------------------------------
 # Codex Responses mode (subscription connection)
 # ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_codex_headers_ignore_provider_extra_headers() -> None:
+    """Provider extra_headers must not leak onto the Codex Responses wire."""
+    access_token = _jwt_with_account("acct_openai")
+    config = replace(_subscription_config(), extra_headers={"X-Injected": "leak"})
+    adapter = OpenAIAdapter(config, access_token, connection_mode=CODEX_RESPONSES_MODE)
+
+    headers = await adapter._build_codex_headers()
+
+    assert "X-Injected" not in headers
+    assert headers["OpenAI-Beta"] == CODEX_EXTRA_HEADERS["OpenAI-Beta"]
+    assert headers["originator"] == CODEX_EXTRA_HEADERS["originator"]
 
 
 @respx.mock
