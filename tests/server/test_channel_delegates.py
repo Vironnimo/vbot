@@ -11,6 +11,16 @@ from core.channels import ChannelConfig, ChannelConfigError
 from server.delegates import dispatch_rpc
 
 
+class _NullAsyncContext:
+    """Stand-in for the per-session write lock in mocked chat-session managers."""
+
+    async def __aenter__(self) -> _NullAsyncContext:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+
 def _channel_config(
     *,
     channel_id: str = "tg-assistant",
@@ -276,6 +286,7 @@ async def test_session_link_channel_sets_metadata_and_writes_system_reminder() -
 
     chat_sessions = Mock()
     chat_sessions.get_metadata.return_value = {"persisted": "value"}
+    chat_sessions.write_lock.return_value = _NullAsyncContext()
     linked_session = Mock()
     chat_sessions.get.return_value = linked_session
 
