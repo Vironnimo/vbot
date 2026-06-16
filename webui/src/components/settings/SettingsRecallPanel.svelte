@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -146,11 +147,11 @@
 </div>
 
 <div class="s-footer">
-  <button
-    class="btn-primary s-save-button s-save-button--inline"
-    type="button"
-    onclick={handleManualRecallSettingsSave}
+  <Button
+    variant="primary"
+    class="s-save-button s-save-button--inline"
+    onClick={handleManualRecallSettingsSave}
   >
     {saving ? t('common.saving', 'Saving…') : t('settings.recall.save', 'Save')}
-  </button>
+  </Button>
 </div>

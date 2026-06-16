@@ -308,19 +308,21 @@ Circular elements (pulse dot, toggle knob) always use `border-radius: 50%`. Neve
 
 ### Buttons
 
-Three visual levels:
+**Every button is the shared `Button` component (`webui/src/components/ui/Button.svelte`).** Views never hand-assemble the global `btn-*` classes; they pass a `variant` (`primary` | `secondary` | `tertiary` | `danger`), an optional `icon` boolean for the square icon footprint, and standard props (`type`, `disabled`, `loading`, `ariaLabel`, `onClick`, label/icon as the `children` snippet). A Vitest guard scan (`webui/src/lib/__tests__/uiPrimitives.guard.test.js`) fails the build if any raw `<button>` reintroduces a primitive class, so the levels below cannot drift back into hand-built markup.
 
-1. **Primary (`btn-new`, send button)** — Accent ghost: `rgba(accent, 0.10)` fill, `rgba(accent, 0.22)` border, accent text. Hover deepens fill to `0.18`, border to `0.38`. Used for the single most important action per panel.
+Each variant emits exactly **one** canonical class (the historical aliases `btn-new`, `btn-outline`, `modal-btn-confirm`/`modal-btn-cancel`, `send-btn`, `icon-btn`, `tl-btn`, `pane-action`, `btn-dang` were collapsed into these):
 
-2. **Secondary (`btn-outline`, modal confirm)** — Neutral ghost: no fill, `border-2` border, `text-med` color. Hover shifts to accent border and tint. Used for supporting actions.
+1. **Primary (`btn-primary`)** — Accent ghost: `rgba(accent, 0.10)` fill, `rgba(accent, 0.22)` border, accent text. Hover deepens fill to `0.18`, border to `0.38`. Used for the single most important action per panel. With `icon`, becomes the 32px square send-style button.
+
+2. **Secondary (`btn-secondary`)** — Neutral ghost: no fill, `border-2` border, `text-med` color. Hover shifts to accent border and tint. Used for supporting actions (and modal confirm/cancel pairs).
+
+3. **Tertiary (`btn-tertiary`)** — Smallest footprint. `border` border, `text-lo` color, 3px radius. Hover becomes accent. With `icon`, becomes the 30px borderless square icon button (composer mic/attach); the engaged state adds the `btn-icon--active` accent tint.
+
+4. **Danger (`btn-danger`)** — Destructive actions (Archive, Delete, Remove). Same neutral-ghost base as secondary, but hover shifts to `red` border and tint.
 
 Primary save buttons inside long editor panels stay enabled even when the form is already clean. When nothing changed, the interaction should confirm trust via lightweight success feedback instead of disabling the control.
 
 **Save model for settings/config surfaces:** every settings-style panel auto-saves changes with a short debounce (800ms) *and* keeps an explicit Save button at the bottom of the panel for users who do not trust auto-save. Clicking Save on a clean form shows an "Already saved" success toast. This is the general scheme for all settings/config surfaces in the app; only entity create/edit forms (agents, channels, cron jobs) stay explicit-save-only, because half-typed entities must not persist.
-
-3. **Tertiary (`pane-action`, `tl-btn`)** — Smallest footprint. `border` border, `text-lo` / `text-med` color, 3px radius. Hover becomes accent.
-
-Destructive actions (Archive, Delete) use the secondary style but hover to `red` border and tint.
 
 ### Inputs
 

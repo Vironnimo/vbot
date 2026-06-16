@@ -1,5 +1,6 @@
 <script>
   import { untrack } from 'svelte';
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -538,20 +539,20 @@
           </p>
           <div class="device-flow-code-row">
             <code class="device-flow-code">{oauthData.user_code}</code>
-            <button
-              class="btn-outline device-flow-copy"
-              type="button"
-              aria-label={t(
+            <Button
+              variant="secondary"
+              class="device-flow-copy"
+              ariaLabel={t(
                 'settings.providers.device_flow.copy_aria',
                 'Copy device code {code}',
                 { code: oauthData.user_code },
               )}
-              onclick={copyUserCode}
+              onClick={copyUserCode}
             >
               {copiedCode
                 ? t('settings.providers.device_flow.copied', 'Copied')
                 : t('common.copy', 'Copy')}
-            </button>
+            </Button>
           </div>
           <a
             class="device-flow-link"
@@ -603,43 +604,32 @@
 
     <div class="modal-footer">
       {#if canGoBack}
-        <button
-          type="button"
-          class="modal-btn-cancel"
-          disabled={saving}
-          onclick={goBack}
-        >
+        <Button variant="secondary" disabled={saving} onClick={goBack}>
           {t('common.back', 'Back')}
-        </button>
+        </Button>
       {/if}
-      <button
-        type="button"
-        class="modal-btn-cancel"
-        disabled={saving}
-        onclick={close}
-      >
+      <Button variant="secondary" disabled={saving} onClick={close}>
         {t('common.cancel', 'Cancel')}
-      </button>
+      </Button>
       {#if step === 'api-key'}
-        <button
+        <Button
           type="submit"
           form="provider-connect-key-form"
-          class="modal-btn-confirm"
+          variant="primary"
           disabled={saving || apiKeyValue.trim().length === 0 || accountInvalid}
         >
           {saving
             ? t('common.saving', 'Saving…')
             : t('settings.providers.add.saveKey', 'Save key')}
-        </button>
+        </Button>
       {:else if step === 'oauth' && !oauthActive}
-        <button
-          type="button"
-          class="modal-btn-confirm"
+        <Button
+          variant="primary"
           disabled={accountInvalid}
-          onclick={startOAuthFlow}
+          onClick={startOAuthFlow}
         >
           {t('settings.providers.connect', 'Connect')}
-        </button>
+        </Button>
       {/if}
     </div>
   </div>

@@ -1,6 +1,7 @@
 <script>
   import { isRunActive } from '$lib/chatState.js';
   import { t } from '$lib/i18n.js';
+  import Button from '../ui/Button.svelte';
 
   let {
     agents = [],
@@ -197,32 +198,27 @@
       <span class="token-badge" title={tokenBadgeTooltip}>{tokenBadgeText}</span
       >
     {/if}
-    <button
-      type="button"
-      class:chat-sessions-toggle--active={showSessionDrawer}
-      class="btn-outline chat-sessions-toggle"
-      onclick={onToggleSessionDrawer}
+    <Button
+      variant="secondary"
+      class={`chat-sessions-toggle${
+        showSessionDrawer ? ' chat-sessions-toggle--active' : ''
+      }`}
+      onClick={onToggleSessionDrawer}
       disabled={!activeAgent}
     >
       {showSessionDrawer
         ? t('sessions.hide', 'Hide sessions')
         : t('sessions.title', 'Sessions')}
-    </button>
+    </Button>
     {#if activeSessionState && isRunActive(activeSessionState)}
-      <button
-        type="button"
-        class="btn-outline btn-dang"
-        disabled={cancellingRun}
-        onclick={onCancelRun}
-      >
+      <Button variant="danger" disabled={cancellingRun} onClick={onCancelRun}>
         {cancellingRun
           ? t('cancel.cancelling', 'Cancelling run…')
           : t('chat.cancelRun', 'Cancel run')}
-      </button>
+      </Button>
     {/if}
-    <button
-      type="button"
-      class="btn-new"
+    <Button
+      variant="primary"
       disabled={!activeAgent || newSessionBlocked || creatingSession}
       title={newSessionBlocked
         ? t(
@@ -230,15 +226,15 @@
             'A new session can be started after the current run finishes.',
           )
         : undefined}
-      onclick={onNewSession}
+      onClick={onNewSession}
     >
-      <svg viewBox="0 0 14 14" aria-hidden="true">
+      <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
         <path d="M7 1v12M1 7h12" />
       </svg>
       {creatingSession
         ? t('common.loading', 'Loading…')
         : t('chat.newSession', 'New session')}
-    </button>
+    </Button>
   </div>
 </header>
 
@@ -378,15 +374,10 @@
     background: var(--red, #fc8181);
   }
 
-  .chat-sessions-toggle--active {
+  :global(.chat-sessions-toggle--active) {
     border-color: var(--accent);
     color: var(--accent);
     background: rgba(232, 135, 10, 0.08);
-  }
-
-  .btn-new svg {
-    width: 12px;
-    height: 12px;
   }
 
   @keyframes mic-pulse {

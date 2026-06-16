@@ -5,6 +5,7 @@
   import { createAudioRecorder } from '$lib/audioRecorder.js';
   import { t } from '$lib/i18n.js';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
+  import Button from './ui/Button.svelte';
 
   const SKILL_TRIGGER_PATTERN = /[A-Za-z0-9_-]/u;
   const ATTACHMENT_ACCEPT =
@@ -743,56 +744,57 @@
       rows="1"
     ></textarea>
     <div class="input-btns">
-      <button
-        type="button"
-        class="icon-btn"
-        class:icon-btn--active={isRecording}
+      <Button
+        variant="tertiary"
+        icon
+        class={isRecording ? 'btn-icon--active' : ''}
         disabled={disabled || voiceBusy}
-        aria-label={isRecording
+        ariaLabel={isRecording
           ? t('chat.voice.stopRecording', 'Stop recording')
           : t('chat.voice.startRecording', 'Start voice input')}
         title={isRecording
           ? t('chat.voice.stopRecording', 'Stop recording')
           : t('chat.voice.startRecording', 'Start voice input')}
-        onclick={handleMicrophoneClick}
+        onClick={handleMicrophoneClick}
       >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
           <path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z" />
           <path d="M4 7v1a4 4 0 0 0 8 0V7M8 12v2M6 14h4" />
         </svg>
-      </button>
-      <button
-        type="button"
-        class="icon-btn"
+      </Button>
+      <Button
+        variant="tertiary"
+        icon
         {disabled}
-        aria-label={t('chat.attachment.addFile', 'Add file')}
+        ariaLabel={t('chat.attachment.addFile', 'Add file')}
         title={t('chat.attachment.addFile', 'Add file')}
-        onclick={handleFilePickerClick}
+        onClick={handleFilePickerClick}
       >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
           <path
             d="M13 7l-5 5a3.5 3.5 0 0 1-5-5l5-5a2 2 0 0 1 3 3L6 10a.5.5 0 0 1-1-1l4.5-4.5"
           />
         </svg>
-      </button>
-      <button
+      </Button>
+      <Button
         type="submit"
-        class="send-btn"
+        variant="primary"
+        icon
         disabled={disabled ||
           hasUploadingAttachments ||
           voiceBusy ||
           (!content.trim() && pendingAttachments.length === 0)}
-        aria-label={isRunning
+        ariaLabel={isRunning
           ? t('chat.queueMessage', 'Queue message')
           : t('chat.sendMessage', 'Send message')}
         title={isRunning
           ? t('chat.queueMessage', 'Queue message')
           : t('chat.sendMessage', 'Send message')}
       >
-        <svg viewBox="0 0 14 14" aria-hidden="true">
+        <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
           <path d="M12 7L2 2l2 5-2 5 10-5z" fill="currentColor" stroke="none" />
         </svg>
-      </button>
+      </Button>
     </div>
   </div>
   {#if pendingAttachments.length > 0}
@@ -1103,21 +1105,5 @@
     .attachment-hover-preview {
       width: min(260px, calc(100vw - 48px));
     }
-  }
-
-  .icon-btn svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  .icon-btn--active {
-    border-color: rgba(232, 135, 10, 0.45);
-    color: var(--accent);
-    background: rgba(232, 135, 10, 0.1);
-  }
-
-  .send-btn svg {
-    width: 13px;
-    height: 13px;
   }
 </style>

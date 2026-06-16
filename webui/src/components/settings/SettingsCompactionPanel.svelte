@@ -2,6 +2,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import SearchableDropdown from '../SearchableDropdown.svelte';
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -303,13 +304,13 @@
 </div>
 
 <div class="s-footer">
-  <button
-    class="btn-primary s-save-button s-save-button--inline"
-    type="button"
-    onclick={handleManualCompactionSettingsSave}
+  <Button
+    variant="primary"
+    class="s-save-button s-save-button--inline"
+    onClick={handleManualCompactionSettingsSave}
   >
     {saving
       ? t('common.saving', 'Saving…')
       : t('settings.compaction.save', 'Save')}
-  </button>
+  </Button>
 </div>

@@ -36,11 +36,6 @@
   border-bottom: 1px solid var(--border);
 }
 
-.agents-view .btn-new svg {
-  width: 11px;
-  height: 11px;
-}
-
 .agents-view .agent-list-scroll {
   min-height: 0;
   flex: 1;
@@ -272,7 +267,7 @@
   gap: 6px;
 }
 
-.agents-view .tl-btn {
+.agents-view .btn-tertiary {
   padding: 2px 8px;
   font-family: var(--font-mono);
   font-size: 10px;
