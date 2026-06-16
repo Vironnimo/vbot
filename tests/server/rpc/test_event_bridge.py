@@ -10,10 +10,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
-from server.rpc.event_bridge import _bridge_queued_item_to_event_bus
+from server.rpc.event_bridge import QueuedRunItem, _bridge_queued_item_to_event_bus
 
 
 @pytest.mark.asyncio
@@ -24,7 +25,7 @@ async def test_queued_item_bridge_logs_when_run_start_fails(
     future: asyncio.Future = asyncio.get_running_loop().create_future()
     item = SimpleNamespace(future=future)
 
-    _bridge_queued_item_to_event_bus(state, item)
+    _bridge_queued_item_to_event_bus(state, cast(QueuedRunItem, item))
 
     caplog.set_level(logging.WARNING, logger="vbot.server.rpc.event_bridge")
     future.set_exception(RuntimeError("queued start boom"))
@@ -48,14 +49,12 @@ async def test_queued_item_bridge_silent_on_cancellation(
     future: asyncio.Future = asyncio.get_running_loop().create_future()
     item = SimpleNamespace(future=future)
 
-    _bridge_queued_item_to_event_bus(state, item)
+    _bridge_queued_item_to_event_bus(state, cast(QueuedRunItem, item))
 
     caplog.set_level(logging.WARNING, logger="vbot.server.rpc.event_bridge")
     future.cancel()
     await asyncio.sleep(0)
 
     assert [
-        record
-        for record in caplog.records
-        if record.name == "vbot.server.rpc.event_bridge"
+        record for record in caplog.records if record.name == "vbot.server.rpc.event_bridge"
     ] == []

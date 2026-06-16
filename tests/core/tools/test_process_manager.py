@@ -384,6 +384,7 @@ async def test_reader_task_failure_is_logged(
         )
         session = manager.get_session(session_id, AGENT_A)
         assert session.stdout_task is not None
+        assert session.stderr_task is not None
         await asyncio.gather(
             session.stdout_task,
             session.stderr_task,
