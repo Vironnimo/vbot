@@ -31,23 +31,21 @@ correct and necessary.
 **Possible cleanup:** split the two cases so the final-response path only
 persists the checkpoint and skips the request rebuild.
 
-### 2. Token source differs between the two auto-compaction trigger points
+### 2. Investigate a precise context size during a run (mid-turn)
 
-The "are we over the threshold?" check uses a different token number depending on
-where it runs:
+The auto-compaction threshold check uses the provider's *real* reported
+`usage.input_tokens` at the end of a turn, but mid-turn (between tool-result
+cycles) the provider hasn't reported usage for the next request yet, so it falls
+back to the character heuristic `estimate_messages_tokens(messages)`
+(`core/utils/tokens.py`, ~4 chars/token), which under-counts tool/function
+schemas and other provider-side overhead.
 
-- **After a final assistant response:** it uses the provider's *real* reported
-  `usage.input_tokens` — accurate.
-- **After a mid-turn tool-result cycle:** the provider hasn't reported usage for
-  the next request yet, so it falls back to the local heuristic
-  `estimate_messages_tokens(messages)` (`core/utils/tokens.py`, ~4 chars/token).
-
-**Why it matters:** the heuristic ignores tool/function schemas and other
-provider-side overhead, so it tends to *under*-count. The practical effect is
-that mid-turn compaction can trigger a bit later than the real context pressure
-would warrant — i.e., the threshold behaves slightly differently mid-turn vs.
-end-of-turn. Not wrong, just inconsistent. Acceptable as long as the heuristic
-stays conservative-ish; worth revisiting only if mid-turn overflows show up.
+**To look into:** whether a precise context size is obtainable *during* a run —
+a provider token-count endpoint, a real count carried over from the previous
+request's reported usage, or a tokenizer-aware local measurement — so the
+mid-turn threshold no longer leans on the estimate. Today the estimate stays
+conservative enough to be acceptable; this is "do better if a precise source
+exists," not a known bug.
 
 ---
 
