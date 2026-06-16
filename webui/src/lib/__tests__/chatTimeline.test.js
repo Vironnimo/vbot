@@ -4,6 +4,7 @@ import {
   appendRunEvent,
   createChatState,
   ensureSessionState,
+  loadHistory,
   startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
@@ -218,5 +219,94 @@ describe('terminal-run projection memoization (handoff3 B10)', () => {
     expect(nextFinishedRun.tools.map((tool) => tool.toolCallId)).toEqual([
       'call-late',
     ]);
+  });
+});
+
+describe('interrupted assistant turn projection', () => {
+  function assistantOutputChild(sessionState, runId) {
+    const run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run' && item.runId === runId,
+    );
+    return run?.items.find((child) => child.type === 'assistant_output');
+  }
+
+  it('flags a live interrupted assistant_output event', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-live-interrupted',
+    );
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-int',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-int',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'a-int',
+          role: 'assistant',
+          content: 'Half',
+          interrupted: true,
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-int',
+      sequence: 3,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    const output = assistantOutputChild(sessionState, 'run-int');
+    expect(output.content).toBe('Half');
+    expect(output.interrupted).toBe(true);
+  });
+
+  it('does not flag a normal assistant_output event', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-live-normal',
+    );
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-normal',
+      sequence: 1,
+      payload: {
+        message: { id: 'a-normal', role: 'assistant', content: 'All done' },
+      },
+    });
+
+    const output = assistantOutputChild(sessionState, 'run-normal');
+    expect(output.interrupted).toBe(false);
+  });
+
+  it('flags an interrupted assistant message loaded from history', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-history-interrupted',
+    );
+    loadHistory(sessionState, [
+      { id: 'u1', role: 'user', content: 'Long question' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'The first half',
+        interrupted: true,
+        run_id: 'run-hist',
+      },
+    ]);
+
+    const run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    const output = run.items.find((child) => child.type === 'assistant_output');
+    expect(output.interrupted).toBe(true);
   });
 });
