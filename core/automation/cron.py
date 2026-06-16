@@ -29,6 +29,12 @@ _ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "once"))
 _ALLOWED_STATUSES = frozenset(("active", "paused", "completed"))
 _RESTART_FIELDS = frozenset(("schedule_type", "cron_expression", "run_at", "timezone", "status"))
 _ONCE_RETRY_DELAY_SECONDS = 60.0
+# Exponential backoff for repeatedly failing once-job fires: the Nth retry waits
+# base * factor**(N-1), capped, and the job is abandoned after the attempt limit
+# so a permanently failing once job (e.g. its agent was deleted) stops looping.
+_ONCE_RETRY_BACKOFF_FACTOR = 2.0
+_ONCE_RETRY_MAX_DELAY_SECONDS = 3600.0
+_ONCE_MAX_FIRE_ATTEMPTS = 5
 _ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
 _MUTABLE_FIELDS = frozenset(
     (
@@ -393,7 +399,15 @@ class CronService:
             self._save_jobs_after_fire(latest.id)
 
     async def _run_once_job(self, job: CronJob) -> None:
-        """Sleep until run_at, fire once, then mark completed."""
+        """Sleep until run_at, fire once, then mark completed.
+
+        A failed fire (claim write or trigger error) is retried with bounded
+        exponential backoff. Once the attempt limit is reached the job is
+        abandoned (marked completed) and logged, so a permanently failing once
+        job stops retrying instead of looping forever (e.g. its agent was
+        deleted, leaving every trigger attempt to fail).
+        """
+        failed_fire_attempts = 0
         while True:
             current = self._jobs.get(job.id)
             if current is None or current.status != "active" or current.schedule_type != "once":
@@ -417,12 +431,16 @@ class CronService:
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )
-                await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
+                failed_fire_attempts += 1
+                if await self._back_off_or_abandon_once_job(job.id, failed_fire_attempts):
+                    return
                 continue
 
             if not await self._trigger_job_run(latest):
                 self._remove_once_fire_claim(latest.id)
-                await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
+                failed_fire_attempts += 1
+                if await self._back_off_or_abandon_once_job(job.id, failed_fire_attempts):
+                    return
                 continue
 
             latest = self._jobs.get(job.id)
@@ -436,6 +454,36 @@ class CronService:
                 await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
             self._remove_once_fire_claim(latest.id)
             return
+
+    async def _back_off_or_abandon_once_job(self, job_id: str, attempts: int) -> bool:
+        """Wait out the backoff for a failed once fire, or abandon after the cap.
+
+        Returns True when the job has been abandoned (marked completed) and the
+        caller must stop; False after sleeping the backoff delay so the caller
+        can retry the fire.
+        """
+        if attempts >= _ONCE_MAX_FIRE_ATTEMPTS:
+            self._abandon_once_job(job_id, attempts)
+            return True
+
+        await asyncio.sleep(_once_retry_delay(attempts))
+        return False
+
+    def _abandon_once_job(self, job_id: str, attempts: int) -> None:
+        """Mark a permanently failing once job completed so it stops retrying."""
+        job = self._jobs.get(job_id)
+        if job is None or job.schedule_type != "once":
+            return
+
+        _LOGGER.error(
+            "Abandoning once job after %d failed fire attempts (id=%s)",
+            attempts,
+            job_id,
+        )
+        job.status = "completed"
+        self._jobs[job_id] = job
+        self._save_jobs_after_fire(job_id)
+        self._remove_once_fire_claim(job_id)
 
     async def _trigger_job_run(self, job: CronJob) -> bool:
         try:
@@ -664,6 +712,13 @@ class CronService:
             path.unlink(missing_ok=True)
         except OSError:
             return
+
+
+def _once_retry_delay(attempt: int) -> float:
+    """Backoff delay in seconds for the Nth (1-based) failed once-job fire."""
+    exponent = max(attempt - 1, 0)
+    delay = _ONCE_RETRY_DELAY_SECONDS * (_ONCE_RETRY_BACKOFF_FACTOR**exponent)
+    return min(delay, _ONCE_RETRY_MAX_DELAY_SECONDS)
 
 
 def _utc_now() -> datetime:

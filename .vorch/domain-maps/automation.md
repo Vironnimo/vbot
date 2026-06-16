@@ -25,7 +25,7 @@ Programmatic Run triggering and time-based scheduling in `core/automation/`.
 - Cron expressions are evaluated with `croniter` in the job timezone when present, otherwise in the host local timezone. `UTC` is accepted without consulting `zoneinfo`; other IANA names use `zoneinfo`, with `tzdata` available for platforms without a system database.
 - Changing `schedule_type`, `cron_expression`, `run_at`, `timezone`, or `status` restarts an active scheduler task. Prompt, agent, and session updates do not restart a sleeper; the task reloads the latest job before firing.
 - `CronService` validates strings and schedules but does not verify that `agent_id` exists. Server cron RPCs validate agent references before create/update; other producers must do that themselves if they need immediate feedback.
-- Active once jobs write a durable fire claim under `<data_dir>/cron/once-fire-claims/` before calling `trigger_run(...)`. If trigger fails, the claim is removed and the job retries after the scheduler delay; if completed-state save fails after a successful trigger, the scheduler retries that save without firing again.
+- Active once jobs write a durable fire claim under `<data_dir>/cron/once-fire-claims/` before calling `trigger_run(...)`. If trigger fails, the claim is removed and the job retries with bounded exponential backoff, and is abandoned (marked completed) once `_ONCE_MAX_FIRE_ATTEMPTS` is reached so a permanently failing once job stops looping; if completed-state save fails after a successful trigger, the scheduler retries that save without firing again.
 
 ## Constraints & Gotchas
 
@@ -34,4 +34,4 @@ Programmatic Run triggering and time-based scheduling in `core/automation/`.
 - Missed once jobs are not caught up on startup; they are logged at warn level and marked completed without firing. Missed cron jobs are not replayed; the next future fire is computed from current time.
 - Once jobs are retained after firing with `status = "completed"` and `last_fired_at` set.
 - Once-job fire claims intentionally prefer at-most-once behavior across restarts: a crash after claim creation but before `trigger_run(...)` may skip that once job on restart instead of risking duplicate execution.
-- Trigger failures are logged by `CronService` and do not kill scheduler tasks. Cron jobs continue to their next computed fire; once jobs retry after `_ONCE_RETRY_DELAY_SECONDS` until trigger and completed-state save both succeed.
+- Trigger failures are logged by `CronService` and do not kill scheduler tasks. Cron jobs continue to their next computed fire; once jobs retry a failed fire (claim write or trigger) with bounded exponential backoff (`_ONCE_RETRY_DELAY_SECONDS` base, `_ONCE_RETRY_BACKOFF_FACTOR`, capped at `_ONCE_RETRY_MAX_DELAY_SECONDS`) and are abandoned (marked completed, `last_fired_at` left unset) after `_ONCE_MAX_FIRE_ATTEMPTS` failed attempts. The completed-state save after a successful trigger still retries until it persists.
