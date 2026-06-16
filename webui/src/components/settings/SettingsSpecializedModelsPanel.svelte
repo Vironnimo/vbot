@@ -2,6 +2,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import Button from '../ui/Button.svelte';
   import {
     getTaskModelOptions,
     listTaskModelTargets,
@@ -509,11 +510,11 @@
 </div>
 
 <div class="s-footer">
-  <button
-    class="btn-primary s-save-button s-save-button--inline"
-    type="button"
-    onclick={handleManualTaskModelSave}
+  <Button
+    variant="primary"
+    class="s-save-button s-save-button--inline"
+    onClick={handleManualTaskModelSave}
   >
     {taskModelSaving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-  </button>
+  </Button>
 </div>

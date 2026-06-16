@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
+  import Button from './ui/Button.svelte';
   import {
     createCronJob,
     deleteCronJob,
@@ -378,20 +379,15 @@
     </div>
 
     <div class="cron-view__header-actions">
-      <button type="button" class="btn-outline" onclick={() => loadJobs()}>
+      <Button variant="secondary" onClick={() => loadJobs()}>
         {t('common.refresh', 'Refresh')}
-      </button>
-      <button
-        type="button"
-        class="btn-new"
-        disabled={!hasAgents}
-        onclick={openCreateModal}
-      >
+      </Button>
+      <Button variant="primary" disabled={!hasAgents} onClick={openCreateModal}>
         <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
           <path d="M7 1v12M1 7h12" />
         </svg>
         {t('cron.newJob', 'New job')}
-      </button>
+      </Button>
     </div>
   </header>
 
@@ -491,30 +487,28 @@
                   >
                     <span class="t-knob"></span>
                   </button>
-                  <button
-                    type="button"
-                    class="btn-outline"
-                    aria-label={t('cron.actions.editJob', 'Edit job {id}', {
+                  <Button
+                    variant="secondary"
+                    ariaLabel={t('cron.actions.editJob', 'Edit job {id}', {
                       id: job.id,
                     })}
                     data-testid={`cron-edit-${job.id}`}
                     disabled={submittingForm || mutatingJobId === job.id}
-                    onclick={() => openEditModal(job)}
+                    onClick={() => openEditModal(job)}
                   >
                     {t('common.edit', 'Edit')}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-outline btn-dang"
-                    aria-label={t('cron.actions.deleteJob', 'Delete job {id}', {
+                  </Button>
+                  <Button
+                    variant="danger"
+                    ariaLabel={t('cron.actions.deleteJob', 'Delete job {id}', {
                       id: job.id,
                     })}
                     data-testid={`cron-delete-${job.id}`}
                     disabled={submittingForm || mutatingJobId === job.id}
-                    onclick={() => deleteJob(job)}
+                    onClick={() => deleteJob(job)}
                   >
                     {t('common.delete', 'Delete')}
-                  </button>
+                  </Button>
                 </div>
               </td>
             </tr>
@@ -700,23 +694,18 @@
           </div>
 
           <div class="modal-footer">
-            <button
-              type="button"
-              class="modal-btn-cancel"
+            <Button
+              variant="secondary"
               disabled={submittingForm}
-              onclick={closeModal}
+              onClick={closeModal}
             >
               {t('common.cancel', 'Cancel')}
-            </button>
-            <button
-              type="submit"
-              class="modal-btn-confirm"
-              disabled={submittingForm}
-            >
+            </Button>
+            <Button variant="primary" type="submit" disabled={submittingForm}>
               {submittingForm
                 ? t('common.saving', 'Saving…')
                 : t('common.save', 'Save')}
-            </button>
+            </Button>
           </div>
         </form>
       </div>
@@ -905,7 +894,8 @@
     gap: 8px;
   }
 
-  .cron-view__actions .btn-outline {
+  .cron-view__actions :global(.btn-secondary),
+  .cron-view__actions :global(.btn-danger) {
     padding: 4px 10px;
     font-size: 11.5px;
   }

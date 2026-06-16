@@ -1,4 +1,5 @@
 <script>
+  import Button from '../ui/Button.svelte';
   import { t } from '$lib/i18n.js';
   import {
     DEBUG_TAB_FORMATTED,
@@ -96,9 +97,9 @@
       aria-live="polite"
     >
       <span>{error}</span>
-      <button type="button" class="btn-outline" onclick={retry}>
+      <Button variant="secondary" onClick={retry}>
         {t('common.retry', 'Retry')}
-      </button>
+      </Button>
     </div>
   {:else if trace}
     <div class="debug-view__detail-tabs" role="tablist">

@@ -331,7 +331,7 @@ describe('ChatView', () => {
     setInputValue(composerInput, '/stop');
     flushSync();
 
-    const sendButton = document.querySelector('.send-btn');
+    const sendButton = document.querySelector('.btn-primary.btn-icon');
     expect(sendButton).toBeTruthy();
     sendButton.click();
 
@@ -2890,7 +2890,7 @@ function sendComposerMessage(content) {
   setInputValue(composerInput, content);
   flushSync();
 
-  const sendButton = document.querySelector('.send-btn');
+  const sendButton = document.querySelector('.btn-primary.btn-icon');
   expect(sendButton).toBeTruthy();
   sendButton.click();
   flushSync();
