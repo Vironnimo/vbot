@@ -225,7 +225,7 @@ def _parse_memory_text(text: str) -> tuple[str, list[str], str]:
     section_lines = lines[heading_index + 1 : section_end]
     suffix = "\n".join(lines[section_end:]).rstrip() if next_heading_index is not None else ""
     entries = [
-        _unescape_entry_line(line) for line in section_lines if line.startswith(_BULLET_PREFIX)
+        _strip_entry_bullet(line) for line in section_lines if line.startswith(_BULLET_PREFIX)
     ]
     return preamble, [entry for entry in entries if entry], suffix
 
@@ -245,8 +245,11 @@ def _next_heading_index(lines: list[str], start_index: int) -> int | None:
     return None
 
 
-def _unescape_entry_line(line: str) -> str:
-    return line.removeprefix(_BULLET_PREFIX).replace("\\-", "-").strip()
+def _strip_entry_bullet(line: str) -> str:
+    # Entries are normalized to a single line and written behind a "- " prefix, so a
+    # leading-dash entry round-trips by stripping the prefix exactly once. No "\-"
+    # unescaping: nothing writes it, and replacing it would corrupt literal "\-" content.
+    return line.removeprefix(_BULLET_PREFIX).strip()
 
 
 def _write_memory_parts(path: Path, preamble: str, entries: list[str], suffix: str) -> None:

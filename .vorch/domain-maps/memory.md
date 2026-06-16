@@ -57,7 +57,8 @@ This domain is separate from Sessions. Sessions remain JSONL-canonical chat hist
 
 - Entry IDs are ephemeral positions, not stable keys: a `remove` shifts every higher ID down by one. The tool returns the full `entries` list after every mutation so the model can re-read current IDs before the next `replace`/`remove`; do not reuse an ID across mutations.
 - `{memory}` shows more than the tool's entries: hand-written freeform text in `USER.md`/`MEMORY.md` is prompt-visible too, because rendering injects the whole file. The tool only curates the `## Entries` bullets.
-- Entry escaping: newlines and carriage returns collapse to spaces, and a leading `-` is written as `\-` (unescaped on read) so an entry that starts with `-` round-trips instead of splitting into a new bullet.
+- Entry normalization: all whitespace (newlines and carriage returns included) collapses to single spaces, so every entry is exactly one line. An entry that starts with `-` round-trips because the `- ` bullet prefix (dash + space) is stripped exactly once on read; there is no `\-` escaping, and literal `\-` in an entry is preserved verbatim.
+- Only `- ` bullet lines inside `## Entries` survive a tool mutation; any other prose hand-written into that section is dropped on the next `add`/`replace`/`remove`. Keep durable freeform notes outside `## Entries` (the section is fully tool-managed).
 - The `## Entries` heading match is case-insensitive; only the first following `## ` heading starts the preserved suffix.
 
 ## Future Backend Boundary
