@@ -186,7 +186,15 @@ resolution is read-side and shared".
   classification can't drift).
 - `ModelRegistry.get(provider_id, model_id)` raises `KeyError` on a missing pair;
   `list_for_provider` returns models sorted by `model_id`, empty for an unknown
-  provider; `invalidate(resources_dir)` clears the cache after a refresh.
+  provider; `invalidate(resources_dir)` clears the cache (used by tests / discovery).
+- `ModelRegistry.reload(resources_dir)` re-assembles **in place** — it swaps the
+  instance's contents and repoints the cache at the same object, so the registry
+  keeps its identity. This is the runtime refresh path (`model.refresh_db` →
+  `_reload_runtime_model_registry`): services that captured the registry at
+  construction (task-model targets for speech/image/embeddings, the `/status`
+  display, the recall backend) hold the one instance and see the new catalog
+  without a restart. Do **not** rebind `runtime._models` to a fresh `load()` — that
+  rebind was the bug (chat list fresh, specialized targets/status stale).
 - `ModelRegistry.query(model_query)` is the filtered read path — pure, no
   credential awareness, lives in `core/models/query.py`. Capability/task/modality/
   context-window matching happens once there; callers that need credential gating
