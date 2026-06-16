@@ -62,6 +62,7 @@ class NoopStrategy:
         summary_model_id: str,
         storage: Any,
         settings: CompactionSettings,
+        instruction: str | None = None,
     ) -> ChatMessage:
         raise AssertionError("NoopStrategy.compact should not be called in this test")
 
