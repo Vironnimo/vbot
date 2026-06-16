@@ -177,9 +177,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             self._auth_config.header: f"{self._auth_config.prefix}{token}",
             "chatgpt-account-id": account_id,
         }
+        # The Codex Responses endpoint owns its required headers; provider-level
+        # extra_headers are deliberately not merged here so a stray config entry can
+        # never leak onto the Codex wire (the OpenAI provider forbids extra_headers).
         headers.update(CODEX_EXTRA_HEADERS)
-        if self._config.extra_headers:
-            headers.update(self._config.extra_headers)
         return headers
 
     async def send(
