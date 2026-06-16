@@ -50,6 +50,7 @@ describe('LogsView', () => {
     document.body.innerHTML = '';
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('loads the newest file by default and subscribes to its live stream', async () => {
@@ -366,6 +367,9 @@ describe('LogsView', () => {
 
   it('reconnects after the live stream closes unexpectedly', async () => {
     vi.useFakeTimers();
+    // Pin reconnect jitter to its midpoint so attempt 0 fires at exactly the
+    // base 1000ms delay this test advances by.
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11'],

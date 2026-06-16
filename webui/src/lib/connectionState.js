@@ -1,4 +1,5 @@
 import { subscribeServerEvents } from './api.js';
+import { reconnectBackoffDelay } from './backoff.js';
 
 export const CONNECTION_STATUS_CONNECTED = 'connected';
 export const CONNECTION_STATUS_RECONNECTING = 'reconnecting';
@@ -6,7 +7,6 @@ export const CONNECTION_STATUS_DISCONNECTED = 'disconnected';
 
 const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
-const RECONNECT_JITTER_FACTOR = 0.25;
 
 export function createConnectionState() {
   return {
@@ -79,19 +79,13 @@ function _cleanup(state) {
 }
 
 function _scheduleReconnect(state, handlers) {
-  const delay = _reconnectDelay(state._reconnectAttempt);
+  const delay = reconnectBackoffDelay(state._reconnectAttempt, {
+    initialDelayMs: RECONNECT_INITIAL_DELAY_MS,
+    maxDelayMs: RECONNECT_MAX_DELAY_MS,
+  });
   state._reconnectAttempt += 1;
   state._reconnectTimer = setTimeout(() => {
     state._reconnectTimer = null;
     connect(state, handlers);
   }, delay);
-}
-
-function _reconnectDelay(attempt) {
-  const baseDelay = Math.min(
-    RECONNECT_INITIAL_DELAY_MS * 2 ** attempt,
-    RECONNECT_MAX_DELAY_MS,
-  );
-  const jitter = baseDelay * RECONNECT_JITTER_FACTOR;
-  return baseDelay - jitter + Math.random() * jitter * 2;
 }

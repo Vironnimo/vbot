@@ -4,6 +4,7 @@
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
+  import { reconnectBackoffDelay } from '$lib/backoff.js';
   import { t } from '$lib/i18n.js';
   import {
     LOGS_STREAM_STATUS_CONNECTED,
@@ -215,10 +216,10 @@
   function scheduleReconnect(file) {
     clearReconnectTimer();
 
-    const delay = Math.min(
-      RECONNECT_INITIAL_DELAY_MS * 2 ** reconnectAttempt,
-      RECONNECT_MAX_DELAY_MS,
-    );
+    const delay = reconnectBackoffDelay(reconnectAttempt, {
+      initialDelayMs: RECONNECT_INITIAL_DELAY_MS,
+      maxDelayMs: RECONNECT_MAX_DELAY_MS,
+    });
     reconnectAttempt += 1;
 
     reconnectTimer = setTimeout(() => {
