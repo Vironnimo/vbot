@@ -1,6 +1,7 @@
 <script>
   import { untrack } from 'svelte';
   import Button from '../ui/Button.svelte';
+  import Modal from '../ui/Modal.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -146,18 +147,6 @@
       void cancelOAuthFlow();
     }
     onClose();
-  }
-
-  function handleDocumentKeydown(event) {
-    if (event.key === 'Escape') {
-      close();
-    }
-  }
-
-  function handleOverlayClick(event) {
-    if (event.target === event.currentTarget) {
-      close();
-    }
   }
 
   async function submitApiKey(event) {
@@ -391,40 +380,20 @@
   {/if}
 {/snippet}
 
-<svelte:document onkeydown={handleDocumentKeydown} />
-
-<div
-  class="modal-overlay open"
-  role="presentation"
-  onclick={handleOverlayClick}
+<Modal
+  title={selectedProvider
+    ? t(
+        'settings.providers.device_flow.title',
+        'Connect {provider}',
+        providerValues(selectedProvider),
+      )
+    : t('settings.providers.add.title', 'Add provider')}
+  labelledById="provider-connect-modal-title"
+  class="provider-connect-modal"
+  closeDisabled={saving}
+  onClose={close}
 >
-  <div
-    class="modal provider-connect-modal"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="provider-connect-modal-title"
-  >
-    <div class="modal-header">
-      <h3 id="provider-connect-modal-title" class="modal-title">
-        {selectedProvider
-          ? t(
-              'settings.providers.device_flow.title',
-              'Connect {provider}',
-              providerValues(selectedProvider),
-            )
-          : t('settings.providers.add.title', 'Add provider')}
-      </h3>
-      <button
-        type="button"
-        class="modal-close"
-        aria-label={t('common.close', 'Close')}
-        disabled={saving}
-        onclick={close}
-      >
-        ×
-      </button>
-    </div>
-
+  {#snippet body()}
     <div class="modal-body provider-connect-modal__body">
       {#if step === 'provider'}
         {#if providers.length === 0}
@@ -601,36 +570,36 @@
         </p>
       {/if}
     </div>
+  {/snippet}
 
-    <div class="modal-footer">
-      {#if canGoBack}
-        <Button variant="secondary" disabled={saving} onClick={goBack}>
-          {t('common.back', 'Back')}
-        </Button>
-      {/if}
-      <Button variant="secondary" disabled={saving} onClick={close}>
-        {t('common.cancel', 'Cancel')}
+  {#snippet footer()}
+    {#if canGoBack}
+      <Button variant="secondary" disabled={saving} onClick={goBack}>
+        {t('common.back', 'Back')}
       </Button>
-      {#if step === 'api-key'}
-        <Button
-          type="submit"
-          form="provider-connect-key-form"
-          variant="primary"
-          disabled={saving || apiKeyValue.trim().length === 0 || accountInvalid}
-        >
-          {saving
-            ? t('common.saving', 'Saving…')
-            : t('settings.providers.add.saveKey', 'Save key')}
-        </Button>
-      {:else if step === 'oauth' && !oauthActive}
-        <Button
-          variant="primary"
-          disabled={accountInvalid}
-          onClick={startOAuthFlow}
-        >
-          {t('settings.providers.connect', 'Connect')}
-        </Button>
-      {/if}
-    </div>
-  </div>
-</div>
+    {/if}
+    <Button variant="secondary" disabled={saving} onClick={close}>
+      {t('common.cancel', 'Cancel')}
+    </Button>
+    {#if step === 'api-key'}
+      <Button
+        type="submit"
+        form="provider-connect-key-form"
+        variant="primary"
+        disabled={saving || apiKeyValue.trim().length === 0 || accountInvalid}
+      >
+        {saving
+          ? t('common.saving', 'Saving…')
+          : t('settings.providers.add.saveKey', 'Save key')}
+      </Button>
+    {:else if step === 'oauth' && !oauthActive}
+      <Button
+        variant="primary"
+        disabled={accountInvalid}
+        onClick={startOAuthFlow}
+      >
+        {t('settings.providers.connect', 'Connect')}
+      </Button>
+    {/if}
+  {/snippet}
+</Modal>
