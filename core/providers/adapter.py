@@ -20,6 +20,11 @@ from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningRepl
 JsonObject = dict[str, Any]
 ModelLookup = Callable[[str], "Model | None"]
 
+# Concrete image media types every current chat wire can carry as native input.
+# Lives in the providers domain (the wire-protocol layer), not the chat layer:
+# it is the common building block adapters compose into their wire-media set.
+IMAGE_WIRE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+
 
 class ProviderAdapter(ABC):
     """Abstract base class for provider adapters.
@@ -105,6 +110,26 @@ class ProviderAdapter(ABC):
         """
         del model_id
         return REASONING_REPLAY_CURRENT_RUN
+
+    # ------------------------------------------------------------------
+    # Wire media capability
+    # ------------------------------------------------------------------
+
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        """Return the concrete media types this adapter's wire carries natively.
+
+        The chat layer intersects this with the model's advertised input
+        modalities to decide whether an attachment goes native or is degraded;
+        the adapter owns the *format* granularity (e.g. ``"image/png"``,
+        ``"audio/wav"``, ``"application/pdf"``) because that is the wire fact.
+        ``model_id`` is part of the contract for parity with
+        ``reasoning_replay_policy`` and because one adapter can route models to
+        different wires; concrete adapters may also branch on their connection
+        mode.  The ABC default carries nothing — a forgotten declaration
+        degrades the attachment, never crashes the wire.
+        """
+        del model_id
+        return frozenset()
 
     @abstractmethod
     async def aclose(self) -> None:

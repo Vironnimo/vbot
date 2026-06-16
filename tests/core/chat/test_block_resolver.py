@@ -21,6 +21,18 @@ TEXT_IMAGE = frozenset({"text", "image"})
 TEXT_ONLY = frozenset({"text"})
 TEXT_IMAGE_AUDIO = frozenset({"text", "image", "audio"})
 
+# Wire-media sets an adapter declares. The image+audio set mirrors a typical
+# OpenAI-compatible wire and is the resolve-helper default so existing native-path
+# tests read unchanged; the wire gate itself is exercised explicitly below by
+# passing a narrower set (e.g. image-only).
+IMAGE_WIRE = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+IMAGE_AUDIO_WIRE = IMAGE_WIRE | frozenset({"audio/wav", "audio/mpeg"})
+IMAGE_PDF_WIRE = IMAGE_WIRE | frozenset({"application/pdf"})
+
+TEXT_IMAGE_PDF = frozenset({"text", "image", "pdf"})
+
+PDF_BYTES = b"%PDF-1.7\n1 0 obj\n"
+
 WAV_BYTES = b"RIFF\x24\x00\x00\x00WAVEfmt wav-payload"
 OGG_BYTES = b"OggS\x00\x02voice-payload"
 MP4_BYTES = b"\x00\x00\x00\x18ftypisomvideo-payload"
@@ -79,8 +91,16 @@ def _media_message(record: Any, *, message_id: str = "user-current") -> dict:
     }
 
 
-def _resolve(resolver: ContentBlockResolver, messages: list[dict], **kwargs) -> list[dict]:
-    return asyncio.run(resolver.resolve_messages(messages, **kwargs))
+def _resolve(
+    resolver: ContentBlockResolver,
+    messages: list[dict],
+    *,
+    wire_media_types: frozenset[str] = IMAGE_AUDIO_WIRE,
+    **kwargs,
+) -> list[dict]:
+    return asyncio.run(
+        resolver.resolve_messages(messages, wire_media_types=wire_media_types, **kwargs)
+    )
 
 
 def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> None:
@@ -208,6 +228,106 @@ def test_file_block_resolves_to_text_path_note(tmp_path: Path, current_turn: boo
     ]
 
 
+def _file_message(record: Any, *, message_id: str = "user-current") -> dict:
+    return {
+        "id": message_id,
+        "role": "user",
+        "content": [
+            {
+                "type": "file",
+                "attachment_id": record.id,
+                "filename": record.filename,
+                "media_type": record.media_type,
+            }
+        ],
+    }
+
+
+def test_current_turn_pdf_resolves_to_native_document_block(tmp_path: Path) -> None:
+    # A PDF-capable model whose adapter wire carries application/pdf gets the
+    # canonical native document block end-to-end.
+    store = AttachmentStore(tmp_path)
+    record = store.store("report.pdf", PDF_BYTES)
+    resolver = ContentBlockResolver(store)
+    messages = [_file_message(record)]
+
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE_PDF,
+        wire_media_types=IMAGE_PDF_WIRE,
+    )
+
+    assert resolved[0]["content"] == [
+        {
+            "type": "document",
+            "base64": base64.b64encode(PDF_BYTES).decode("ascii"),
+            "media_type": "application/pdf",
+            "filename": "report.pdf",
+        }
+    ]
+
+
+def test_current_turn_pdf_degrades_to_path_note_without_pdf_modality(tmp_path: Path) -> None:
+    # The wire carries PDF, but the model does not advertise the pdf modality.
+    store = AttachmentStore(tmp_path)
+    record = store.store("report.pdf", PDF_BYTES)
+    resolver = ContentBlockResolver(store)
+    messages = [_file_message(record)]
+
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE,
+        wire_media_types=IMAGE_PDF_WIRE,
+    )
+
+    assert resolved[0]["content"] == [
+        {"type": "text", "text": f"[File: report.pdf (application/pdf) — Path: {record.file_path}]"},
+    ]
+
+
+def test_current_turn_pdf_degrades_to_path_note_when_wire_cannot_carry(tmp_path: Path) -> None:
+    # The model advertises pdf, but the chosen adapter wire cannot carry it
+    # (e.g. an unverified OpenAI-compatible provider) — degrade, never crash.
+    store = AttachmentStore(tmp_path)
+    record = store.store("report.pdf", PDF_BYTES)
+    resolver = ContentBlockResolver(store)
+    messages = [_file_message(record)]
+
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE_PDF,
+        wire_media_types=IMAGE_WIRE,
+    )
+
+    assert resolved[0]["content"][0]["type"] == "text"
+    assert "report.pdf" in resolved[0]["content"][0]["text"]
+
+
+def test_historical_pdf_degrades_to_path_note_even_when_native_capable(tmp_path: Path) -> None:
+    # An earlier-turn PDF is never re-sent natively, regardless of capability.
+    store = AttachmentStore(tmp_path)
+    record = store.store("report.pdf", PDF_BYTES)
+    resolver = ContentBlockResolver(store)
+    messages = [_file_message(record, message_id="user-historical")]
+
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="other-message",
+        input_modalities=TEXT_IMAGE_PDF,
+        wire_media_types=IMAGE_PDF_WIRE,
+    )
+
+    assert resolved[0]["content"][0]["type"] == "text"
+    assert "report.pdf" in resolved[0]["content"][0]["text"]
+
+
 @pytest.mark.parametrize("current_turn", [True, False])
 def test_text_block_resolves_to_text_dict(tmp_path: Path, current_turn: bool) -> None:
     # Arrange
@@ -331,6 +451,47 @@ def test_current_turn_ogg_audio_degrades_even_for_audio_model(tmp_path: Path) ->
     assert transcriber.calls == [("voice.ogg", "audio/ogg")]
     assert resolved[0]["content"][0]["type"] == "text"
     assert "ogg transcript" in resolved[0]["content"][0]["text"]
+
+
+def test_audio_model_on_image_only_wire_degrades_to_transcription(tmp_path: Path) -> None:
+    # The model advertises audio, but the adapter wire carries images only. The
+    # resolver must degrade to STT rather than emit native audio the wire cannot
+    # encode — the latent resolver/adapter contradiction, now closed.
+    store = AttachmentStore(tmp_path)
+    record = store.store("clip.wav", WAV_BYTES)
+    transcriber = _StubTranscriber(text="from stt")
+    resolver = ContentBlockResolver(store, transcriber=transcriber)
+    messages = [_media_message(record)]
+
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE_AUDIO,
+        wire_media_types=IMAGE_WIRE,
+    )
+
+    assert transcriber.calls == [("clip.wav", "audio/wav")]
+    assert resolved[0]["content"][0]["type"] == "text"
+    assert "from stt" in resolved[0]["content"][0]["text"]
+
+
+def test_audio_model_on_image_only_wire_without_transcriber_raises(tmp_path: Path) -> None:
+    # Same contradiction, no transcriber available: a clear ChatError instead of
+    # the adapter being handed audio it cannot carry.
+    store = AttachmentStore(tmp_path)
+    record = store.store("clip.wav", WAV_BYTES)
+    resolver = ContentBlockResolver(store)
+    messages = [_media_message(record)]
+
+    with pytest.raises(ChatError, match="no speech-to-text"):
+        _resolve(
+            resolver,
+            messages,
+            current_user_message_id="user-current",
+            input_modalities=TEXT_IMAGE_AUDIO,
+            wire_media_types=IMAGE_WIRE,
+        )
 
 
 def test_cached_transcription_is_reused_without_new_stt_call(tmp_path: Path) -> None:

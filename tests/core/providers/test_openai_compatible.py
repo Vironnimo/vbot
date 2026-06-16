@@ -18,6 +18,7 @@ import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -223,6 +224,17 @@ def test_reasoning_replay_policy_stays_current_run(openai_adapter):
     assert openai_adapter.reasoning_replay_policy("gpt-4o") == "current_run"
 
 
+def test_wire_media_support_is_images_plus_openai_audio(openai_adapter):
+    """The generic OpenAI-compatible wire carries images plus WAV/MP3 — no PDF.
+
+    Generic providers (OpenRouter, MiniMax, OpenCode-Go, Mistral) inherit this set.
+    """
+    supported = openai_adapter.wire_media_support("gpt-4o")
+
+    assert supported == IMAGE_WIRE_MEDIA_TYPES | frozenset({"audio/wav", "audio/mpeg"})
+    assert "application/pdf" not in supported
+
+
 def _openai_test_model(
     model_id: str,
     *,
@@ -384,6 +396,38 @@ class TestSendRequestFormat:
         part = {"type": "media", "base64": "YXVkaW8=", "media_type": media_type}
 
         with pytest.raises(ProviderError, match="unsupported media type"):
+            _to_openai_user_content_part(part)
+
+    def test_document_part_maps_to_openai_file_part(self):
+        """A canonical document block becomes a Chat Completions file part."""
+        part = {
+            "type": "document",
+            "base64": "JVBERi0=",
+            "media_type": "application/pdf",
+            "filename": "report.pdf",
+        }
+
+        result = _to_openai_user_content_part(part)
+
+        assert result == {
+            "type": "file",
+            "file": {
+                "filename": "report.pdf",
+                "file_data": "data:application/pdf;base64,JVBERi0=",
+            },
+        }
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            {"type": "document", "base64": None, "media_type": "application/pdf", "filename": "r.pdf"},
+            {"type": "document", "base64": "JVBERi0=", "media_type": "", "filename": "r.pdf"},
+            {"type": "document", "base64": "JVBERi0=", "media_type": "application/pdf", "filename": ""},
+        ],
+    )
+    def test_invalid_document_part_raises(self, part):
+        """Malformed document parts must not reach the wire as partial file parts."""
+        with pytest.raises(ProviderError, match="document content block requires"):
             _to_openai_user_content_part(part)
 
     @respx.mock

@@ -15,6 +15,7 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
@@ -68,6 +69,17 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         if policy.endpoint_path in {RESPONSES_ENDPOINT, MESSAGES_ENDPOINT}:
             return REASONING_REPLAY_FULL_HISTORY
         return REASONING_REPLAY_CURRENT_RUN
+
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        """Every Copilot endpoint family carries images only.
+
+        Both the ``/responses`` and ``/v1/messages`` routes accept image input
+        but no audio; overriding the OpenAI-compatible base (which advertises
+        WAV/MP3) keeps the chat layer from emitting audio the Copilot wire
+        cannot carry.
+        """
+        del model_id
+        return IMAGE_WIRE_MEDIA_TYPES
 
     # ------------------------------------------------------------------
     # Payload / request helpers

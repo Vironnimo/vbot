@@ -18,6 +18,7 @@ import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.errors import ProviderAuthError
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.openai import (
     CODEX_EXTRA_HEADERS,
     CODEX_RESPONSES_ENDPOINT,
@@ -560,3 +561,23 @@ def test_codex_mode_stores_connection_mode() -> None:
         connection_mode=CODEX_RESPONSES_MODE,
     )
     assert adapter._connection_mode == CODEX_RESPONSES_MODE
+
+
+def test_chat_mode_wire_media_supports_images_audio_and_pdf() -> None:
+    """The ``/chat/completions`` wire carries images, the OpenAI audio formats, and PDF."""
+
+    adapter = OpenAIAdapter(_platform_config(), "sk-test")
+    assert adapter.wire_media_support("gpt-5.2") == (
+        IMAGE_WIRE_MEDIA_TYPES | frozenset({"audio/wav", "audio/mpeg", "application/pdf"})
+    )
+
+
+def test_codex_mode_wire_media_is_image_only() -> None:
+    """The Codex Responses wire carries images only — no native audio or PDF."""
+
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account("acct_openai"),
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    assert adapter.wire_media_support("gpt-5.2-codex") == IMAGE_WIRE_MEDIA_TYPES

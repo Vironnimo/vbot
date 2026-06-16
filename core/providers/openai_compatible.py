@@ -27,7 +27,7 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
-from core.providers.adapter import ModelLookup, ProviderAdapter
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
@@ -126,6 +126,22 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.aclose()
+
+    # ------------------------------------------------------------------
+    # Wire media capability
+    # ------------------------------------------------------------------
+
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        """Images plus the OpenAI ``input_audio`` format set (WAV/MP3).
+
+        This is exactly what the shared ``/chat/completions`` content
+        translator encodes today, so generic OpenAI-compatible providers
+        (OpenRouter, MiniMax, OpenCode-Go, Mistral) inherit the correct set.
+        ``application/pdf`` is deliberately *not* declared here: the base wire
+        is unverified for documents, so only concrete, verified adapters opt in.
+        """
+        del model_id
+        return IMAGE_WIRE_MEDIA_TYPES | frozenset(_OPENAI_INPUT_AUDIO_FORMATS)
 
     # ------------------------------------------------------------------
     # Header / payload helpers
@@ -703,11 +719,45 @@ def _to_openai_user_content_part(part: Any) -> dict[str, Any]:
             retryable=False,
         )
 
+    if part_type == "document":
+        return _to_openai_file_part(part)
+
     if part_type == "text":
         text = part.get("text")
         return {"type": "text", "text": "" if text is None else str(text)}
 
     return dict(part)
+
+
+def _to_openai_file_part(part: dict[str, Any]) -> dict[str, Any]:
+    """Translate a canonical document block into an OpenAI Chat Completions ``file`` part.
+
+    Wire shape verified against the OpenAI Chat Completions file-input API: the
+    bytes ride as a ``data:<mime>;base64,...`` URL under ``file_data`` with the
+    original ``filename``. Declaring which adapters' wires actually carry
+    documents stays in ``wire_media_support`` — this is encoding only.
+    """
+    base64_data = part.get("base64")
+    media_type = part.get("media_type")
+    filename = part.get("filename")
+    if (
+        not isinstance(base64_data, str)
+        or not isinstance(media_type, str)
+        or not media_type
+        or not isinstance(filename, str)
+        or not filename
+    ):
+        raise ProviderError(
+            "document content block requires string base64, media_type, and filename fields",
+            retryable=False,
+        )
+    return {
+        "type": "file",
+        "file": {
+            "filename": filename,
+            "file_data": f"data:{media_type};base64,{base64_data}",
+        },
+    }
 
 
 def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
