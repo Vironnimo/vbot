@@ -42,9 +42,7 @@ def test_trace_count_returns_zero_silently_on_missing_store(
     caplog.set_level(logging.WARNING, logger="vbot.server.rpc.settings")
     assert _trace_count(runtime) == 0
 
-    assert [
-        record for record in caplog.records if record.name == "vbot.server.rpc.settings"
-    ] == []
+    assert [record for record in caplog.records if record.name == "vbot.server.rpc.settings"] == []
 
 
 def test_trace_count_logs_warning_on_unexpected_error(
@@ -58,8 +56,7 @@ def test_trace_count_logs_warning_on_unexpected_error(
     warning_records = [
         record
         for record in caplog.records
-        if record.name == "vbot.server.rpc.settings"
-        and "debug trace count" in record.getMessage()
+        if record.name == "vbot.server.rpc.settings" and "debug trace count" in record.getMessage()
     ]
     assert len(warning_records) == 1
     assert warning_records[0].exc_info is not None

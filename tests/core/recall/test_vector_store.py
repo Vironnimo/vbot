@@ -59,7 +59,8 @@ def _upsert_one(
 def test_vector_store_creates_index_file_under_recall_dir(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
     header = VectorHeader(provider_id="openrouter", model_id="model-a", dimension=4)
-    _upsert_one(store,
+    _upsert_one(
+        store,
         header=header,
         record=_record("sess-1"),
         vector=[0.1, 0.2, 0.3, 0.4],
@@ -72,7 +73,7 @@ def test_vector_store_creates_index_file_under_recall_dir(tmp_path: Path) -> Non
 def test_vector_store_pins_provider_model_and_dimension_in_header(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
     header = VectorHeader(provider_id="openrouter", model_id="model-a", dimension=4)
-    _upsert_one(store,header=header, record=_record("sess-1"), vector=[0.1, 0.2, 0.3, 0.4])
+    _upsert_one(store, header=header, record=_record("sess-1"), vector=[0.1, 0.2, 0.3, 0.4])
 
     stored = store.read_header()
     assert stored is not None
@@ -85,7 +86,8 @@ def test_vector_store_creates_vec0_table_lazily_on_first_insert(tmp_path: Path) 
     store = VectorStore(tmp_path)
     assert store.read_header() is None
 
-    _upsert_one(store,
+    _upsert_one(
+        store,
         header=VectorHeader(provider_id="p", model_id="m", dimension=3),
         record=_record("s1"),
         vector=[0.1, 0.2, 0.3],
@@ -105,11 +107,11 @@ def test_vector_store_drops_and_rebuilds_on_model_change(tmp_path: Path) -> None
     store = VectorStore(tmp_path)
     header_a = VectorHeader(provider_id="openrouter", model_id="model-a", dimension=4)
     header_b = VectorHeader(provider_id="openrouter", model_id="model-b", dimension=4)
-    _upsert_one(store,header=header_a, record=_record("a-1"), vector=[0.1, 0.2, 0.3, 0.4])
-    _upsert_one(store,header=header_a, record=_record("a-2"), vector=[0.2, 0.3, 0.4, 0.5])
+    _upsert_one(store, header=header_a, record=_record("a-1"), vector=[0.1, 0.2, 0.3, 0.4])
+    _upsert_one(store, header=header_a, record=_record("a-2"), vector=[0.2, 0.3, 0.4, 0.5])
     assert set(store.list_indexed_sessions("coder")) == {"a-1", "a-2"}
 
-    _upsert_one(store,header=header_b, record=_record("b-1"), vector=[0.9, 0.8, 0.7, 0.6])
+    _upsert_one(store, header=header_b, record=_record("b-1"), vector=[0.9, 0.8, 0.7, 0.6])
 
     indexed = store.list_indexed_sessions("coder")
     assert set(indexed) == {"b-1"}
@@ -120,12 +122,14 @@ def test_vector_store_drops_and_rebuilds_on_model_change(tmp_path: Path) -> None
 
 def test_vector_store_drops_and_rebuilds_on_provider_change(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    _upsert_one(store,
+    _upsert_one(
+        store,
         header=VectorHeader(provider_id="openrouter", model_id="m", dimension=4),
         record=_record("s1"),
         vector=[0.1, 0.2, 0.3, 0.4],
     )
-    _upsert_one(store,
+    _upsert_one(
+        store,
         header=VectorHeader(provider_id="openai", model_id="m", dimension=4),
         record=_record("s2"),
         vector=[0.5, 0.6, 0.7, 0.8],
@@ -139,7 +143,8 @@ def test_vector_store_drops_and_rebuilds_on_provider_change(tmp_path: Path) -> N
 
 def test_vector_store_rebuilds_on_schema_version_mismatch(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    _upsert_one(store,
+    _upsert_one(
+        store,
         header=VectorHeader(provider_id="p", model_id="m", dimension=4),
         record=_record("s1"),
         vector=[0.1, 0.2, 0.3, 0.4],
@@ -150,7 +155,8 @@ def test_vector_store_rebuilds_on_schema_version_mismatch(tmp_path: Path) -> Non
         conn.execute("PRAGMA user_version = 999")
         conn.commit()
 
-    _upsert_one(store,
+    _upsert_one(
+        store,
         header=VectorHeader(provider_id="p", model_id="m", dimension=4),
         record=_record("s2"),
         vector=[0.4, 0.5, 0.6, 0.7],
@@ -162,14 +168,16 @@ def test_vector_store_rebuilds_on_schema_version_mismatch(tmp_path: Path) -> Non
 
 def test_vector_store_rejects_vector_with_wrong_dimension(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    _upsert_one(store,
+    _upsert_one(
+        store,
         header=VectorHeader(provider_id="p", model_id="m", dimension=4),
         record=_record("s1"),
         vector=[0.1, 0.2, 0.3, 0.4],
     )
 
     with pytest.raises(VectorStoreError, match="does not match pinned dimension"):
-        _upsert_one(store,
+        _upsert_one(
+            store,
             header=VectorHeader(provider_id="p", model_id="m", dimension=4),
             record=_record("s2"),
             vector=[0.1, 0.2, 0.3, 0.4, 0.5],
@@ -179,9 +187,9 @@ def test_vector_store_rejects_vector_with_wrong_dimension(tmp_path: Path) -> Non
 def test_vector_store_knn_search_returns_nearest_by_cosine(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
     header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-    _upsert_one(store,header=header, record=_record("near"), vector=[1.0, 0.0, 0.0])
-    _upsert_one(store,header=header, record=_record("mid"), vector=[0.7, 0.7, 0.0])
-    _upsert_one(store,header=header, record=_record("far"), vector=[0.0, 0.0, 1.0])
+    _upsert_one(store, header=header, record=_record("near"), vector=[1.0, 0.0, 0.0])
+    _upsert_one(store, header=header, record=_record("mid"), vector=[0.7, 0.7, 0.0])
+    _upsert_one(store, header=header, record=_record("far"), vector=[0.0, 0.0, 1.0])
 
     results = store.knn_search(header=header, query_vector=[1.0, 0.0, 0.0], limit=3)
     assert [rowid for rowid, _ in results] == [1, 2, 3]
@@ -192,8 +200,8 @@ def test_vector_store_knn_search_returns_nearest_by_cosine(tmp_path: Path) -> No
 def test_vector_store_get_chunks_by_rowids_round_trip(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
     header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-    _upsert_one(store,header=header, record=_record("a"), vector=[1.0, 0.0, 0.0])
-    _upsert_one(store,header=header, record=_record("b"), vector=[0.0, 1.0, 0.0])
+    _upsert_one(store, header=header, record=_record("a"), vector=[1.0, 0.0, 0.0])
+    _upsert_one(store, header=header, record=_record("b"), vector=[0.0, 1.0, 0.0])
 
     records = store.get_chunks_by_rowids([1, 2])
     assert set(records) == {1, 2}
@@ -230,7 +238,7 @@ def test_vector_store_list_indexed_sessions_reports_mtime_and_size(tmp_path: Pat
         start_message_id="m1",
         end_message_id="m1",
     )
-    _upsert_one(store,header=header, record=record, vector=[0.1, 0.2])
+    _upsert_one(store, header=header, record=record, vector=[0.1, 0.2])
 
     indexed = store.list_indexed_sessions("coder")
     assert indexed == {"s1": (12345, 67890)}
@@ -240,7 +248,7 @@ def test_vector_store_drop_indexed_sessions_removes_only_listed(tmp_path: Path) 
     store = VectorStore(tmp_path)
     header = VectorHeader(provider_id="p", model_id="m", dimension=2)
     for sid in ("keep-1", "drop-1", "keep-2", "drop-2"):
-        _upsert_one(store,header=header, record=_record(sid), vector=[0.1, 0.2])
+        _upsert_one(store, header=header, record=_record(sid), vector=[0.1, 0.2])
 
     removed = store.drop_indexed_sessions("coder", ["drop-1", "drop-2"])
     assert removed == 2
