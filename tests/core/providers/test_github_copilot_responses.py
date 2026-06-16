@@ -9,10 +9,16 @@ import pytest
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT, copilot_model_policy
 from core.providers.github_copilot_responses import (
+    ResponsesStreamState,
     build_responses_payload,
-    iter_responses_sse_deltas,
+    iter_responses_sse_deltas_with_state,
     normalize_responses_response,
 )
+
+
+def _iter_deltas(lines):
+    """Parse Responses SSE lines with a fresh stream state (test convenience)."""
+    return iter_responses_sse_deltas_with_state(lines, ResponsesStreamState())
 
 
 def responses_policy(model_id: str = "gpt-5.4", **overrides):
@@ -582,7 +588,7 @@ def test_stream_normalizes_text_reasoning_tool_usage_and_finish() -> None:
         "data: [DONE]\n\n",
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {"type": "content_delta", "text": "Hel"},
         {"type": "reasoning_delta", "text": "Thinking"},
         {
@@ -640,7 +646,7 @@ def test_stream_emits_tool_name_from_nested_function_call_item() -> None:
         )
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {
             "type": "tool_call_delta",
             "id": "call_1",
@@ -681,7 +687,7 @@ def test_stream_deduplicates_replayed_argument_delta_when_item_id_differs(model_
         ),
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {
             "type": "tool_call_delta",
             "id": "call_1",
@@ -719,7 +725,7 @@ def test_stream_item_id_only_delta_resolves_to_call_id_canonical_slot(model_id: 
         ),
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {
             "type": "tool_call_delta",
             "id": "call_1",
@@ -776,7 +782,7 @@ def test_stream_combined_placeholder_name_and_item_id_only_delta_emits_single_ca
         ),
     ]
 
-    deltas = list(iter_responses_sse_deltas(lines))
+    deltas = list(_iter_deltas(lines))
     tool_call_deltas = [delta for delta in deltas if delta.get("type") == "tool_call_delta"]
 
     assert tool_call_deltas == [
@@ -816,7 +822,7 @@ def test_stream_backfills_only_missing_argument_suffix_after_added_item() -> Non
         ),
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {
             "type": "tool_call_delta",
             "id": "call_1",
@@ -850,7 +856,7 @@ def test_stream_preserves_repeated_tool_argument_boundary_text() -> None:
         ),
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {
             "type": "tool_call_delta",
             "id": "call_1",
@@ -891,7 +897,7 @@ def test_stream_preserves_tool_argument_delta_that_appears_elsewhere_in_payload(
         ),
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {
             "type": "tool_call_delta",
             "id": "call_1",
@@ -934,7 +940,7 @@ def test_stream_emits_visible_reasoning_from_completed_response_output() -> None
         )
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {"type": "reasoning_delta", "text": "Need docs lookup."},
         {
             "type": "reasoning_meta",
@@ -970,7 +976,7 @@ def test_stream_emits_visible_reasoning_from_reasoning_output_item() -> None:
         ),
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {"type": "reasoning_delta", "text": "Need docs lookup."},
         {
             "type": "reasoning_meta",
@@ -1008,7 +1014,7 @@ def test_stream_completed_event_prefers_tool_calls_finish_over_completed_status(
         )
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {"type": "reasoning_meta", "reasoning_meta": {"response_id": "resp_tool"}},
         {"type": "finish", "reason": "tool_calls"},
     ]
@@ -1042,7 +1048,7 @@ def test_responses_policy_variants_cover_same_nested_tool_name_and_visible_reaso
         }
     )
     streamed = list(
-        iter_responses_sse_deltas(
+        _iter_deltas(
             [
                 _sse(
                     "response.output_item.added",
@@ -1114,7 +1120,7 @@ def test_stream_does_not_duplicate_reasoning_when_completed_repeats_streamed_tex
         ),
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {"type": "reasoning_delta", "text": "Need docs lookup."},
         {
             "type": "reasoning_meta",
@@ -1150,7 +1156,7 @@ def test_stream_backfills_only_missing_reasoning_suffix_from_completed_response(
         ),
     ]
 
-    assert list(iter_responses_sse_deltas(lines)) == [
+    assert list(_iter_deltas(lines)) == [
         {"type": "reasoning_delta", "text": "Need docs"},
         {"type": "reasoning_delta", "text": " lookup."},
         {
@@ -1168,28 +1174,28 @@ def test_stream_backfills_only_missing_reasoning_suffix_from_completed_response(
 def test_stream_tolerates_unknown_events() -> None:
     lines = [_sse("response.unrecognized", {"type": "response.unrecognized", "value": 1})]
 
-    assert list(iter_responses_sse_deltas(lines)) == []
+    assert list(_iter_deltas(lines)) == []
 
 
 def test_stream_raises_provider_error_for_error_events() -> None:
     lines = [_sse("response.failed", {"error": {"message": "bad request"}})]
 
     with pytest.raises(ProviderError, match="bad request"):
-        list(iter_responses_sse_deltas(lines))
+        list(_iter_deltas(lines))
 
 
 def test_stream_raises_provider_error_for_malformed_json() -> None:
     lines = ["event: response.output_text.delta\ndata: not-json\n\n"]
 
     with pytest.raises(ProviderError, match="malformed JSON"):
-        list(iter_responses_sse_deltas(lines))
+        list(_iter_deltas(lines))
 
 
 def test_stream_raises_provider_error_for_non_object_json() -> None:
     lines = ["event: response.output_text.delta\ndata: []\n\n"]
 
     with pytest.raises(ProviderError, match="non-object JSON"):
-        list(iter_responses_sse_deltas(lines))
+        list(_iter_deltas(lines))
 
 
 def _sse(event: str, data: dict) -> str:
