@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
 
+  import Button from './ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import {
@@ -178,9 +179,9 @@
           })}
         </span>
       {/if}
-      <button type="button" class="btn-outline" onclick={loadReport}>
+      <Button variant="secondary" onClick={loadReport}>
         {t('common.refresh', 'Refresh')}
-      </button>
+      </Button>
     </div>
   </header>
 
@@ -190,9 +191,9 @@
       aria-live="polite"
     >
       <span>{errorMessage}</span>
-      <button type="button" class="btn-outline" onclick={loadReport}>
+      <Button variant="secondary" onClick={loadReport}>
         {t('common.retry', 'Retry')}
-      </button>
+      </Button>
     </div>
   {/if}
 

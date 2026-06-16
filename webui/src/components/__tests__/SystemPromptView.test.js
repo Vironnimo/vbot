@@ -188,7 +188,7 @@ describe('SystemPromptView', () => {
     );
 
     const resetButton = Array.from(
-      document.body.querySelectorAll('button.btn-outline.sp-btn-sm'),
+      document.body.querySelectorAll('button.btn-secondary.sp-btn-sm'),
     ).find((button) => button.textContent.trim() === 'Reset');
     resetButton.click();
     flushSync();
@@ -528,7 +528,7 @@ describe('SystemPromptView', () => {
     flushSync();
 
     const resetButtons = Array.from(
-      document.body.querySelectorAll('button.btn-outline.sp-btn-sm'),
+      document.body.querySelectorAll('button.btn-secondary.sp-btn-sm'),
     ).filter((btn) => btn.textContent.trim() === 'Reset');
     expect(resetButtons.length).toBeGreaterThan(0);
 
@@ -562,13 +562,13 @@ describe('SystemPromptView', () => {
 
     await waitForCondition(
       () =>
-        document.body.querySelectorAll('button.btn-outline.sp-btn-sm').length >
-        0,
+        document.body.querySelectorAll('button.btn-secondary.sp-btn-sm')
+          .length > 0,
       100,
     );
 
     const resetButtons = Array.from(
-      document.body.querySelectorAll('button.btn-outline.sp-btn-sm'),
+      document.body.querySelectorAll('button.btn-secondary.sp-btn-sm'),
     ).filter((btn) => btn.textContent.trim() === 'Reset');
     resetButtons[0].click();
     flushSync();

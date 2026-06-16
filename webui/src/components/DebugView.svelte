@@ -21,6 +21,7 @@
   import DebugModelProbe from './debug/DebugModelProbe.svelte';
   import DebugTraceDetail from './debug/DebugTraceDetail.svelte';
   import DebugTraceList from './debug/DebugTraceList.svelte';
+  import Button from './ui/Button.svelte';
 
   const TRACE_LIMIT_MAX = 500;
   const TRACE_LIMIT_MIN = 1;
@@ -280,42 +281,38 @@
       </label>
 
       {#if traceLimitDirty}
-        <button
-          type="button"
-          class="btn-primary debug-view__apply-btn"
-          onclick={handleTraceLimitChange}
+        <Button
+          variant="primary"
+          class="debug-view__apply-btn"
+          onClick={handleTraceLimitChange}
         >
           {t('common.save', 'Save')}
-        </button>
+        </Button>
       {/if}
 
       {#if showClearConfirm}
         <span class="debug-view__confirm-text">
           {t('debug.clearConfirm', 'Clear all traces? This cannot be undone.')}
         </span>
-        <button
-          type="button"
-          class="btn-outline debug-view__confirm-btn debug-view__confirm-btn--danger"
-          onclick={handleClearTraces}
+        <Button
+          variant="secondary"
+          class="debug-view__confirm-btn debug-view__confirm-btn--danger"
+          onClick={handleClearTraces}
         >
           {t('common.confirm', 'Confirm')}
-        </button>
-        <button
-          type="button"
-          class="btn-outline"
-          onclick={() => (showClearConfirm = false)}
-        >
+        </Button>
+        <Button variant="secondary" onClick={() => (showClearConfirm = false)}>
           {t('common.cancel', 'Cancel')}
-        </button>
+        </Button>
       {:else}
-        <button
-          type="button"
-          class="btn-outline debug-view__clear-btn"
-          onclick={() => (showClearConfirm = true)}
+        <Button
+          variant="secondary"
+          class="debug-view__clear-btn"
+          onClick={() => (showClearConfirm = true)}
           disabled={!hasTraces}
         >
           {t('common.clear', 'Clear')}
-        </button>
+        </Button>
       {/if}
     </div>
   </div>
@@ -335,9 +332,9 @@
       aria-live="polite"
     >
       <span>{viewState.error}</span>
-      <button type="button" class="btn-outline" onclick={loadAll}>
+      <Button variant="secondary" onClick={loadAll}>
         {t('common.retry', 'Retry')}
-      </button>
+      </Button>
     </div>
   {/if}
 
@@ -505,7 +502,7 @@
     outline: none;
   }
 
-  .debug-view__apply-btn {
+  :global(.debug-view__apply-btn) {
     padding: 4px 10px;
     font-size: 12px;
   }
@@ -516,14 +513,14 @@
     line-height: 1.4;
   }
 
-  .debug-view__confirm-btn--danger:hover,
-  .debug-view__confirm-btn--danger:focus-visible {
+  :global(.debug-view__confirm-btn--danger):hover,
+  :global(.debug-view__confirm-btn--danger):focus-visible {
     border-color: var(--red);
     color: var(--red);
     background: rgba(252, 129, 129, 0.07);
   }
 
-  .debug-view__clear-btn:disabled {
+  :global(.debug-view__clear-btn):disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }

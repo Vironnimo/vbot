@@ -379,14 +379,16 @@ svg {
   display: flex;
 }
 
-.btn-new,
-.btn-primary,
-.send-btn,
-.modal-btn-confirm {
+/* Canonical button primitives. The Button component (`components/ui/Button.svelte`)
+   is the only place that emits these class names; the historical aliases
+   (btn-new, btn-outline, modal-btn-*, send-btn, icon-btn, tl-btn, pane-action)
+   were collapsed into the four variants plus the `btn-icon` footprint modifier. */
+.btn-primary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding: 6px 14px;
   border: 1px solid rgba(232, 135, 10, 0.22);
   border-radius: var(--r-md);
   color: var(--accent);
@@ -400,30 +402,15 @@ svg {
     color 120ms ease;
 }
 
-.btn-new,
-.btn-primary,
-.modal-btn-confirm {
-  padding: 6px 14px;
-}
-
-.btn-new:hover,
-.btn-primary:hover,
-.send-btn:hover,
-.modal-btn-confirm:hover {
+.btn-primary:hover {
   border-color: rgba(232, 135, 10, 0.38);
   background: rgba(232, 135, 10, 0.18);
 }
 
-.btn-new:focus-visible,
 .btn-primary:focus-visible,
-.send-btn:focus-visible,
-.modal-btn-confirm:focus-visible,
-.btn-outline:focus-visible,
 .btn-secondary:focus-visible,
-.modal-btn-cancel:focus-visible,
-.pane-action:focus-visible,
-.tl-btn:focus-visible,
-.icon-btn:focus-visible,
+.btn-danger:focus-visible,
+.btn-tertiary:focus-visible,
 .toggle:focus-visible,
 .tl-toggle:focus-visible,
 .dropdown-trigger:focus-visible,
@@ -437,9 +424,8 @@ svg {
   box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.16);
 }
 
-.btn-outline,
 .btn-secondary,
-.modal-btn-cancel {
+.btn-danger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -458,25 +444,19 @@ svg {
     color 120ms ease;
 }
 
-.btn-outline:hover,
-.btn-secondary:hover,
-.modal-btn-cancel:hover {
+.btn-secondary:hover {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-dim);
 }
 
-.btn-dang:hover,
-.btn-danger:hover,
-.btn-outline.danger:hover {
+.btn-danger:hover {
   border-color: var(--red);
   color: var(--red);
   background: rgba(252, 129, 129, 0.07);
 }
 
-.pane-action,
-.tl-btn,
-.icon-btn {
+.btn-tertiary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -490,19 +470,35 @@ svg {
     color 120ms ease;
 }
 
-.pane-action:hover,
-.tl-btn:hover,
-.icon-btn:hover {
+.btn-tertiary:hover {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-dim);
 }
 
-.tl-btn:disabled:hover,
-.icon-btn:disabled:hover,
-.btn-outline:disabled:hover,
+/* Icon footprint: primary becomes the 32px send-style square, tertiary the
+   30px borderless square. */
+.btn-primary.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.btn-tertiary.btn-icon {
+  width: 30px;
+  height: 30px;
+  border-color: transparent;
+}
+
+.btn-icon.btn-icon--active {
+  border-color: rgba(232, 135, 10, 0.45);
+  color: var(--accent);
+  background: rgba(232, 135, 10, 0.1);
+}
+
 .btn-secondary:disabled:hover,
-.modal-btn-cancel:disabled:hover {
+.btn-danger:disabled:hover,
+.btn-tertiary:disabled:hover {
   border-color: var(--border-2);
   color: var(--text-med);
   background: transparent;
@@ -601,18 +597,6 @@ textarea::placeholder {
   align-self: flex-end;
   align-items: center;
   gap: 4px;
-}
-
-.icon-btn {
-  width: 30px;
-  height: 30px;
-  border-color: transparent;
-}
-
-.send-btn {
-  width: 32px;
-  height: 32px;
-  padding: 0;
 }
 
 .chip {
@@ -1903,23 +1887,15 @@ kbd {
 
   /* Touch targets: buttons, dropdown triggers, and composer controls all reach
      a ≥40px hit area on phone widths. */
-  .btn-new,
   .btn-primary,
-  .btn-outline,
   .btn-secondary,
-  .modal-btn-confirm,
-  .modal-btn-cancel,
+  .btn-danger,
   .dropdown-trigger,
   .s-dropdown-trigger {
     min-height: 40px;
   }
 
-  .icon-btn {
-    width: 40px;
-    height: 40px;
-  }
-
-  .send-btn {
+  .btn-icon {
     width: 40px;
     height: 40px;
   }

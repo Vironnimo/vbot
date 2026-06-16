@@ -1,4 +1,5 @@
 <script>
+  import Button from './ui/Button.svelte';
   import { t } from '$lib/i18n.js';
 
   let {
@@ -67,33 +68,30 @@
               }}
             ></textarea>
             <div class="queued-messages__actions">
-              <button
-                type="button"
-                class="tl-btn"
-                aria-label={t('queue.saveEdit', 'Save edit')}
-                onclick={saveEdit}
+              <Button
+                variant="tertiary"
+                ariaLabel={t('queue.saveEdit', 'Save edit')}
+                onClick={saveEdit}
               >
                 {t('queue.saveEdit', 'Save')}
-              </button>
-              <button
-                type="button"
-                class="tl-btn"
-                aria-label={t('queue.cancelEdit', 'Cancel edit')}
-                onclick={cancelEdit}
+              </Button>
+              <Button
+                variant="tertiary"
+                ariaLabel={t('queue.cancelEdit', 'Cancel edit')}
+                onClick={cancelEdit}
               >
                 {t('queue.cancelEdit', 'Cancel')}
-              </button>
-              <button
-                type="button"
-                class="tl-btn"
-                aria-label={t('queue.removeMessage', 'Remove queued message')}
-                onclick={() => {
+              </Button>
+              <Button
+                variant="tertiary"
+                ariaLabel={t('queue.removeMessage', 'Remove queued message')}
+                onClick={() => {
                   onRemoveQueuedMessage?.(message.id);
                   cancelEdit();
                 }}
               >
                 {t('common.remove', 'Remove')}
-              </button>
+              </Button>
             </div>
             {#if editError}
               <p class="queued-messages__error">{editError}</p>
@@ -101,22 +99,20 @@
           {:else}
             <span class="queued-messages__content">{message.content}</span>
             <div class="queued-messages__actions">
-              <button
-                type="button"
-                class="tl-btn"
-                aria-label={t('queue.editMessage', 'Edit queued message')}
-                onclick={() => beginEdit(message)}
+              <Button
+                variant="tertiary"
+                ariaLabel={t('queue.editMessage', 'Edit queued message')}
+                onClick={() => beginEdit(message)}
               >
                 {t('queue.editMessage', 'Edit')}
-              </button>
-              <button
-                type="button"
-                class="tl-btn"
-                aria-label={t('queue.removeMessage', 'Remove queued message')}
-                onclick={() => onRemoveQueuedMessage?.(message.id)}
+              </Button>
+              <Button
+                variant="tertiary"
+                ariaLabel={t('queue.removeMessage', 'Remove queued message')}
+                onClick={() => onRemoveQueuedMessage?.(message.id)}
               >
                 {t('common.remove', 'Remove')}
-              </button>
+              </Button>
             </div>
           {/if}
         </li>
@@ -226,7 +222,7 @@
     font-size: 12px;
   }
 
-  .tl-btn {
+  .queued-messages__actions :global(.btn-tertiary) {
     flex-shrink: 0;
   }
 

@@ -1,5 +1,6 @@
 <script>
   import ProviderConnectModal from './ProviderConnectModal.svelte';
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -289,9 +290,9 @@
   {/if}
 
   <div class="s-providers-toolbar">
-    <button class="btn-primary" type="button" onclick={openAddProviderModal}>
+    <Button variant="primary" onClick={openAddProviderModal}>
       {t('settings.providers.add.button', 'Add provider')}
-    </button>
+    </Button>
   </div>
 
   {#if connectedProviders.length === 0}
@@ -335,16 +336,15 @@
                     </span>
                   {/if}
                   {#if connectionSupportsAddAccount(connection)}
-                    <button
-                      class="btn-outline"
-                      type="button"
-                      onclick={() => openAddAccountModal(provider, connection)}
+                    <Button
+                      variant="secondary"
+                      onClick={() => openAddAccountModal(provider, connection)}
                     >
                       {t(
                         'settings.providers.accounts.addButton',
                         'Add account…',
                       )}
-                    </button>
+                    </Button>
                   {/if}
                 </div>
               </div>
@@ -373,10 +373,9 @@
                       </span>
                       <div class="s-connection-account-actions">
                         {#if isOAuthDeviceFlowConnection(connection) && isOAuthAccount(account)}
-                          <button
-                            class="btn-outline"
-                            type="button"
-                            onclick={() =>
+                          <Button
+                            variant="secondary"
+                            onClick={() =>
                               disconnectOAuthAccount(
                                 provider,
                                 connection,
@@ -384,12 +383,11 @@
                               )}
                           >
                             {t('settings.providers.disconnect', 'Disconnect')}
-                          </button>
+                          </Button>
                         {:else if !isOAuthConnection(connection)}
-                          <button
-                            class="btn-outline"
-                            type="button"
-                            onclick={() =>
+                          <Button
+                            variant="secondary"
+                            onClick={() =>
                               openReplaceKeyModal(
                                 provider,
                                 connection,
@@ -397,7 +395,7 @@
                               )}
                           >
                             {t('settings.providers.replaceKey', 'Replace key…')}
-                          </button>
+                          </Button>
                           {#if isProcessEnvAccount(account)}
                             <span
                               class="s-connection-account-locked"
@@ -406,23 +404,18 @@
                                 'This credential comes from the process environment and cannot be removed here.',
                               )}
                             >
-                              <button
-                                class="btn-outline danger"
-                                type="button"
-                                disabled
-                              >
+                              <Button variant="danger" disabled>
                                 {t('common.remove', 'Remove')}
-                              </button>
+                              </Button>
                             </span>
                           {:else}
-                            <button
-                              class="btn-outline danger"
-                              type="button"
-                              onclick={() =>
+                            <Button
+                              variant="danger"
+                              onClick={() =>
                                 removeApiKey(provider, connection, account)}
                             >
                               {t('common.remove', 'Remove')}
-                            </button>
+                            </Button>
                           {/if}
                         {/if}
                       </div>
@@ -435,13 +428,12 @@
 
           {#if getAddableConnections(provider).length > 0}
             <div class="s-provider-add-connection">
-              <button
-                class="btn-outline"
-                type="button"
-                onclick={() => openAddConnectionModal(provider)}
+              <Button
+                variant="secondary"
+                onClick={() => openAddConnectionModal(provider)}
               >
                 {t('settings.providers.add.connectionButton', 'Add connection')}
-              </button>
+              </Button>
             </div>
           {/if}
         </div>
@@ -466,9 +458,9 @@
         <span class="chip chip-orange"
           >{t('settings.providers.customEndpointStatus', 'Placeholder')}</span
         >
-        <button class="btn-outline" type="button" disabled>
+        <Button variant="secondary" disabled>
           {t('settings.providers.configure', 'Configure…')}
-        </button>
+        </Button>
       </div>
     </div>
   </div>

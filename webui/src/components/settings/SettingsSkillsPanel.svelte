@@ -1,6 +1,7 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -182,18 +183,18 @@
       {#each skillDirectories as directory (directory)}
         <div class="s-skill-directory-item">
           <span>{directory}</span>
-          <button
-            class="btn-outline s-directory-remove"
-            type="button"
-            aria-label={t(
+          <Button
+            variant="secondary"
+            class="s-directory-remove"
+            ariaLabel={t(
               'settings.skills.removeDirectory',
               'Remove skill directory {path}',
               { path: directory },
             )}
-            onclick={() => removeSkillDirectory(directory)}
+            onClick={() => removeSkillDirectory(directory)}
           >
             {t('common.remove', 'Remove')}
-          </button>
+          </Button>
         </div>
       {/each}
     {/if}
@@ -207,23 +208,22 @@
       placeholder={t('settings.skills.pathPlaceholder', 'C:/path/to/skills')}
       onkeydown={handleSkillDirectoryKeydown}
     />
-    <button
-      class="btn-outline"
-      type="button"
+    <Button
+      variant="secondary"
       disabled={!newSkillDirectory.trim()}
-      onclick={addSkillDirectory}
+      onClick={addSkillDirectory}
     >
       {t('settings.skills.addDirectory', 'Add directory')}
-    </button>
+    </Button>
   </div>
 
   <div class="s-footer">
-    <button
-      class="btn-primary s-save-button s-save-button--inline"
-      type="button"
-      onclick={handleManualSkillDirectoriesSave}
+    <Button
+      variant="primary"
+      class="s-save-button s-save-button--inline"
+      onClick={handleManualSkillDirectoriesSave}
     >
       {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-    </button>
+    </Button>
   </div>
 </div>

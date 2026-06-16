@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
 
+  import Button from './ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
 
@@ -528,16 +529,16 @@
                   {/if}
                 </div>
                 <div class="sp-fragment-actions">
-                  <button
-                    class="btn-outline sp-btn-sm"
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    class="sp-btn-sm"
                     disabled={fragment.isResetting || fragment.isSaving}
-                    onclick={() => resetFragment(index)}
+                    onClick={() => resetFragment(index)}
                   >
                     {fragment.isResetting
                       ? t('common.loading', 'Loading…')
                       : t('systemPrompt.fragmentEditor.reset', 'Reset')}
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -592,24 +593,24 @@
               {/if}
             </div>
             <div class="sp-preview-controls">
-              <button
-                class="btn-outline sp-btn-sm"
-                type="button"
+              <Button
+                variant="secondary"
+                class="sp-btn-sm"
                 disabled={!previewText}
-                onclick={copyPreview}
+                onClick={copyPreview}
               >
                 {t('systemPrompt.preview.copy', 'Copy')}
-              </button>
-              <button
-                class="btn-primary sp-btn-sm"
-                type="button"
+              </Button>
+              <Button
+                variant="primary"
+                class="sp-btn-sm"
                 disabled={isRefreshingPreview || !canRefreshPreview()}
-                onclick={refreshPreview}
+                onClick={refreshPreview}
               >
                 {isRefreshingPreview
                   ? t('common.loading', 'Loading…')
                   : t('systemPrompt.preview.refresh', 'Refresh')}
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -628,16 +629,16 @@
         </div>
 
         <div class="sp-global-footer">
-          <button
-            class="btn-primary sp-btn-sm"
-            type="button"
+          <Button
+            variant="primary"
+            class="sp-btn-sm"
             disabled={isPromptSaveBusy}
-            onclick={handleManualSaveAll}
+            onClick={handleManualSaveAll}
           >
             {isPromptSaveBusy
               ? t('common.saving', 'Saving…')
               : t('systemPrompt.fragmentEditor.save', 'Save')}
-          </button>
+          </Button>
         </div>
       {/if}
     </div>
@@ -819,7 +820,7 @@
     flex-shrink: 0;
   }
 
-  .sp-btn-sm {
+  :global(.sp-btn-sm) {
     padding: 4px 10px;
     font-size: 12px;
   }

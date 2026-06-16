@@ -1,4 +1,5 @@
 <script>
+  import Button from '../ui/Button.svelte';
   import { debugModelProbe } from '$lib/api.js';
   import {
     applyModelProbeResult,
@@ -102,16 +103,16 @@
       </select>
     </label>
 
-    <button
-      type="button"
-      class="btn-primary debug-view__probe-btn"
-      onclick={handleProbe}
+    <Button
+      variant="primary"
+      class="debug-view__probe-btn"
+      onClick={handleProbe}
       disabled={!canProbe || viewState.modelProbeLoading}
     >
       {viewState.modelProbeLoading
         ? t('common.loading', 'Loading\u2026')
         : t('debug.modelProbe.run', 'Probe')}
-    </button>
+    </Button>
   </div>
 
   {#if viewState.modelProbeError}
@@ -230,7 +231,7 @@
     cursor: not-allowed;
   }
 
-  .debug-view__probe-btn {
+  :global(.debug-view__probe-btn) {
     align-self: flex-end;
   }
 

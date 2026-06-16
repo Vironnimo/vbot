@@ -1,4 +1,5 @@
 <script>
+  import Button from '../ui/Button.svelte';
   import { t } from '$lib/i18n.js';
 
   let {
@@ -15,12 +16,12 @@
     <span id="agents-list-title" class="pane-title">
       {t('agents.title', 'Agents')}
     </span>
-    <button class="btn-new" type="button" onclick={onCreate}>
-      <svg viewBox="0 0 14 14" aria-hidden="true">
+    <Button variant="primary" onClick={onCreate}>
+      <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
         <path d="M7 1v12M1 7h12" />
       </svg>
       {t('common.new', 'New')}
-    </button>
+    </Button>
   </div>
 
   <div class="agent-list-scroll">

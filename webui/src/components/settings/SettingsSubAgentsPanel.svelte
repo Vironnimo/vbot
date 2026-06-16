@@ -1,6 +1,7 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -209,11 +210,11 @@
 </div>
 
 <div class="s-footer">
-  <button
-    class="btn-primary s-save-button s-save-button--inline"
-    type="button"
-    onclick={handleManualSubAgentSettingsSave}
+  <Button
+    variant="primary"
+    class="s-save-button s-save-button--inline"
+    onClick={handleManualSubAgentSettingsSave}
   >
     {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-  </button>
+  </Button>
 </div>

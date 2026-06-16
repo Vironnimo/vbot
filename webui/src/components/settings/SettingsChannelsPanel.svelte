@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -297,22 +298,20 @@
 <div class="s-row s-row--stacked s-row--channels-header">
   <div class="s-row-control">
     <div class="s-row-actions s-row-actions--channel-header">
-      <button
-        class="btn-outline"
-        type="button"
+      <Button
+        variant="secondary"
         disabled={channelPanelBusy}
-        onclick={reloadChannelsPanel}
+        onClick={reloadChannelsPanel}
       >
         {t('common.refresh', 'Refresh')}
-      </button>
-      <button
-        class="btn-primary"
-        type="button"
+      </Button>
+      <Button
+        variant="primary"
         disabled={channelPanelBusy}
-        onclick={startCreateChannel}
+        onClick={startCreateChannel}
       >
         {t('settings.channels.add', 'Add channel')}
-      </button>
+      </Button>
     </div>
   </div>
 </div>
@@ -438,16 +437,16 @@
     </div>
 
     <div class="s-channel-form-actions">
-      <button class="btn-outline" type="button" onclick={cancelChannelForm}>
+      <Button variant="secondary" onClick={cancelChannelForm}>
         {t('common.cancel', 'Cancel')}
-      </button>
-      <button class="btn-primary" type="submit" disabled={channelBusy}>
+      </Button>
+      <Button variant="primary" type="submit" disabled={channelBusy}>
         {channelBusy
           ? t('common.saving', 'Saving…')
           : channelFormMode === CHANNEL_FORM_MODE_CREATE
             ? t('common.create', 'Create')
             : t('common.save', 'Save')}
-      </button>
+      </Button>
     </div>
   </form>
 {/if}
@@ -502,49 +501,46 @@
             </div>
 
             <div class="s-row-actions s-row-actions--channel">
-              <button
-                class="btn-outline"
-                type="button"
+              <Button
+                variant="secondary"
                 disabled={rowBusy}
-                aria-label={t('settings.channels.edit', 'Edit channel {id}', {
+                ariaLabel={t('settings.channels.edit', 'Edit channel {id}', {
                   id: channel.id,
                 })}
-                onclick={() => startEditChannel(channel)}
+                onClick={() => startEditChannel(channel)}
               >
                 {t('common.edit', 'Edit')}
-              </button>
-              <button
-                class="btn-outline"
-                type="button"
+              </Button>
+              <Button
+                variant="secondary"
                 disabled={rowBusy}
-                aria-label={channel.enabled
+                ariaLabel={channel.enabled
                   ? t('settings.channels.disableAria', 'Disable channel {id}', {
                       id: channel.id,
                     })
                   : t('settings.channels.enableAria', 'Enable channel {id}', {
                       id: channel.id,
                     })}
-                onclick={() => toggleChannelEnabled(channel)}
+                onClick={() => toggleChannelEnabled(channel)}
               >
                 {channel.enabled
                   ? t('settings.channels.disable', 'Disable')
                   : t('settings.channels.enable', 'Enable')}
-              </button>
-              <button
-                class="btn-outline"
-                type="button"
+              </Button>
+              <Button
+                variant="secondary"
                 disabled={rowBusy}
-                aria-label={t(
+                ariaLabel={t(
                   'settings.channels.delete',
                   'Delete channel {id}',
                   {
                     id: channel.id,
                   },
                 )}
-                onclick={() => deleteChannel(channel)}
+                onClick={() => deleteChannel(channel)}
               >
                 {t('common.delete', 'Delete')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

@@ -3,6 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import {
     AGENT_MEMORY_PROMPT_MODES,
@@ -594,9 +595,8 @@
 
       <div class="detail-btns">
         {#if formMode === AGENT_FORM_MODE_EDIT}
-          <button
-            class="btn-outline btn-dang"
-            type="button"
+          <Button
+            variant="danger"
             disabled={isDeleting || !canDeleteSelectedAgent}
             title={!canDeleteSelectedAgent
               ? t(
@@ -604,12 +604,12 @@
                   'The last remaining agent cannot be deleted.',
                 )
               : t('agents.delete', 'Delete agent')}
-            onclick={deleteSelectedAgent}
+            onClick={deleteSelectedAgent}
           >
             {isDeleting
               ? t('common.loading', 'Loading…')
               : t('agents.delete', 'Delete agent')}
-          </button>
+          </Button>
         {/if}
       </div>
     </div>
@@ -848,22 +848,20 @@
             {t('agents.form.allowedTools', 'Allowed tools')}
           </span>
           <div class="tl-actions">
-            <button
-              class="tl-btn"
-              type="button"
+            <Button
+              variant="tertiary"
               disabled={visibleToolItems.length === 0}
-              onclick={() => setAccessItems('allowed_tools', true)}
+              onClick={() => setAccessItems('allowed_tools', true)}
             >
               {t('agents.access.allOn', 'all on')}
-            </button>
-            <button
-              class="tl-btn"
-              type="button"
+            </Button>
+            <Button
+              variant="tertiary"
               disabled={visibleToolItems.length === 0}
-              onclick={() => setAccessItems('allowed_tools', false)}
+              onClick={() => setAccessItems('allowed_tools', false)}
             >
               {t('agents.access.allOff', 'all off')}
-            </button>
+            </Button>
           </div>
         </div>
         {#if visibleToolItems.length > 0}
@@ -913,22 +911,20 @@
             {t('agents.form.allowedSkills', 'Allowed skills')}
           </span>
           <div class="tl-actions">
-            <button
-              class="tl-btn"
-              type="button"
+            <Button
+              variant="tertiary"
               disabled={visibleSkillItems.length === 0}
-              onclick={() => setAccessItems('allowed_skills', true)}
+              onClick={() => setAccessItems('allowed_skills', true)}
             >
               {t('agents.access.allOn', 'all on')}
-            </button>
-            <button
-              class="tl-btn"
-              type="button"
+            </Button>
+            <Button
+              variant="tertiary"
               disabled={visibleSkillItems.length === 0}
-              onclick={() => setAccessItems('allowed_skills', false)}
+              onClick={() => setAccessItems('allowed_skills', false)}
             >
               {t('agents.access.allOff', 'all off')}
-            </button>
+            </Button>
           </div>
         </div>
         {#if visibleSkillItems.length > 0}
@@ -1066,9 +1062,9 @@
     {/if}
 
     <div class="agent-detail-footer">
-      <button class="btn-outline" type="submit" disabled={isSaving}>
+      <Button variant="secondary" type="submit" disabled={isSaving}>
         {isSaving ? t('common.saving', 'Saving…') : submitLabel}
-      </button>
+      </Button>
     </div>
   </div>
 </form>

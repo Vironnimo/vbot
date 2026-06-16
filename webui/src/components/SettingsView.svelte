@@ -15,6 +15,7 @@
   import SettingsSpecializedModelsPanel from './settings/SettingsSpecializedModelsPanel.svelte';
   import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
   import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
+  import Button from './ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
   import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
@@ -287,16 +288,16 @@
         </div>
 
         {#if activePanelId === 'providers' && !loading && !loadError && providerHeaderAction}
-          <button
-            class="btn-primary s-refresh-button"
-            type="button"
+          <Button
+            variant="primary"
+            class="s-refresh-button"
             disabled={providerHeaderAction.refreshing}
-            onclick={() => providerHeaderAction?.refresh()}
+            onClick={() => providerHeaderAction?.refresh()}
           >
             {providerHeaderAction.refreshing
               ? t('settings.providers.refreshingModels', 'Updating…')
               : t('settings.providers.refreshModels', 'Update Model DB')}
-          </button>
+          </Button>
         {/if}
       </div>
 
@@ -307,9 +308,9 @@
       {:else if loadError}
         <div class="s-feedback s-feedback--error">
           <p>{loadError}</p>
-          <button class="btn-outline" type="button" onclick={loadSettings}>
+          <Button variant="secondary" onClick={loadSettings}>
             {t('common.retry', 'Retry')}
-          </button>
+          </Button>
         </div>
       {:else}
         {#if saveError}
