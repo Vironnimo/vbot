@@ -208,6 +208,25 @@ def _find_boundary_index(messages: list[ChatMessage], boundary_id: str) -> int:
     raise CompactionError(f"Tail boundary id was not found in messages: {boundary_id}")
 
 
+def _uncompacted_start_index(messages: list[ChatMessage], checkpoint: ChatMessage) -> int:
+    """Return the index where the re-summarizable region after a checkpoint begins.
+
+    Normally the checkpoint's recorded ``tail_boundary_id``. If that anchor is no
+    longer present (corrupted or partial history), fall back to the position right
+    after the checkpoint itself so compaction can still run and emit a fresh
+    checkpoint with a valid boundary instead of being skipped forever.
+    """
+    boundary_id = checkpoint.tail_boundary_id
+    if boundary_id is not None:
+        for index, message in enumerate(messages):
+            if message.id == boundary_id:
+                return index
+    for index, message in enumerate(messages):
+        if message.id == checkpoint.id:
+            return index + 1
+    return len(messages)
+
+
 def _split_at_previous_checkpoint(
     messages: list[ChatMessage],
 ) -> tuple[str | None, list[ChatMessage], int]:
@@ -223,7 +242,7 @@ def _split_at_previous_checkpoint(
     if checkpoint is None or checkpoint.tail_boundary_id is None:
         return None, messages, 0
 
-    boundary_index = _find_boundary_index(messages, checkpoint.tail_boundary_id)
+    boundary_index = _uncompacted_start_index(messages, checkpoint)
     uncompacted_messages = [
         message for message in messages[boundary_index:] if message.role != "compaction_checkpoint"
     ]
