@@ -130,18 +130,6 @@ A Linux-readiness audit found the process layer already platform-branched (POSIX
   Python and a `sqlite3` built with extension loading. Verify on first Pi deploy (64-bit
   Raspberry Pi OS required) before enabling `recall.backend: vector`.
 
-## 2026-06-12 — Channel observed-note writes can race with non-channel Runs
-
-`ChannelConversationEngine` serializes `observe_unaddressed` note writes through its
-per-conversation FIFO, so they cannot land inside a tool cycle of a Run triggered by that same
-channel worker. A Run started for the same group Session through another accessor (for example the
-WebUI on a linked Session) is outside that queue, however, and an observed note could still append
-between that Run's assistant tool-call message and its tool results.
-
-**Why deferred:** fixing this requires Session-level append coordination across accessors rather
-than another channels-only queue rule. It is the same pre-existing exposure as the note written by
-`session.link_channel`; address both together when Session append serialization is designed.
-
 ## 2026-06-15 — Model DB Phase 7 (docs): consciously deferred rebuild items
 
 Gathered while making the living docs describe the as-built Model DB. None block a
