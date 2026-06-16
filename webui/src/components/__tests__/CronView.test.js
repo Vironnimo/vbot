@@ -64,7 +64,7 @@ describe('CronView', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders active and paused jobs while filtering completed jobs', async () => {
+  it('renders active, paused, and failed jobs while filtering completed jobs', async () => {
     listCronJobsMock.mockResolvedValue({
       jobs: [
         cronJob({
@@ -76,6 +76,11 @@ describe('CronView', () => {
           id: 'job-paused',
           prompt: 'Pause me',
           status: 'paused',
+        }),
+        cronJob({
+          id: 'job-failed',
+          prompt: 'Never ran',
+          status: 'failed',
         }),
         cronJob({
           id: 'job-completed',
@@ -94,12 +99,19 @@ describe('CronView', () => {
 
     expect(document.body.textContent).toContain('Nightly summary');
     expect(document.body.textContent).toContain('Pause me');
+    // A failed once job stays visible (labelled Failed) so the user sees it
+    // never ran; a successful completed fire is hidden from the list.
+    expect(document.body.textContent).toContain('Never ran');
+    expect(document.body.textContent).toContain('Failed');
     expect(document.body.textContent).not.toContain('Completed and hidden');
     expect(
       document.querySelector('[data-testid="cron-toggle-job-active"]'),
     ).toBeTruthy();
     expect(
       document.querySelector('[data-testid="cron-toggle-job-paused"]'),
+    ).toBeTruthy();
+    expect(
+      document.querySelector('[data-testid="cron-toggle-job-failed"]'),
     ).toBeTruthy();
     expect(
       document.querySelector('[data-testid="cron-toggle-job-completed"]'),

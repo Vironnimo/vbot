@@ -23,10 +23,10 @@ if TYPE_CHECKING:
     from core.automation.automation import TriggerService
 
 ScheduleType = Literal["cron", "once"]
-CronJobStatus = Literal["active", "paused", "completed"]
+CronJobStatus = Literal["active", "paused", "completed", "failed"]
 
 _ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "once"))
-_ALLOWED_STATUSES = frozenset(("active", "paused", "completed"))
+_ALLOWED_STATUSES = frozenset(("active", "paused", "completed", "failed"))
 _RESTART_FIELDS = frozenset(("schedule_type", "cron_expression", "run_at", "timezone", "status"))
 _ONCE_RETRY_DELAY_SECONDS = 60.0
 # Exponential backoff for repeatedly failing once-job fires: the Nth retry waits
@@ -403,7 +403,7 @@ class CronService:
 
         A failed fire (claim write or trigger error) is retried with bounded
         exponential backoff. Once the attempt limit is reached the job is
-        abandoned (marked completed) and logged, so a permanently failing once
+        abandoned (marked failed) and logged, so a permanently failing once
         job stops retrying instead of looping forever (e.g. its agent was
         deleted, leaving every trigger attempt to fail).
         """
@@ -458,7 +458,7 @@ class CronService:
     async def _back_off_or_abandon_once_job(self, job_id: str, attempts: int) -> bool:
         """Wait out the backoff for a failed once fire, or abandon after the cap.
 
-        Returns True when the job has been abandoned (marked completed) and the
+        Returns True when the job has been abandoned (marked failed) and the
         caller must stop; False after sleeping the backoff delay so the caller
         can retry the fire.
         """
@@ -470,7 +470,12 @@ class CronService:
         return False
 
     def _abandon_once_job(self, job_id: str, attempts: int) -> None:
-        """Mark a permanently failing once job completed so it stops retrying."""
+        """Mark a permanently failing once job failed so it stops retrying.
+
+        The terminal ``failed`` status keeps the never-fired job visible and
+        distinct from a successful ``completed`` fire; ``last_fired_at`` stays
+        unset because the job never actually ran.
+        """
         job = self._jobs.get(job_id)
         if job is None or job.schedule_type != "once":
             return
@@ -480,7 +485,7 @@ class CronService:
             attempts,
             job_id,
         )
-        job.status = "completed"
+        job.status = "failed"
         self._jobs[job_id] = job
         self._save_jobs_after_fire(job_id)
         self._remove_once_fire_claim(job_id)
@@ -575,7 +580,7 @@ class CronService:
             raise CronJobValidationError("schedule_type must be 'cron' or 'once'")
 
         if job.status not in _ALLOWED_STATUSES:
-            raise CronJobValidationError("status must be active, paused, or completed")
+            raise CronJobValidationError("status must be active, paused, completed, or failed")
 
         if job.session_id is not None and not isinstance(job.session_id, str):
             raise CronJobValidationError("session_id must be a string when provided")
