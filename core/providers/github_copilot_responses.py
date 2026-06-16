@@ -160,7 +160,7 @@ def _messages_to_responses_input(messages: list[dict[str, Any]]) -> list[dict[st
             input_items.append(_tool_message_to_function_output(message))
             continue
         if role == "user":
-            input_items.append(_text_message_to_input_item("user", message.get("content", "")))
+            input_items.append(_user_message_to_input_item(message.get("content", "")))
     return input_items
 
 
@@ -179,6 +179,52 @@ def _text_message_to_input_item(role: str, content: Any) -> dict[str, Any]:
     text = content if isinstance(content, str) else ""
     content_type = "output_text" if role == "assistant" else "input_text"
     return {"role": role, "content": [{"type": content_type, "text": text}]}
+
+
+def _user_message_to_input_item(content: Any) -> dict[str, Any]:
+    return {"role": "user", "content": _user_content_parts(content)}
+
+
+def _user_content_parts(content: Any) -> list[dict[str, Any]]:
+    if not isinstance(content, list):
+        text = content if isinstance(content, str) else ""
+        return [{"type": "input_text", "text": text}]
+
+    parts: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, Mapping):
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            block_text = block.get("text")
+            if isinstance(block_text, str):
+                parts.append({"type": "input_text", "text": block_text})
+        elif block_type == "media":
+            parts.append(_input_image_from_media(block))
+    return parts
+
+
+def _input_image_from_media(block: Mapping[str, Any]) -> dict[str, Any]:
+    # The Responses endpoint takes images as an `input_image` part with a data
+    # URI. Reject non-image media loudly instead of silently dropping the whole
+    # turn, which previously collapsed any list content to an empty string.
+    base64_data = block.get("base64")
+    media_type = block.get("media_type")
+    if not isinstance(base64_data, str) or not isinstance(media_type, str) or not media_type:
+        raise ProviderError(
+            "media content block requires string base64 and media_type fields",
+            retryable=False,
+        )
+    if not media_type.startswith("image/"):
+        raise ProviderError(
+            "GitHub Copilot responses adapter supports only image media blocks; "
+            f"received {media_type}",
+            retryable=False,
+        )
+    return {
+        "type": "input_image",
+        "image_url": f"data:{media_type};base64,{base64_data}",
+    }
 
 
 def _tool_call_to_function_call(tool_call: Mapping[str, Any]) -> dict[str, Any]:

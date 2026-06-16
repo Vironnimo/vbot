@@ -17,6 +17,8 @@ from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
 
 TEXT_BLOCK_TYPE = "text"
+IMAGE_BLOCK_TYPE = "image"
+MEDIA_BLOCK_TYPE = "media"
 TOOL_USE_BLOCK_TYPE = "tool_use"
 TOOL_RESULT_BLOCK_TYPE = "tool_result"
 THINKING_BLOCK_TYPE = "thinking"
@@ -211,12 +213,42 @@ def _safe_content_blocks(content: list[Any]) -> list[dict[str, Any]]:
     for block in content:
         if not isinstance(block, dict):
             continue
-        if block.get("type") != TEXT_BLOCK_TYPE:
-            continue
-        text = block.get("text")
-        if isinstance(text, str):
-            blocks.append({"type": TEXT_BLOCK_TYPE, "text": text})
+        block_type = block.get("type")
+        if block_type == TEXT_BLOCK_TYPE:
+            text = block.get("text")
+            if isinstance(text, str):
+                blocks.append({"type": TEXT_BLOCK_TYPE, "text": text})
+        elif block_type == MEDIA_BLOCK_TYPE:
+            blocks.append(_image_block_from_media(block))
     return blocks
+
+
+def _image_block_from_media(block: dict[str, Any]) -> dict[str, Any]:
+    # The Messages endpoint mirrors the Anthropic image block shape. Reject
+    # anything that is not a usable image loudly instead of silently dropping
+    # it, so an unsupported attachment surfaces as an error rather than a
+    # quietly text-only request.
+    base64_data = block.get("base64")
+    media_type = block.get("media_type")
+    if not isinstance(base64_data, str) or not isinstance(media_type, str) or not media_type:
+        raise ProviderError(
+            "media content block requires string base64 and media_type fields",
+            retryable=False,
+        )
+    if not media_type.startswith("image/"):
+        raise ProviderError(
+            "GitHub Copilot messages adapter supports only image media blocks; "
+            f"received {media_type}",
+            retryable=False,
+        )
+    return {
+        "type": IMAGE_BLOCK_TYPE,
+        "source": {
+            "type": "base64",
+            "media_type": media_type,
+            "data": base64_data,
+        },
+    }
 
 
 def _text_from_content(content: Any) -> str:

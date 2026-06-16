@@ -730,3 +730,64 @@ def test_stream_error_event_raises_provider_error() -> None:
             },
             CopilotMessagesStreamState(),
         )
+
+
+def test_build_payload_translates_user_image_media_block() -> None:
+    policy = _messages_policy()
+    payload = build_copilot_messages_payload(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {"type": "media", "media_type": "image/png", "base64": "aW1n"},
+                ],
+            }
+        ],
+        model_id="claude-sonnet-4.6",
+        policy=policy,
+    )
+
+    assert payload["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is this?"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "aW1n",
+                    },
+                },
+            ],
+        }
+    ]
+
+
+def test_build_payload_rejects_non_image_media_block() -> None:
+    policy = _messages_policy()
+    with pytest.raises(ProviderError, match="only image media blocks"):
+        build_copilot_messages_payload(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "media", "media_type": "audio/wav", "base64": "YXVkaW8="}
+                    ],
+                }
+            ],
+            model_id="claude-sonnet-4.6",
+            policy=policy,
+        )
+
+
+def test_build_payload_rejects_media_block_missing_fields() -> None:
+    policy = _messages_policy()
+    with pytest.raises(ProviderError, match="requires string base64 and media_type"):
+        build_copilot_messages_payload(
+            [{"role": "user", "content": [{"type": "media", "media_type": "image/png"}]}],
+            model_id="claude-sonnet-4.6",
+            policy=policy,
+        )
