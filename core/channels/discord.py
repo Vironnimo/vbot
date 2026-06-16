@@ -15,10 +15,11 @@ from core.channels.adapter import (
     ConversationFacts,
     FileData,
     RouteFacts,
+    content_block_for_attachment,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
-from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock, TextBlock
+from core.chat.content_blocks import ContentBlock, TextBlock
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -187,26 +188,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         attachments = _message_attachments(raw_message)
         for attachment in attachments:
             record = await self._store_inbound_attachment(attachment)
-            if record.media_type.startswith(("image/", "audio/", "video/")):
-                blocks.append(
-                    MediaBlock(
-                        type="media",
-                        attachment_id=record.id,
-                        filename=record.filename,
-                        media_type=record.media_type,
-                    )
-                )
-            elif record.media_type.startswith("text/"):
-                blocks.append(TextBlock(type="text", text=record.text_content or ""))
-            else:
-                blocks.append(
-                    FileBlock(
-                        type="file",
-                        attachment_id=record.id,
-                        filename=record.filename,
-                        media_type=record.media_type,
-                    )
-                )
+            blocks.append(content_block_for_attachment(record))
         return blocks
 
     # -- Inbound handling -------------------------------------------------------------
