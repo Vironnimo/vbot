@@ -29,7 +29,12 @@ from server.rpc.errors import (
 from server.rpc.event_bridge import _publish_agent_event
 from server.rpc.payloads import _agent_response
 from server.rpc.runtime_access import _state_chat_runs
-from server.rpc.validation import _optional_bool, _optional_string, _required_string
+from server.rpc.validation import (
+    _ensure_model_connection_supported,
+    _optional_bool,
+    _optional_string,
+    _required_string,
+)
 
 JsonObject = dict[str, Any]
 
@@ -65,6 +70,7 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     name = _required_string(params, "name")
     try:
         changes = _agent_changes(params, blocked={"id", "name"}, for_create=True)
+        _ensure_agent_model_connections(state, changes)
         state.runtime.agents.create(agent_id, name, **changes)
         if changes.get("custom_system_prompt_enabled") is True:
             state.runtime.storage.copy_agent_prompt_fragments(agent_id)
@@ -80,6 +86,7 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
         changes = _agent_changes(params, blocked={"id"}, for_create=False)
+        _ensure_agent_model_connections(state, changes)
         previous_agent = state.runtime.agents.get(agent_id)
         if (
             changes.get("custom_system_prompt_enabled") is True
@@ -234,6 +241,14 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
             continue
         changes[key] = _validate_agent_field(key, value)
     return changes
+
+
+def _ensure_agent_model_connections(state: Any, changes: JsonObject) -> None:
+    """Reject agent model / fallback_model pinned to a connection they forbid."""
+    models = state.runtime.models
+    for field in ("model", "fallback_model"):
+        if field in changes:
+            _ensure_model_connection_supported(models, field, changes[field])
 
 
 def _validate_agent_field(key: str, value: Any) -> Any:

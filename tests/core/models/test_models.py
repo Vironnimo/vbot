@@ -1159,6 +1159,37 @@ class TestModelConnectionsParsing:
         assert registry.get("openai", "gpt-5.2").connections == ()
 
 
+class TestModelAllowsConnection:
+    """The single source of the per-model connection rule."""
+
+    @staticmethod
+    def _model(connections: tuple[str, ...]) -> Model:
+        return Model(
+            model_id="gpt-5.2",
+            name="GPT-5.2",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=False,
+                reasoning=ReasoningCapabilities(supported=False),
+            ),
+            context_window=128000,
+            max_output_tokens=16000,
+            connections=connections,
+        )
+
+    def test_empty_allowlist_permits_every_connection(self):
+        model = self._model(())
+        assert model.allows_connection("api-key") is True
+        assert model.allows_connection("subscription") is True
+
+    def test_non_empty_allowlist_permits_listed_connection(self):
+        assert self._model(("subscription",)).allows_connection("subscription") is True
+
+    def test_non_empty_allowlist_rejects_unlisted_connection(self):
+        assert self._model(("subscription",)).allows_connection("api-key") is False
+
+
 # ---------------------------------------------------------------------------
 # ModelRegistry — get()
 # ---------------------------------------------------------------------------
