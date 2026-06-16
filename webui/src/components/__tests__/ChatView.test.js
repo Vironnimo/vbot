@@ -1263,6 +1263,9 @@ describe('ChatView', () => {
     const handlers = subscribeRunEventsMock.mock.calls[0][1];
 
     vi.useFakeTimers();
+    // Pin reconnect jitter to its midpoint so attempt 0 fires at exactly the
+    // base 500ms delay this test advances by.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
     try {
       handlers.onError(new Error('first disconnect'));
       handlers.onError(new Error('second disconnect'));
@@ -1275,6 +1278,7 @@ describe('ChatView', () => {
       expect(secondCloseSubscription).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+      randomSpy.mockRestore();
     }
   });
 
