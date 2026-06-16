@@ -910,6 +910,16 @@ export const englishCatalog = Object.freeze({
   'statistics.tools.perTool': 'Per tool',
   'statistics.tools.byAgent': 'Calls per agent',
   'statistics.tools.topSessions': 'Busiest sessions',
+  'statistics.subview.limits': 'Limits',
+  'statistics.limits.note':
+    'Live subscription usage, fetched on demand — nothing is stored.',
+  'statistics.limits.loading': 'Loading usage limits…',
+  'statistics.limits.loadError': 'Usage limits could not be loaded.',
+  'statistics.limits.empty': 'No subscription providers connected.',
+  'statistics.limits.unavailable': 'Usage unavailable',
+  'statistics.limits.plan': 'Plan',
+  'statistics.limits.usedPercent': '{percent}% used',
+  'statistics.limits.resetsIn': 'Resets in {duration}',
 });
 
 const catalogs = Object.freeze({
