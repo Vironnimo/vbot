@@ -10,6 +10,7 @@ import pytest
 from core.settings import (
     SettingsValidationError,
     SettingsValidationReport,
+    is_valid_agent_id,
     parse_settings_update,
     validate_agent_data,
     validate_channel_data,
@@ -542,3 +543,57 @@ def test_validate_agent_data_rejects_non_finite_temperature() -> None:
             diagnostics=tuple(diagnostics),
         )
     ) == [("error", "$.temperature", "must be finite")]
+
+
+def test_validate_agent_data_rejects_out_of_range_temperature() -> None:
+    data = _valid_agent_data()
+    data["temperature"] = 2.5
+
+    diagnostics = validate_agent_data(data)
+
+    assert diagnostics_as_tuples(
+        SettingsValidationReport(
+            file_path=Path("agent.json"),
+            exists=True,
+            diagnostics=tuple(diagnostics),
+        )
+    ) == [("error", "$.temperature", "must be between 0 and 2")]
+
+
+def test_validate_agent_data_rejects_invalid_thinking_effort() -> None:
+    data = _valid_agent_data()
+    data["thinking_effort"] = "extreme"
+
+    diagnostics = validate_agent_data(data)
+
+    assert diagnostics_as_tuples(
+        SettingsValidationReport(
+            file_path=Path("agent.json"),
+            exists=True,
+            diagnostics=tuple(diagnostics),
+        )
+    ) == [
+        (
+            "error",
+            "$.thinking_effort",
+            "must be one of: '', 'high', 'low', 'max', 'medium', 'minimal', 'none', 'xhigh'",
+        )
+    ]
+
+
+@pytest.mark.parametrize("agent_id", ["coder", "a", "Agent_1", "x-y_z", "0", "a" * 64])
+def test_is_valid_agent_id_accepts_filesystem_safe_slugs(agent_id: str) -> None:
+    assert is_valid_agent_id(agent_id) is True
+
+
+@pytest.mark.parametrize(
+    "agent_id",
+    ["", ".hidden", "../escape", "with space", "slash/name", "_leading", "-leading", "a" * 65],
+)
+def test_is_valid_agent_id_rejects_unsafe_values(agent_id: str) -> None:
+    assert is_valid_agent_id(agent_id) is False
+
+
+def test_is_valid_agent_id_rejects_non_string() -> None:
+    assert is_valid_agent_id(123) is False
+    assert is_valid_agent_id(None) is False

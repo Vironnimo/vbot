@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -19,12 +18,12 @@ from core.settings.normalizers import (
 )
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
-    ALLOWED_THINKING_EFFORTS,
-    MAX_TEMPERATURE,
-    MIN_TEMPERATURE,
+    AGENT_ID_PATTERN,
     RECALL_BACKEND_PATTERN,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SettingsValidationError,
+    validate_temperature,
+    validate_thinking_effort,
 )
 
 DiagnosticSeverity = Literal["error", "warning"]
@@ -71,7 +70,6 @@ MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
 DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
 MAX_TRACE_LIMIT = 500
 
-AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 AGENT_FIELDS = frozenset(
     {
         "allowed_skills",
@@ -922,40 +920,33 @@ def _validate_optional_path_string(
 def _validate_temperature_value(
     diagnostics: list[JsonDiagnostic], path: str, value: Any, *, allow_none: bool
 ) -> None:
-    if value is None:
-        if allow_none:
-            return
-        _error(diagnostics, path, "must be a number")
-        return
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        _error(diagnostics, path, "must be a number")
-        return
-    temperature = float(value)
-    if not math.isfinite(temperature):
-        _error(diagnostics, path, "must be finite")
-        return
-    if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
-        _error(
-            diagnostics,
-            path,
-            f"must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}",
-        )
+    _delegate_field_rule(diagnostics, path, validate_temperature, value, allow_none=allow_none)
 
 
 def _validate_thinking_effort_value(
     diagnostics: list[JsonDiagnostic], path: str, value: Any, *, allow_none: bool
 ) -> None:
-    if value is None:
-        if allow_none:
-            return
-        _error(diagnostics, path, "must be a string")
-        return
-    if not isinstance(value, str):
-        _error(diagnostics, path, "must be a string")
-        return
-    if value not in ALLOWED_THINKING_EFFORTS:
-        allowed = ", ".join(repr(item) for item in sorted(ALLOWED_THINKING_EFFORTS))
-        _error(diagnostics, path, f"must be one of: {allowed}")
+    _delegate_field_rule(diagnostics, path, validate_thinking_effort, value, allow_none=allow_none)
+
+
+def _delegate_field_rule(
+    diagnostics: list[JsonDiagnostic],
+    path: str,
+    validator: Callable[..., Any],
+    value: Any,
+    *,
+    allow_none: bool,
+) -> None:
+    """Run a canonical raise-based field validator, turning its error into a diagnostic.
+
+    Keeps the canonical validators in ``core.settings.settings`` the single
+    implementation of the value rules; the only adaptation is dropping the
+    ``label`` prefix they embed (the diagnostic carries ``path`` separately).
+    """
+    try:
+        validator(value, label=path, allow_none=allow_none)
+    except SettingsValidationError as exc:
+        _error(diagnostics, path, str(exc).removeprefix(f"{path} "))
 
 
 def _validate_string_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:

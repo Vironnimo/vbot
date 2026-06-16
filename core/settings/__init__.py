@@ -7,12 +7,14 @@ from core.settings.normalizers import (
 )
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
+    AGENT_ID_PATTERN,
     ALLOWED_THINKING_EFFORTS,
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     MAX_TEMPERATURE,
     MIN_TEMPERATURE,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SettingsValidationError,
+    is_valid_agent_id,
     parse_settings_update,
     validate_temperature,
     validate_thinking_effort,
@@ -40,6 +42,7 @@ from core.settings.validation import (
 
 __all__ = [
     "AGENT_DEFAULT_FIELDS",
+    "AGENT_ID_PATTERN",
     "ALLOWED_THINKING_EFFORTS",
     "DEFAULT_APPEARANCE_CHAT_WIDTH",
     "DEFAULT_APPEARANCE_LANGUAGE",
@@ -54,6 +57,7 @@ __all__ = [
     "SettingsValidationError",
     "SettingsValidationReport",
     "format_report_diagnostics",
+    "is_valid_agent_id",
     "load_validated_agent_json",
     "load_validated_channel_json",
     "load_validated_cron_jobs_json",

@@ -22,6 +22,10 @@ ALLOWED_THINKING_EFFORTS = frozenset(
     {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 )
 AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thinking_effort"})
+# Single authority for the agent-id format (filesystem-safe slug): a leading
+# letter or digit, then up to 63 more of letter/digit/hyphen/underscore. Shared
+# by file-schema validation, the agent store, and prompt-fragment storage.
+AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 # Appearance chat-width preference (the WebUI chat reading-column width). The
@@ -442,6 +446,11 @@ def _positive_integer(value: Any, label: str) -> int:
     if value <= 0:
         raise SettingsValidationError(f"{label} must be a positive integer")
     return cast("int", value)
+
+
+def is_valid_agent_id(value: Any) -> bool:
+    """Return whether ``value`` is a filesystem-safe agent id per the canonical rule."""
+    return isinstance(value, str) and AGENT_ID_PATTERN.fullmatch(value) is not None
 
 
 def validate_temperature(
