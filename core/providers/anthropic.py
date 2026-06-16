@@ -36,7 +36,7 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
-from core.providers.adapter import ModelLookup, ProviderAdapter
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
@@ -147,6 +147,19 @@ class AnthropicAdapter(ProviderAdapter):
         """
         del model_id
         return REASONING_REPLAY_FULL_HISTORY
+
+    # ------------------------------------------------------------------
+    # Wire media capability
+    # ------------------------------------------------------------------
+
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        """The Anthropic Messages wire carries images plus native ``application/pdf``.
+
+        PDFs ride as a base64 ``document`` block (verified shape); other office
+        formats are out of scope until their wire is probed.
+        """
+        del model_id
+        return IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"}
 
     # ------------------------------------------------------------------
     # Header / payload helpers
@@ -820,11 +833,35 @@ def _to_anthropic_user_content_block(block: Any) -> dict[str, Any]:
                 "data": base64_data,
             },
         }
+    if block_type == "document":
+        return _to_anthropic_document_block(block)
     if block_type == "text":
         text = block.get("text")
         return {"type": "text", "text": "" if text is None else str(text)}
 
     return dict(block)
+
+
+def _to_anthropic_document_block(block: dict[str, Any]) -> dict[str, Any]:
+    """Translate a canonical document block into an Anthropic ``document`` block.
+
+    Wire shape verified against the Anthropic Messages API (base64 source).
+    """
+    base64_data = block.get("base64")
+    media_type = block.get("media_type")
+    if not isinstance(base64_data, str) or not isinstance(media_type, str) or not media_type:
+        raise ProviderError(
+            "document content block requires string base64 and media_type fields",
+            retryable=False,
+        )
+    return {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": media_type,
+            "data": base64_data,
+        },
+    }
 
 
 def _to_anthropic_text_content(content: Any) -> list[dict[str, Any]]:

@@ -14,6 +14,7 @@ import respx
 from core.chat.chat import _assistant_message_from_response
 from core.chat.streaming import StreamingAccumulator
 from core.models.models import Model
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
 from core.providers.github_copilot import (
     GitHubCopilotAdapter,
@@ -509,6 +510,15 @@ def test_reasoning_replay_policy_defaults_to_current_run_without_metadata(
     copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
     assert copilot_adapter.reasoning_replay_policy("unknown-model") == "current_run"
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "claude-haiku-4.5", "gemini-3.1-pro-preview"])
+def test_wire_media_support_is_image_only_across_endpoint_families(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+    model_id: str,
+) -> None:
+    """Every Copilot endpoint family carries images only — no native audio."""
+    assert metadata_copilot_adapter.wire_media_support(model_id) == IMAGE_WIRE_MEDIA_TYPES
 
 
 @pytest.mark.parametrize("model_id", ["claude-sonnet-4.6", "claude-haiku-4.5"])
