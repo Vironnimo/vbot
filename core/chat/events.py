@@ -32,7 +32,6 @@ from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
     ProviderRateLimitError,
-    ProviderStreamingUnsupportedError,
     ProviderTimeoutError,
 )
 from core.runs import (
@@ -71,28 +70,6 @@ def _emit_message_event(run: Run, event_type: str, message: ChatMessage) -> None
     run.emit(event_type, {"message": _visible_message_payload(message)})
 
 
-def _is_streaming_fallback_error(error: Exception) -> bool:
-    return isinstance(error, ProviderStreamingUnsupportedError)
-
-
-def _is_stream_restartable_error(error: Exception) -> bool:
-    """Whether a streaming failure may be replayed as a fresh stream.
-
-    True for retryable transport/timeout failures (``NetworkError``,
-    ``ProviderTimeoutError``, retryable ``ProviderError``) and for a mid-stream
-    chunk stall (``StreamingChunkTimeoutError``) — the provider went silent
-    after the connect succeeded, which is exactly the transient "not yet
-    visible" case the restart was built for (it carries no ``retryable``
-    attribute, so it is matched by type). The chat loop restarts the stream from
-    scratch only when *nothing visible* has been emitted yet, so the replay
-    cannot duplicate output the user already saw — this is the streaming
-    analogue of the streaming→non-streaming fallback.
-    """
-    if isinstance(error, StreamingChunkTimeoutError):
-        return True
-    return bool(getattr(error, "retryable", False))
-
-
 PARTIAL_THINKING_CAP = 2000
 """Max chars of partial reasoning kept in the interruption note (head retained)."""
 
@@ -128,10 +105,6 @@ def _visible_message_payload(message: ChatMessage) -> JsonObject:
 
 def _emit_tool_context_event(run: Run, event_type: str, payload: JsonObject) -> None:
     run.emit(event_type, payload)
-
-
-def _is_model_fallback_trigger(exc: Exception) -> bool:
-    return isinstance(exc, ProviderError) and exc.retryable
 
 
 def _exception_to_error_kind(exc: Exception) -> str:

@@ -165,6 +165,7 @@ class ChatMessage:
     run_id: str | None = None
     status: str | None = None
     sender: MessageSender | None = None
+    interrupted: bool = False
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -231,9 +232,15 @@ class ChatMessage:
         reasoning_meta: JsonObject | None = None,
         usage: JsonObject | None = None,
         tool_calls: list[ToolCall] | None = None,
+        interrupted: bool = False,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
-        """Create an assistant message."""
+        """Create an assistant message.
+
+        ``interrupted`` marks a turn whose provider stream broke after visible
+        output was emitted: the accumulated answer is preserved, but the turn did
+        not finish, so the next request continues it (see chat domain map).
+        """
         return cls(
             id=_new_message_id(),
             timestamp=_format_timestamp(timestamp),
@@ -244,6 +251,7 @@ class ChatMessage:
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
             usage=dict(usage) if usage is not None else None,
             tool_calls=list(tool_calls) if tool_calls is not None else None,
+            interrupted=interrupted,
         )
 
     @classmethod
@@ -333,6 +341,8 @@ class ChatMessage:
         _add_if_not_none(message, "status", self.status)
         if self.sender is not None:
             message["sender"] = self.sender.to_dict()
+        if self.interrupted:
+            message["interrupted"] = True
         return message
 
     @classmethod
@@ -352,6 +362,9 @@ class ChatMessage:
         sender_data = data.get("sender")
         if sender_data is not None and not isinstance(sender_data, dict):
             raise ChatMessageValidationError("sender must be an object")
+        interrupted = data.get("interrupted", False)
+        if not isinstance(interrupted, bool):
+            raise ChatMessageValidationError("interrupted must be a boolean")
 
         message = cls(
             id=_require_string(data, "id"),
@@ -371,6 +384,7 @@ class ChatMessage:
             run_id=_optional_string(data, "run_id"),
             status=_optional_string(data, "status"),
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
+            interrupted=interrupted,
         )
         message.validate()
         return message
@@ -378,6 +392,8 @@ class ChatMessage:
     def validate(self) -> None:
         """Validate this message against the role-specific canonical schema."""
         _validate_core_fields(self)
+        if self.interrupted and self.role != "assistant":
+            raise ChatMessageValidationError(f"{self.role} messages cannot include interrupted")
         match self.role:
             case "system":
                 _validate_system_message(self)
@@ -456,6 +472,8 @@ def _message_to_request_dict(
             data.pop("reasoning", None)
             data.pop("reasoning_meta", None)
         data.pop("usage", None)
+        # ``interrupted`` is a vBot-internal turn annotation, never a wire field.
+        data.pop("interrupted", None)
     data.pop("timing", None)
     # Sender attribution exists only in the provider request: persisted content stays
     # clean and the tag cannot be spoofed by typing a look-alike prefix in message text.
@@ -525,6 +543,7 @@ def _assistant_continuation_dict(
     data = message.to_dict()
     data.pop("usage", None)
     data.pop("timing", None)
+    data.pop("interrupted", None)
     if replay_policy == REASONING_REPLAY_NONE:
         data.pop("reasoning", None)
         data.pop("reasoning_meta", None)
@@ -826,7 +845,12 @@ def _system_reminder_block(message: ChatMessage) -> str:
     return f"{SYSTEM_REMINDER_OPEN_TAG}\n{content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
 
 
-def _assistant_message_from_response(model: str, response: JsonObject) -> ChatMessage:
+def _assistant_message_from_response(
+    model: str,
+    response: JsonObject,
+    *,
+    interrupted: bool = False,
+) -> ChatMessage:
     tool_calls = _parse_tool_calls(response.get("tool_calls"))
     return ChatMessage.assistant(
         model=model,
@@ -835,6 +859,7 @@ def _assistant_message_from_response(model: str, response: JsonObject) -> ChatMe
         reasoning_meta=_response_reasoning_meta(response),
         usage=response.get("usage"),
         tool_calls=tool_calls,
+        interrupted=interrupted,
     )
 
 

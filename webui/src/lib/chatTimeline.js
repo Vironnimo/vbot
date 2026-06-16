@@ -803,6 +803,7 @@ function appendLiveRunEvent(assistantRun, event) {
       content: textFromRunEventMessage(event, 'content'),
       event,
       streaming: false,
+      interrupted: Boolean(message?.interrupted),
     });
     return;
   }
@@ -851,6 +852,7 @@ function appendHistoryAssistantMessage(assistantRun, message) {
       content: message.content,
       message,
       streaming: false,
+      interrupted: Boolean(message.interrupted),
     });
   }
 
@@ -906,7 +908,14 @@ function appendHistoryRunSummary(assistantRun, message) {
 
 function appendTextSection(
   assistantRun,
-  { type, content, event = null, message = null, streaming },
+  {
+    type,
+    content,
+    event = null,
+    message = null,
+    streaming,
+    interrupted = false,
+  },
 ) {
   if (!content) {
     return;
@@ -926,6 +935,7 @@ function appendTextSection(
     existingItem.sequence = firstSeenSequence(existingItem.sequence, sequence);
     existingItem.timestamp ??= event?.timestamp ?? message?.timestamp;
     existingItem.streaming = streaming;
+    existingItem.interrupted = interrupted;
     existingItem.events = [...(existingItem.events ?? []), event].filter(
       Boolean,
     );
@@ -943,6 +953,7 @@ function appendTextSection(
     sequence,
     timestamp: event?.timestamp ?? message?.timestamp,
     streaming,
+    interrupted,
     events: event ? [event] : [],
     messages: message ? [message] : [],
   });

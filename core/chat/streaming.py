@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
+from urllib.parse import urlparse
 
+from core.providers.errors import ProviderStreamingUnsupportedError
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
 )
-from core.utils.errors import VBotError
+from core.utils.errors import ProviderError, VBotError
 
 JsonObject = dict[str, Any]
 
@@ -32,6 +36,118 @@ class StreamingDeltaError(StreamingError):
 
 class StreamingChunkTimeoutError(StreamingError):
     """Raised when a provider stream stalls between chunks."""
+
+
+class StreamRecoveryAction(Enum):
+    """What the chat loop should do when a streaming attempt breaks.
+
+    The single, provider-agnostic vocabulary for stream-break recovery: deciding
+    which action applies is :func:`decide_stream_recovery` (here); executing it —
+    restarting, falling back to non-streaming, finalizing the partial answer,
+    leaving an interruption note, or re-raising — stays in the chat loop.
+    """
+
+    RESTART = "restart"
+    FALLBACK = "fallback"
+    PRESERVE_PARTIAL = "preserve_partial"
+    DISCARD_WITH_NOTE = "discard_with_note"
+    FAIL = "fail"
+
+
+def decide_stream_recovery(
+    error: Exception,
+    *,
+    emitted_visible_delta: bool,
+    can_restart: bool,
+    has_partial_content: bool,
+) -> StreamRecoveryAction:
+    """Decide how to recover from a broken streaming attempt.
+
+    Provider-agnostic: it reads only normalized vBot errors plus the attempt's
+    state, so the same matrix holds for every adapter. The discriminators mirror
+    the converged design of the reference harnesses — "did visible output
+    escape?" gates whether a replay could duplicate, and the accumulated content
+    decides between preserving the partial answer and merely leaving a note.
+
+    Before any visible delta a not-yet-visible drop can be replayed cleanly: a
+    streaming-unsupported error falls back to a non-streaming request, a
+    restartable transient (transport/timeout drop or chunk stall) replays the
+    whole stream while restarts remain, anything else fails. Once visible output
+    has escaped, the stream is never replayed: accumulated content is preserved
+    as an interrupted assistant turn, a reasoning-only interruption leaves a
+    partial-thinking note, and the error otherwise propagates.
+    """
+    if not emitted_visible_delta:
+        if _is_streaming_fallback_error(error):
+            return StreamRecoveryAction.FALLBACK
+        if can_restart and _is_stream_restartable_error(error):
+            return StreamRecoveryAction.RESTART
+        return StreamRecoveryAction.FAIL
+    if has_partial_content:
+        return StreamRecoveryAction.PRESERVE_PARTIAL
+    return StreamRecoveryAction.DISCARD_WITH_NOTE
+
+
+def _is_streaming_fallback_error(error: Exception) -> bool:
+    """Whether a streaming failure should fall back to a non-streaming request.
+
+    Only ``ProviderStreamingUnsupportedError`` qualifies (a provider/model that
+    cannot serve this request as a stream at all); the chat loop applies it only
+    before any visible delta has been emitted.
+    """
+    return isinstance(error, ProviderStreamingUnsupportedError)
+
+
+def _is_stream_restartable_error(error: Exception) -> bool:
+    """Whether a streaming failure may be replayed as a fresh stream.
+
+    True for retryable transport/timeout failures (``NetworkError``,
+    ``ProviderTimeoutError``, retryable ``ProviderError``) and for a mid-stream
+    chunk stall (``StreamingChunkTimeoutError``) — the provider went silent after
+    the connect succeeded, which is exactly the transient "not yet visible" case
+    the restart was built for (it carries no ``retryable`` attribute, so it is
+    matched by type). The chat loop restarts from scratch only when *nothing
+    visible* has been emitted yet, so the replay cannot duplicate output the user
+    already saw — this is the streaming analogue of the streaming→non-streaming
+    fallback.
+    """
+    if isinstance(error, StreamingChunkTimeoutError):
+        return True
+    return bool(getattr(error, "retryable", False))
+
+
+def _is_model_fallback_trigger(error: Exception) -> bool:
+    """Whether a propagated error should switch the agent to its fallback model.
+
+    Only a retryable ``ProviderError`` (provider-specific and transient). A
+    ``NetworkError`` is deliberately excluded — it is not provider-specific, so
+    switching models would not help.
+    """
+    return isinstance(error, ProviderError) and error.retryable
+
+
+def is_local_provider_base_url(base_url: str | None) -> bool:
+    """Whether a provider base URL points at a loopback or private-network host.
+
+    Local inference servers (Ollama, llama.cpp, vLLM) can stay silent for
+    minutes during prompt prefill, so the per-chunk stall timeout must not abort
+    them; remote providers keep the timeout. Centralized here so the chunk-stall
+    policy has one source of truth. Matches ``localhost`` and ``*.localhost`` /
+    ``*.local`` names plus loopback, RFC1918 private, and link-local IP literals.
+    """
+    if not base_url:
+        return False
+    host = urlparse(base_url).hostname
+    if not host:
+        return False
+    host = host.lower()
+    if host == "localhost" or host.endswith((".localhost", ".local")):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
 
 
 @dataclass(frozen=True)
@@ -123,6 +239,11 @@ class StreamingAccumulator:
         """Return accumulated reasoning text so far, or None if empty."""
         return _joined_or_none(self._reasoning_parts)
 
+    @property
+    def partial_content(self) -> str | None:
+        """Return accumulated visible content so far, or None if empty."""
+        return _joined_or_none(self._content_parts)
+
     def add_delta(self, delta: JsonObject) -> list[StreamingVisibleDelta]:
         """Accept one normalized provider delta and return public deltas to emit."""
         delta_type = _require_delta_type(delta)
@@ -161,6 +282,25 @@ class StreamingAccumulator:
             reasoning_meta=dict(self._reasoning_meta) if self._reasoning_meta is not None else None,
             tool_calls=tool_calls or None,
             finish_reason=self._finish_reason,
+            usage=dict(self._usage) if self._usage is not None else None,
+        )
+
+    def finalize_partial_fields(self) -> StreamingAssistantFields:
+        """Build assistant fields from a stream interrupted after visible output.
+
+        Unlike :meth:`finalize_assistant_fields`, this never parses tool-call
+        arguments and never raises on a malformed fragment: a tool call cut off
+        mid-stream was never executed, so its in-flight fragment is dropped
+        rather than parsed (side-effect-free). No ``finish_reason`` is set — the
+        turn did not finish — so the result reads as an interrupted assistant
+        turn the next request can continue.
+        """
+        return StreamingAssistantFields(
+            content=_joined_or_none(self._content_parts),
+            reasoning=_joined_or_none(self._reasoning_parts),
+            reasoning_meta=dict(self._reasoning_meta) if self._reasoning_meta is not None else None,
+            tool_calls=None,
+            finish_reason=None,
             usage=dict(self._usage) if self._usage is not None else None,
         )
 
@@ -242,9 +382,18 @@ class StreamingAccumulator:
 async def iter_with_chunk_timeout(
     source: AsyncIterator[JsonObject],
     *,
-    timeout_seconds: float = STREAM_CHUNK_TIMEOUT_SECONDS,
+    timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
 ) -> AsyncIterator[JsonObject]:
-    """Yield stream chunks with a timeout that resets before each chunk."""
+    """Yield stream chunks with a timeout that resets before each chunk.
+
+    A ``timeout_seconds`` of ``None`` disables the stall guard entirely — used
+    for local/loopback providers whose prefill can be silent for minutes (see
+    :func:`is_local_provider_base_url`).
+    """
+    if timeout_seconds is None:
+        async for chunk in source:
+            yield chunk
+        return
     iterator = source.__aiter__()
     while True:
         try:

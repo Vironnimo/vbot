@@ -3467,6 +3467,72 @@ describe('ChatTimeline', () => {
     );
   });
 
+  it('renders an interrupted marker under an interrupted assistant turn', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-interrupted',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-interrupted',
+      sequence: 1,
+      payload: {
+        message: {
+          role: 'assistant',
+          content: 'The first half of the answer',
+          interrupted: true,
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const notice = document.querySelector('.interrupted-notice');
+    expect(notice).toBeTruthy();
+    expect(notice.textContent).toContain('interrupted');
+    expect(document.body.textContent).toContain('The first half of the answer');
+  });
+
+  it('renders no interrupted marker for a normal assistant turn', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-not-interrupted',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-not-interrupted',
+      sequence: 1,
+      payload: {
+        message: {
+          role: 'assistant',
+          content: 'A complete answer',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelector('.interrupted-notice')).toBeNull();
+  });
+
   it('renders streamed tool stdout and stderr inside assistant runs', () => {
     const sessionState = ensureSessionState(
       createChatState(),

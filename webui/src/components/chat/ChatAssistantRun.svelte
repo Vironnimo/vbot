@@ -434,6 +434,14 @@
           {#if child.streaming}<span class="streaming-caret" aria-hidden="true"
             ></span>{/if}
         </div>
+        {#if child.interrupted && !child.streaming}
+          <div class="interrupted-notice">
+            {t(
+              'chat.interrupted',
+              'Response interrupted — the next turn continues it.',
+            )}
+          </div>
+        {/if}
       {:else if child.type === 'model_fallback'}
         <div class="model-fallback-notice">
           {t('chat.modelFallbackActivated', 'Switched to {model}', {
