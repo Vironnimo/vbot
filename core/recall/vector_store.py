@@ -280,22 +280,6 @@ class VectorStore:
     # Chunk upsert / delete
     # ------------------------------------------------------------------
 
-    def upsert_session(
-        self,
-        *,
-        header: VectorHeader,
-        record: ChunkVectorRecord,
-        vector: Sequence[float],
-    ) -> None:
-        """Insert or replace a single chunk row + its vector.
-
-        Thin convenience wrapper around :meth:`upsert_many_chunks` —
-        useful for tests and one-chunk-at-a-time callers. Production
-        indexing should batch chunks via ``upsert_many_chunks`` directly.
-        """
-
-        self.upsert_many_chunks(header=header, records=[(record, vector)])
-
     def delete_session(self, agent_id: str, session_id: str) -> None:
         """Remove all chunk rows for an agent+session (used for staleness cleanup)."""
 
