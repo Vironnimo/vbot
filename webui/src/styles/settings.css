@@ -141,6 +141,12 @@
   border-color: rgba(74, 222, 128, 0.2);
 }
 
+.s-feedback--warning {
+  color: var(--amber);
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
 .s-row {
   display: flex;
   align-items: center;

@@ -44,6 +44,7 @@
 
   let refreshingModels = $state(false);
   let modelRefreshMessage = $state('');
+  let modelRefreshWarning = $state('');
   let modelRefreshError = $state('');
   let modalScope = $state(null);
   let forwardedAuthEvent = $state(null);
@@ -200,6 +201,7 @@
 
     refreshingModels = true;
     modelRefreshMessage = '';
+    modelRefreshWarning = '';
     modelRefreshError = '';
 
     try {
@@ -211,6 +213,14 @@
         'Model DB updated: {providerCount} providers, {count} models available.',
         refreshSummaryValues(result),
       );
+      const failedProviders = getRefreshFailures(result);
+      if (failedProviders.length > 0) {
+        modelRefreshWarning = t(
+          'settings.providers.refreshPartial',
+          'Some providers could not be reached and were skipped: {providers}.',
+          { providers: failedProviders.join(', ') },
+        );
+      }
     } catch (error) {
       modelRefreshError = `${t(
         'settings.providers.refreshError',
@@ -263,6 +273,16 @@
     return [];
   }
 
+  function getRefreshFailures(result) {
+    if (!Array.isArray(result?.errors)) {
+      return [];
+    }
+
+    return result.errors
+      .map((entry) => entry?.connection_id ?? entry?.provider_id)
+      .filter((label) => typeof label === 'string' && label.length > 0);
+  }
+
   function refreshSummaryValues(result) {
     const refreshedProviders = getRefreshedProviders(result);
     const modelCount = Number.isFinite(result?.model_count)
@@ -288,6 +308,9 @@
     <div class="s-feedback s-feedback--success">
       {modelRefreshMessage}
     </div>
+  {/if}
+  {#if modelRefreshWarning}
+    <div class="s-feedback s-feedback--warning">{modelRefreshWarning}</div>
   {/if}
 
   <div class="s-providers-toolbar">
