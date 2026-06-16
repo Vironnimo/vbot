@@ -274,6 +274,45 @@ async def test_run_once_job_retries_trigger_failure_without_completing(
 
 
 @pytest.mark.asyncio
+async def test_run_once_job_abandons_after_attempt_limit_with_backoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    service, trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-gone",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+    )
+    sleep_delays: list[float] = []
+
+    async def record_sleep(delay_seconds: float) -> None:
+        sleep_delays.append(delay_seconds)
+
+    monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
+    trigger_service.trigger_run.side_effect = RuntimeError("agent deleted")
+
+    # Act
+    await service._run_once_job(job)
+
+    # Assert: a permanently failing once job stops after the attempt cap instead
+    # of looping forever, backing off exponentially between attempts.
+    assert trigger_service.trigger_run.await_count == cron_module._ONCE_MAX_FIRE_ATTEMPTS
+    backoff_delays = [delay for delay in sleep_delays if delay > 0]
+    expected_backoff = [
+        cron_module._once_retry_delay(attempt)
+        for attempt in range(1, cron_module._ONCE_MAX_FIRE_ATTEMPTS)
+    ]
+    assert backoff_delays == expected_backoff
+    updated = service.get_job(job.id)
+    assert updated.status == "completed"
+    assert updated.last_fired_at is None
+    assert not service._once_fire_claim_path(job.id).exists()
+
+
+@pytest.mark.asyncio
 async def test_run_once_job_retries_completed_save_without_refiring(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
