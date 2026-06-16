@@ -6,8 +6,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock, TextBlock
+
 if TYPE_CHECKING:
-    from core.chat.content_blocks import ContentBlock
+    from core.attachments import AttachmentRecord
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,33 @@ def channel_system_reminder(
         f"This session is receiving messages via {platform_display_name} "
         f"(channel: {channel_id}, chat: {chat_id}).\n"
         f"Respond in a style appropriate for {platform_display_name} messaging."
+    )
+
+
+def content_block_for_attachment(record: AttachmentRecord) -> ContentBlock:
+    """Classify one stored inbound attachment into its canonical content block.
+
+    Shared by every channel adapter so inbound-file handling cannot drift between
+    platforms: image/audio/video become a MediaBlock (the chat-layer resolver then
+    decides native input vs. transcription vs. a path note), text files become an
+    extracted TextBlock, and everything else stays a generic FileBlock. This is the
+    single classification point regardless of how the platform delivered the file
+    (e.g. a Telegram MP3 sent as a "document" is media, not a generic file).
+    """
+    if record.media_type.startswith(("image/", "audio/", "video/")):
+        return MediaBlock(
+            type="media",
+            attachment_id=record.id,
+            filename=record.filename,
+            media_type=record.media_type,
+        )
+    if record.media_type.startswith("text/"):
+        return TextBlock(type="text", text=record.text_content or "")
+    return FileBlock(
+        type="file",
+        attachment_id=record.id,
+        filename=record.filename,
+        media_type=record.media_type,
     )
 
 
