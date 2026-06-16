@@ -847,23 +847,35 @@ def test_compaction_latest_checkpoint_helper_returns_none_when_absent() -> None:
     assert _latest_compaction_checkpoint([ChatMessage.user("only")]) is None
 
 
-def test_compaction_messages_from_boundary_helper_slices_history() -> None:
-    from core.chat.chat import _messages_from_boundary
+def test_resolve_preserved_tail_slices_from_boundary() -> None:
+    from core.chat.chat import _resolve_preserved_tail
 
     first = ChatMessage.user("first")
     second = ChatMessage.assistant(model="openai/gpt-5.2", content="second")
     third = ChatMessage.user("third")
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="s", tail_boundary_id=second.id, compacted_token_count=1
+    )
 
-    sliced = _messages_from_boundary([first, second, third], second.id)
+    tail, recovered = _resolve_preserved_tail([first, second, third, checkpoint], checkpoint)
 
-    assert sliced == [second, third]
+    assert tail == [second, third]
+    assert recovered is False
 
 
-def test_compaction_messages_from_boundary_helper_raises_for_missing_boundary() -> None:
-    from core.chat.chat import _messages_from_boundary
+def test_resolve_preserved_tail_recovers_when_boundary_missing() -> None:
+    from core.chat.chat import _resolve_preserved_tail
 
-    with pytest.raises(ChatError, match="compaction boundary id not found"):
-        _messages_from_boundary([ChatMessage.user("only")], "missing-id")
+    older = ChatMessage.user("older")
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="s", tail_boundary_id="missing-id", compacted_token_count=1
+    )
+    newer = ChatMessage.user("newer")
+
+    tail, recovered = _resolve_preserved_tail([older, checkpoint, newer], checkpoint)
+
+    assert tail == [newer]
+    assert recovered is True
 
 
 def test_compaction_build_request_messages_without_checkpoint_keeps_existing_path(
