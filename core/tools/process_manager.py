@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import uuid
+from asyncio import StreamWriter
 from asyncio.subprocess import PIPE, Process
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -307,8 +308,7 @@ class ProcessManager:
             raise SessionInputClosedError(f"Process stdin is closed: {session_id}")
 
         if data:
-            stdin.write(data.encode("utf-8"))
-            await stdin.drain()
+            await self._write_stdin(session, stdin, data.encode("utf-8"))
         if eof:
             await self._close_stdin(session)
 
@@ -319,8 +319,30 @@ class ProcessManager:
         if stdin is None or not session.stdin_open:
             raise SessionInputClosedError(f"Process stdin is closed: {session_id}")
 
-        stdin.write(SUBMIT_BYTES)
-        await stdin.drain()
+        await self._write_stdin(session, stdin, SUBMIT_BYTES)
+
+    @staticmethod
+    async def _write_stdin(
+        session: ProcessSession,
+        stdin: StreamWriter,
+        payload: bytes,
+    ) -> None:
+        """Write bytes to stdin, mapping a raced close to SessionInputClosedError.
+
+        The upfront ``stdin_open`` check cannot stop a kill or the process
+        exiting from closing stdin while ``drain()`` awaits, so a concurrent
+        close surfaces here as a pipe error. Translate it to the expected
+        closed-stdin error instead of leaking BrokenPipeError/
+        ConnectionResetError to callers.
+        """
+        try:
+            stdin.write(payload)
+            await stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as error:
+            session.stdin_open = False
+            raise SessionInputClosedError(
+                f"Process stdin is closed: {session.session_id}"
+            ) from error
 
     async def kill(self, session_id: str, agent_id: str) -> None:
         """Terminate a session with SIGKILL / platform equivalent."""
