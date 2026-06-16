@@ -75,11 +75,23 @@ def register_channel_send_tool(
     registry: ToolRegistry,
     channel_service: ChannelService,
     chat_sessions: ChatSessionManager,
+    *,
+    max_attachment_size_bytes: int,
 ) -> None:
-    """Register the channel_send tool with a vBot tool registry."""
+    """Register the channel_send tool with a vBot tool registry.
+
+    ``max_attachment_size_bytes`` caps the size of any file an agent sends
+    outbound, mirroring the limit enforced on inbound attachments and uploads.
+    """
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await _handle_channel_send_tool(channel_service, chat_sessions, context, arguments)
+        return await _handle_channel_send_tool(
+            channel_service,
+            chat_sessions,
+            context,
+            arguments,
+            max_attachment_size_bytes=max_attachment_size_bytes,
+        )
 
     registry.register(
         CHANNEL_SEND_TOOL_NAME,
@@ -95,6 +107,8 @@ async def _handle_channel_send_tool(
     chat_sessions: ChatSessionManager,
     context: ToolContext,
     arguments: JsonObject,
+    *,
+    max_attachment_size_bytes: int,
 ) -> JsonObject:
     unknown_arguments = sorted(set(arguments) - _CHANNEL_SEND_ALLOWED_ARGUMENTS)
     if unknown_arguments:
@@ -106,7 +120,11 @@ async def _handle_channel_send_tool(
             arguments.get("channel_id"), field_name="channel_id"
         )
         message = _optional_non_empty_string(arguments.get("message"), field_name="message")
-        files = _build_file_data(arguments.get("file_paths"), workspace=context.workspace)
+        files = _build_file_data(
+            arguments.get("file_paths"),
+            workspace=context.workspace,
+            max_size_bytes=max_attachment_size_bytes,
+        )
         if message is None and not files:
             return tool_failure(
                 "invalid_arguments",
@@ -274,7 +292,7 @@ def _optional_non_empty_string(value: object, *, field_name: str) -> str | None:
     return _required_non_empty_string(value, field_name=field_name)
 
 
-def _build_file_data(value: object, *, workspace: Path) -> list[FileData]:
+def _build_file_data(value: object, *, workspace: Path, max_size_bytes: int) -> list[FileData]:
     if value is None:
         return []
     if not isinstance(value, list):
@@ -288,6 +306,14 @@ def _build_file_data(value: object, *, workspace: Path) -> list[FileData]:
         resolved_path = _resolve_path(raw_path.strip(), workspace=workspace)
         if not resolved_path.is_file():
             raise ValueError(f"file_paths[{index}] is not a file: {raw_path}")
+
+        # Reject oversize files by their on-disk size before reading, so a large
+        # file never gets loaded into memory just to be turned away.
+        size_bytes = resolved_path.stat().st_size
+        if size_bytes > max_size_bytes:
+            raise ValueError(
+                f"file_paths[{index}] size {size_bytes} exceeds limit {max_size_bytes}: {raw_path}"
+            )
 
         try:
             data = resolved_path.read_bytes()
