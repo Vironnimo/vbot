@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -187,7 +188,7 @@ async def test_build_payload_replays_reasoning_details_on_history(
 ) -> None:
     """A historical assistant turn replays reasoning_details back onto the wire."""
     route = respx.post(MINIMAX_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-    history = [
+    history: list[dict[str, Any]] = [
         {"role": "user", "content": "Hi"},
         {
             "role": "assistant",

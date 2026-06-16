@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -309,7 +310,7 @@ async def test_in_run_round_trips_reasoning_details(
         {"type": "reasoning.encrypted", "data": "enc-signature-blob"},
         {"type": "reasoning.text", "text": "step one", "signature": "sig-1"},
     ]
-    history = [
+    history: list[dict[str, Any]] = [
         {"role": "user", "content": "Use the tool"},
         {
             "role": "assistant",
