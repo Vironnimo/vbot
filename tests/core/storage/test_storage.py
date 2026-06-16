@@ -306,9 +306,9 @@ def test_update_defaults_none_value_removes_existing_key(tmp_path: Path) -> None
         }
     )
 
-    updated = storage.update_defaults("agent", {"temperature": None})
+    updated = storage.update_settings_sections({"defaults": {"agent": {"temperature": None}}})
 
-    assert updated == {
+    assert updated["defaults"] == {
         "agent": {
             "model": "openrouter/anthropic/claude-sonnet-4",
             "thinking_effort": "high",
@@ -341,7 +341,7 @@ def test_update_defaults_rejects_invalid_agent_values(
     storage = StorageManager(tmp_path)
 
     with pytest.raises(StorageError, match=message):
-        storage.update_defaults("agent", values)
+        storage.update_settings_sections({"defaults": {"agent": values}})
 
 
 def test_save_settings_rejects_unserializable_values(tmp_path: Path) -> None:
@@ -418,9 +418,9 @@ def test_update_recall_settings_persists_under_recall_key(tmp_path: Path) -> Non
     storage = StorageManager(tmp_path)
     storage.save_settings({"server_port": 8500})
 
-    updated = storage.update_recall_settings({"backend": " sqlite_fts "})
+    updated = storage.update_settings_sections({"recall": {"backend": " sqlite_fts "}})
 
-    assert updated == {"backend": "sqlite_fts"}
+    assert updated["recall"] == {"backend": "sqlite_fts"}
     assert storage.load_settings() == {
         "server_port": 8500,
         "recall": {"backend": "sqlite_fts"},
@@ -431,7 +431,7 @@ def test_update_recall_settings_rejects_unsupported_fields(tmp_path: Path) -> No
     storage = StorageManager(tmp_path)
 
     with pytest.raises(StorageError, match="Unsupported recall settings: unknown"):
-        storage.update_recall_settings({"backend": "sqlite_fts", "unknown": True})
+        storage.update_settings_sections({"recall": {"backend": "sqlite_fts", "unknown": True}})
 
 
 def test_load_extensions_settings_defaults_to_empty(tmp_path: Path) -> None:
@@ -486,20 +486,22 @@ def test_update_web_search_settings_persists_provider_and_searxng_url(tmp_path: 
     storage = StorageManager(tmp_path)
     storage.save_settings({"server_port": 8500})
 
-    updated = storage.update_web_search_settings(
+    updated = storage.update_settings_sections(
         {
-            "provider": "searxng",
-            "searxng": {"base_url": " http://localhost:9999/ "},
+            "web_search": {
+                "provider": "searxng",
+                "searxng": {"base_url": " http://localhost:9999/ "},
+            }
         }
     )
 
-    assert updated == {
+    assert updated["web_search"] == {
         "provider": "searxng",
         "searxng": {"base_url": "http://localhost:9999/"},
     }
     assert storage.load_settings() == {
         "server_port": 8500,
-        "web_search": updated,
+        "web_search": updated["web_search"],
     }
 
 
@@ -507,16 +509,18 @@ def test_update_web_search_settings_preserves_searxng_url_when_switching_provide
     tmp_path: Path,
 ) -> None:
     storage = StorageManager(tmp_path)
-    storage.update_web_search_settings(
+    storage.update_settings_sections(
         {
-            "provider": "searxng",
-            "searxng": {"base_url": "http://localhost:9999"},
+            "web_search": {
+                "provider": "searxng",
+                "searxng": {"base_url": "http://localhost:9999"},
+            }
         }
     )
 
-    updated = storage.update_web_search_settings({"provider": "brave"})
+    updated = storage.update_settings_sections({"web_search": {"provider": "brave"}})
 
-    assert updated == {
+    assert updated["web_search"] == {
         "provider": "brave",
         "searxng": {"base_url": "http://localhost:9999"},
     }
@@ -545,7 +549,7 @@ def test_update_web_search_settings_rejects_invalid_payloads(
     storage = StorageManager(tmp_path)
 
     with pytest.raises(StorageError, match=message):
-        storage.update_web_search_settings(web_search)
+        storage.update_settings_sections({"web_search": web_search})
 
 
 def test_model_task_settings_round_trip_and_preserve_other_settings(tmp_path: Path) -> None:
@@ -647,21 +651,23 @@ def test_update_compaction_settings_persists_under_compaction_key(tmp_path: Path
         }
     )
 
-    updated = storage.update_compaction_settings(
+    updated = storage.update_settings_sections(
         {
-            "tail_tokens": 8_000,
-            "summary_model": "openai/gpt-4.1-mini",
+            "compaction": {
+                "tail_tokens": 8_000,
+                "summary_model": "openai/gpt-4.1-mini",
+            }
         }
     )
 
-    assert updated == {
+    assert updated["compaction"] == {
         "auto": False,
         "threshold": 0.9,
         "tail_tokens": 8_000,
         "summary_model": "openai/gpt-4.1-mini",
     }
-    assert storage.load_compaction_settings() == updated
-    assert storage.load_settings() == {"compaction": updated, "server_port": 8500}
+    assert storage.load_compaction_settings() == updated["compaction"]
+    assert storage.load_settings() == {"compaction": updated["compaction"], "server_port": 8500}
 
 
 def test_update_settings_sections_persists_multiple_sections_with_one_save(
@@ -754,9 +760,9 @@ def test_update_appearance_settings_persists_language_and_preserves_other_settin
     storage = StorageManager(tmp_path)
     storage.save_settings({"server_port": 8500, "appearance": {}})
 
-    updated = storage.update_appearance_settings({"language": "en"})
+    updated = storage.update_settings_sections({"appearance": {"language": "en"}})
 
-    assert updated == {"language": "en", "chat_width": "comfortable"}
+    assert updated["appearance"] == {"language": "en", "chat_width": "comfortable"}
     assert storage.load_settings() == {
         "appearance": {"language": "en", "chat_width": "comfortable"},
         "server_port": 8500,
@@ -767,18 +773,22 @@ def test_update_appearance_settings_persists_chat_width(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.save_settings({"appearance": {}})
 
-    updated = storage.update_appearance_settings({"language": "en", "chat_width": "wide"})
+    updated = storage.update_settings_sections(
+        {"appearance": {"language": "en", "chat_width": "wide"}}
+    )
 
-    assert updated == {"language": "en", "chat_width": "wide"}
+    assert updated["appearance"] == {"language": "en", "chat_width": "wide"}
     assert storage.load_appearance_settings() == {"language": "en", "chat_width": "wide"}
 
 
 def test_update_appearance_settings_coerces_unknown_chat_width_to_default(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 
-    updated = storage.update_appearance_settings({"language": "en", "chat_width": "bogus"})
+    updated = storage.update_settings_sections(
+        {"appearance": {"language": "en", "chat_width": "bogus"}}
+    )
 
-    assert updated == {"language": "en", "chat_width": "comfortable"}
+    assert updated["appearance"] == {"language": "en", "chat_width": "comfortable"}
 
 
 def test_update_appearance_settings_drops_deprecated_appearance_keys(tmp_path: Path) -> None:
@@ -794,9 +804,9 @@ def test_update_appearance_settings_drops_deprecated_appearance_keys(tmp_path: P
         }
     )
 
-    updated = storage.update_appearance_settings({"language": "en"})
+    updated = storage.update_settings_sections({"appearance": {"language": "en"}})
 
-    assert updated == {"language": "en", "chat_width": "comfortable"}
+    assert updated["appearance"] == {"language": "en", "chat_width": "comfortable"}
     assert storage.load_settings() == {
         "appearance": {"language": "en", "chat_width": "comfortable"},
         "server_port": 8500,
@@ -821,7 +831,7 @@ def test_update_appearance_settings_rejects_invalid_payloads(
     storage = StorageManager(tmp_path)
 
     with pytest.raises(StorageError, match=message):
-        storage.update_appearance_settings(appearance)
+        storage.update_settings_sections({"appearance": appearance})
 
 
 def test_update_skill_directory_settings_persists_list_and_preserves_other_settings(
@@ -831,9 +841,11 @@ def test_update_skill_directory_settings_persists_list_and_preserves_other_setti
     storage.save_settings({"server_port": 8500, "appearance": {"language": "en"}})
     absolute_skills = tmp_path / "team-skills"
 
-    updated = storage.update_skill_directory_settings(["~/skills", f" {absolute_skills} "])
+    updated = storage.update_settings_sections(
+        {"skills": {"directories": ["~/skills", f" {absolute_skills} "]}}
+    )
 
-    assert updated == ["~/skills", str(absolute_skills)]
+    assert updated["skills"]["directories"] == ["~/skills", str(absolute_skills)]
     assert storage.load_skill_directory_settings() == ["~/skills", str(absolute_skills)]
     assert storage.load_settings() == {
         "appearance": {"language": "en"},
@@ -860,7 +872,7 @@ def test_update_skill_directory_settings_rejects_invalid_payloads(
     storage = StorageManager(tmp_path)
 
     with pytest.raises(StorageError, match=message):
-        storage.update_skill_directory_settings(directories)
+        storage.update_settings_sections({"skills": {"directories": directories}})
 
 
 def test_update_skill_directory_settings_accepts_windows_absolute_paths(
@@ -868,9 +880,9 @@ def test_update_skill_directory_settings_accepts_windows_absolute_paths(
 ) -> None:
     storage = StorageManager(tmp_path)
 
-    updated = storage.update_skill_directory_settings(["C:/skills/team"])
+    updated = storage.update_settings_sections({"skills": {"directories": ["C:/skills/team"]}})
 
-    assert updated == ["C:/skills/team"]
+    assert updated["skills"]["directories"] == ["C:/skills/team"]
 
 
 def test_copy_prompt_fragments_preserves_existing_user_copy(tmp_path: Path) -> None:

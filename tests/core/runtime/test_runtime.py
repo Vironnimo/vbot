@@ -709,7 +709,7 @@ def test_reload_skills_updates_system_prompt_skill_registry(config: Config, tmp_
 
     prompt_before_reload = runtime.system_prompts.build_system_prompt(agent)
 
-    runtime.storage.update_skill_directory_settings([str(skill_root)])
+    runtime.storage.update_settings_sections({"skills": {"directories": [str(skill_root)]}})
     runtime.reload_skills()
     prompt_after_reload = runtime.system_prompts.build_system_prompt(agent)
 
@@ -737,7 +737,7 @@ def test_reload_skills_updates_provider_skill_tool_visibility(config: Config, tm
 
     definitions_before_reload = runtime.system_prompts.provider_tool_definitions(agent)
 
-    runtime.storage.update_skill_directory_settings([str(skill_root)])
+    runtime.storage.update_settings_sections({"skills": {"directories": [str(skill_root)]}})
     runtime.reload_skills()
     definitions_after_reload = runtime.system_prompts.provider_tool_definitions(agent)
 

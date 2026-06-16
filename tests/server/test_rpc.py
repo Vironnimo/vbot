@@ -459,7 +459,7 @@ class StubStorage:
     def supported_appearance_languages(self) -> list[str]:
         return ["en"]
 
-    def update_appearance_settings(self, appearance: JsonObject) -> JsonObject:
+    def _apply_appearance_settings(self, appearance: JsonObject) -> JsonObject:
         unsupported_fields = sorted(set(appearance) - {"language", "chat_width"})
         if unsupported_fields:
             raise StorageError(f"unsupported appearance settings: {', '.join(unsupported_fields)}")
@@ -477,7 +477,7 @@ class StubStorage:
     def load_skill_directory_settings(self) -> list[str]:
         return list(self._skill_directories)
 
-    def update_skill_directory_settings(self, directories: object) -> list[str]:
+    def _apply_skill_directory_settings(self, directories: object) -> list[str]:
         if not isinstance(directories, list) or not all(
             isinstance(directory, str) for directory in directories
         ):
@@ -563,7 +563,7 @@ class StubStorage:
         stored = self._settings.get("model_tasks")
         return dict(stored) if isinstance(stored, dict) else {}
 
-    def update_recall_settings(self, recall: object) -> JsonObject:
+    def _apply_recall_settings(self, recall: object) -> JsonObject:
         if not isinstance(recall, dict):
             raise StorageError("Recall settings must be an object")
 
@@ -573,7 +573,7 @@ class StubStorage:
         }
         return self.load_recall_settings()
 
-    def update_web_search_settings(self, web_search: object) -> JsonObject:
+    def _apply_web_search_settings(self, web_search: object) -> JsonObject:
         if not isinstance(web_search, dict):
             raise StorageError("Web search settings must be an object")
 
@@ -597,7 +597,7 @@ class StubStorage:
         }
         return self.load_web_search_settings()
 
-    def update_compaction_settings(self, compaction: object) -> JsonObject:
+    def _apply_compaction_settings(self, compaction: object) -> JsonObject:
         if not isinstance(compaction, dict):
             raise StorageError("Compaction settings must be an object")
 
@@ -635,7 +635,7 @@ class StubStorage:
             return {}
         return {"agent": normalized_agent_defaults}
 
-    def update_defaults(self, section: str, values: object) -> JsonObject:
+    def _apply_defaults(self, section: str, values: object) -> JsonObject:
         if section != "agent":
             raise StorageError(f"Unsupported defaults section: {section}")
         if not isinstance(values, dict):
@@ -723,12 +723,12 @@ class StubStorage:
     def update_settings_sections(self, settings_update: JsonObject) -> JsonObject:
         updated_sections: JsonObject = {}
         if "appearance" in settings_update:
-            updated_sections["appearance"] = self.update_appearance_settings(
+            updated_sections["appearance"] = self._apply_appearance_settings(
                 settings_update["appearance"]
             )
         if "skills" in settings_update:
             updated_sections["skills"] = {
-                "directories": self.update_skill_directory_settings(
+                "directories": self._apply_skill_directory_settings(
                     settings_update["skills"]["directories"]
                 )
             }
@@ -742,20 +742,20 @@ class StubStorage:
                 field: subagents[field] for field in STUB_SUBAGENT_SETTING_FIELDS
             }
         if "compaction" in settings_update:
-            updated_sections["compaction"] = self.update_compaction_settings(
+            updated_sections["compaction"] = self._apply_compaction_settings(
                 settings_update["compaction"]
             )
         if "defaults" in settings_update:
             defaults_update = settings_update["defaults"]
             if "agent" in defaults_update:
-                updated_sections["defaults"] = self.update_defaults(
+                updated_sections["defaults"] = self._apply_defaults(
                     "agent",
                     defaults_update["agent"],
                 )
         if "recall" in settings_update:
-            updated_sections["recall"] = self.update_recall_settings(settings_update["recall"])
+            updated_sections["recall"] = self._apply_recall_settings(settings_update["recall"])
         if "web_search" in settings_update:
-            updated_sections["web_search"] = self.update_web_search_settings(
+            updated_sections["web_search"] = self._apply_web_search_settings(
                 settings_update["web_search"]
             )
         if "model_tasks" in settings_update:
@@ -3206,12 +3206,15 @@ async def test_settings_update_persists_agent_default_model_and_returns_defaults
 @pytest.mark.asyncio
 async def test_settings_update_removes_agent_default_temperature_on_null(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.update_defaults(
-        "agent",
+    state.runtime.storage.update_settings_sections(
         {
-            "model": "openai/gpt-4.1-mini",
-            "temperature": 0.6,
-        },
+            "defaults": {
+                "agent": {
+                    "model": "openai/gpt-4.1-mini",
+                    "temperature": 0.6,
+                }
+            }
+        }
     )
 
     response = await dispatch_rpc(
@@ -3720,7 +3723,9 @@ async def test_agent_update_accepts_memory_prompt_mode(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_agent_get_reflects_configured_default_model(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.update_defaults("agent", {"model": "openai/gpt-4.1-mini"})
+    state.runtime.storage.update_settings_sections(
+        {"defaults": {"agent": {"model": "openai/gpt-4.1-mini"}}}
+    )
     state.runtime.agents.update("coder", model="")
 
     response = await dispatch_rpc(
@@ -3736,13 +3741,16 @@ async def test_agent_get_reflects_configured_default_model(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_agent_create_returns_and_publishes_resolved_defaults(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.update_defaults(
-        "agent",
+    state.runtime.storage.update_settings_sections(
         {
-            "model": "openai/gpt-5.2",
-            "temperature": 0.6,
-            "thinking_effort": "high",
-        },
+            "defaults": {
+                "agent": {
+                    "model": "openai/gpt-5.2",
+                    "temperature": 0.6,
+                    "thinking_effort": "high",
+                }
+            }
+        }
     )
 
     response = await dispatch_rpc(

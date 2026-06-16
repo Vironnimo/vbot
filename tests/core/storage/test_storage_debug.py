@@ -137,9 +137,9 @@ class TestUpdateDebugSettings:
         storage = StorageManager(tmp_path)
         storage.save_settings({"server_port": 8500})
 
-        updated = storage.update_debug_settings({"enabled": True, "trace_limit": 100})
+        updated = storage.update_settings_sections({"debug": {"enabled": True, "trace_limit": 100}})
 
-        assert updated == {"enabled": True, "trace_limit": 100}
+        assert updated["debug"] == {"enabled": True, "trace_limit": 100}
         assert storage.load_settings() == {
             "debug": {"enabled": True, "trace_limit": 100},
             "server_port": 8500,
@@ -149,9 +149,9 @@ class TestUpdateDebugSettings:
         storage = StorageManager(tmp_path)
         storage.save_settings({"debug": {"enabled": True, "trace_limit": 100}})
 
-        updated = storage.update_debug_settings({"trace_limit": 200})
+        updated = storage.update_settings_sections({"debug": {"trace_limit": 200}})
 
-        assert updated == {"enabled": True, "trace_limit": 200}
+        assert updated["debug"] == {"enabled": True, "trace_limit": 200}
         assert storage.load_debug_settings() == {
             "enabled": True,
             "trace_limit": 200,
@@ -161,7 +161,7 @@ class TestUpdateDebugSettings:
         storage = StorageManager(tmp_path)
 
         with pytest.raises(StorageError, match="Unsupported debug settings: unknown"):
-            storage.update_debug_settings({"enabled": True, "unknown": "value"})
+            storage.update_settings_sections({"debug": {"enabled": True, "unknown": "value"}})
 
     @pytest.mark.parametrize(
         ("debug", "message"),
@@ -183,7 +183,7 @@ class TestUpdateDebugSettings:
         storage = StorageManager(tmp_path)
 
         with pytest.raises(StorageError, match=message):
-            storage.update_debug_settings(debug)
+            storage.update_settings_sections({"debug": debug})
 
     def test_leaves_file_unchanged_when_rejected(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
@@ -191,7 +191,7 @@ class TestUpdateDebugSettings:
         storage.save_settings(original)
 
         with pytest.raises(StorageError, match="Unsupported debug settings"):
-            storage.update_debug_settings({"unknown": 1})
+            storage.update_settings_sections({"debug": {"unknown": 1}})
 
         assert storage.load_settings() == original
 
@@ -232,7 +232,7 @@ class TestDebugSettingsRoundTrip:
     def test_update_then_reload_preserves_values(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
 
-        storage.update_debug_settings({"enabled": True, "trace_limit": 30})
+        storage.update_settings_sections({"debug": {"enabled": True, "trace_limit": 30}})
         reloaded = storage.load_debug_settings()
 
         assert reloaded == {"enabled": True, "trace_limit": 30}
@@ -240,13 +240,13 @@ class TestDebugSettingsRoundTrip:
     def test_disable_then_enable_cycle(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
 
-        storage.update_debug_settings({"enabled": True, "trace_limit": 100})
+        storage.update_settings_sections({"debug": {"enabled": True, "trace_limit": 100}})
         assert storage.load_debug_settings() == {"enabled": True, "trace_limit": 100}
 
-        storage.update_debug_settings({"enabled": False, "trace_limit": 100})
+        storage.update_settings_sections({"debug": {"enabled": False, "trace_limit": 100}})
         assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 100}
 
-        storage.update_debug_settings({"enabled": True, "trace_limit": 100})
+        storage.update_settings_sections({"debug": {"enabled": True, "trace_limit": 100}})
         assert storage.load_debug_settings() == {"enabled": True, "trace_limit": 100}
 
 

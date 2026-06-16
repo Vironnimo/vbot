@@ -67,7 +67,6 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "extensions",
     }
 )
-SUPPORTED_DEFAULTS_SECTIONS = frozenset({"agent"})
 PHASE_TWO_DIRECTORIES = (
     ".tmp",
     "agents",
@@ -350,13 +349,6 @@ class StorageManager:
         settings = self.load_settings()
         return normalize_appearance_settings(settings.get("appearance"))
 
-    def update_appearance_settings(self, appearance: Mapping[str, Any]) -> dict[str, str]:
-        """Persist the supported Appearance Settings subset and return it."""
-
-        return self.update_settings(
-            lambda settings: self._apply_appearance_settings(settings, appearance)
-        )
-
     def _apply_appearance_settings(
         self,
         settings: dict[str, Any],
@@ -382,13 +374,6 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_skill_directories(settings.get("skill_directories"))
-
-    def update_skill_directory_settings(self, directories: Any) -> list[str]:
-        """Persist the extra skill directory list and return it."""
-
-        return self.update_settings(
-            lambda settings: self._apply_skill_directory_settings(settings, directories)
-        )
 
     def _apply_skill_directory_settings(
         self,
@@ -497,11 +482,6 @@ class StorageManager:
         settings["extensions"] = normalized_extensions
         return dict(normalized_extensions)
 
-    def update_recall_settings(self, recall: Mapping[str, Any]) -> dict[str, str]:
-        """Persist the supported recall settings subset and return it."""
-
-        return self.update_settings(lambda settings: self._apply_recall_settings(settings, recall))
-
     def _apply_recall_settings(
         self,
         settings: dict[str, Any],
@@ -519,11 +499,6 @@ class StorageManager:
         normalized_recall = normalize_recall_settings(recall)
         settings["recall"] = normalized_recall
         return dict(normalized_recall)
-
-    def update_debug_settings(self, debug: Mapping[str, Any]) -> dict[str, Any]:
-        """Persist the supported debug settings subset and return it."""
-
-        return self.update_settings(lambda settings: self._apply_debug_settings(settings, debug))
 
     def _apply_debug_settings(
         self,
@@ -547,13 +522,6 @@ class StorageManager:
         )
         settings["debug"] = normalized_debug
         return dict(normalized_debug)
-
-    def update_web_search_settings(self, web_search: Mapping[str, Any]) -> dict[str, Any]:
-        """Persist the supported web search provider settings and return them."""
-
-        return self.update_settings(
-            lambda settings: self._apply_web_search_settings(settings, web_search)
-        )
 
     def _apply_web_search_settings(
         self,
@@ -655,18 +623,6 @@ class StorageManager:
 
         return normalize_model_task_settings(settings.get("model_tasks"))
 
-    def update_defaults(self, section: str, values: Mapping[str, Any]) -> dict[str, Any]:
-        """Persist normalized defaults for a single section and return persisted values."""
-
-        if section not in SUPPORTED_DEFAULTS_SECTIONS:
-            raise StorageError(f"Unsupported defaults section: {section}")
-        if not isinstance(values, Mapping):
-            raise StorageError("Defaults values must be a mapping")
-
-        return self.update_settings(
-            lambda settings: self._apply_defaults(settings, section, values)
-        )
-
     def _apply_defaults(
         self,
         settings: dict[str, Any],
@@ -698,13 +654,6 @@ class StorageManager:
             settings.pop("defaults", None)
 
         return normalize_defaults_settings(merged_defaults)
-
-    def update_compaction_settings(self, compaction: Mapping[str, Any]) -> dict[str, Any]:
-        """Persist compaction settings and return normalized values."""
-
-        return self.update_settings(
-            lambda settings: self._apply_compaction_settings(settings, compaction)
-        )
 
     def _apply_compaction_settings(
         self,
