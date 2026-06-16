@@ -1,5 +1,6 @@
 <script>
   import Button from './ui/Button.svelte';
+  import StatusChip from './ui/StatusChip.svelte';
   import { t } from '$lib/i18n.js';
 
   let {
@@ -51,9 +52,9 @@
         <h3>{t('queue.title', 'Queued messages')}</h3>
         <p>{t('queue.pending', 'Waiting for the active run to finish.')}</p>
       </div>
-      <span class="chip chip-amber">
+      <StatusChip variant="warn">
         {t('queue.count', '{count} queued', { count: queuedMessages.length })}
-      </span>
+      </StatusChip>
     </div>
     <ol>
       {#each queuedMessages as message (message.id)}

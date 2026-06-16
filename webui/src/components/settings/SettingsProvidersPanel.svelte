@@ -1,6 +1,7 @@
 <script>
   import ProviderConnectModal from './ProviderConnectModal.svelte';
   import Button from '../ui/Button.svelte';
+  import StatusChip from '../ui/StatusChip.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -331,9 +332,9 @@
 
                 <div class="s-row-actions s-row-actions--provider">
                   {#if getConnectionAccounts(connection).length === 0}
-                    <span class="chip chip-green">
+                    <StatusChip variant="success">
                       {t('settings.providers.connected', 'Connected')}
-                    </span>
+                    </StatusChip>
                   {/if}
                   {#if connectionSupportsAddAccount(connection)}
                     <Button
@@ -356,10 +357,8 @@
                       <span class="s-connection-account-id">
                         {accountDisplayName(account, t)}
                       </span>
-                      <span
-                        class="chip {isAccountUsable(account)
-                          ? 'chip-green'
-                          : 'chip-amber'}"
+                      <StatusChip
+                        variant={isAccountUsable(account) ? 'success' : 'warn'}
                       >
                         {isAccountUsable(account)
                           ? t('settings.providers.connected', 'Connected')
@@ -367,7 +366,7 @@
                               'settings.providers.accounts.notUsable',
                               'Not usable',
                             )}
-                      </span>
+                      </StatusChip>
                       <span class="s-connection-account-source">
                         {describeAccountSource(account, t)}
                       </span>
@@ -455,9 +454,9 @@
     </div>
     <div class="s-row-control">
       <div class="s-row-actions">
-        <span class="chip chip-orange"
-          >{t('settings.providers.customEndpointStatus', 'Placeholder')}</span
-        >
+        <StatusChip variant="info">
+          {t('settings.providers.customEndpointStatus', 'Placeholder')}
+        </StatusChip>
         <Button variant="secondary" disabled>
           {t('settings.providers.configure', 'Configure…')}
         </Button>

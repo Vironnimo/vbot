@@ -2,12 +2,13 @@
   import { onMount } from 'svelte';
 
   import Button from '../ui/Button.svelte';
+  import StatusChip from '../ui/StatusChip.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     applyExtensionsPanelList,
     buildExtensionsUpdatePayload,
-    extensionStatusChipClass,
+    extensionStatusChipVariant,
     formatExtensionConfig,
     parseExtensionConfigDraft,
     summarizeExtensionCapabilities,
@@ -204,11 +205,11 @@
           <div class="s-row-info">
             <div class="s-ext-name-row">
               <span class="s-row-label s-ext-name">{extension.name}</span>
-              <span
-                class={`chip ${extensionStatusChipClass(extension.status)}`}
+              <StatusChip
+                variant={extensionStatusChipVariant(extension.status)}
               >
                 {statusLabel(extension.status)}
-              </span>
+              </StatusChip>
               {#if extension.version}
                 <span class="s-ext-version">v{extension.version}</span>
               {/if}

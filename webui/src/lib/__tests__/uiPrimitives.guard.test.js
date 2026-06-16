@@ -143,4 +143,24 @@ describe('UI primitive guard', () => {
 
     expect(violations).toEqual([]);
   });
+
+  it('routes every status chip through components/ui/StatusChip.svelte', () => {
+    // The canonical `chip` base plus the retired color aliases; scoped chips
+    // named differently (logs-view__stream-chip, sp-scope-chip, …) are distinct.
+    const forbidden = new Set([
+      'chip',
+      'chip-green',
+      'chip-amber',
+      'chip-orange',
+      'chip-red',
+    ]);
+
+    const violations = findRawClassViolations(
+      ANY_ELEMENT,
+      forbidden,
+      'components/ui/StatusChip.svelte',
+    );
+
+    expect(violations).toEqual([]);
+  });
 });

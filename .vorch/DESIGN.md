@@ -368,10 +368,14 @@ If we use inline SVGs without explicit `width` and `height`, they can suddenly r
 
 ### Status chips
 
-Three semantic colors, pill shape (12px border-radius), mono font 11.5px:
-- Green chip: `green-dim` bg + `green` text
-- Amber chip: amber tint bg + `amber` text
-- Orange/accent chip: `accent-dim` bg + `accent` text
+**Every status chip is the shared `StatusChip` component (`webui/src/components/ui/StatusChip.svelte`).** It is a pill (12px border-radius, mono 11.5px) carrying one semantic color; callers pass a `variant` and the already-translated label as `children`. The component emits the canonical `chip <variant>` classes — the color-named aliases (`chip-green`/`chip-amber`/`chip-orange`/`chip-red`) were collapsed into the semantic names, and the guard scan fails the build if a raw element reintroduces `chip` outside the component. Variants:
+- `success`: `green-dim` bg + `green` text
+- `warn`: amber tint bg + `amber` text
+- `info`: `accent-dim` bg + `accent` text
+- `error`: red tint bg + `red` text
+- `neutral`: `surface-3` bg + `text-med` text
+
+(The Logs connection chip and other scoped `*-chip` labels are distinct controls with their own classes, not this component.)
 
 ### Log viewer
 
