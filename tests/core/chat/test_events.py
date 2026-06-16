@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 from core.chat.events import (
     PARTIAL_THINKING_CAP,
+    StreamingAccumulator,
     _maybe_persist_partial_thinking,
     _partial_thinking_note_content,
 )
@@ -40,7 +42,7 @@ class TestMaybePersistPartialThinking:
         captured: list[str] = []
         accumulator = SimpleNamespace(partial_reasoning="y" * (PARTIAL_THINKING_CAP + 10))
 
-        _maybe_persist_partial_thinking(accumulator, captured.append)
+        _maybe_persist_partial_thinking(cast(StreamingAccumulator, accumulator), captured.append)
 
         assert len(captured) == 1
         assert captured[0].startswith(PARTIAL_THINKING_NOTE_PREFIX)
@@ -50,11 +52,11 @@ class TestMaybePersistPartialThinking:
         captured: list[str] = []
         accumulator = SimpleNamespace(partial_reasoning=None)
 
-        _maybe_persist_partial_thinking(accumulator, captured.append)
+        _maybe_persist_partial_thinking(cast(StreamingAccumulator, accumulator), captured.append)
 
         assert captured == []
 
     def test_no_hook_is_a_noop(self) -> None:
         accumulator = SimpleNamespace(partial_reasoning="something")
 
-        _maybe_persist_partial_thinking(accumulator, None)
+        _maybe_persist_partial_thinking(cast(StreamingAccumulator, accumulator), None)

@@ -493,7 +493,7 @@ async def test_ensure_watcher_attaches_crash_logging_done_callback(
         raise RuntimeError("awatch exploded")
 
     # Replace the watch loop so the created task fails with a real exception.
-    viewer._watch_file = explode  # type: ignore[method-assign]
+    viewer._watch_file = explode  # type: ignore[method-assign,assignment]
 
     caplog.set_level(logging.ERROR, logger="vbot.log_viewer")
     watcher = await viewer._ensure_watcher("2026-05-11")
