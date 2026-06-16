@@ -49,46 +49,6 @@ would warrant — i.e., the threshold behaves slightly differently mid-turn vs.
 end-of-turn. Not wrong, just inconsistent. Acceptable as long as the heuristic
 stays conservative-ish; worth revisiting only if mid-turn overflows show up.
 
-### 3. The summary is injected as a second consecutive `user` message
-
-When a checkpoint exists, `_build_request_messages` (`core/chat/chat.py`) emits
-the summary as a synthetic `role: "user"` message wrapped in `<system-reminder>`
-tags, placed immediately before the preserved tail. The tail itself always
-starts on a `user` message (boundary invariant). So the provider request
-contains **two `user` messages in a row** (summary, then the boundary turn).
-
-**Why to keep an eye on it:** some provider wire protocols (notably Anthropic's
-Messages API) historically expected strictly alternating user/assistant roles.
-Most adapters tolerate or merge consecutive same-role messages, and this codebase
-already injects notes/system-reminders as synthetic user messages elsewhere, so
-it's *probably* fine — but it has not been explicitly verified for the summary
-injection path against every adapter. If an adapter ever rejects consecutive
-user turns, this is where it would surface. Worth a one-time check against the
-Anthropic adapter rather than a fix.
-
----
-
-## 2026-06-08 — Memory/recall: review findings
-
-Found during a review of the `memory` tool (`core/memory/`, `core/tools/memory.py`)
-and `session_search` (`core/recall/`, `core/tools/session_search.py`). The items
-below were deliberately **not** done and are recorded here.
-
-### 1. `sqlite_fts` still diverges from JSONL in ordering & truncation (left on purpose)
-
-The substring fix made *what matches* agree between the two backends, but not
-*which/how many/what order*. JSONL collects matches grouped by session recency
-then in-file order, scanning until it has `limit` real hits
-(`message_search_result` in `core/recall/jsonl.py`). SQLite orders globally by
-message timestamp and fetches `limit + 1` candidates before re-validation
-(`_query_matches` / `_search_with_sqlite` in `core/recall/sqlite_fts.py`), so it
-can return fewer than `limit` and mislabel `truncated` when re-validation drops
-candidates, and its "top N" differs. The user explicitly does **not** require
-backend parity, so this is intentionally left. Also minor: the `trigram` tokenizer's
-case folding isn't identical to Python `.casefold()` for exotic cases (e.g. `ß`↔`ss`);
-since re-validation only *removes* candidates, this can cause rare false negatives
-in `sqlite_fts` that the JSONL scan would find. Acceptable.
-
 ---
 
 ### 1. Local embedding engines
@@ -226,13 +186,6 @@ are already flagged above under the Phase-3 entries and are not repeated here.)
    so Anthropic catalogs cannot be refreshed through the pipeline. Anthropic was
    deliberately skipped in the Phase-3 regeneration (no normalizer, no key). Building
    the normalizer is deferred.
-
-5. **`apply_overrides` in `core/models/discovery.py` is dead and should be removed.**
-   Refresh no longer bakes `<provider>.overrides.json` into `<provider>.json` — that
-   cross-file merge moved to LOAD (`assembly.py`). `apply_overrides` (and its private
-   `_validate_override_model_data`/`_overrides_path` helpers, if unused elsewhere) is
-   retained only for legacy callers/tests. Deferred because removing it is a
-   test-refactor, not a behavior change; do it when those tests are touched anyway.
 
 ## 2026-06-15 - Model DB live-test follow-ups (opencode-go minimax-m3)
 
