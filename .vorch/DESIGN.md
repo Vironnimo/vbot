@@ -336,9 +336,11 @@ Primary save buttons inside long editor panels stay enabled even when the form i
 
 ### Toggles
 
+**Every switch toggle is the shared `Toggle` component (`webui/src/components/ui/Toggle.svelte`).** It renders the `role="switch"` button + knob; callers pass `checked`, `onChange(next)`, `size`, `disabled`, and `ariaLabel`. The guard scan fails the build if a raw `<button class="toggle">`/`tl-toggle` appears outside the component. (The `voice-toggle` checkbox-slider in the Desktop Voice panel and the `stats-toggle` segmented control are distinct controls, not this switch.)
+
 Two sizes, same visual language:
-- **Large (38×22px):** Used in settings rows alongside label-value pairs.
-- **Small (30×17px):** Used in tool/skill toggle lists inside agent detail.
+- **Large (`size="lg"`, 38×22px):** Used in settings rows alongside label-value pairs.
+- **Small (`size="sm"`, 30×17px):** Used in tool/skill toggle lists inside agent detail.
 
 Both: `surface-3` off-state, full `accent` on-state. White knob. Smooth 0.2s `left` transition.
 

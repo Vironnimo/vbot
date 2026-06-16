@@ -3,6 +3,7 @@
 
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -203,18 +204,11 @@
     </div>
   </div>
   <div class="s-row-control">
-    <button
-      class="toggle"
-      class:on={compactionSettings.auto === true}
-      type="button"
-      role="switch"
-      aria-checked={compactionSettings.auto === true}
-      aria-label={t('settings.compaction.auto', 'Auto-compact')}
-      onclick={() =>
-        handleCompactionSettingChange('auto', compactionSettings.auto !== true)}
-    >
-      <span class="t-knob"></span>
-    </button>
+    <Toggle
+      checked={compactionSettings.auto === true}
+      ariaLabel={t('settings.compaction.auto', 'Auto-compact')}
+      onChange={(next) => handleCompactionSettingChange('auto', next)}
+    />
   </div>
 </div>
 
