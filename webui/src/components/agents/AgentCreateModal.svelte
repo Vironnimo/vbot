@@ -2,6 +2,7 @@
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import Modal from '../ui/Modal.svelte';
   import { rpc } from '$lib/api.js';
   import {
     AGENT_FORM_MODE_CREATE,
@@ -71,18 +72,6 @@
     }
   }
 
-  function handleDocumentKeydown(event) {
-    if (event.key === 'Escape') {
-      close();
-    }
-  }
-
-  function handleOverlayClick(event) {
-    if (event.target === event.currentTarget) {
-      close();
-    }
-  }
-
   function updateModelSelection(selectedValue) {
     const selection = parseModelSelectionValue(selectedValue);
     formValues.model = modelSelectionValue(
@@ -146,34 +135,14 @@
   }
 </script>
 
-<svelte:document onkeydown={handleDocumentKeydown} />
-
-<div
-  class="modal-overlay open"
-  role="presentation"
-  onclick={handleOverlayClick}
+<Modal
+  title={t('agents.create', 'Create agent')}
+  labelledById="agent-create-modal-title"
+  class="agents-view__create-modal"
+  closeDisabled={isSaving}
+  onClose={close}
 >
-  <div
-    class="modal agents-view__create-modal"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="agent-create-modal-title"
-  >
-    <div class="modal-header">
-      <h3 id="agent-create-modal-title" class="modal-title">
-        {t('agents.create', 'Create agent')}
-      </h3>
-      <button
-        type="button"
-        class="modal-close"
-        aria-label={t('common.close', 'Close')}
-        disabled={isSaving}
-        onclick={close}
-      >
-        ×
-      </button>
-    </div>
-
+  {#snippet body()}
     <form onsubmit={submit}>
       <div class="modal-body agents-view__create-modal-body">
         <label class="modal-field">
@@ -304,5 +273,5 @@
         </Button>
       </div>
     </form>
-  </div>
-</div>
+  {/snippet}
+</Modal>

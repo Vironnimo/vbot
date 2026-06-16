@@ -44,12 +44,18 @@ function classTokensInTag(openingTag) {
 }
 
 /**
- * Finds raw `<tagName ...>` elements (the lowercase HTML element, not a Svelte
+ * Finds raw HTML elements (lowercase tags — never a capitalized Svelte
  * component) whose class attribute or `class:` directive uses one of the
  * forbidden primitive classes, anywhere except the primitive's own component.
+ * `tagPattern` is a regex fragment: a literal tag name (e.g. `button`) or a
+ * wildcard (`[a-z][\\w-]*`) to scan every element.
  */
-function findRawClassViolations(tagName, forbiddenClasses, ownerRelativePath) {
-  const openingTagPattern = new RegExp(`<${tagName}\\b[^>]*>`, 'g');
+function findRawClassViolations(
+  tagPattern,
+  forbiddenClasses,
+  ownerRelativePath,
+) {
+  const openingTagPattern = new RegExp(`<(?:${tagPattern})\\b[^>]*>`, 'g');
   const violations = [];
 
   for (const filePath of SVELTE_FILES) {
@@ -62,7 +68,9 @@ function findRawClassViolations(tagName, forbiddenClasses, ownerRelativePath) {
     for (const tagMatch of source.matchAll(openingTagPattern)) {
       for (const token of classTokensInTag(tagMatch[0])) {
         if (forbiddenClasses.has(token)) {
-          violations.push(`${relativePath}: <${tagName} class="…${token}…">`);
+          violations.push(
+            `${relativePath}: <${tagMatch[0].slice(1).match(/^[\w-]+/)?.[0]} class="…${token}…">`,
+          );
         }
       }
     }
@@ -70,6 +78,8 @@ function findRawClassViolations(tagName, forbiddenClasses, ownerRelativePath) {
 
   return violations;
 }
+
+const ANY_ELEMENT = '[a-z][\\w-]*';
 
 describe('UI primitive guard', () => {
   it('routes every button through components/ui/Button.svelte', () => {
@@ -96,6 +106,25 @@ describe('UI primitive guard', () => {
       'button',
       forbidden,
       'components/ui/Button.svelte',
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it('routes every modal through components/ui/Modal.svelte', () => {
+    // The shell owns the overlay, header, title, and close button; callers only
+    // supply body/footer content (modal-body/modal-footer stay caller-side).
+    const forbidden = new Set([
+      'modal-overlay',
+      'modal-header',
+      'modal-title',
+      'modal-close',
+    ]);
+
+    const violations = findRawClassViolations(
+      ANY_ELEMENT,
+      forbidden,
+      'components/ui/Modal.svelte',
     );
 
     expect(violations).toEqual([]);

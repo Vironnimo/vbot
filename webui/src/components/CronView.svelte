@@ -3,6 +3,7 @@
 
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
+  import Modal from './ui/Modal.svelte';
   import {
     createCronJob,
     deleteCronJob,
@@ -163,18 +164,6 @@
 
     isModalOpen = false;
     formErrorMessage = '';
-  }
-
-  function handleDocumentKeydown(event) {
-    if (event.key === 'Escape' && isModalOpen && !submittingForm) {
-      closeModal();
-    }
-  }
-
-  function handleOverlayClick(event) {
-    if (event.target === event.currentTarget) {
-      closeModal();
-    }
   }
 
   function setScheduleType(scheduleType) {
@@ -359,8 +348,6 @@
   }
 </script>
 
-<svelte:document onkeydown={handleDocumentKeydown} />
-
 <section class="cron-view view active" aria-labelledby="cron-title">
   <header class="cron-view__header">
     <div>
@@ -519,29 +506,13 @@
   {/if}
 
   {#if isModalOpen}
-    <div
-      class="modal-overlay open"
-      role="presentation"
-      onclick={handleOverlayClick}
+    <Modal
+      title={modalTitle}
+      labelledById="cron-modal-title"
+      class="cron-view__modal"
+      onClose={closeModal}
     >
-      <div
-        class="modal cron-view__modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="cron-modal-title"
-      >
-        <div class="modal-header">
-          <h3 id="cron-modal-title" class="modal-title">{modalTitle}</h3>
-          <button
-            type="button"
-            class="modal-close"
-            aria-label={t('common.close', 'Close')}
-            onclick={closeModal}
-          >
-            ×
-          </button>
-        </div>
-
+      {#snippet body()}
         <form onsubmit={submitForm}>
           <div class="modal-body">
             <label class="modal-field">
@@ -708,8 +679,8 @@
             </Button>
           </div>
         </form>
-      </div>
-    </div>
+      {/snippet}
+    </Modal>
   {/if}
 </section>
 
@@ -900,7 +871,7 @@
     font-size: 11.5px;
   }
 
-  .cron-view__modal {
+  :global(.cron-view__modal) {
     width: 560px;
     max-width: calc(100vw - 40px);
   }

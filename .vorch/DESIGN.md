@@ -348,6 +348,10 @@ Two types:
 - **Simple** — Absolute-positioned list below trigger. Uses `surface-2` + `border-2`.
 - **Searchable** — Fixed-positioned panel (escapes any `overflow: hidden` ancestor). Has a filter input header with a search icon. Panel border uses accent tint `rgba(accent, 0.3)` to signal "elevated and interactive".
 
+### Modals
+
+**Every modal is the shared `Modal` component (`webui/src/components/ui/Modal.svelte`).** The shell owns the dialog chrome: the dimmed `modal-overlay` (blur + dark scrim), overlay-click-to-close, Escape-to-close, `role="dialog"` / `aria-modal`, the `modal-header` with `modal-title` + the `modal-close` (×) button, and moving keyboard focus into the dialog on open. Callers pass `title`, `labelledById`, `onClose`, an optional `closeDisabled` (blocks all close paths and disables ×), an optional `class` on the box, and supply a `body` snippet (their own `modal-body` content) plus an optional `footer` snippet (the shell wraps it in `modal-footer`). Forms that span body + footer keep their `<form>` inside the `body` snippet; footer submit buttons associate by `form="…"` id. The guard scan fails the build if a raw element reintroduces `modal-overlay`/`modal-header`/`modal-title`/`modal-close` outside the shell.
+
 ### Modal pick lists
 
 Choice steps inside modals (e.g. provider/connection selection in the provider
