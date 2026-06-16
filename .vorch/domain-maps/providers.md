@@ -29,6 +29,41 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - `ProviderAdapter.reasoning_replay_policy(model_id) -> ReasoningReplayPolicy` (`none` / `current_run` / `full_history`, defined in `core/providers/reasoning.py` and exported from `core.providers`) declares how persisted assistant `reasoning`/`reasoning_meta` replays into request history. The ABC default is `current_run` (the historical behavior); the chat layer queries the hook per request build and owns the resulting history shaping, including the same-model gate for `full_history` (semantics in `chat.md` → Conventions). The policy is adapter-coded only — no catalog field, no provider-JSON field, no agent setting. `model_id` is part of the contract because one adapter can route models to different wires.
 - `core/providers/task_client.py` — `ProviderTaskClient`, the shared base for the task-model HTTP clients in `core/model_tasks/` (`ProviderSpeechClient`, `ProviderImageClient`, `ProviderEmbeddingClient` — see `model_tasks.md` and its child maps). Owns the bound `(provider, connection, credential, model_id)` constructor, the `from_runtime(runtime, target_ref)` factory (structural `TaskClientRuntime`/`TaskTargetRef` protocols defined locally — the module must not import `core.runtime` or `core.model_tasks`, import-cycle risk), auth-header assembly, and `post_and_parse(endpoint, *, timeout, parse, json=None, data=None, files=None)`. The `parse` callback runs **inside** `retry_async`, so retryable `ProviderError`s raised during response parsing are retried like transient HTTP errors. `classify_task_response(response)` is the shared status classifier that appends the error body as detail. Task clients deliberately use a plain `httpx.AsyncClient` — no debug capture, unlike chat adapters.
 
+## Provider Usage Probe
+
+`core/providers/usage.py` — `ProviderUsageService`, an on-demand probe of each
+logged-in connection's *own* subscription usage (rolling-window percent used,
+reset time, plan). This is **live provider state**, deliberately separate from
+`core/statistics/` (a read-only Session aggregation that never hits the network);
+the only coupling is the WebUI Limits subtab that surfaces it (see `statistics.md`,
+`webui.md`). Exposed via RPC `provider.usage` (`server.md`), never through chat.
+
+- **Common shape** (`to_dict()`-able frozen dataclasses): `UsageWindow{label,
+  used_percent, reset_at}`, `ProviderUsageSnapshot{connection, display_name, plan,
+  windows, error}`, `UsageReport{generated_at, providers}`. `used_percent` is clamped
+  0–100; `reset_at` is ISO-8601 UTC or `null`.
+- **DI, no import cycle.** Constructed from a local `UsageProbeRuntime` protocol
+  (`providers`, `provider_credentials`, `get_connection_token_getter`,
+  `get_connection_token_extra`) — like `task_client.py` it must not import
+  `core.runtime`. The HTTP GET is an injectable `UsageTransport` (httpx by default) so
+  tests never hit the network. Not exported from `core.providers.__init__` (import
+  directly), mirroring `task_client.py`.
+- **Fan-out / fail-open.** `report(connections=None)` queries only connections with a
+  registered fetcher AND usable credentials/login; fetchers run concurrently with a
+  per-fetcher timeout; one failure (timeout → `Timeout`, HTTP error → `HTTP <code>`,
+  shape mismatch → `Unsupported response shape`, anything else → `Unavailable`) becomes
+  that snapshot's `error` and never breaks siblings; snapshots with neither a window nor
+  an error are dropped. A 60s in-memory TTL cache per connection avoids hammering on tab
+  toggles.
+- **Token safety.** Never caches raw OAuth tokens and logs no token data — it pulls a
+  fresh token per fetch via the runtime token getter (`get_connection_token_getter`),
+  and reads token-store `extra` via `get_connection_token_extra` (Copilot's
+  `github_oauth_token`, OpenAI's mirrored `chatgpt_account_id`).
+- **Supported connections.** `openai:subscription` (live-verified 2026-06-16),
+  `github-copilot:oauth` and `minimax:api-key` (blind from openclaw field names,
+  degrade to an `error` snapshot on shape mismatch). Per-endpoint facts live in
+  `providers/openai.md`, `providers/github-copilot.md`, `providers/minimax.md`.
+
 ## Specific Specs
 
 - `providers/openai.md` - Direct OpenAI Platform access and ChatGPT subscription access as one provider with two connections (`api-key`, `subscription`); single `OpenAIAdapter` branches on connection `mode`.

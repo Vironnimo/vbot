@@ -48,6 +48,22 @@ Endpoint selection uses sanitized model metadata first:
 - Normalized `Model.capabilities` includes chat-oriented modality/task defaults plus Copilot-advertised vision/tools/structured-output/reasoning facts.
 - Only sanitized runtime metadata is stored under `metadata.github_copilot`; raw provider data, policy terms, picker flags, and credentials are not stored.
 
+## Usage Probe (`copilot_internal/user`)
+
+The Copilot usage fetcher in `core/providers/usage.py` (see `providers.md` → Provider
+Usage Probe). **Blind, best-effort** — implemented from openclaw's verified field names,
+not yet live-verified (no Copilot login in this environment):
+
+- `GET https://api.github.com/copilot_internal/user` — GitHub's host, NOT the Copilot
+  API host. Authenticates with `Authorization: token <github_oauth_token>` (the GitHub
+  OAuth token from token-store `extra.github_oauth_token`, **not** the exchanged Copilot
+  bearer), plus `Accept: application/json`, `Copilot-Integration-Id`, `Editor-Version`.
+  Missing `github_oauth_token` → snapshot error "Reconnect required".
+- Expected body: `quota_snapshots.{premium_interactions,chat}.percent_remaining`
+  (→ window `used = 100 - percent_remaining`, labels `Premium` / `Chat`),
+  `copilot_plan` → plan, `quota_reset_date` → each window's reset. Missing/unknown
+  snapshots yield empty windows (dropped), never a crash.
+
 ## Constraints & Gotchas
 
 - Exact-model quirks belong in `core/providers/github_copilot_policy.py`, not hand-edited `resources/models/github-copilot.json`.

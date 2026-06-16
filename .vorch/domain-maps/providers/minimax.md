@@ -36,6 +36,25 @@ MiniMax is wired as an OpenAI-compatible chat-completions provider with provider
 - Non-streaming responses with `reasoning_details` expose their text as visible `reasoning` while preserving the original details in `reasoning_meta`.
 - Reasoning replay policy: `full_history`. MiniMax's own guidance is the strongest of any provider reviewed — preserving the reasoning trace across multi-turn interactions is "essential" and discarding it measurably degrades quality (their published SWE-Bench/Tau²/GAIA deltas). With `reasoning_split: true` defaulted, the generic request builder round-trips `reasoning_meta.reasoning_details` onto same-model assistant history; the chat layer's same-model gate strips cross-model entries. **Not yet probed against the live MiniMax API** (no credentials in this environment) — behavior is pinned by unit tests; live verification is deferred in `.vorch/FLAGGED.md` (2026-06-13).
 
+## Usage Probe (`token_plan/remains`)
+
+The MiniMax usage fetcher in `core/providers/usage.py` (see `providers.md` → Provider
+Usage Probe). **Blind, best-effort** — implemented from openclaw's verified field names,
+not yet live-verified (no credentials in this environment):
+
+- `GET <connection.base_url>/token_plan/remains` (base_url `https://api.minimaxi.com/v1`),
+  `Authorization: Bearer <api key>`.
+- Expected body: `model_remains[]`. The fetcher picks the chat-model entry whose
+  `model_name` starts `minimax-m` (case-insensitive) with a non-zero total, derives
+  `used_percent = (total - remaining) / total` (counts read from candidate keys —
+  `current_interval_total_count` / `current_interval_remain_count` and fallbacks),
+  window label from `current_interval_minutes` (else the model name), and `reset_at`
+  from `current_interval_end` / similar.
+- A body that is not a usable `model_remains` list (or no qualifying chat model) →
+  snapshot error "Unsupported response shape", never a crash.
+- **Caveat:** MiniMax misnames "usage" vs "remaining"; the remaining-count key is an
+  assumption pinned only by unit tests until live-verified — flagged in `.vorch/FLAGGED.md`.
+
 ## Constraints & Gotchas
 
 - The provider uses MiniMax's OpenAI-compatible protocol, not vBot's Anthropic adapter, even though MiniMax also exposes an Anthropic-compatible endpoint.
