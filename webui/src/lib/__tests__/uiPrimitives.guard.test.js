@@ -129,4 +129,18 @@ describe('UI primitive guard', () => {
 
     expect(violations).toEqual([]);
   });
+
+  it('routes every switch toggle through components/ui/Toggle.svelte', () => {
+    // The two switch sizes; other "toggle"-named controls (stats-toggle,
+    // voice-toggle, chat-sessions-toggle) are distinct tokens and unaffected.
+    const forbidden = new Set(['toggle', 'tl-toggle']);
+
+    const violations = findRawClassViolations(
+      'button',
+      forbidden,
+      'components/ui/Toggle.svelte',
+    );
+
+    expect(violations).toEqual([]);
+  });
 });
