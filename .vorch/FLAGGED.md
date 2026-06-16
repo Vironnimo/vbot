@@ -130,15 +130,6 @@ A Linux-readiness audit found the process layer already platform-branched (POSIX
   Python and a `sqlite3` built with extension loading. Verify on first Pi deploy (64-bit
   Raspberry Pi OS required) before enabling `recall.backend: vector`.
 
-## 2026-06-11 — agent.json is validated twice (settings validators + AgentStore's own family)
-
-`core/settings/validation.py` (`validate_agent_data`) and `core/agents/agents.py` (`_validate_string_field`,
-`_validate_temperature`, `_validate_thinking_effort`, `_validate_memory_prompt_mode`, …) both encode the
-agent.json field rules — two validators for one format, found during the deep-modules audit (A2 symptom).
-Consolidating means deciding which side owns the schema (settings as central authority vs. the agent domain)
-and rewiring AgentStore create/update paths plus their tests. Deferred: behavior-relevant refactor beyond
-the audit's settings-consolidation scope.
-
 ## 2026-06-12 — Channel observed-note writes can race with non-channel Runs
 
 `ChannelConversationEngine` serializes `observe_unaddressed` note writes through its
