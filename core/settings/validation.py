@@ -122,7 +122,7 @@ REQUIRED_CRON_JOB_FIELDS = frozenset(
     {"agent_id", "created_at", "id", "prompt", "schedule_type", "status"}
 )
 ALLOWED_CRON_SCHEDULE_TYPES = frozenset({"cron", "once"})
-ALLOWED_CRON_STATUSES = frozenset({"active", "paused", "completed"})
+ALLOWED_CRON_STATUSES = frozenset({"active", "paused", "completed", "failed"})
 
 CHANNEL_FIELDS = frozenset(
     {

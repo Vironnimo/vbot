@@ -23,8 +23,16 @@ export function describeCronExpression(expression) {
 export const CRON_STATUS_ACTIVE = 'active';
 export const CRON_STATUS_PAUSED = 'paused';
 export const CRON_STATUS_COMPLETED = 'completed';
+export const CRON_STATUS_FAILED = 'failed';
 
-const VISIBLE_JOB_STATUSES = new Set([CRON_STATUS_ACTIVE, CRON_STATUS_PAUSED]);
+// A successfully fired once job (`completed`) drops off the list, but a job
+// that gave up after repeated failures (`failed`) stays visible so the user
+// sees that it never ran instead of it silently disappearing.
+const VISIBLE_JOB_STATUSES = new Set([
+  CRON_STATUS_ACTIVE,
+  CRON_STATUS_PAUSED,
+  CRON_STATUS_FAILED,
+]);
 
 export function createCronViewState() {
   return {
@@ -240,7 +248,11 @@ function normalizeScheduleType(value) {
 }
 
 function normalizeStatus(value) {
-  if (value === CRON_STATUS_PAUSED || value === CRON_STATUS_COMPLETED) {
+  if (
+    value === CRON_STATUS_PAUSED ||
+    value === CRON_STATUS_COMPLETED ||
+    value === CRON_STATUS_FAILED
+  ) {
     return value;
   }
 

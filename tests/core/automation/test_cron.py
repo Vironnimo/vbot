@@ -307,9 +307,28 @@ async def test_run_once_job_abandons_after_attempt_limit_with_backoff(
     ]
     assert backoff_delays == expected_backoff
     updated = service.get_job(job.id)
-    assert updated.status == "completed"
+    assert updated.status == "failed"
     assert updated.last_fired_at is None
     assert not service._once_fire_claim_path(job.id).exists()
+
+
+def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
+    # Arrange: a once job abandoned as failed (distinct from a completed fire).
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+    )
+    service._abandon_once_job(job.id, cron_module._ONCE_MAX_FIRE_ATTEMPTS)
+    assert service.get_job(job.id).status == "failed"
+
+    # Act: unlike a completed job, a failed job can be re-enabled to retry.
+    re_enabled = service.enable_job(job.id)
+
+    # Assert
+    assert re_enabled.status == "active"
 
 
 @pytest.mark.asyncio
