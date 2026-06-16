@@ -504,8 +504,12 @@ svg {
   background: transparent;
 }
 
+/* Canonical text-field classes. The TextField component
+   (`components/ui/TextField.svelte`) emits `s-input` (default) / `modal-input`
+   (modal contrast) for editable fields and `s-value-box` for the read-only
+   presentation; the dead bare `.input` alias was dropped. The `.agents-view
+   input/textarea` tag selectors stay as a safety net for non-primitive fields. */
 .s-input,
-.input,
 .modal-input,
 .agents-view input,
 .agents-view textarea {
@@ -523,12 +527,17 @@ svg {
 }
 
 .s-input:focus,
-.input:focus,
 .modal-input:focus,
 .agents-view input:focus,
 .agents-view textarea:focus {
   border-color: rgba(232, 135, 10, 0.4);
   box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+}
+
+/* Invalid field: red border wins over the focus glow, matching the previous
+   agents-view__invalid treatment. */
+.s-input--invalid {
+  border-color: var(--red) !important;
 }
 
 .modal-input {

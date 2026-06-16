@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
   import Button from '../ui/Button.svelte';
   import Modal from '../ui/Modal.svelte';
+  import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -350,15 +351,13 @@
     <span class="modal-label">
       {t('settings.providers.accounts.nameLabel', 'Account')}
     </span>
-    <input
-      class="s-input"
-      type="text"
+    <TextField
       autocomplete="off"
       placeholder={DEFAULT_ACCOUNT_ID}
       value={accountValue}
       disabled={fieldDisabled || accountFixed}
-      oninput={(event) => {
-        accountValue = event.currentTarget.value;
+      onInput={(next) => {
+        accountValue = next;
         errorMessage = '';
       }}
     />
@@ -466,8 +465,7 @@
             <span class="modal-label">
               {t('settings.providers.add.apiKeyLabel', 'API key')}
             </span>
-            <input
-              class="s-input"
+            <TextField
               type="password"
               autocomplete="off"
               placeholder={t(
@@ -476,8 +474,8 @@
               )}
               value={apiKeyValue}
               disabled={saving}
-              oninput={(event) => {
-                apiKeyValue = event.currentTarget.value;
+              onInput={(next) => {
+                apiKeyValue = next;
                 errorMessage = '';
               }}
             />

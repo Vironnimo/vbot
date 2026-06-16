@@ -163,4 +163,22 @@ describe('UI primitive guard', () => {
 
     expect(violations).toEqual([]);
   });
+
+  it('routes every text field through components/ui/TextField.svelte', () => {
+    // Editable inputs: scoped to <input> so textareas (which legitimately reuse
+    // s-input for styling) are unaffected. The read-only value-box may live on
+    // any element, so it is scanned everywhere.
+    const inputViolations = findRawClassViolations(
+      'input',
+      new Set(['s-input', 'modal-input']),
+      'components/ui/TextField.svelte',
+    );
+    const valueBoxViolations = findRawClassViolations(
+      ANY_ELEMENT,
+      new Set(['s-value-box']),
+      'components/ui/TextField.svelte',
+    );
+
+    expect([...inputViolations, ...valueBoxViolations]).toEqual([]);
+  });
 });

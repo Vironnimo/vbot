@@ -326,11 +326,13 @@ Primary save buttons inside long editor panels stay enabled even when the form i
 
 ### Inputs
 
-**Default input (`s-input`)** — Mono font at 12.5px, `surface-2` background, `border-2` border, 6px radius. Focus: accent border + glow ring.
+**Every text field is the shared `TextField` component (`webui/src/components/ui/TextField.svelte`).** It uses the callback-prop pattern (`value` in, `onInput(next, event)` out — never `bind:`) and takes `type`, `variant`, `readonly`, `invalid`, `disabled`, `inputmode`, `placeholder`, `ariaLabel`. The guard scan fails the build if a raw `<input class="s-input">`/`modal-input` or a raw `s-value-box` appears outside the component. (Multi-line textareas — the chat composer, cron prompt, JSON option editors — are a separate concern and keep their own `<textarea>` markup.)
 
-**Modal input** — Same as default but uses the deepest `bg` as background for contrast against the `surface` modal backdrop.
+**Default input (`variant="default"` → `s-input`)** — Mono font at 12.5px, `surface-2` background, `border-2` border, 6px radius. Focus: accent border + glow ring. `invalid` adds a red border (`s-input--invalid`) that wins over the focus glow.
 
-**Read-only value (`s-value-box`)** — Same geometry and mono type as the default input, but visually non-interactive: structural `border` (not `border-2`), transparent background, `text-med` color. Read-only facts (server host, data directory, default skill directory) must never wear the editable input chrome.
+**Modal input (`variant="modal"` → `modal-input`)** — Same as default but uses the deepest `bg` as background for contrast against the `surface` modal backdrop.
+
+**Read-only value (`readonly` → `s-value-box`)** — Renders a non-interactive `<div>` with the same geometry and mono type as the default input but a structural `border` (not `border-2`), transparent background, and `text-med` color. Read-only facts (server host, data directory, default skill directory) must never wear the editable input chrome.
 
 **Chat composer** — A `bg`-filled rounded rectangle (10px radius) with `border-2` border. Contains an auto-resizing textarea (max 182px, hidden scrollbar) and action buttons flush to the bottom-right. Focus applies the accent border + glow.
 
