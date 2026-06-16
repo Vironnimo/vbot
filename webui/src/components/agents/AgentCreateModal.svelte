@@ -3,6 +3,7 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
   import Modal from '../ui/Modal.svelte';
+  import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import {
     AGENT_FORM_MODE_CREATE,
@@ -147,14 +148,12 @@
       <div class="modal-body agents-view__create-modal-body">
         <label class="modal-field">
           <span class="modal-label">{t('agents.form.id', 'Agent ID')}</span>
-          <input
-            class:agents-view__invalid={formErrors.id}
-            class="s-input"
-            type="text"
+          <TextField
+            invalid={Boolean(formErrors.id)}
             value={formValues.id}
             disabled={isSaving}
-            oninput={(event) => {
-              formValues.id = event.currentTarget.value;
+            onInput={(next) => {
+              formValues.id = next;
               formErrors.id = '';
               errorMessage = '';
             }}
@@ -168,14 +167,12 @@
 
         <label class="modal-field">
           <span class="modal-label">{t('agents.form.name', 'Name')}</span>
-          <input
-            class:agents-view__invalid={formErrors.name}
-            class="s-input"
-            type="text"
+          <TextField
+            invalid={Boolean(formErrors.name)}
             value={formValues.name}
             disabled={isSaving}
-            oninput={(event) => {
-              formValues.name = event.currentTarget.value;
+            onInput={(next) => {
+              formValues.name = next;
               formErrors.name = '';
               errorMessage = '';
             }}
@@ -232,15 +229,13 @@
           <span class="modal-label">
             {t('agents.form.temperature', 'Temperature')}
           </span>
-          <input
-            class:agents-view__invalid={formErrors.temperature}
-            class="s-input"
-            type="text"
+          <TextField
             inputmode="decimal"
+            invalid={Boolean(formErrors.temperature)}
             value={formValues.temperature}
             disabled={isSaving}
-            oninput={(event) => {
-              formValues.temperature = event.currentTarget.value;
+            onInput={(next) => {
+              formValues.temperature = next;
               formErrors.temperature = '';
               errorMessage = '';
             }}

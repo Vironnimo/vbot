@@ -1,6 +1,7 @@
 <script>
   import { onDestroy } from 'svelte';
   import Dropdown from './Dropdown.svelte';
+  import TextField from './ui/TextField.svelte';
   import { t } from '$lib/i18n.js';
   import {
     getWakewordStatus,
@@ -321,7 +322,7 @@
         </div>
       </div>
       <div class="s-row-control s-row-control--input">
-        <div class="s-value-box">{voiceState.engine}</div>
+        <TextField readonly value={voiceState.engine} />
       </div>
     </div>
 
@@ -333,7 +334,7 @@
         </div>
       </div>
       <div class="s-row-control s-row-control--input">
-        <div class="s-value-box">{microphoneLabel()}</div>
+        <TextField readonly value={microphoneLabel()} />
       </div>
     </div>
 
@@ -345,7 +346,7 @@
         </div>
       </div>
       <div class="s-row-control s-row-control--input">
-        <div class="s-value-box">{voiceState.wake_phrase}</div>
+        <TextField readonly value={voiceState.wake_phrase} />
       </div>
     </div>
 

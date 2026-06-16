@@ -5,6 +5,7 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
+  import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
   import {
@@ -629,11 +630,10 @@
       <div class="detail-fields">
         <label class="f">
           <span class="f-label">{t('agents.form.id', 'Agent ID')}</span>
-          <input
-            class:agents-view__invalid={formErrors.id}
-            class="s-input"
-            type="text"
-            bind:value={formValues.id}
+          <TextField
+            invalid={Boolean(formErrors.id)}
+            value={formValues.id}
+            onInput={(next) => (formValues.id = next)}
             disabled={formMode === AGENT_FORM_MODE_EDIT}
             aria-describedby="agent-id-help agent-id-error"
           />
@@ -649,11 +649,10 @@
 
         <label class="f">
           <span class="f-label">{t('agents.form.name', 'Name')}</span>
-          <input
-            class:agents-view__invalid={formErrors.name}
-            class="s-input"
-            type="text"
-            bind:value={formValues.name}
+          <TextField
+            invalid={Boolean(formErrors.name)}
+            value={formValues.name}
+            onInput={(next) => (formValues.name = next)}
           />
           {#if formErrors.name}
             <small class="agents-view__field-error">
@@ -666,12 +665,12 @@
           <span class="f-label">
             {t('agents.form.workspace', 'Workspace')}
           </span>
-          <input
+          <TextField
             id="agent-workspace"
-            class:agents-view__invalid={formErrors.workspace}
-            class="s-input mono"
-            type="text"
-            bind:value={formValues.workspace}
+            class="mono"
+            invalid={Boolean(formErrors.workspace)}
+            value={formValues.workspace}
+            onInput={(next) => (formValues.workspace = next)}
             disabled={formMode === AGENT_FORM_MODE_CREATE}
             aria-describedby="agent-workspace-help agent-workspace-error"
           />
@@ -778,12 +777,11 @@
           <span class="f-label">
             {t('agents.form.temperature', 'Temperature')}
           </span>
-          <input
-            class:agents-view__invalid={formErrors.temperature}
-            class="s-input"
-            type="text"
+          <TextField
             inputmode="decimal"
-            bind:value={formValues.temperature}
+            invalid={Boolean(formErrors.temperature)}
+            value={formValues.temperature}
+            onInput={(next) => (formValues.temperature = next)}
           />
           {#if formErrors.temperature}
             <small class="agents-view__field-error">

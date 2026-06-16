@@ -3,6 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
   import {
     getTaskModelOptions,
     listTaskModelTargets,
@@ -461,15 +462,14 @@
                   </span>
                 {/if}
               {:else if field.type === 'number'}
-                <input
-                  class="s-input"
+                <TextField
                   type="number"
                   min={field.min ?? undefined}
                   max={field.max ?? undefined}
                   step={field.step ?? 'any'}
                   value={taskModelOptionValue(row.taskType, field)}
                   disabled={taskModelSaving}
-                  oninput={(event) =>
+                  onInput={(_next, event) =>
                     handleTaskModelOptionChange(row.taskType, field, event)}
                 />
               {:else if field.type === 'boolean'}
@@ -482,12 +482,10 @@
                     handleTaskModelOptionChange(row.taskType, field, event)}
                 />
               {:else}
-                <input
-                  class="s-input"
-                  type="text"
+                <TextField
                   value={taskModelOptionValue(row.taskType, field)}
                   disabled={taskModelSaving}
-                  oninput={(event) =>
+                  onInput={(_next, event) =>
                     handleTaskModelOptionChange(row.taskType, field, event)}
                 />
               {/if}

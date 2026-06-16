@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
+  import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -338,15 +339,12 @@
         <span class="s-field-label">
           {t('sessions.link_channel_id', 'Channel ID')}
         </span>
-        <input
+        <TextField
           id="channel-id-input"
-          class="s-input"
-          type="text"
           value={channelFormValues.id}
           required
           disabled={channelBusy || channelFormMode === CHANNEL_FORM_MODE_EDIT}
-          oninput={(event) =>
-            setChannelFormField('id', event.currentTarget.value)}
+          onInput={(next) => setChannelFormField('id', next)}
         />
       </label>
 
@@ -405,15 +403,12 @@
         <span class="s-field-label">
           {t('settings.channels.token_env_var', 'Token env var')}
         </span>
-        <input
+        <TextField
           id="channel-token-env-input"
-          class="s-input"
-          type="text"
           value={channelFormValues.token_env_var}
           required
           disabled={channelBusy}
-          oninput={(event) =>
-            setChannelFormField('token_env_var', event.currentTarget.value)}
+          onInput={(next) => setChannelFormField('token_env_var', next)}
         />
       </label>
 
@@ -421,18 +416,15 @@
         <span class="s-field-label">
           {t('settings.channels.allowed_chat_ids', 'Allowed chat IDs')}
         </span>
-        <input
+        <TextField
           id="channel-allowed-chat-ids-input"
-          class="s-input"
-          type="text"
           value={channelFormValues.allowed_chat_ids}
           disabled={channelBusy}
           placeholder={t(
             'settings.channels.allowed_chat_ids.placeholder',
             '12345, -1009876543210',
           )}
-          oninput={(event) =>
-            setChannelFormField('allowed_chat_ids', event.currentTarget.value)}
+          onInput={(next) => setChannelFormField('allowed_chat_ids', next)}
         />
       </label>
     </div>

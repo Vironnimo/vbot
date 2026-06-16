@@ -1,4 +1,5 @@
 <script>
+  import TextField from '../ui/TextField.svelte';
   import { t } from '$lib/i18n.js';
   import {
     formatServerHost,
@@ -26,7 +27,7 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--input">
-    <div class="s-value-box">{serverHostValue}</div>
+    <TextField readonly value={serverHostValue} />
   </div>
 </div>
 <div class="s-row">
@@ -42,6 +43,6 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--input">
-    <div class="s-value-box">{dataDirectoryValue}</div>
+    <TextField readonly value={dataDirectoryValue} />
   </div>
 </div>

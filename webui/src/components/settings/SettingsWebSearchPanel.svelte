@@ -3,6 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -178,14 +179,13 @@
       </div>
     </div>
     <div class="s-row-control s-row-control--web-search-url">
-      <input
+      <TextField
         id="settings-web-search-searxng-base-url"
-        class="s-input"
         type="url"
         value={webSearchSettings.searxng.base_url}
         placeholder="http://localhost:8888"
-        aria-label={t('settings.webSearch.searxngBaseUrl', 'SearXNG base URL')}
-        oninput={handleWebSearchSearxngBaseUrlChange}
+        ariaLabel={t('settings.webSearch.searxngBaseUrl', 'SearXNG base URL')}
+        onInput={(_next, event) => handleWebSearchSearxngBaseUrlChange(event)}
       />
     </div>
   </div>
