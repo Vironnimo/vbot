@@ -69,7 +69,7 @@ Key question: "Did I expect this could happen?" Yes → handle. No → rethrow.
 - Handle as close to origin as possible
 - Error messages must be meaningful — "something went wrong" is useless
 
-**Retry transient errors** (network, HTTP 429, 502/503): max 3 retries, exponential backoff with jitter. Do NOT retry: 4xx (except 429), auth failures, validation errors.
+**Retry transient errors**: network failures and HTTP 429/502/503/504 always; HTTP 500 only for idempotent (safely repeatable) requests — never on action-causing POSTs. Max 3 retries, exponential backoff with jitter. Do NOT retry: other 4xx, auth failures, validation errors.
 
 For project-specific error patterns, log format, and logging setup → `.vorch/PROJECT.md` (Conventions section).
 
