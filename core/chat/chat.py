@@ -26,6 +26,28 @@ from core.chat.events import (
     _exception_to_error_kind as _exception_to_error_kind,
 )
 from core.chat.messages import (
+    COMPACTION_TAIL_RECOVERED_HINT,
+    SYSTEM_REMINDER_CLOSE_TAG,
+    SYSTEM_REMINDER_OPEN_TAG,
+    ChatMessage,
+    JsonObject,
+    _append_input_origin_note,
+    _apply_usage_estimation,
+    _assistant_continuation_dict,
+    _assistant_message_from_response,
+    _display_content_preview,
+    _embed_notes_into_request,
+    _last_user_message,
+    _last_user_message_with_content_blocks,
+    _latest_compaction_checkpoint,
+    _message_to_request_dict,
+    _notes_to_synthetic_user_message,
+    _resolve_preserved_tail,
+    _restore_in_run_assistant_reasoning,
+    _session_has_any_content_blocks,
+    _strip_assistant_reasoning_fields,
+)
+from core.chat.messages import (
     ERROR_KIND_AUTH as ERROR_KIND_AUTH,
 )
 from core.chat.messages import (
@@ -54,27 +76,6 @@ from core.chat.messages import (
 )
 from core.chat.messages import (
     INPUT_ORIGIN_SPEECH_TRANSCRIPTION as INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
-)
-from core.chat.messages import (
-    SYSTEM_REMINDER_CLOSE_TAG,
-    SYSTEM_REMINDER_OPEN_TAG,
-    ChatMessage,
-    JsonObject,
-    _append_input_origin_note,
-    _apply_usage_estimation,
-    _assistant_continuation_dict,
-    _assistant_message_from_response,
-    _display_content_preview,
-    _embed_notes_into_request,
-    _last_user_message,
-    _last_user_message_with_content_blocks,
-    _latest_compaction_checkpoint,
-    _message_to_request_dict,
-    _messages_from_boundary,
-    _notes_to_synthetic_user_message,
-    _restore_in_run_assistant_reasoning,
-    _session_has_any_content_blocks,
-    _strip_assistant_reasoning_fields,
 )
 from core.chat.messages import (
     InputOrigin as InputOrigin,
@@ -658,18 +659,21 @@ class ChatLoop:
                 *history,
             ]
         else:
-            if checkpoint.tail_boundary_id is None:
-                raise ChatError("compaction checkpoint is missing tail boundary")
-
-            tail_messages = [
-                message
-                for message in _messages_from_boundary(
-                    session_messages,
+            tail_messages, tail_recovered = _resolve_preserved_tail(session_messages, checkpoint)
+            if tail_recovered:
+                _LOGGER.warning(
+                    "Compaction tail boundary %r not found for session %s; "
+                    "recovering from post-checkpoint history",
                     checkpoint.tail_boundary_id,
+                    session.id,
                 )
-                if message.role != "compaction_checkpoint"
-            ]
             summary_text = checkpoint.content if isinstance(checkpoint.content, str) else ""
+            if tail_recovered:
+                summary_text = (
+                    f"{summary_text}\n\n{COMPACTION_TAIL_RECOVERED_HINT}"
+                    if summary_text
+                    else COMPACTION_TAIL_RECOVERED_HINT
+                )
             summary_synthetic_message: JsonObject = {
                 "role": "user",
                 "content": (
