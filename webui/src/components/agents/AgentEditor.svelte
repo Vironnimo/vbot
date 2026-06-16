@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
   import {
     AGENT_MEMORY_PROMPT_MODES,
@@ -800,24 +801,19 @@
         <span class="agents-view__prompt-toggle-label">
           {t('agents.form.customSystemPrompt', 'Custom system prompt')}
         </span>
-        <button
-          class="tl-toggle agents-view__prompt-toggle"
-          class:on={formValues.custom_system_prompt_enabled}
-          type="button"
-          role="switch"
-          aria-checked={formValues.custom_system_prompt_enabled}
-          aria-label={t(
+        <Toggle
+          size="sm"
+          class="agents-view__prompt-toggle"
+          checked={formValues.custom_system_prompt_enabled}
+          ariaLabel={t(
             'agents.form.customSystemPrompt',
             'Custom system prompt',
           )}
           disabled={formMode === AGENT_FORM_MODE_CREATE}
-          onclick={() => {
-            formValues.custom_system_prompt_enabled =
-              !formValues.custom_system_prompt_enabled;
+          onChange={(next) => {
+            formValues.custom_system_prompt_enabled = next;
           }}
-        >
-          <span class="t-knob"></span>
-        </button>
+        />
       </div>
       <div class="agents-view__prompt-memory-row">
         <span class="agents-view__prompt-toggle-label">
@@ -878,27 +874,18 @@
                     </span>
                   {/if}
                 </div>
-                <button
-                  class="tl-toggle"
-                  class:on={item.isAllowed}
-                  type="button"
-                  role="switch"
-                  aria-checked={item.isAllowed}
-                  aria-label={t(
+                <Toggle
+                  size="sm"
+                  checked={item.isAllowed}
+                  ariaLabel={t(
                     'agents.access.toggleTool',
                     'Toggle tool {name}',
                     { name: item.name },
                   )}
                   disabled={item.isWildcard}
-                  onclick={() =>
-                    updateAccessItem(
-                      'allowed_tools',
-                      item.name,
-                      !item.isAllowed,
-                    )}
-                >
-                  <span class="t-knob"></span>
-                </button>
+                  onChange={(next) =>
+                    updateAccessItem('allowed_tools', item.name, next)}
+                />
               </div>
             {/each}
           </div>
@@ -953,27 +940,18 @@
                     </div>
                   {/if}
                 </div>
-                <button
-                  class="tl-toggle"
-                  class:on={item.isAllowed}
-                  type="button"
-                  role="switch"
-                  aria-checked={item.isAllowed}
-                  aria-label={t(
+                <Toggle
+                  size="sm"
+                  checked={item.isAllowed}
+                  ariaLabel={t(
                     'agents.access.toggleSkill',
                     'Toggle skill {name}',
                     { name: item.name },
                   )}
                   disabled={item.isWildcard}
-                  onclick={() =>
-                    updateAccessItem(
-                      'allowed_skills',
-                      item.name,
-                      !item.isAllowed,
-                    )}
-                >
-                  <span class="t-knob"></span>
-                </button>
+                  onChange={(next) =>
+                    updateAccessItem('allowed_skills', item.name, next)}
+                />
               </div>
             {/each}
           </div>

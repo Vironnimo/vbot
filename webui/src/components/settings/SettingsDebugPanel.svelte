@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Button from '../ui/Button.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
 
@@ -140,23 +141,17 @@
     </div>
   </div>
   <div class="s-row-control">
-    <button
-      class="toggle"
-      class:on={debugSettings.enabled === true}
-      type="button"
-      role="switch"
-      aria-checked={debugSettings.enabled === true}
-      aria-label={t('debug.enabled', 'Enable debug mode')}
-      onclick={() => {
+    <Toggle
+      checked={debugSettings.enabled === true}
+      ariaLabel={t('debug.enabled', 'Enable debug mode')}
+      onChange={(next) => {
         debugSettings = {
           ...debugSettings,
-          enabled: debugSettings.enabled !== true,
+          enabled: next,
         };
         onError('');
       }}
-    >
-      <span class="t-knob"></span>
-    </button>
+    />
   </div>
 </div>
 

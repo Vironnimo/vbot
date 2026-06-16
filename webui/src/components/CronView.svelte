@@ -4,6 +4,7 @@
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
   import Modal from './ui/Modal.svelte';
+  import Toggle from './ui/Toggle.svelte';
   import {
     createCronJob,
     deleteCronJob,
@@ -455,13 +456,9 @@
               </td>
               <td>
                 <div class="cron-view__actions">
-                  <button
-                    type="button"
-                    class="toggle"
-                    class:on={job.status === CRON_STATUS_ACTIVE}
-                    role="switch"
-                    aria-checked={job.status === CRON_STATUS_ACTIVE}
-                    aria-label={job.status === CRON_STATUS_ACTIVE
+                  <Toggle
+                    checked={job.status === CRON_STATUS_ACTIVE}
+                    ariaLabel={job.status === CRON_STATUS_ACTIVE
                       ? t('cron.actions.disableJob', 'Disable job {id}', {
                           id: job.id,
                         })
@@ -470,10 +467,8 @@
                         })}
                     disabled={submittingForm || mutatingJobId === job.id}
                     data-testid={`cron-toggle-${job.id}`}
-                    onclick={() => toggleJob(job)}
-                  >
-                    <span class="t-knob"></span>
-                  </button>
+                    onChange={() => toggleJob(job)}
+                  />
                   <Button
                     variant="secondary"
                     ariaLabel={t('cron.actions.editJob', 'Edit job {id}', {
