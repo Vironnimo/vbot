@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 from core.utils.errors import VBotError
 
@@ -62,6 +63,25 @@ class MemoryEntry:
 class FilePinnedMemoryBackend:
     """Store pinned memory entries in USER.md and MEMORY.md workspace files."""
 
+    # Tool calls in one assistant turn run concurrently (and the memory handler runs
+    # in a worker thread), so two mutations to the same file would otherwise read the
+    # same starting list and the last writer would clobber the other's entry — a silent
+    # lost update that os.replace's atomicity does not prevent. Serialize the
+    # read-modify-write per file, process-wide and keyed by canonical path so every
+    # backend instance shares the same lock for a given file.
+    _file_locks: ClassVar[dict[str, threading.Lock]] = {}
+    _file_locks_guard: ClassVar[threading.Lock] = threading.Lock()
+
+    @classmethod
+    def _file_lock(cls, path: Path) -> threading.Lock:
+        key = os.path.normcase(os.path.abspath(os.fspath(path)))
+        with cls._file_locks_guard:
+            lock = cls._file_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                cls._file_locks[key] = lock
+            return lock
+
     def list_entries(self, workspace: Path, scope: MemoryScope) -> list[MemoryEntry]:
         validated_scope = validate_memory_scope(scope)
         _preamble, entries, _suffix = _read_memory_parts(self._path(workspace, validated_scope))
@@ -70,15 +90,16 @@ class FilePinnedMemoryBackend:
     def add_entry(self, workspace: Path, scope: MemoryScope, content: str) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
-        preamble, entries, suffix = _read_memory_parts(path)
-        normalized = _normalize_entry_content(content)
-        if normalized in entries:
-            existing_index = entries.index(normalized) + 1
-            return MemoryEntry(id=existing_index, scope=validated_scope, content=normalized)
+        with self._file_lock(path):
+            preamble, entries, suffix = _read_memory_parts(path)
+            normalized = _normalize_entry_content(content)
+            if normalized in entries:
+                existing_index = entries.index(normalized) + 1
+                return MemoryEntry(id=existing_index, scope=validated_scope, content=normalized)
 
-        entries.append(normalized)
-        _write_memory_parts(path, preamble, entries, suffix)
-        return MemoryEntry(id=len(entries), scope=validated_scope, content=normalized)
+            entries.append(normalized)
+            _write_memory_parts(path, preamble, entries, suffix)
+            return MemoryEntry(id=len(entries), scope=validated_scope, content=normalized)
 
     def replace_entry(
         self,
@@ -89,21 +110,23 @@ class FilePinnedMemoryBackend:
     ) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
-        preamble, entries, suffix = _read_memory_parts(path)
-        index = _entry_index(entry_id, entries)
-        normalized = _normalize_entry_content(content)
-        entries[index] = normalized
-        _write_memory_parts(path, preamble, entries, suffix)
-        return MemoryEntry(id=entry_id, scope=validated_scope, content=normalized)
+        with self._file_lock(path):
+            preamble, entries, suffix = _read_memory_parts(path)
+            index = _entry_index(entry_id, entries)
+            normalized = _normalize_entry_content(content)
+            entries[index] = normalized
+            _write_memory_parts(path, preamble, entries, suffix)
+            return MemoryEntry(id=entry_id, scope=validated_scope, content=normalized)
 
     def remove_entry(self, workspace: Path, scope: MemoryScope, entry_id: int) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
-        preamble, entries, suffix = _read_memory_parts(path)
-        index = _entry_index(entry_id, entries)
-        removed = entries.pop(index)
-        _write_memory_parts(path, preamble, entries, suffix)
-        return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
+        with self._file_lock(path):
+            preamble, entries, suffix = _read_memory_parts(path)
+            index = _entry_index(entry_id, entries)
+            removed = entries.pop(index)
+            _write_memory_parts(path, preamble, entries, suffix)
+            return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
 
     def build_prompt_block(self, workspace: Path, mode: MemoryPromptMode) -> str:
         validated_mode = validate_memory_prompt_mode(mode)
