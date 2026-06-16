@@ -131,7 +131,7 @@ async def _handle_channel_send_tool(
     except ChannelError as error:
         return tool_failure("channel_error", str(error))
 
-    _record_outbound_message_note(
+    await _record_outbound_message_note(
         channel_service,
         chat_sessions,
         channel_id,
@@ -143,7 +143,7 @@ async def _handle_channel_send_tool(
     return tool_success({"channel_id": channel_id, "platform_target": platform_target})
 
 
-def _record_outbound_message_note(
+async def _record_outbound_message_note(
     channel_service: ChannelService,
     chat_sessions: ChatSessionManager,
     channel_id: str,
@@ -155,8 +155,12 @@ def _record_outbound_message_note(
 ) -> None:
     try:
         route = channel_service.ensure_outbound_session(channel_id, platform_target)
-        session = chat_sessions.get_or_create(route.agent_id, route.session_id)
-        session.add_note(_outbound_message_note(sender_agent_id, message, files))
+        # Serialize the outbound-context note against an open tool cycle on the
+        # target session. The lock is task-reentrant, so this is safe even when
+        # the sending Run targets its own session.
+        async with chat_sessions.write_lock(route.agent_id, route.session_id):
+            session = chat_sessions.get_or_create(route.agent_id, route.session_id)
+            session.add_note(_outbound_message_note(sender_agent_id, message, files))
     except Exception as error:
         # The outbound message already went out; failing to record context into the target
         # Session must not turn a successful send into a tool failure.

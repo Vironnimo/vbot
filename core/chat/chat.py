@@ -769,56 +769,61 @@ class ChatLoop:
             run.raise_if_cancelled()
             if assistant_message.usage is None:
                 assistant_message = _apply_usage_estimation(assistant_message, messages)
-            session.append(assistant_message)
-            if not self._streaming:
-                _emit_assistant_events(run, assistant_message)
-            messages.append(
-                _assistant_continuation_dict(assistant_message, replay_policy=replay_policy)
-            )
-
-            if not assistant_message.tool_calls:
-                if self._compaction_service is not None:
-                    messages = await self._maybe_auto_compact(
-                        agent,
-                        adapter,
-                        model_id,
-                        session,
-                        messages,
-                        usage=assistant_message.usage,
-                        run=run,
-                    )
-                return assistant_message
-
-            if tool_iteration_count >= self._max_tool_iterations:
-                raise ToolIterationLimitError("maximum tool iterations exceeded")
-            tool_iteration_count += 1  # noqa: SIM113 - paired with iteration_number; enumerate would obscure the pre-increment limit check.
-            iteration_number += 1
-
-            session.begin_defer_notes()
-            try:
-                tool_messages, media_injections = await _dispatch_tool_calls(
-                    self._runtime,
-                    agent,
-                    assistant_message.tool_calls,
-                    session,
-                    run,
-                    nesting_depth=self._nesting_depth,
+            # Hold the per-session append lock from the assistant tool-call
+            # message through its tool results so a writer on another accessor
+            # (a channel observed note, session.link_channel) cannot land between
+            # them and break the tool-cycle ordering invariant.
+            async with self._runtime.chat_sessions.write_lock(run.agent_id, run.session_id):
+                session.append(assistant_message)
+                if not self._streaming:
+                    _emit_assistant_events(run, assistant_message)
+                messages.append(
+                    _assistant_continuation_dict(assistant_message, replay_policy=replay_policy)
                 )
-                for tool_message in tool_messages:
-                    session.append(tool_message)
-                    messages.append(_message_to_request_dict(tool_message))
-                # A tool may ask to show media (e.g. read on an image): inject it
-                # as a synthetic current-turn user message after the tool results
-                # so the tool-cycle invariant (results before any non-tool message)
-                # is preserved.
-                for injection in media_injections:
-                    await self._inject_read_media(agent, session, messages, injection)
-                # Honor cancellation only after every sibling tool result has
-                # been persisted, so a mid-cycle cancel never leaves an
-                # assistant turn with dangling tool_calls in JSONL history.
-                run.raise_if_cancelled()
-            finally:
-                session.flush_deferred_notes()
+
+                if not assistant_message.tool_calls:
+                    if self._compaction_service is not None:
+                        messages = await self._maybe_auto_compact(
+                            agent,
+                            adapter,
+                            model_id,
+                            session,
+                            messages,
+                            usage=assistant_message.usage,
+                            run=run,
+                        )
+                    return assistant_message
+
+                if tool_iteration_count >= self._max_tool_iterations:
+                    raise ToolIterationLimitError("maximum tool iterations exceeded")
+                tool_iteration_count += 1  # noqa: SIM113 - paired with iteration_number; enumerate would obscure the pre-increment limit check.
+                iteration_number += 1
+
+                session.begin_defer_notes()
+                try:
+                    tool_messages, media_injections = await _dispatch_tool_calls(
+                        self._runtime,
+                        agent,
+                        assistant_message.tool_calls,
+                        session,
+                        run,
+                        nesting_depth=self._nesting_depth,
+                    )
+                    for tool_message in tool_messages:
+                        session.append(tool_message)
+                        messages.append(_message_to_request_dict(tool_message))
+                    # A tool may ask to show media (e.g. read on an image): inject it
+                    # as a synthetic current-turn user message after the tool results
+                    # so the tool-cycle invariant (results before any non-tool message)
+                    # is preserved.
+                    for injection in media_injections:
+                        await self._inject_read_media(agent, session, messages, injection)
+                    # Honor cancellation only after every sibling tool result has
+                    # been persisted, so a mid-cycle cancel never leaves an
+                    # assistant turn with dangling tool_calls in JSONL history.
+                    run.raise_if_cancelled()
+                finally:
+                    session.flush_deferred_notes()
 
             if self._compaction_service is not None:
                 messages = await self._maybe_auto_compact(

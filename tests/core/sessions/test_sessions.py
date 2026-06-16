@@ -1,5 +1,6 @@
 """Tests for append-only chat session JSONL storage."""
 
+import asyncio
 import json
 import os
 from datetime import UTC, datetime
@@ -500,3 +501,66 @@ class TestChatSessionManager:
 
         with pytest.raises(ChatSessionError, match="agent id"):
             manager.create("", session_id="session-one")
+
+    def test_write_lock_is_shared_across_manager_instances(self, tmp_path):
+        manager_a = ChatSessionManager(tmp_path)
+        manager_b = ChatSessionManager(tmp_path)
+
+        lock = manager_a.write_lock("coder", "session-one")
+
+        assert manager_b.write_lock("coder", "session-one") is lock
+        assert manager_a.write_lock("coder", "session-two") is not lock
+
+    def test_write_lock_is_task_reentrant(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        async def reenter() -> bool:
+            lock = manager.write_lock("coder", "session-one")
+            async with lock, lock:  # same task re-enters; a plain lock would deadlock here
+                return True
+
+        assert asyncio.run(asyncio.wait_for(reenter(), timeout=1.0)) is True
+
+    def test_open_tool_cycle_blocks_out_of_band_note_until_release(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        session = manager.create("coder", session_id="session-one")
+        assistant_message = ChatMessage.assistant(
+            model="anthropic/claude-sonnet-4",
+            content=None,
+            tool_calls=[ToolCall(id="call_abc", name="get_weather", arguments={"city": "Berlin"})],
+            timestamp=FIXED_TIMESTAMP,
+        )
+        tool_message = ChatMessage.tool(
+            tool_call_id="call_abc",
+            name="get_weather",
+            content='{"temp":22}',
+            timestamp=FIXED_TIMESTAMP,
+        )
+        release_tool = asyncio.Event()
+        note_persisted = asyncio.Event()
+
+        async def run_tool_cycle() -> None:
+            async with manager.write_lock("coder", "session-one"):
+                session.append(assistant_message)
+                await release_tool.wait()
+                session.append(tool_message)
+
+        async def observe_note() -> None:
+            # A Run on another accessor: must wait behind the open tool cycle.
+            async with manager.write_lock("coder", "session-one"):
+                manager.get("coder", "session-one").add_note("[channel] observed")
+                note_persisted.set()
+
+        async def scenario() -> None:
+            run_task = asyncio.create_task(run_tool_cycle())
+            await asyncio.sleep(0)  # Run acquires the lock and appends the tool-call message.
+            observe_task = asyncio.create_task(observe_note())
+            await asyncio.sleep(0)  # The note attempts the lock and must block.
+            assert not note_persisted.is_set()
+            release_tool.set()
+            await asyncio.gather(run_task, observe_task)
+
+        asyncio.run(scenario())
+
+        roles = [message.role for message in manager.get("coder", "session-one").load()]
+        assert roles == ["assistant", "tool", "note"]

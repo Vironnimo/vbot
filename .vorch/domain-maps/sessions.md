@@ -26,6 +26,7 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - `ChatSessionManager(data_dir)` — the path-free entry point for sessions: `create` / `get` / `get_or_create` / `exists` / `list` / `delete(agent_id, session_id)` resolve agent session roots so callers never construct `.jsonl` paths; all validate the session ID first.
 - `ChatSessionManager.get_metadata(agent_id, session_id)` / `set_metadata(...)` — read/write arbitrary JSON-object metadata through the current sidecar file using atomic replace.
 - `ChatSessionManager.list_with_metadata(agent_id)` — returns session summaries with `id`, `created_at`, `last_active_at`, plus sidecar fields.
+- `ChatSessionManager.write_lock(agent_id, session_id)` — returns the process-wide, task-reentrant async append lock for one session's transcript. Shared across manager instances (keyed by the resolved file path), so every writer reaches the same lock regardless of which manager it holds. Reentrant per task so a Run that holds it across its tool cycle can run a tool (e.g. `channel_send`) targeting its own session without self-deadlocking.
 
 ## Current Storage Contract
 
@@ -46,6 +47,7 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - Channel adapters must use `ChatSessionManager.exists()` / `get_or_create()` / metadata methods instead of deriving `.jsonl` paths.
 - Server RPC delegates should expose session operations through the runtime service and keep storage details out of the public contract.
 - `core/recall/` may maintain derived search indexes, but JSONL remains canonical. Recall indexes must be disposable and rebuildable from `ChatSessionManager`.
+- **Cross-accessor append ordering:** a Run's tool cycle (the assistant tool-call message through its tool results) must stay contiguous in the transcript. Runs on one session are already serialized by `ChatRunManager`, but out-of-band writers are not — so every writer that can append while a Run might be active acquires `ChatSessionManager.write_lock(agent_id, session_id)` (`async with`). The Run holds it across its tool cycle; out-of-band note writers (channel observed notes, `session.link_channel`, `channel_send`) hold it just around their append, so they wait for an open tool cycle instead of splitting it. Any new out-of-band session writer MUST follow this rule.
 
 ## Constraints & Gotchas
 
