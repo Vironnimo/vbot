@@ -463,6 +463,42 @@ async def test_timeout_kills_process(
 
 
 @pytest.mark.asyncio
+async def test_natural_completion_at_deadline_not_reported_as_timeout(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A process that exits on its own as the timer fires reports success.
+
+    Reproduces the deadline race: the timeout flag is already set (the timer
+    elapsed) but the process completes naturally, so its kill is a no-op and the
+    session ends "completed". The tool must surface that success, not a timeout.
+    """
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+
+    def already_timed_out(
+        process_manager: ProcessManager,
+        session_id: str,
+        agent_id: str,
+        timeout: float | None,
+    ) -> tuple[None, dict[str, bool]]:
+        return None, {"timed_out": True}
+
+    monkeypatch.setattr(bash_module, "_schedule_timeout", already_timed_out)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "print('done')", "timeout": 0.01, "yield_after": 1},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert "done" in result["data"]["output"]
+
+
+@pytest.mark.asyncio
 async def test_large_foreground_stdout_is_bounded_and_truncated(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

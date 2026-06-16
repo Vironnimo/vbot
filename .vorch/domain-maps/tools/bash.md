@@ -22,5 +22,5 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 
 - Sensitive environment overrides such as `PATH`, loader hooks, and shell startup hooks are blocked.
 - A login shell environment is probed once per process and falls back to `os.environ` on failure or timeout.
-- Spawn failures and tool-enforced timeouts are failure envelopes.
+- Spawn failures and tool-enforced timeouts are failure envelopes. A `process_timeout` is reported only when the timeout actually killed a still-running process (terminal status `killed`); a process that exits on its own as the deadline elapses keeps its completed/failed result instead of being masked as a timeout.
 - With `trigger_service`, background completion creates a fire-and-forget follow-up trigger with command, exit code, and output.
