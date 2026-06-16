@@ -8,7 +8,6 @@ import os
 import signal
 import subprocess
 import sys
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -136,7 +135,6 @@ async def bash_handler(
         context,
         session_id,
         parsed["yield_after"],
-        timeout_state,
     )
 
     if timeout_task is not None:
@@ -155,7 +153,9 @@ async def bash_handler(
         )
         return result
 
-    if timeout_state["timed_out"]:
+    if timeout_state["timed_out"] and _timed_out_process_killed(
+        process_manager, context, session_id
+    ):
         return tool_failure(
             "process_timeout", f"process timed out after {parsed['timeout']} seconds"
         )
@@ -565,21 +565,35 @@ def _schedule_timeout(
     return asyncio.create_task(kill_after_timeout(), name=f"bash-timeout:{session_id}"), state
 
 
+def _timed_out_process_killed(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    session_id: str,
+) -> bool:
+    """Confirm the timeout actually terminated a still-running process.
+
+    The timer flag only records that the deadline elapsed; the kill it triggers
+    is a no-op once the process has already exited. A process that finishes on
+    its own a hair before the deadline keeps its completed/failed terminal
+    status, while a genuine timeout kill leaves the session "killed". Reading
+    that terminal status — not the timer flag alone — stops a race at the
+    deadline from masking a successful run as a timeout.
+    """
+    session = process_manager.get_session(session_id, context.agent_id)
+    return session.status == "killed"
+
+
 async def _run_foreground_phase(
     process_manager: ProcessManager,
     context: ToolContext,
     session_id: str,
     yield_after: float,
-    timeout_state: Mapping[str, bool],
 ) -> JsonObject:
     deadline = asyncio.get_running_loop().time() + yield_after
 
     while True:
         poll_result = await process_manager.poll(session_id, context.agent_id, timeout_ms=0)
         await _emit_output_chunks(context, session_id, poll_result)
-
-        if timeout_state["timed_out"] and poll_result["status"] != "running":
-            return tool_failure("process_timeout", "process timed out")
 
         if poll_result["status"] != "running":
             return await _completion_result(process_manager, context, session_id)
