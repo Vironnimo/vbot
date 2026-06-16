@@ -100,6 +100,9 @@
                 d="M3 2.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5z"
               />
               <path d="M5 5.5h6M5 8h6M5 10.5h4" />
+            {:else if item.id === 'statistics'}
+              <path d="M2.5 13.5h11" />
+              <path d="M4.5 13.5V10.5M8 13.5V8M11.5 13.5V5" />
             {:else if item.id === 'debug'}
               <rect x="5.5" y="5" width="5" height="7.5" rx="2.5" />
               <path d="M6.5 5 5 3m4.5 2L11 3" />
