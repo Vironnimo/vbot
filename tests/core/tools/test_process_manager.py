@@ -17,6 +17,7 @@ import pytest_asyncio
 from core.tools.process_manager import (
     PROCESS_BUFFER_CAP_BYTES,
     ProcessManager,
+    SessionInputClosedError,
     SessionNotFoundError,
     SessionStillRunningError,
 )
@@ -341,6 +342,59 @@ async def test_write_with_eof_closes_stdin(manager: ProcessManager) -> None:
 
     assert result["status"] == "completed"
     assert "read:payload" in as_text(result["stdout"])
+
+
+@pytest.mark.asyncio
+async def test_write_translates_raced_stdin_close_to_input_closed_error(
+    manager: ProcessManager,
+) -> None:
+    session_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "import sys; sys.stdin.read()"],
+        env=None,
+        cwd=None,
+    )
+    session = manager.get_session(session_id, AGENT_A)
+    assert session.proc.stdin is not None
+
+    async def raise_connection_reset() -> None:
+        raise ConnectionResetError("peer closed")
+
+    # Simulate a kill / process exit closing stdin while drain() awaits.
+    session.proc.stdin.drain = raise_connection_reset  # type: ignore[method-assign]
+
+    with pytest.raises(SessionInputClosedError, match=session_id):
+        await manager.write(session_id, AGENT_A, "value")
+    assert session.stdin_open is False
+
+    await manager.kill(session_id, AGENT_A)
+
+
+@pytest.mark.asyncio
+async def test_submit_translates_raced_stdin_close_to_input_closed_error(
+    manager: ProcessManager,
+) -> None:
+    session_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "import sys; sys.stdin.readline()"],
+        env=None,
+        cwd=None,
+    )
+    session = manager.get_session(session_id, AGENT_A)
+    assert session.proc.stdin is not None
+
+    async def raise_broken_pipe() -> None:
+        raise BrokenPipeError("peer closed")
+
+    session.proc.stdin.drain = raise_broken_pipe  # type: ignore[method-assign]
+
+    with pytest.raises(SessionInputClosedError, match=session_id):
+        await manager.submit(session_id, AGENT_A)
+    assert session.stdin_open is False
+
+    await manager.kill(session_id, AGENT_A)
 
 
 @pytest.mark.asyncio
