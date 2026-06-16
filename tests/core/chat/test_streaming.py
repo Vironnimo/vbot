@@ -12,13 +12,22 @@ from core.chat.streaming import (
     StreamingAssistantFields,
     StreamingChunkTimeoutError,
     StreamingDeltaError,
+    StreamRecoveryAction,
+    decide_stream_recovery,
+    is_local_provider_base_url,
     iter_with_chunk_timeout,
+)
+from core.providers.errors import (
+    NetworkError,
+    ProviderStreamingUnsupportedError,
+    ProviderTimeoutError,
 )
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
 )
+from core.utils.errors import ProviderError
 
 JsonObject = dict[str, Any]
 
@@ -562,6 +571,175 @@ async def test_accumulator_usage_is_none_when_no_usage_delta() -> None:
 
     assert fields.usage is None
     assert "usage" not in fields.to_response_dict()
+
+
+async def test_partial_content_is_none_without_content_deltas() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta({"type": "reasoning_delta", "text": "Think"})
+
+    assert accumulator.partial_content is None
+
+
+async def test_partial_content_returns_joined_content_deltas() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta({"type": "content_delta", "text": "Hello"})
+    accumulator.add_delta({"type": "content_delta", "text": " world"})
+
+    assert accumulator.partial_content == "Hello world"
+
+
+async def test_finalize_partial_fields_drops_in_flight_tool_call_without_raising() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta({"type": "reasoning_delta", "text": "Working"})
+    accumulator.add_delta({"type": "content_delta", "text": "Here is the"})
+    # Malformed/incomplete tool-call fragment that finalize_assistant_fields would reject.
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "name_delta": "write",
+            "arguments_delta": '{"path":',
+        }
+    )
+
+    fields = accumulator.finalize_partial_fields()
+
+    assert fields.content == "Here is the"
+    assert fields.reasoning == "Working"
+    assert fields.tool_calls is None
+    assert fields.finish_reason is None
+
+
+async def test_decide_recovery_streaming_unsupported_before_visible_falls_back() -> None:
+    action = decide_stream_recovery(
+        ProviderStreamingUnsupportedError("no streaming"),
+        emitted_visible_delta=False,
+        can_restart=True,
+        has_partial_content=False,
+    )
+
+    assert action is StreamRecoveryAction.FALLBACK
+
+
+async def test_decide_recovery_restartable_transient_before_visible_restarts() -> None:
+    for error in (
+        NetworkError("dropped"),
+        ProviderTimeoutError("slow"),
+        StreamingChunkTimeoutError("stalled"),
+        ProviderError("overloaded", retryable=True),
+    ):
+        action = decide_stream_recovery(
+            error,
+            emitted_visible_delta=False,
+            can_restart=True,
+            has_partial_content=False,
+        )
+
+        assert action is StreamRecoveryAction.RESTART, type(error).__name__
+
+
+async def test_decide_recovery_restartable_before_visible_fails_when_budget_exhausted() -> None:
+    action = decide_stream_recovery(
+        NetworkError("dropped"),
+        emitted_visible_delta=False,
+        can_restart=False,
+        has_partial_content=False,
+    )
+
+    assert action is StreamRecoveryAction.FAIL
+
+
+async def test_decide_recovery_non_restartable_before_visible_fails() -> None:
+    action = decide_stream_recovery(
+        ProviderError("fatal", retryable=False),
+        emitted_visible_delta=False,
+        can_restart=True,
+        has_partial_content=False,
+    )
+
+    assert action is StreamRecoveryAction.FAIL
+
+
+async def test_decide_recovery_visible_with_content_preserves_partial() -> None:
+    for error in (
+        NetworkError("dropped"),
+        StreamingChunkTimeoutError("stalled"),
+        ProviderError("overloaded", retryable=True),
+        ProviderStreamingUnsupportedError("no streaming"),
+    ):
+        action = decide_stream_recovery(
+            error,
+            emitted_visible_delta=True,
+            can_restart=True,
+            has_partial_content=True,
+        )
+
+        assert action is StreamRecoveryAction.PRESERVE_PARTIAL, type(error).__name__
+
+
+async def test_decide_recovery_visible_reasoning_only_discards_with_note() -> None:
+    action = decide_stream_recovery(
+        NetworkError("dropped"),
+        emitted_visible_delta=True,
+        can_restart=True,
+        has_partial_content=False,
+    )
+
+    assert action is StreamRecoveryAction.DISCARD_WITH_NOTE
+
+
+async def test_local_provider_base_url_detects_loopback_and_local_names() -> None:
+    for url in (
+        "http://localhost:11434",
+        "http://localhost:11434/v1",
+        "http://127.0.0.1:8080",
+        "http://[::1]:8080",
+        "http://ollama.local:11434",
+        "http://box.localhost/v1",
+    ):
+        assert is_local_provider_base_url(url) is True, url
+
+
+async def test_local_provider_base_url_detects_private_and_link_local_ips() -> None:
+    for url in (
+        "http://10.0.0.5:1234",
+        "http://172.16.4.2:1234",
+        "http://192.168.1.50:11434",
+        "http://169.254.10.10:1234",
+    ):
+        assert is_local_provider_base_url(url) is True, url
+
+
+async def test_local_provider_base_url_rejects_public_hosts() -> None:
+    for url in (
+        "https://api.openai.com/v1",
+        "https://api.anthropic.com",
+        "http://8.8.8.8:443",
+    ):
+        assert is_local_provider_base_url(url) is False, url
+
+
+async def test_local_provider_base_url_rejects_missing_or_unparseable() -> None:
+    assert is_local_provider_base_url(None) is False
+    assert is_local_provider_base_url("") is False
+    assert is_local_provider_base_url("not a url") is False
+
+
+async def test_iter_with_chunk_timeout_disabled_never_aborts_on_silence() -> None:
+    async def source() -> AsyncIteratorForTest:
+        yield {"type": "content_delta", "text": "first"}
+        await asyncio.sleep(0.02)
+        yield {"type": "content_delta", "text": "second"}
+
+    chunks = [chunk async for chunk in iter_with_chunk_timeout(source(), timeout_seconds=None)]
+
+    assert chunks == [
+        {"type": "content_delta", "text": "first"},
+        {"type": "content_delta", "text": "second"},
+    ]
 
 
 AsyncIteratorForTest = Any

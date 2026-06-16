@@ -316,6 +316,53 @@ class TestChatMessageFactories:
         result = message.to_dict()
         assert "usage" not in result
 
+    def test_assistant_message_interrupted_round_trips(self):
+        message = ChatMessage.assistant(
+            model="openai/gpt-4.1",
+            content="Partial answer",
+            interrupted=True,
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        result = message.to_dict()
+        assert result["interrupted"] is True
+        assert ChatMessage.from_dict(result).interrupted is True
+
+    def test_assistant_message_not_interrupted_omits_flag(self):
+        message = ChatMessage.assistant(
+            model="openai/gpt-4.1",
+            content="Complete answer",
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert message.interrupted is False
+        assert "interrupted" not in message.to_dict()
+
+    def test_interrupted_rejected_on_non_assistant_role(self):
+        with pytest.raises(ChatMessageValidationError, match="interrupted"):
+            ChatMessage.from_dict(
+                {
+                    "id": "u1",
+                    "timestamp": "2026-05-03T14:30:01+00:00",
+                    "role": "user",
+                    "content": "hi",
+                    "interrupted": True,
+                }
+            )
+
+    def test_interrupted_must_be_boolean(self):
+        with pytest.raises(ChatMessageValidationError, match="interrupted must be a boolean"):
+            ChatMessage.from_dict(
+                {
+                    "id": "a1",
+                    "timestamp": "2026-05-03T14:30:01+00:00",
+                    "role": "assistant",
+                    "model": "openai/gpt-4.1",
+                    "content": "hi",
+                    "interrupted": "yes",
+                }
+            )
+
     def test_naive_timestamp_is_rejected(self):
         with pytest.raises(ChatMessageValidationError, match="timezone"):
             ChatMessage.user("hello", timestamp=datetime(2026, 5, 3, 14, 30))

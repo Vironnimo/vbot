@@ -15,9 +15,6 @@ from core.chat.events import (
     _emit_assistant_events,
     _emit_message_event,
     _emit_streaming_assistant_events,
-    _is_model_fallback_trigger,
-    _is_stream_restartable_error,
-    _is_streaming_fallback_error,
     _maybe_persist_partial_thinking,
     _persist_run_error,
     _timing_payload,
@@ -110,7 +107,13 @@ from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
     StreamingAccumulator,
     StreamingChunkTimeoutError,
+    StreamRecoveryAction,
+    decide_stream_recovery,
+    is_local_provider_base_url,
     iter_with_chunk_timeout,
+)
+from core.chat.streaming import (
+    _is_model_fallback_trigger as _is_model_fallback_trigger,
 )
 from core.chat.tool_dispatch import (
     _activate_triggered_skills,
@@ -185,6 +188,19 @@ def _resolve_wire_media_support(adapter: Any, model_id: str) -> frozenset[str]:
     if hasattr(adapter, "wire_media_support"):
         return frozenset(adapter.wire_media_support(model_id))
     return frozenset()
+
+
+def _connection_local_id(provider_id: str, connection_id: str) -> str | None:
+    """Extract the provider-local connection id from a ``<provider>:<conn>[:<account>]`` id.
+
+    Returns ``None`` when *connection_id* does not carry the expected provider
+    prefix, so callers fall back to the provider-level base URL.
+    """
+    prefix = f"{provider_id}:"
+    if not connection_id.startswith(prefix):
+        return None
+    remainder = connection_id[len(prefix) :]
+    return remainder.split(":", 1)[0] or None
 
 
 def _read_media_text_note(filename: str, media_type: str) -> JsonObject:
@@ -742,6 +758,7 @@ class ChatLoop:
     ) -> ChatMessage:
         replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
         wire_media_types = _resolve_wire_media_support(adapter, model_id)
+        chunk_timeout_seconds = self._resolve_chunk_timeout(provider_id, connection_id)
         tool_iteration_count = 0
         iteration_number = 1
         for _ in range(self._max_tool_iterations + 1):
@@ -785,6 +802,7 @@ class ChatLoop:
                 tools,
                 run,
                 note_hook=session.add_note,
+                chunk_timeout_seconds=chunk_timeout_seconds,
             )
             run.raise_if_cancelled()
             if assistant_message.usage is None:
@@ -1072,6 +1090,7 @@ class ChatLoop:
         tools: list[JsonObject],
         run: Run,
         note_hook: Callable[[str], None] | None = None,
+        chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
     ) -> ChatMessage:
         if self._streaming:
             return await self._send_streaming_assistant_request(
@@ -1082,6 +1101,7 @@ class ChatLoop:
                 tools,
                 run,
                 note_hook=note_hook,
+                chunk_timeout_seconds=chunk_timeout_seconds,
             )
 
         return await self._send_non_streaming_assistant_request(
@@ -1115,6 +1135,7 @@ class ChatLoop:
         tools: list[JsonObject],
         run: Run,
         note_hook: Callable[[str], None] | None = None,
+        chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
     ) -> ChatMessage:
         # A transient drop before any visible output is replayed as a full stream
         # restart (the not-yet-visible analogue of the non-streaming fallback).
@@ -1131,6 +1152,7 @@ class ChatLoop:
                     run,
                     note_hook,
                     can_restart=attempt < MAX_STREAM_RESTARTS,
+                    chunk_timeout_seconds=chunk_timeout_seconds,
                 )
             except _StreamRestartNeeded as restart:
                 _LOGGER.warning(
@@ -1156,6 +1178,7 @@ class ChatLoop:
         note_hook: Callable[[str], None] | None,
         *,
         can_restart: bool,
+        chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
     ) -> ChatMessage:
         accumulator = StreamingAccumulator()
         emitted_visible_delta = False
@@ -1170,7 +1193,7 @@ class ChatLoop:
         try:
             async for delta in iter_with_chunk_timeout(
                 stream,
-                timeout_seconds=STREAM_CHUNK_TIMEOUT_SECONDS,
+                timeout_seconds=chunk_timeout_seconds,
             ):
                 run.raise_if_cancelled()
                 visible_deltas = accumulator.add_delta(delta)
@@ -1182,7 +1205,15 @@ class ChatLoop:
                 raise NetworkError("Provider stream ended without finish delta")
             assistant_fields = accumulator.finalize_assistant_fields()
         except (ProviderError, NetworkError, StreamingChunkTimeoutError) as exc:
-            if not emitted_visible_delta and _is_streaming_fallback_error(exc):
+            # One provider-agnostic owner decides what a stream break means; the
+            # action stays here (the chat loop owns side effects, not the policy).
+            action = decide_stream_recovery(
+                exc,
+                emitted_visible_delta=emitted_visible_delta,
+                can_restart=can_restart,
+                has_partial_content=accumulator.partial_content is not None,
+            )
+            if action is StreamRecoveryAction.FALLBACK:
                 assistant_message = await self._send_non_streaming_assistant_request(
                     agent,
                     adapter,
@@ -1192,12 +1223,12 @@ class ChatLoop:
                 )
                 _emit_assistant_events(run, assistant_message)
                 return assistant_message
-            # A chunk stall before any visible output is the not-yet-visible
-            # analogue of the transient-drop restart: replay the whole stream.
-            # Once visible output exists, this falls through and re-raises.
-            if can_restart and not emitted_visible_delta and _is_stream_restartable_error(exc):
+            if action is StreamRecoveryAction.RESTART:
                 raise _StreamRestartNeeded(exc) from exc
-            _maybe_persist_partial_thinking(accumulator, note_hook)
+            if action is StreamRecoveryAction.PRESERVE_PARTIAL:
+                return self._finalize_interrupted_partial(agent, accumulator, run)
+            if action is StreamRecoveryAction.DISCARD_WITH_NOTE:
+                _maybe_persist_partial_thinking(accumulator, note_hook)
             raise
         except BaseException:
             _maybe_persist_partial_thinking(accumulator, note_hook)
@@ -1209,3 +1240,63 @@ class ChatLoop:
         )
         _emit_streaming_assistant_events(run, assistant_message)
         return assistant_message
+
+    def _finalize_interrupted_partial(
+        self,
+        agent: Any,
+        accumulator: StreamingAccumulator,
+        run: Run,
+    ) -> ChatMessage:
+        """Preserve a stream broken after visible output as an interrupted turn.
+
+        The visible answer streamed so far is finalized into an assistant message
+        flagged ``interrupted`` (no finish reason; any in-flight tool call is
+        dropped — it was never executed, so dropping it is side-effect-free).
+        The run ends as a normal turn-less assistant turn instead of failing or
+        re-running, so the next turn sees the truncated answer in history and
+        continues it naturally — no auto-retry, no duplicate output.
+        """
+        assistant_message = _assistant_message_from_response(
+            agent.model,
+            accumulator.finalize_partial_fields().to_response_dict(),
+            interrupted=True,
+        )
+        _emit_streaming_assistant_events(run, assistant_message)
+        return assistant_message
+
+    def _resolve_chunk_timeout(self, provider_id: str, connection_id: str) -> float | None:
+        """Return the per-chunk stall timeout for this connection, or None to disable it.
+
+        Local/loopback inference servers (Ollama, llama.cpp, vLLM) can stay
+        silent for minutes during prompt prefill, so the stall guard is disabled
+        for them; every remote provider keeps the default timeout. Detection is
+        owned by :func:`is_local_provider_base_url` so the policy has one home.
+        """
+        base_url = self._resolve_connection_base_url(provider_id, connection_id)
+        if is_local_provider_base_url(base_url):
+            return None
+        return STREAM_CHUNK_TIMEOUT_SECONDS
+
+    def _resolve_connection_base_url(self, provider_id: str, connection_id: str) -> str | None:
+        """Resolve the effective base URL for a provider connection, if known.
+
+        Tolerant of a missing/partial provider registry and of connections
+        without their own base URL: returns ``None`` when nothing is resolvable
+        (treated as "not local", so the stall guard stays on).
+        """
+        try:
+            provider_config = self._runtime.providers.get(provider_id)
+        except (KeyError, AttributeError):
+            return None
+        local_id = _connection_local_id(provider_id, connection_id)
+        get_connection = getattr(provider_config, "get_connection", None)
+        if local_id is not None and callable(get_connection):
+            try:
+                connection = get_connection(local_id)
+            except KeyError:
+                connection = None
+            connection_base_url = getattr(connection, "base_url", None) if connection else None
+            if isinstance(connection_base_url, str) and connection_base_url:
+                return connection_base_url
+        provider_base_url = getattr(provider_config, "base_url", None)
+        return provider_base_url if isinstance(provider_base_url, str) else None

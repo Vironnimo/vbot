@@ -145,6 +145,12 @@ describe('i18n t()', () => {
     expect(englishCatalog['navigation.components']).toBeUndefined();
   });
 
+  it('contains the interrupted assistant turn marker', () => {
+    expect(englishCatalog['chat.interrupted']).toBeTruthy();
+    expect(t('chat.interrupted')).toBe(englishCatalog['chat.interrupted']);
+    expect(t('chat.interrupted').toLowerCase()).toContain('interrupted');
+  });
+
   it('contains Toasted design labels for Agents placeholders', () => {
     const requiredKeys = [
       'agents.detail.identity',
