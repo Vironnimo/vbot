@@ -668,6 +668,8 @@ class Runtime:
             raise RuntimeError("Channel service not available")
         if self._chat_sessions is None:
             raise RuntimeError("Chat session service not available")
+        if self._attachment_store is None:
+            raise RuntimeError("Attachment store not available")
 
         self._tools.unregister("channel_send")
         if not self._channel_service.has_active_channels():
@@ -678,7 +680,12 @@ class Runtime:
         except ModuleNotFoundError as error:
             raise RuntimeError("Channel tool registration is unavailable") from error
 
-        register_channel_send_tool(self._tools, self._channel_service, self._chat_sessions)
+        register_channel_send_tool(
+            self._tools,
+            self._channel_service,
+            self._chat_sessions,
+            max_attachment_size_bytes=self._attachment_store.max_size_bytes,
+        )
 
     def _build_recall_backend_registry(self) -> RecallBackendRegistry:
         """Build a builtins registry with extension recall backends applied.
