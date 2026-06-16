@@ -63,6 +63,17 @@ def test_memory_service_replace_and_remove_entries(tmp_path: Path) -> None:
     assert [entry.content for entry in service.list_entries(workspace, "agent")] == ["new fact"]
 
 
+def test_memory_service_preserves_literal_backslash_dash(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    service = MemoryService()
+
+    service.add_entry(workspace, "agent", "pass \\-v for verbose output")
+    service.add_entry(workspace, "agent", "-leading dash survives")
+
+    contents = [entry.content for entry in service.list_entries(workspace, "agent")]
+    assert contents == ["pass \\-v for verbose output", "-leading dash survives"]
+
+
 def test_memory_service_concurrent_adds_do_not_lose_entries(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
