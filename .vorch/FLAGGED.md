@@ -90,22 +90,20 @@ by their head alone. Neither is worth building yet.
 
 ## 2026-06-11 — Dead-code sweep: test-only public APIs left in place
 
-These candidates were deliberately **not** removed in the dead-code sweep because they are public
-APIs exercised only by tests — possibly superseded, but deleting them means rewriting the tests that
-use them:
+The recall `upsert_session` and github-copilot `iter_responses_sse_deltas` convenience wrappers from
+this sweep have been removed (their tests now use the surviving batched/`_with_state` APIs). One
+candidate remains, deferred because removing it is a large test refactor rather than a deletion:
 
 - `core/storage/storage.py` — per-section `update_appearance_settings` / `update_skill_directory_settings` /
   `update_recall_settings` / `update_debug_settings` / `update_web_search_settings` / `update_defaults` /
-  `update_compaction_settings`. Production goes through `update_settings_sections` (one transaction over
-  the private `_apply_*` helpers); the public per-section wrappers are used only by
-  `tests/core/storage/test_storage*.py` and mirrored by the fake in `tests/server/test_rpc.py`.
-- `core/recall/vector_store.py` — `upsert_session` is unused by the vector backend (`vector.py` writes via
-  `upsert_many_chunks`) but is the seeding helper for `tests/core/recall/test_vector_store.py`.
-- `core/providers/github_copilot_responses.py` — `iter_responses_sse_deltas` is a stateless wrapper around
-  `iter_responses_sse_deltas_with_state`; production uses only the `_with_state` variant, ~20 tests use the wrapper.
+  `update_compaction_settings` have no production caller: the RPC path goes through
+  `update_settings_sections` (one transaction over the private `_apply_*` helpers). They are exercised only by
+  the per-section unit tests in `tests/core/storage/test_storage*.py`, the skill-directory setup in
+  `tests/core/runtime/test_runtime.py`, and a fake reimplementation in `tests/server/test_rpc.py`.
 
-**Why deferred:** removing them is a test refactor, not a dead-code deletion — each needs its tests
-rewritten against the surviving API and re-verified. Do it per-domain when those tests are touched anyway.
+**Why still deferred:** ~30 per-section unit tests plus the `test_rpc` fake would move to
+`update_settings_sections({...})` with adjusted return-shape assertions. Genuinely dead, but low value
+for the churn — do it when those storage tests are touched anyway.
 
 ## 2026-06-11 — Linux readiness: remaining unverified pieces
 
