@@ -180,6 +180,46 @@ function makeReport(overrides = {}) {
   };
 }
 
+function makeUsageReport(overrides = {}) {
+  return {
+    generated_at: '2026-06-16T12:00:00+00:00',
+    providers: [
+      {
+        connection: 'openai:subscription',
+        display_name: 'OpenAI',
+        plan: 'Plus',
+        windows: [
+          { label: '5h', used_percent: 42.5, reset_at: '2099-06-16T15:00:00+00:00' },
+          { label: 'Week', used_percent: 88, reset_at: '2099-06-20T00:00:00+00:00' },
+        ],
+        error: null,
+      },
+      {
+        connection: 'github-copilot:oauth',
+        display_name: 'GitHub Copilot',
+        plan: null,
+        windows: [],
+        error: 'HTTP 401',
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function routedRpc(usageReport) {
+  return (method) =>
+    method === 'provider.usage'
+      ? Promise.resolve(usageReport)
+      : Promise.resolve(makeReport());
+}
+
+function openLimitsTab() {
+  const limitsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+    (button) => button.textContent.trim() === 'Limits',
+  );
+  limitsTab.click();
+}
+
 async function waitForCondition(predicate, attempts = 50) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     flushSync();
@@ -286,6 +326,51 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('not_found');
     expect(document.body.textContent).toContain(
       'Tool arguments are never collected.',
+    );
+  });
+
+  it('lazily loads provider usage when the Limits sub-view opens', async () => {
+    rpcMock.mockImplementation(routedRpc(makeUsageReport()));
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+
+    // provider.usage is not fetched until the Limits tab is opened.
+    expect(rpcMock).not.toHaveBeenCalledWith('provider.usage');
+
+    openLimitsTab();
+    await waitForCondition(() => document.body.textContent.includes('OpenAI'));
+
+    expect(rpcMock).toHaveBeenCalledWith('provider.usage');
+    expect(document.body.textContent).toContain('Plus');
+    expect(document.body.textContent).toContain('5h');
+    expect(document.body.textContent).toContain('Resets in');
+    // The error snapshot renders its message cleanly rather than crashing.
+    expect(document.body.textContent).toContain('GitHub Copilot');
+    expect(document.body.textContent).toContain('HTTP 401');
+  });
+
+  it('shows the limits empty state when no providers are connected', async () => {
+    rpcMock.mockImplementation(
+      routedRpc({ generated_at: '2026-06-16T12:00:00+00:00', providers: [] }),
+    );
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+
+    openLimitsTab();
+    await waitForCondition(() =>
+      document.body.textContent.includes(
+        'No subscription providers connected.',
+      ),
+    );
+
+    expect(document.body.textContent).toContain(
+      'No subscription providers connected.',
     );
   });
 

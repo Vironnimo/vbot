@@ -105,6 +105,25 @@ Each `Model` carries `connections: tuple[str, ...]`, loaded from `Model.connecti
 - Target expansion in `core/model_tasks/` skips a connection for a model when `model.connections` is non-empty and the connection id is not in the list, so connection-restricted models do not produce cross-product targets against all usable connections.
 - Refresh tags every discovered model with `connections: [<credential_connection.id>]` and merges into the existing catalog by replacing only models whose `connections` include the current connection id; models belonging to other connections are preserved.
 
+## Usage Probe (`/wham/usage`)
+
+The subscription usage fetcher in `core/providers/usage.py` (see `providers.md` →
+Provider Usage Probe). Live-verified against the real endpoint 2026-06-16 (HTTP 200):
+
+- `GET <connection.base_url>/wham/usage` (base_url `https://chatgpt.com/backend-api`).
+- Headers mirror the Codex runtime path: `Authorization: Bearer <oauth token>`,
+  `chatgpt-account-id: <id>` (from the JWT via `extract_chatgpt_account_id`, falling
+  back to token-store `extra.chatgpt_account_id`), plus `CODEX_EXTRA_HEADERS`
+  (`OpenAI-Beta`, `originator`). A missing account id → snapshot error "Reconnect required".
+- Body (verified shape): `rate_limit.primary_window` + `secondary_window`, each
+  `{used_percent, limit_window_seconds, reset_at}` with `reset_at` an **epoch-seconds**
+  int; top-level `plan_type` (lowercase, e.g. `"plus"`); `credits.{has_credits, balance}`
+  where `balance` is a **string**.
+- Normalization: primary window label = `{hours}h` from `limit_window_seconds`;
+  secondary label = `Week` / `Day` / `{hours}h` by cadence; `plan = plan_type`, with
+  `· <balance> credits` appended only when `has_credits` is true and the (string)
+  balance parses > 0.
+
 ## Error Classification
 
 - 401/403 -> `ProviderAuthError`

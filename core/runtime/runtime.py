@@ -6,6 +6,7 @@ all core services and manages the application lifecycle.
 
 import asyncio
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -23,7 +24,7 @@ from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.models import Model, ModelRegistry
 from core.prompts import SkillPromptRegistry, SystemPromptManager
-from core.providers.accounts import split_connection_id
+from core.providers.accounts import DEFAULT_ACCOUNT_ID, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
@@ -1070,6 +1071,68 @@ class Runtime:
         )
 
         return cast(ProviderAdapter, adapter)
+
+    def get_connection_token_getter(self, provider_id: str, connection_id: str) -> TokenGetter:
+        """Return a token getter for one provider connection.
+
+        Public, DI-friendly wrapper over the same connection resolution and
+        token-getter construction :meth:`get_adapter` uses, so non-chat
+        provider clients (e.g. the usage probe) can obtain a per-connection
+        token without re-implementing OAuth refresh. The returned getter is a
+        :class:`StaticTokenGetter` for api-key connections, or a refresh-capable
+        :class:`OAuthTokenGetter` for OAuth connections.
+
+        Args:
+            provider_id: Unique provider identifier (e.g. ``"openai"``).
+            connection_id: Compositional ``provider:connection[:account]`` id.
+
+        Raises:
+            RuntimeError: If the runtime has not been started.
+            KeyError: If no provider with *provider_id* is registered.
+            ConfigError: If the connection id is unknown.
+        """
+        if not self._started:
+            raise RuntimeError("Runtime not started — call start() first")
+
+        provider_config = self.providers.get(provider_id)
+        connection, account_id = self._get_connection_config(provider_config, connection_id)
+        return self._get_token_getter(provider_id, connection_id, connection, account_id)
+
+    def get_connection_token_extra(self, provider_id: str, connection_id: str) -> Mapping[str, str]:
+        """Return the stored OAuth token ``extra`` metadata for a connection.
+
+        Reads the persisted token-store ``extra`` map for the resolved account
+        (e.g. Copilot's ``github_oauth_token`` or OpenAI's mirrored
+        ``chatgpt_account_id``). Returns an empty mapping when no token is
+        stored — api-key connections and not-yet-connected OAuth connections
+        both yield ``{}`` rather than raising.
+
+        Args:
+            provider_id: Unique provider identifier (e.g. ``"github-copilot"``).
+            connection_id: Compositional ``provider:connection[:account]`` id.
+
+        Raises:
+            RuntimeError: If the runtime has not been started.
+            KeyError: If no provider with *provider_id* is registered.
+            ConfigError: If the connection id is unknown.
+        """
+        if not self._started:
+            raise RuntimeError("Runtime not started — call start() first")
+
+        provider_config = self.providers.get(provider_id)
+        connection, account_id = self._get_connection_config(provider_config, connection_id)
+        resolved_account_id = account_id
+        if resolved_account_id is None:
+            try:
+                resolved_account_id = self.provider_credentials.resolve_account_id(
+                    provider_id, connection.id
+                )
+            except ConfigError:
+                resolved_account_id = DEFAULT_ACCOUNT_ID
+        token = self.token_store.load(provider_id, connection.id, account_id=resolved_account_id)
+        if token is None:
+            return {}
+        return dict(token.extra)
 
     def _build_debug_recorder(self) -> ProviderDebugRecorder | None:
         """Create a debug recorder when debug mode is enabled, else ``None``.
