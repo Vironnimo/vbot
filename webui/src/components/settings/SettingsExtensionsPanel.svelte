@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
 
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -159,14 +160,9 @@
 <div class="s-row s-row--stacked s-row--channels-header">
   <div class="s-row-control">
     <div class="s-row-actions s-row-actions--channel-header">
-      <button
-        class="btn-outline"
-        type="button"
-        disabled={panelBusy}
-        onclick={loadExtensions}
-      >
+      <Button variant="secondary" disabled={panelBusy} onClick={loadExtensions}>
         {t('common.refresh', 'Refresh')}
-      </button>
+      </Button>
     </div>
   </div>
 </div>
@@ -236,11 +232,10 @@
           </div>
 
           <div class="s-ext-controls">
-            <button
-              class="btn-outline"
-              type="button"
+            <Button
+              variant="secondary"
               disabled={rowBusy}
-              aria-label={extension.disabled
+              ariaLabel={extension.disabled
                 ? t(
                     'settings.extensions.enableAria',
                     'Enable extension {name}',
@@ -253,12 +248,12 @@
                     'Disable extension {name}',
                     { name: extension.name },
                   )}
-              onclick={() => toggleExtension(extension)}
+              onClick={() => toggleExtension(extension)}
             >
               {extension.disabled
                 ? t('settings.extensions.enable', 'Enable')
                 : t('settings.extensions.disable', 'Disable')}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -285,16 +280,15 @@
             <span class="s-field-error">{configErrors[extension.name]}</span>
           {/if}
           <div class="s-ext-config-actions">
-            <button
-              class="btn-primary"
-              type="button"
+            <Button
+              variant="primary"
               disabled={rowBusy}
-              onclick={() => saveExtensionConfig(extension)}
+              onClick={() => saveExtensionConfig(extension)}
             >
               {savingConfigName === extension.name
                 ? t('common.saving', 'Saving…')
                 : t('settings.extensions.saveConfig', 'Save config')}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

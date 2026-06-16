@@ -1,6 +1,7 @@
 <script>
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
+  import Button from '../ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import {
     AGENT_FORM_MODE_CREATE,
@@ -293,19 +294,14 @@
       </div>
 
       <div class="modal-footer">
-        <button
-          type="button"
-          class="modal-btn-cancel"
-          disabled={isSaving}
-          onclick={close}
-        >
+        <Button variant="secondary" disabled={isSaving} onClick={close}>
           {t('common.cancel', 'Cancel')}
-        </button>
-        <button type="submit" class="modal-btn-confirm" disabled={isSaving}>
+        </Button>
+        <Button variant="primary" type="submit" disabled={isSaving}>
           {isSaving
             ? t('common.saving', 'Saving…')
             : t('agents.form.submitCreate', 'Create agent')}
-        </button>
+        </Button>
       </div>
     </form>
   </div>

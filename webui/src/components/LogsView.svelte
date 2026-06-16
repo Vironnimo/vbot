@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
+  import Button from './ui/Button.svelte';
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -371,13 +372,12 @@
       >
         {streamStatusLabel(viewState.streamStatus)}
       </span>
-      <button
-        type="button"
-        class="btn-outline"
-        onclick={() => loadCatalogAndMaybeFile({ forceReload: true })}
+      <Button
+        variant="secondary"
+        onClick={() => loadCatalogAndMaybeFile({ forceReload: true })}
       >
         {t('common.refresh', 'Refresh')}
-      </button>
+      </Button>
     </div>
   </header>
 
@@ -387,13 +387,12 @@
       aria-live="polite"
     >
       <span>{viewState.catalogError}</span>
-      <button
-        type="button"
-        class="btn-outline"
-        onclick={() => loadCatalogAndMaybeFile({ forceReload: true })}
+      <Button
+        variant="secondary"
+        onClick={() => loadCatalogAndMaybeFile({ forceReload: true })}
       >
         {t('common.retry', 'Retry')}
-      </button>
+      </Button>
     </div>
   {/if}
 
@@ -403,9 +402,9 @@
       aria-live="polite"
     >
       <span>{viewState.readError}</span>
-      <button type="button" class="btn-outline" onclick={retryCurrentFile}>
+      <Button variant="secondary" onClick={retryCurrentFile}>
         {t('common.retry', 'Retry')}
-      </button>
+      </Button>
     </div>
   {/if}
 

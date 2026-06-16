@@ -1,4 +1,5 @@
 <script>
+  import Button from './ui/Button.svelte';
   import { listSessions } from '$lib/api.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
@@ -138,14 +139,14 @@
 <aside class="session-drawer" aria-label={t('sessions.title', 'Sessions')}>
   <div class="session-drawer__header">
     <h3 class="session-drawer__title">{t('sessions.title', 'Sessions')}</h3>
-    <button
-      type="button"
-      class="btn-outline session-drawer__refresh"
+    <Button
+      variant="secondary"
+      class="session-drawer__refresh"
       disabled={sessionState.loading || !agentId}
-      onclick={() => loadSessions()}
+      onClick={() => loadSessions()}
     >
       {t('common.refresh', 'Refresh')}
-    </button>
+    </Button>
   </div>
 
   {#if sessionState.error}
@@ -253,7 +254,7 @@
     text-transform: uppercase;
   }
 
-  .session-drawer__refresh {
+  :global(.session-drawer__refresh) {
     padding: 4px 10px;
     font-size: 12px;
   }

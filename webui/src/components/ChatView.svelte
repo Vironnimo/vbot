@@ -48,6 +48,7 @@
   import SessionListDrawer from './SessionListDrawer.svelte';
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
+  import Button from './ui/Button.svelte';
 
   let {
     sharedAgents = [],
@@ -1189,14 +1190,14 @@
                       )}
                 </p>
               </div>
-              <button
-                type="button"
-                class="btn-outline chat-view__subagent-session-return"
+              <Button
+                variant="secondary"
+                class="chat-view__subagent-session-return"
                 disabled={loadingHistory}
-                onclick={handleReturnToCurrentSession}
+                onClick={handleReturnToCurrentSession}
               >
                 {t('chat.returnToCurrentSession', 'Return to current session')}
-              </button>
+              </Button>
             </div>
           {/if}
           <div class="chat-view__measure">
@@ -1384,7 +1385,7 @@
     font-size: 12.5px;
   }
 
-  .chat-view__subagent-session-return {
+  :global(.chat-view__subagent-session-return) {
     flex-shrink: 0;
   }
 
@@ -1402,7 +1403,7 @@
       flex-direction: column;
     }
 
-    .chat-view__subagent-session-return {
+    :global(.chat-view__subagent-session-return) {
       margin-right: 0;
     }
   }
