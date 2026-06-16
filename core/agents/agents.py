@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
@@ -21,6 +20,7 @@ from core.memory import (
 from core.sessions import ChatSessionManager
 from core.settings import (
     SettingsValidationError,
+    is_valid_agent_id,
     load_validated_agent_json,
     validate_temperature,
     validate_thinking_effort,
@@ -34,7 +34,6 @@ DEFAULT_THINKING_EFFORT: str | None = None
 DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
 DEFAULT_ALLOWED_ITEMS = ("*",)
 WORKSPACE_TEMPLATE_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
-AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
@@ -361,7 +360,7 @@ class AgentStore:
 
     @staticmethod
     def _validate_agent_id(agent_id: str) -> None:
-        if not AGENT_ID_PATTERN.fullmatch(agent_id):
+        if not is_valid_agent_id(agent_id):
             raise InvalidAgentIdError(
                 "Agent id must be 1-64 characters using only letters, numbers, "
                 "hyphen, or underscore"

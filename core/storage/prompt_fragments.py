@@ -9,10 +9,10 @@ fragments. ``StorageManager`` owns one instance and delegates its prompt methods
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Callable
 from pathlib import Path
 
+from core.settings import is_valid_agent_id
 from core.storage.atomic import remove_temporary_file, temporary_path
 from core.storage.errors import StorageError
 
@@ -35,7 +35,6 @@ AGENT_PROMPT_FRAGMENT_NAMES = frozenset(
         "skills.md",
     }
 )
-AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
 class PromptFragmentStore:
@@ -245,7 +244,7 @@ class PromptFragmentStore:
 
     @staticmethod
     def _validate_agent_id(agent_id: str) -> str:
-        if not isinstance(agent_id, str) or AGENT_ID_PATTERN.fullmatch(agent_id) is None:
+        if not is_valid_agent_id(agent_id):
             raise StorageError(f"Unsafe agent id: {agent_id}")
         return agent_id
 
