@@ -11,7 +11,7 @@ malformed JSON becomes a non-retryable ``ProviderError``).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 
 import httpx
@@ -285,7 +285,7 @@ def test_parse_retry_after_ms_takes_priority_over_seconds() -> None:
 def test_parse_retry_after_http_date_future() -> None:
     """An HTTP-date in the future yields the seconds until that moment."""
 
-    future = datetime.now(timezone.utc) + timedelta(seconds=120)
+    future = datetime.now(UTC) + timedelta(seconds=120)
     headers = httpx.Headers({"Retry-After": format_datetime(future, usegmt=True)})
 
     seconds = parse_retry_after(headers)
@@ -298,7 +298,7 @@ def test_parse_retry_after_http_date_future() -> None:
 def test_parse_retry_after_http_date_in_past_clamps_to_zero() -> None:
     """An HTTP-date already in the past means "retry now" (clamped to 0)."""
 
-    past = datetime.now(timezone.utc) - timedelta(seconds=120)
+    past = datetime.now(UTC) - timedelta(seconds=120)
     headers = httpx.Headers({"Retry-After": format_datetime(past, usegmt=True)})
 
     assert parse_retry_after(headers) == 0.0

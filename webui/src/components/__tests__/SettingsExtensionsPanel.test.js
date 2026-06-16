@@ -15,9 +15,8 @@ vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
 }));
 
-const { default: SettingsExtensionsPanel } = await import(
-  '../settings/SettingsExtensionsPanel.svelte'
-);
+const { default: SettingsExtensionsPanel } =
+  await import('../settings/SettingsExtensionsPanel.svelte');
 
 function extensionsResult() {
   return {
@@ -87,7 +86,9 @@ describe('SettingsExtensionsPanel', () => {
   it('renders extension cards with status, capabilities, and failure detail', async () => {
     rpcMock.mockResolvedValue(extensionsResult());
 
-    mountedComponent = mount(SettingsExtensionsPanel, { target: document.body });
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
     flushSync();
     await flushAsync();
 
@@ -107,7 +108,9 @@ describe('SettingsExtensionsPanel', () => {
       return Promise.resolve({ restart_required: true });
     });
 
-    mountedComponent = mount(SettingsExtensionsPanel, { target: document.body });
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
     flushSync();
     await flushAsync();
 
@@ -130,7 +133,9 @@ describe('SettingsExtensionsPanel', () => {
   it('rejects invalid config JSON without calling settings.update', async () => {
     rpcMock.mockResolvedValue(extensionsResult());
 
-    mountedComponent = mount(SettingsExtensionsPanel, { target: document.body });
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
     flushSync();
     await flushAsync();
 
@@ -142,7 +147,9 @@ describe('SettingsExtensionsPanel', () => {
     buttonByText('Save config').click();
     await flushAsync();
 
-    expect(document.body.textContent).toContain('Config must be a JSON object.');
+    expect(document.body.textContent).toContain(
+      'Config must be a JSON object.',
+    );
     expect(
       rpcMock.mock.calls.some((call) => call[0] === 'settings.update'),
     ).toBe(false);

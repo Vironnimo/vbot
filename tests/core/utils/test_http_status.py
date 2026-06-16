@@ -71,9 +71,9 @@ def test_unlisted_code_without_extra_is_not_retryable() -> None:
 
 def test_retryable_set_is_method_agnostic_codes() -> None:
     """The always-retryable set is exactly 429/502/503/504."""
-    assert RETRYABLE_STATUS_CODES == frozenset({429, 502, 503, 504})
+    assert frozenset({429, 502, 503, 504}) == RETRYABLE_STATUS_CODES
 
 
 def test_idempotent_only_set_is_500() -> None:
     """The idempotent-only set is exactly 500."""
-    assert IDEMPOTENT_RETRYABLE_STATUS_CODES == frozenset({500})
+    assert frozenset({500}) == IDEMPOTENT_RETRYABLE_STATUS_CODES

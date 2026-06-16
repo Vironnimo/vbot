@@ -698,7 +698,8 @@ async def test_await_adapter_shutdown_logs_real_exception_at_error(
 
     error_records = [record for record in caplog.records if record.levelno == logging.ERROR]
     assert any(
-        "shutdown raised during stop" in record.getMessage() and "tg-assistant" in record.getMessage()
+        "shutdown raised during stop" in record.getMessage()
+        and "tg-assistant" in record.getMessage()
         for record in error_records
     )
     # The traceback must be attached so the underlying error is diagnosable.
