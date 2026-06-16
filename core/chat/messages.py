@@ -54,6 +54,14 @@ TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
+
+# Appended to a checkpoint summary when the preserved tail could not be anchored
+# on its recorded boundary and was recovered from post-checkpoint history.
+COMPACTION_TAIL_RECOVERED_HINT = (
+    "Part of the recent verbatim history could not be restored after a data issue "
+    "and is omitted below. The summary above still covers earlier context; the "
+    "conversation continues from the messages that follow."
+)
 INPUT_ORIGIN_SPEECH_TRANSCRIPTION: InputOrigin = "speech_transcription"
 SPEECH_TRANSCRIPTION_SYSTEM_REMINDER = (
     "The following user message was produced by speech-to-text transcription. "
@@ -583,11 +591,42 @@ def _latest_compaction_checkpoint(messages: list[ChatMessage]) -> ChatMessage | 
     return None
 
 
-def _messages_from_boundary(messages: list[ChatMessage], boundary_id: str) -> list[ChatMessage]:
+def _resolve_preserved_tail(
+    messages: list[ChatMessage], checkpoint: ChatMessage
+) -> tuple[list[ChatMessage], bool]:
+    """Resolve the verbatim tail to replay after a compaction checkpoint.
+
+    The tail normally starts at the checkpoint's recorded ``tail_boundary_id``.
+    When that anchor message is no longer present in the loaded history (a
+    corrupted or partial write can truncate it, or the id may be absent), the
+    start falls back to the position right after the checkpoint itself, which is
+    always locatable. That keeps a compacted session usable instead of
+    permanently failing every request build on a dangling boundary reference.
+
+    Returns ``(tail_messages, recovered)`` where ``recovered`` signals that the
+    fallback anchor was used. Checkpoint markers are excluded from the tail.
+    """
+    start_index, recovered = _tail_start_index(messages, checkpoint)
+    tail_messages = [
+        message for message in messages[start_index:] if message.role != "compaction_checkpoint"
+    ]
+    return tail_messages, recovered
+
+
+def _tail_start_index(messages: list[ChatMessage], checkpoint: ChatMessage) -> tuple[int, bool]:
+    boundary_id = checkpoint.tail_boundary_id
+    if boundary_id is not None:
+        for index, message in enumerate(messages):
+            if message.id == boundary_id:
+                return index, False
+    return _index_after_checkpoint(messages, checkpoint), True
+
+
+def _index_after_checkpoint(messages: list[ChatMessage], checkpoint: ChatMessage) -> int:
     for index, message in enumerate(messages):
-        if message.id == boundary_id:
-            return messages[index:]
-    raise ChatError(f"compaction boundary id not found: {boundary_id}")
+        if message.id == checkpoint.id:
+            return index + 1
+    return len(messages)
 
 
 def _embed_notes_into_request(

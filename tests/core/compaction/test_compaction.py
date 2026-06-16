@@ -327,6 +327,60 @@ async def test_summarization_strategy_compact_is_incremental_after_checkpoint() 
 
 
 @pytest.mark.asyncio
+async def test_summarization_strategy_self_heals_when_prior_boundary_missing() -> None:
+    # The prior checkpoint's tail boundary no longer exists in history (e.g. a
+    # corrupted/partial write). Compaction must still run: fall back to the
+    # post-checkpoint region, seed the prior summary, and emit a fresh
+    # checkpoint anchored on a boundary that actually exists.
+    messages = [
+        _user("u1", "ALREADY COMPACTED user turn one"),
+        _assistant("a1", "ALREADY COMPACTED assistant one"),
+        _user("u2", "preserved tail that lost its anchor"),
+        _assistant("a2", "preserved tail answer"),
+        _checkpoint(
+            "c1", boundary="anchor-that-vanished", content="PRIOR SUMMARY", compacted_tokens=50
+        ),
+        _user("u3", "newer turn"),
+        _assistant("a3", "newer answer"),
+        _user("u4", "latest tail turn"),
+        _assistant("a4", "latest tail answer"),
+    ]
+
+    adapter = StubSummaryAdapter({"content": "Merged continuation context."})
+    storage = StubStorage("Create a continuation context.")
+    settings = CompactionSettings(tail_tokens=4)
+    strategy = SummarizationStrategy()
+
+    checkpoint = await strategy.compact(
+        messages,
+        agent=object(),
+        summary_adapter=adapter,
+        summary_model_id="anthropic/claude-sonnet-4",
+        storage=storage,
+        settings=settings,
+    )
+
+    # The fresh boundary is a real id from the post-checkpoint region.
+    assert checkpoint.tail_boundary_id == "u4"
+
+    # Token count still accumulates onto the prior checkpoint's count.
+    delta_tokens = sum(
+        estimate_message_tokens(message.to_dict())[0]
+        for message in messages
+        if message.id in {"u3", "a3"}
+    )
+    assert checkpoint.usage == {"compacted_token_count": 50 + delta_tokens}
+
+    prompt = adapter.requests[0]["messages"][0]["content"]
+    # The prior summary is carried forward and the post-checkpoint delta summarized.
+    assert "PRIOR SUMMARY" in prompt
+    assert "newer turn" in prompt
+    # The unanchored pre-checkpoint slice and already-compacted region are dropped.
+    assert "preserved tail that lost its anchor" not in prompt
+    assert "ALREADY COMPACTED user turn one" not in prompt
+
+
+@pytest.mark.asyncio
 async def test_summarization_strategy_compact_includes_user_instruction() -> None:
     messages = [
         _user("u1", "first turn"),

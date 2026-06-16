@@ -1036,6 +1036,52 @@ class TestRepairDanglingToolCalls:
         envelope = json.loads(tool_entries[0]["content"])
         assert envelope == _synthesized_failure_envelope()
 
+    def test_compaction_build_recovers_from_missing_tail_boundary(self, tmp_path) -> None:
+        # A checkpoint points at a tail boundary that no longer exists in
+        # history (e.g. a corrupted/partial write). The build path must recover
+        # instead of failing every request: keep the summary, replay
+        # post-checkpoint history, and flag the loss in the summary block.
+        from core.chat.chat import ChatLoop
+        from core.chat.messages import COMPACTION_TAIL_RECOVERED_HINT
+        from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+
+        agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+        runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+        session = runtime.chat_sessions.create("coder", session_id="session-one")
+
+        # Pre-checkpoint slice whose anchor is lost, the checkpoint, then a
+        # genuinely new turn appended after the checkpoint.
+        session.append(ChatMessage.user("Lost tail question", timestamp=FIXED_TIMESTAMP))
+        session.append(ChatMessage.assistant(model=agent.model, content="Lost tail answer"))
+        session.append(
+            ChatMessage.compaction_checkpoint(
+                summary="Compacted earlier turns.",
+                tail_boundary_id="boundary-that-no-longer-exists",
+                compacted_token_count=10,
+            )
+        )
+        session.append(ChatMessage.user("Fresh question", timestamp=FIXED_TIMESTAMP))
+
+        request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
+
+        # The summary survives and carries the recovery hint.
+        summary_entries = [
+            entry
+            for entry in request_messages
+            if entry.get("role") == "user"
+            and "Compacted earlier turns." in entry.get("content", "")
+        ]
+        assert len(summary_entries) == 1
+        assert COMPACTION_TAIL_RECOVERED_HINT in summary_entries[0]["content"]
+
+        # Post-checkpoint history is replayed; the unanchored pre-checkpoint
+        # slice is not.
+        user_contents = [
+            entry.get("content") for entry in request_messages if entry.get("role") == "user"
+        ]
+        assert any(content == "Fresh question" for content in user_contents)
+        assert all("Lost tail question" not in (content or "") for content in user_contents)
+
     def test_repair_does_not_double_answer_already_answered_calls(self) -> None:
         # Arrange: every tool call already has a matching tool result.
         tool_envelope = json.dumps({"ok": True, "error": None, "data": {"x": 1}, "artifacts": []})
