@@ -13,8 +13,12 @@ function translateWithValues(_key, fallback, values = {}) {
   );
 }
 
-function catalogModel(id, providerId) {
-  return { id, provider_id: providerId, name: id };
+function catalogModel(id, providerId, connections) {
+  const model = { id, provider_id: providerId, name: id };
+  if (connections) {
+    model.connections = connections;
+  }
+  return model;
 }
 
 function usableConnection(id, providerId, label, accounts) {
@@ -146,6 +150,53 @@ describe('buildModelSelectOptions', () => {
     });
 
     expect(options.some((option) => option.isUnavailable)).toBe(false);
+  });
+
+  it('only offers a connection-restricted model on its allowed connection', () => {
+    const options = buildModelSelectOptions({
+      models: [catalogModel('openai/gpt-5.4', 'openai', ['subscription'])],
+      connections: [
+        usableConnection('openai:api-key', 'openai', 'API Key'),
+        usableConnection('openai:subscription', 'openai', 'Subscription'),
+      ],
+    });
+
+    expect(options.slice(1)).toEqual([
+      {
+        value: 'openai/gpt-5.4::subscription',
+        label: 'openai/gpt-5.4',
+        isUnavailable: false,
+      },
+    ]);
+  });
+
+  it('drops a restricted model entirely when no allowed connection is usable', () => {
+    const options = buildModelSelectOptions({
+      models: [catalogModel('openai/gpt-5.2', 'openai', ['api-key'])],
+      connections: [usableConnection('openai:subscription', 'openai', 'Subscription')],
+      emptyLabel: 'None',
+    });
+
+    expect(options).toEqual([{ value: '', label: 'None', isUnavailable: false }]);
+  });
+
+  it('marks a saved selection on a now-forbidden connection as unavailable', () => {
+    const options = buildModelSelectOptions({
+      models: [catalogModel('openai/gpt-5.4', 'openai', ['subscription'])],
+      connections: [
+        usableConnection('openai:api-key', 'openai', 'API Key'),
+        usableConnection('openai:subscription', 'openai', 'Subscription'),
+      ],
+      selectedModelValue: 'openai/gpt-5.4::api-key',
+      translate: translateWithValues,
+    });
+
+    expect(options[1]).toEqual({
+      value: 'openai/gpt-5.4::api-key',
+      label: 'Unavailable / custom: openai/gpt-5.4 (API Key)',
+      isUnavailable: true,
+    });
+    expect(options.some((option) => option.value === 'openai/gpt-5.4::subscription')).toBe(true);
   });
 
   it('marks a selection pinned to an unknown account as unavailable with the account in the label', () => {

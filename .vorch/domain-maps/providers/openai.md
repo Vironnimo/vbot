@@ -102,7 +102,7 @@ Each `Model` carries `connections: tuple[str, ...]`, loaded from `Model.connecti
 
 - Empty tuple means the model is valid on every connection of its provider.
 - A non-empty tuple restricts the model to the listed connection ids of its provider. Connection-bound Codex models (`connections: ["subscription"]`) are only offered on the subscription connection; Platform models (`connections: ["api-key"]`) only on the api-key connection.
-- Target expansion in `core/model_tasks/` skips a connection for a model when `model.connections` is non-empty and the connection id is not in the list, so connection-restricted models do not produce cross-product targets against all usable connections.
+- The rule is enforced everywhere via `Model.allows_connection(connection_id)` (the single source): target expansion in `core/model_tasks/` skips forbidden connections; the WebUI model dropdown (`modelSelection.js`) only offers a model on connections it permits; and the server rejects a save (`agent.create`/`agent.update`, `settings.update` for the default agent and compaction summary models) that pins a model to a forbidden connection — so a subscription-only Codex model can no longer be saved against an api-key connection and fail only at run time.
 - Refresh tags every discovered model with `connections: [<credential_connection.id>]` and merges into the existing catalog by replacing only models whose `connections` include the current connection id; models belonging to other connections are preserved.
 
 ## Usage Probe (`/wham/usage`)

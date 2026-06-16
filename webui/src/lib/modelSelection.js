@@ -37,7 +37,10 @@ export function buildModelSelectOptions({
     isUnavailable: false,
   };
   const catalogOptions = models.flatMap((model) => {
-    const providerConnections = connectionsByProvider[model.provider_id] ?? [];
+    const providerConnections = connectionsAllowedForModel(
+      model,
+      connectionsByProvider[model.provider_id] ?? [],
+    );
 
     return providerConnections.flatMap((connection) =>
       connectionModelOptions(
@@ -239,6 +242,17 @@ function usableConnectionsByProvider(connections) {
   }
 
   return connectionsByProvider;
+}
+
+function connectionsAllowedForModel(model, providerConnections) {
+  const allowlist = Array.isArray(model?.connections) ? model.connections : [];
+  if (allowlist.length === 0) {
+    return providerConnections;
+  }
+
+  return providerConnections.filter((connection) =>
+    allowlist.includes(connectionLocalIdFromConnectionId(connection.id)),
+  );
 }
 
 function modelOptionLabel(model, connection, providerConnectionCount) {

@@ -3727,6 +3727,134 @@ async def test_agent_crud_rejects_connection_fields(tmp_path: Path) -> None:
     assert "unsupported agent fields" in update_response["error"]["message"]
 
 
+def _append_subscription_only_model(state: Any) -> None:
+    """Add an openai model restricted to the subscription connection."""
+    state.runtime.models._models["openai"].append(
+        Model(
+            model_id="gpt-5.4",
+            name="GPT-5.4",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=256000,
+            max_output_tokens=32000,
+            connections=("subscription",),
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_create_rejects_model_on_forbidden_connection(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _append_subscription_only_model(state)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.create",
+            "params": {
+                "id": "writer",
+                "name": "Writer",
+                "model": "openai/gpt-5.4::api-key",
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "not available on connection 'api-key'" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_agent_update_rejects_fallback_model_on_forbidden_connection(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _append_subscription_only_model(state)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.update",
+            "params": {"id": "coder", "fallback_model": "openai/gpt-5.4::api-key"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "openai/gpt-5.4" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_agent_create_allows_model_on_permitted_connection(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _append_subscription_only_model(state)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.create",
+            "params": {
+                "id": "writer",
+                "name": "Writer",
+                "model": "openai/gpt-5.4::subscription",
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert response["result"]["model"] == "openai/gpt-5.4::subscription"
+
+
+@pytest.mark.asyncio
+async def test_settings_update_rejects_default_model_on_forbidden_connection(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _append_subscription_only_model(state)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {"defaults": {"agent": {"model": "openai/gpt-5.4::api-key"}}},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "defaults.agent.model" in response["error"]["message"]
+    assert state.runtime.storage.load_defaults() == {}
+
+
+@pytest.mark.asyncio
+async def test_settings_update_rejects_summary_model_on_forbidden_connection(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _append_subscription_only_model(state)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "compaction": {
+                    "auto": True,
+                    "threshold": 0.8,
+                    "tail_tokens": 15000,
+                    "summary_model": "openai/gpt-5.4::api-key",
+                }
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "compaction.summary_model" in response["error"]["message"]
+
+
 @pytest.mark.asyncio
 async def test_agent_list_response_omits_connection_fields(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())

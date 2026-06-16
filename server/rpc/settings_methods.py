@@ -13,7 +13,7 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.provider_access import _provider_has_credentials, _provider_settings_connection
-from server.rpc.validation import _required_string
+from server.rpc.validation import _ensure_model_connection_supported, _required_string
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.settings")
@@ -89,6 +89,8 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     if should_reload_recall_backend:
         _validate_recall_backend_known(state.runtime, settings_update["recall"]["backend"])
 
+    _validate_model_connections(state.runtime.models, settings_update)
+
     try:
         storage.update_settings_sections(settings_update)
         if should_reload_skills:
@@ -121,6 +123,19 @@ def _available_recall_backends(runtime: Any) -> list[str]:
     if callable(getter):
         return sorted(getter())
     return sorted(FIRST_PARTY_RECALL_BACKENDS)
+
+
+def _validate_model_connections(models: Any, settings_update: JsonObject) -> None:
+    """Reject default-agent and summary models pinned to a forbidden connection."""
+    agent_defaults = settings_update.get("defaults", {}).get("agent", {})
+    for field in ("model", "fallback_model"):
+        value = agent_defaults.get(field)
+        if isinstance(value, str):
+            _ensure_model_connection_supported(models, f"defaults.agent.{field}", value)
+
+    summary_model = settings_update.get("compaction", {}).get("summary_model")
+    if isinstance(summary_model, str):
+        _ensure_model_connection_supported(models, "compaction.summary_model", summary_model)
 
 
 def _validate_recall_backend_known(runtime: Any, backend: str) -> None:
