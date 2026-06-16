@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import json
 import os
@@ -10,7 +11,7 @@ import uuid
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from core.chat.errors import ChatMessageValidationError, ChatSessionError
 from core.utils.logging import get_logger
@@ -270,8 +271,51 @@ class ChatSession:
         )
 
 
+class _SessionWriteLock:
+    """Task-reentrant async lock guarding one session transcript's appends.
+
+    Reentrant per task so a Run that holds the lock across its tool cycle can run
+    a tool (for example ``channel_send``) that targets its own session without
+    self-deadlocking; re-entry from the owning task just nests. A different task
+    (a channel observe worker, an RPC handler, a Run on another accessor) blocks
+    until the owner releases, which is what keeps an out-of-band note from
+    splitting an open tool cycle.
+    """
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: asyncio.Task[Any] | None = None
+        self._depth = 0
+
+    async def __aenter__(self) -> _SessionWriteLock:
+        task = asyncio.current_task()
+        if task is not None and self._owner is task:
+            self._depth += 1
+            return self
+        await self._lock.acquire()
+        self._owner = task
+        self._depth = 1
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._lock.release()
+
+
 class ChatSessionManager:
     """Manager for agent session files."""
+
+    # Per-session-file append locks, shared process-wide. The manager is
+    # constructed per-call in some paths (e.g. AgentStore), so this coordination
+    # state must live on the class, not the instance, for every writer to a given
+    # session to serialize against the others. A Run holds the lock across its
+    # tool cycle (assistant tool-call message through its tool results) and every
+    # out-of-band writer (channel observed notes, session.link_channel,
+    # channel_send) acquires it, so a note can never split a tool cycle. Entries
+    # are never reaped: one lock per session file ever written is negligible.
+    _write_locks: ClassVar[dict[str, _SessionWriteLock]] = {}
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
@@ -281,6 +325,22 @@ class ChatSessionManager:
         if not agent_id:
             raise ChatSessionError("agent id must not be empty")
         return self.data_dir / "agents" / agent_id / "sessions"
+
+    def write_lock(self, agent_id: str, session_id: str) -> _SessionWriteLock:
+        """Return the shared append lock for one session's transcript file.
+
+        Hold it around any append that must stay contiguous with neighbouring
+        appends — see the class note. Single one-off appends still acquire it so
+        they wait for an open tool cycle on the same session instead of splitting
+        it.
+        """
+        _validate_session_id(session_id)
+        key = str((self.sessions_dir(agent_id) / f"{session_id}{SESSION_FILE_EXTENSION}").resolve())
+        lock = ChatSessionManager._write_locks.get(key)
+        if lock is None:
+            lock = _SessionWriteLock()
+            ChatSessionManager._write_locks[key] = lock
+        return lock
 
     def create(self, agent_id: str, session_id: str | None = None) -> ChatSession:
         """Create a new session for an agent."""
