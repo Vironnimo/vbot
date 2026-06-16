@@ -175,6 +175,18 @@ def _resolve_reasoning_replay_policy(adapter: Any, model_id: str) -> ReasoningRe
     return REASONING_REPLAY_CURRENT_RUN
 
 
+def _resolve_wire_media_support(adapter: Any, model_id: str) -> frozenset[str]:
+    """Resolve the media types the adapter's wire can carry for one request build.
+
+    Mirrors ``_resolve_reasoning_replay_policy``: adapters and test doubles that
+    do not expose the hook carry nothing, so the resolver degrades every
+    attachment rather than emitting media the wire cannot encode.
+    """
+    if hasattr(adapter, "wire_media_support"):
+        return frozenset(adapter.wire_media_support(model_id))
+    return frozenset()
+
+
 def _read_media_text_note(filename: str, media_type: str) -> JsonObject:
     """Plain-text fallback when a read-media image cannot be shown to the model."""
     return {
@@ -477,6 +489,7 @@ class ChatLoop:
                 agent,
                 session,
                 replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+                wire_media_types=_resolve_wire_media_support(adapter, model_id),
             )
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
@@ -637,6 +650,7 @@ class ChatLoop:
         session: ChatSession,
         *,
         replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+        wire_media_types: frozenset[str] = frozenset(),
     ) -> list[JsonObject]:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_messages = (
@@ -711,6 +725,7 @@ class ChatLoop:
             request_messages,
             current_user_message_id=current_user_message.id,
             input_modalities=_model_input_modalities(self._runtime, agent),
+            wire_media_types=wire_media_types,
         )
 
     async def _send_until_final(
@@ -726,6 +741,7 @@ class ChatLoop:
         connection_id: str,
     ) -> ChatMessage:
         replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
+        wire_media_types = _resolve_wire_media_support(adapter, model_id)
         tool_iteration_count = 0
         iteration_number = 1
         for _ in range(self._max_tool_iterations + 1):
@@ -821,7 +837,9 @@ class ChatLoop:
                     # so the tool-cycle invariant (results before any non-tool message)
                     # is preserved.
                     for injection in media_injections:
-                        await self._inject_read_media(agent, session, messages, injection)
+                        await self._inject_read_media(
+                            agent, session, messages, injection, wire_media_types
+                        )
                     # Honor cancellation only after every sibling tool result has
                     # been persisted, so a mid-cycle cancel never leaves an
                     # assistant turn with dangling tool_calls in JSONL history.
@@ -848,6 +866,7 @@ class ChatLoop:
         session: ChatSession,
         messages: list[JsonObject],
         injection: JsonObject,
+        wire_media_types: frozenset[str],
     ) -> None:
         """Inject a tool-loaded media file as a synthetic current-turn user message.
 
@@ -880,6 +899,7 @@ class ChatLoop:
             [_message_to_request_dict(user_message)],
             current_user_message_id=user_message.id,
             input_modalities=input_modalities,
+            wire_media_types=wire_media_types,
         )
         messages.append(resolved[0])
 
@@ -952,6 +972,7 @@ class ChatLoop:
             agent,
             session,
             replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+            wire_media_types=_resolve_wire_media_support(adapter, model_id),
         )
         return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)
 

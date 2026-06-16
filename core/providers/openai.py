@@ -19,6 +19,7 @@ from core.providers._http_shared import (
     decode_response_json,
     wrap_network_error,
 )
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
@@ -160,6 +161,19 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             max_output_tokens=base_model.max_output_tokens,
             metadata=base_model.metadata,
         )
+
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        """Wire media depends on the connection's wire variant.
+
+        The Codex Responses wire (``subscription`` connection) carries images
+        only; the inherited ``/chat/completions`` wire (``api-key`` connection)
+        additionally carries the OpenAI ``input_audio`` formats and, on this
+        verified adapter, native ``application/pdf`` documents (Chat Completions
+        ``file`` parts).
+        """
+        if self._connection_mode == CODEX_RESPONSES_MODE:
+            return IMAGE_WIRE_MEDIA_TYPES
+        return super().wire_media_support(model_id) | {"application/pdf"}
 
     async def _build_headers(self) -> dict[str, str]:
         if self._connection_mode == CODEX_RESPONSES_MODE:

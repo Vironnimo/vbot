@@ -11,7 +11,7 @@ from typing import get_type_hints
 
 import pytest
 
-from core.providers.adapter import ProviderAdapter
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ProviderAdapter
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN
 
 # ---------------------------------------------------------------------------
@@ -104,6 +104,18 @@ class TestProviderAdapterABC:
         adapter = _StubAdapter()
 
         assert adapter.reasoning_replay_policy("any-model") == REASONING_REPLAY_CURRENT_RUN
+
+    def test_wire_media_support_defaults_to_empty(self) -> None:
+        """The ABC carries nothing by default: a forgotten declaration degrades."""
+        adapter = _StubAdapter()
+
+        assert adapter.wire_media_support("any-model") == frozenset()
+
+    def test_image_wire_media_types_are_the_common_image_set(self) -> None:
+        """The shared image constant covers exactly the allowlisted image types."""
+        assert IMAGE_WIRE_MEDIA_TYPES == frozenset(
+            {"image/jpeg", "image/png", "image/gif", "image/webp"}
+        )
 
     def test_default_normalize_response_requires_adapter_implementation(self) -> None:
         """Response normalization is optional for ABC construction but required at use."""

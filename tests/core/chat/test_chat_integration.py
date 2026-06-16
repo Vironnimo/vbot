@@ -13,7 +13,7 @@ import pytest
 from core.chat import ChatLoop, ChatMessage
 from core.chat.content_blocks import MediaBlock
 from core.prompts import SkillPromptRegistry
-from core.providers.adapter import ProviderAdapter
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ProviderAdapter
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningReplayPolicy
 from core.runtime import Runtime
 from core.skills.skills import SkillRegistry
@@ -66,6 +66,10 @@ class FakeAdapter(ProviderAdapter):
         self, response: JsonObject, *, model_id: str | None = None
     ) -> JsonObject:
         return response
+
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        del model_id
+        return IMAGE_WIRE_MEDIA_TYPES
 
 
 class FullHistoryFakeAdapter(FakeAdapter):

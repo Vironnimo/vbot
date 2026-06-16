@@ -15,6 +15,7 @@ import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.anthropic import AnthropicAdapter, _to_anthropic_user_content_block
 from core.providers.errors import (
     NetworkError,
@@ -371,6 +372,38 @@ class TestSendRequestFormat:
         block = {"type": "media", "base64": "YXVkaW8=", "media_type": media_type}
 
         with pytest.raises(ProviderError, match="supports only image media blocks"):
+            _to_anthropic_user_content_block(block)
+
+    def test_document_block_maps_to_anthropic_document_part(self):
+        """A canonical document block becomes an Anthropic base64 document block."""
+        block = {
+            "type": "document",
+            "base64": "JVBERi0=",
+            "media_type": "application/pdf",
+            "filename": "report.pdf",
+        }
+
+        result = _to_anthropic_user_content_block(block)
+
+        assert result == {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": "JVBERi0=",
+            },
+        }
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {"type": "document", "base64": None, "media_type": "application/pdf"},
+            {"type": "document", "base64": "JVBERi0=", "media_type": ""},
+        ],
+    )
+    def test_invalid_document_block_raises(self, block):
+        """Malformed document blocks must never reach the wire as raw dicts."""
+        with pytest.raises(ProviderError, match="document content block requires"):
             _to_anthropic_user_content_block(block)
 
     @respx.mock
@@ -1072,6 +1105,13 @@ TWO_RUN_HISTORY = [
     },
     {"role": "user", "content": "Q2"},
 ]
+
+
+def test_wire_media_support_is_images_plus_pdf(anthropic_adapter):
+    """The Anthropic Messages wire carries images plus native ``application/pdf``."""
+    assert anthropic_adapter.wire_media_support("claude-sonnet-4-20250219") == (
+        IMAGE_WIRE_MEDIA_TYPES | frozenset({"application/pdf"})
+    )
 
 
 class TestReasoningReplay:
