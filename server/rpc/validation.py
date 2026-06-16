@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast
 
+from core.chat import ChatError
 from core.chat.content_blocks import ContentBlock, ContentBlockError, content_block_from_dict
+from core.chat.model_resolution import parse_model_with_connection
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
 JsonObject = dict[str, Any]
@@ -144,3 +146,42 @@ def _optional_bool(params: JsonObject, key: str, *, default: bool) -> bool:
     if not isinstance(value, bool):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a boolean")
     return value
+
+
+def _ensure_model_connection_supported(models: Any, label: str, model_string: str) -> None:
+    """Reject a saved model whose pinned connection its allowlist forbids.
+
+    Mirrors the task-target expansion rule (``Model.allows_connection``): a model
+    with a non-empty connection allowlist may only run on the listed connection
+    ids of its provider. This is the save-time guard behind the WebUI dropdown
+    filter — it also catches model strings that never pass through the UI
+    (imports, hand-edited config).
+
+    Nothing is flagged when there is nothing to check: an empty value, no pinned
+    connection (the runtime then picks a usable one), a malformed model string
+    (surfaced elsewhere at run time), or a model absent from the catalog (e.g. a
+    custom id). ``models`` is the runtime model registry (``runtime.models``).
+    """
+    if not model_string:
+        return
+    try:
+        provider_id, model_id, connection_suffix = parse_model_with_connection(model_string)
+    except ChatError:
+        return
+    if not connection_suffix:
+        return
+
+    connection_id = connection_suffix.partition(":")[0]
+    try:
+        model = models.get(provider_id, model_id)
+    except KeyError:
+        return
+    if model.allows_connection(connection_id):
+        return
+
+    allowed = ", ".join(model.connections)
+    raise RpcError(
+        RPC_ERROR_INVALID_REQUEST,
+        f"params.{label}: model {provider_id}/{model_id} is not available on "
+        f"connection '{connection_id}' (allowed connections: {allowed})",
+    )
