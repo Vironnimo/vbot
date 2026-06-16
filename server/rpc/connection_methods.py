@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from core.models.discovery import refresh_models
+from core.models.discovery import ModelDiscoveryError, refresh_models
 from core.models.models import ModelRegistry
 from core.models.models_dev import (
     ModelsDevCatalog,
@@ -400,28 +400,33 @@ async def _fetch_catalog_for_refresh() -> ModelsDevCatalog | None:
 async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObject:
     catalog = await _fetch_catalog_for_refresh()
     refreshed_providers: list[JsonObject] = []
+    refresh_errors: list[JsonObject] = []
     for provider_id in runtime.providers.list_ids():
         provider = runtime.providers.get(provider_id)
         if not _provider_supports_refresh(provider):
             continue
 
-        provider_results = await _refresh_provider_connections(
+        successes, errors = await _refresh_provider_connections(
             runtime,
             provider_id,
             provider,
             resources_dir,
             catalog,
         )
-        refreshed_providers.extend(provider_results)
+        refreshed_providers.extend(successes)
+        refresh_errors.extend(errors)
 
     canonical_result = await _refresh_canonical_layer_if_possible(catalog, resources_dir)
     _reload_runtime_model_registry(runtime, resources_dir)
-    return {
+    result: JsonObject = {
         "providers": refreshed_providers,
         "refreshed_count": len(refreshed_providers),
-        "model_count": sum(_model_count(result) for result in refreshed_providers),
+        "model_count": sum(_model_count(entry) for entry in refreshed_providers),
         "canonical": canonical_result,
     }
+    if refresh_errors:
+        result["errors"] = refresh_errors
+    return result
 
 
 async def _refresh_canonical_layer_if_possible(
@@ -452,21 +457,29 @@ async def _refresh_provider_model_db(
         )
 
     catalog = await _fetch_catalog_for_refresh()
-    provider_results = await _refresh_provider_connections(
+    successes, errors = await _refresh_provider_connections(
         runtime,
         provider_id,
         provider,
         resources_dir,
         catalog,
     )
-    await _refresh_canonical_layer_if_possible(catalog, resources_dir)
-    _reload_runtime_model_registry(runtime, resources_dir)
-    if not provider_results:
+    if not successes:
+        # An explicit single-provider refresh that produced nothing useful
+        # still reports why: a discovery failure surfaces its message, an
+        # absent credential keeps the existing "not found" wording.
+        if errors:
+            raise RpcError(RPC_ERROR_DOMAIN, str(errors[0]["error"]))
         raise RpcError(
             RPC_ERROR_DOMAIN,
             f"Provider credentials not found for provider '{provider_id}'",
         )
-    return provider_results[0]
+    await _refresh_canonical_layer_if_possible(catalog, resources_dir)
+    _reload_runtime_model_registry(runtime, resources_dir)
+    result = dict(successes[0])
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 def _provider_supports_refresh(provider: Any) -> bool:
@@ -498,7 +511,7 @@ async def _refresh_provider_connections(
     provider: Any,
     resources_dir: Path,
     models_dev_catalog: ModelsDevCatalog | None = None,
-) -> list[JsonObject]:
+) -> tuple[list[JsonObject], list[JsonObject]]:
     """Refresh every connection on *provider* that supports it.
 
     Connections without an effective ``models_endpoint`` or without
@@ -506,9 +519,16 @@ async def _refresh_provider_connections(
     shared ``<provider>.json`` catalog via discovery's merge logic. The
     pre-fetched ``models_dev_catalog`` is threaded into each refresh so the
     public catalog is fetched once per refresh, not once per connection.
+
+    A connection whose discovery fails (provider unreachable, bad key, fatal
+    HTTP status, malformed catalog) is logged and recorded as an error rather
+    than raised: one broken connection must never abort its sibling
+    connections or — in a global refresh — the remaining providers. Returns
+    ``(successes, errors)``; each error carries the connection id and message.
     """
 
-    results: list[JsonObject] = []
+    successes: list[JsonObject] = []
+    errors: list[JsonObject] = []
     for connection in getattr(provider, "connections", []):
         if not _connection_effective_endpoint(connection, provider):
             continue
@@ -527,15 +547,31 @@ async def _refresh_provider_connections(
                 exc,
             )
             continue
-        result = await refresh_models(
-            provider,
-            credential_value,
-            resources_dir,
-            credential_connection=connection,
-            models_dev_catalog=models_dev_catalog,
-        )
-        results.append(result)
-    return results
+        try:
+            result = await refresh_models(
+                provider,
+                credential_value,
+                resources_dir,
+                credential_connection=connection,
+                models_dev_catalog=models_dev_catalog,
+            )
+        except ModelDiscoveryError as exc:
+            _LOGGER.warning(
+                "Model refresh failed for provider '%s' connection '%s': %s",
+                provider_id,
+                connection.id,
+                exc,
+            )
+            errors.append(
+                {
+                    "provider_id": provider_id,
+                    "connection_id": connection_id,
+                    "error": str(exc),
+                }
+            )
+            continue
+        successes.append(result)
+    return successes, errors
 
 
 def _reload_runtime_model_registry(runtime: Any, resources_dir: Path) -> None:

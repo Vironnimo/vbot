@@ -2790,6 +2790,164 @@ async def test_model_refresh_db_maps_discovery_failures_to_rpc_error(
 
 
 @pytest.mark.asyncio
+async def test_model_refresh_db_global_continues_when_one_provider_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A single unreachable provider must not abort the whole global refresh.
+
+    The healthy provider is still written and loaded into the runtime
+    registry, and the failure is reported in ``errors`` instead of turning the
+    whole RPC into an error.
+    """
+
+    async def selective_refresh_models(
+        provider_config: Any,
+        credential_value: str,
+        resources_dir: Path,
+        **kwargs: Any,
+    ) -> JsonObject:
+        if provider_config.id == "openrouter":
+            raise ModelDiscoveryError(
+                "Model discovery failed for provider 'openrouter': 503 upstream down"
+            )
+        return await fake_refresh_models(provider_config, credential_value, resources_dir, **kwargs)
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("OPENROUTER_SECONDARY_API_KEY", "secondary-key")
+    monkeypatch.setattr(delegates, "refresh_models", selective_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.providers.add(
+        SimpleNamespace(
+            id="refreshable-secondary",
+            name="Refreshable Secondary",
+            adapter="openai_compatible",
+            base_url="https://secondary.example/v1",
+            defaults={},
+            extra_headers={},
+            models_endpoint="/models",
+            connections=[
+                SimpleNamespace(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=SimpleNamespace(credential_key="OPENROUTER_SECONDARY_API_KEY"),
+                )
+            ],
+        )
+    )
+
+    response = await dispatch_rpc(state, {"method": "model.refresh_db"})
+
+    assert response["ok"] is True, response
+    result = response["result"]
+    assert result["providers"] == [
+        {
+            "provider_id": "refreshable-secondary",
+            "model_count": 1,
+            "fetched_at": "2026-05-08T19:08:00+00:00",
+        },
+    ]
+    assert result["refreshed_count"] == 1
+    assert result["model_count"] == 1
+    assert result["errors"] == [
+        {
+            "provider_id": "openrouter",
+            "connection_id": "openrouter:api-key",
+            "error": "Model discovery failed for provider 'openrouter': 503 upstream down",
+        }
+    ]
+    # The healthy provider is loaded into the runtime registry despite the failure.
+    assert state.runtime.models.get("refreshable-secondary", "fresh-model").name == "Fresh Model"
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_single_provider_reports_failed_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One failing connection must not sink a provider's other connection.
+
+    The healthy connection still refreshes and reloads; the failed one is
+    reported in ``errors`` on the single-provider result.
+    """
+
+    async def selective_refresh_models(
+        provider_config: Any,
+        credential_value: str,
+        resources_dir: Path,
+        **kwargs: Any,
+    ) -> JsonObject:
+        if kwargs["credential_connection"].id == "secondary":
+            raise ModelDiscoveryError(
+                "Model discovery failed for provider 'openai': 401 unauthorized"
+            )
+        return await fake_refresh_models(provider_config, credential_value, resources_dir, **kwargs)
+
+    monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
+    monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
+    monkeypatch.setattr(delegates, "refresh_models", selective_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(
+        SimpleNamespace(
+            id="openai",
+            name="OpenAI",
+            adapter="openai",
+            base_url="https://api.openai.com/v1",
+            defaults={},
+            extra_headers={},
+            models_endpoint=None,
+            connections=[
+                SimpleNamespace(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    base_url="https://api.openai.com/v1",
+                    models_endpoint="/v1/models",
+                    auth=SimpleNamespace(credential_key="OPENAI_PRIMARY_KEY"),
+                ),
+                SimpleNamespace(
+                    id="secondary",
+                    type="api_key",
+                    label="Secondary",
+                    base_url="https://api.openai.com/v1",
+                    models_endpoint="/v1/models",
+                    auth=SimpleNamespace(credential_key="OPENAI_SECONDARY_KEY"),
+                ),
+            ],
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openai"}},
+    )
+
+    assert response["ok"] is True, response
+    result = response["result"]
+    assert result["provider_id"] == "openai"
+    assert result["model_count"] == 1
+    assert result["errors"] == [
+        {
+            "provider_id": "openai",
+            "connection_id": "openai:secondary",
+            "error": "Model discovery failed for provider 'openai': 401 unauthorized",
+        }
+    ]
+    assert state.runtime.models.get("openai", "fresh-model").name == "Fresh Model"
+
+
+@pytest.mark.asyncio
 async def test_model_refresh_db_rejects_provider_without_models_endpoint(
     tmp_path: Path,
 ) -> None:

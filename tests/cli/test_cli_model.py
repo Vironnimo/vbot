@@ -227,6 +227,44 @@ def test_model_refresh_formats_global_result(
     )
 
 
+def test_model_refresh_reports_failed_providers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refresh that skipped an unreachable provider names it in the message."""
+
+    instance = make_instance(tmp_path)
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "refreshed_count": 1,
+                    "model_count": 25,
+                    "errors": [
+                        {
+                            "provider_id": "openrouter",
+                            "connection_id": "openrouter:api-key",
+                            "error": "503 upstream down",
+                        }
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr(model_management.httpx, "post", fake_post)
+
+    result = model_management.model_refresh(instance)
+
+    assert result == CommandResult(
+        ok=True,
+        message="refreshed 1 providers (25 models); 1 failed: openrouter:api-key",
+        instance=instance,
+    )
+
+
 def test_model_list_returns_error_on_rpc_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

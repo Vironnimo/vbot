@@ -532,6 +532,8 @@ export const englishCatalog = Object.freeze({
   'settings.providers.refreshSuccess':
     'Model DB updated: {providerCount} providers, {count} models available.',
   'settings.providers.refreshError': 'Model DB could not be updated.',
+  'settings.providers.refreshPartial':
+    'Some providers could not be reached and were skipped: {providers}.',
   'settings.providers.connect': 'Connect',
   'settings.providers.disconnect': 'Disconnect',
   'settings.providers.connected': 'Connected',
