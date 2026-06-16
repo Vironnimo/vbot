@@ -311,11 +311,11 @@ class TestConnectionParsing:
         # Assert
         assert config.get_connection("api-key").base_url == "https://enterprise.example.com/v1"
 
-    def test_openai_subscription_oauth_device_flow_fields_parse(
+    def test_subscription_connection_oauth_device_flow_fields_parse(
         self,
         tmp_path: Path,
     ) -> None:
-        """OpenAI Subscription's Codex Device Flow metadata parses from JSON."""
+        """A subscription connection's Codex Device Flow metadata parses from JSON."""
         # Arrange
         prov_dir = tmp_path / "providers"
         prov_dir.mkdir()
@@ -844,7 +844,7 @@ class TestConnectionModeAndModelsEndpoint:
         assert connection.mode == "codex_responses"
         assert connection.models_endpoint == "/codex/models"
 
-    def test_openai_subscription_connection_parses_mode_and_models_endpoint(
+    def test_subscription_connection_parses_mode_and_models_endpoint(
         self,
         tmp_path: Path,
     ) -> None:
