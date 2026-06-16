@@ -88,23 +88,6 @@ by their head alone. Neither is worth building yet.
 
 **Why deferred:** cleaning it up means rewriting the fixture, then chasing every test that depends on its specific shape (the `oauth` / `api-key` connection ids, the `OPENAI_OAUTH_TOKEN` env var, etc.). Pure test refactor, no production behavior. Out of scope for the merge, and the merge is a feature change, not a test-hygiene drive. Do it in a focused follow-up PR.
 
-## 2026-06-11 — Dead-code sweep: test-only public APIs left in place
-
-The recall `upsert_session` and github-copilot `iter_responses_sse_deltas` convenience wrappers from
-this sweep have been removed (their tests now use the surviving batched/`_with_state` APIs). One
-candidate remains, deferred because removing it is a large test refactor rather than a deletion:
-
-- `core/storage/storage.py` — per-section `update_appearance_settings` / `update_skill_directory_settings` /
-  `update_recall_settings` / `update_debug_settings` / `update_web_search_settings` / `update_defaults` /
-  `update_compaction_settings` have no production caller: the RPC path goes through
-  `update_settings_sections` (one transaction over the private `_apply_*` helpers). They are exercised only by
-  the per-section unit tests in `tests/core/storage/test_storage*.py`, the skill-directory setup in
-  `tests/core/runtime/test_runtime.py`, and a fake reimplementation in `tests/server/test_rpc.py`.
-
-**Why still deferred:** ~30 per-section unit tests plus the `test_rpc` fake would move to
-`update_settings_sections({...})` with adjusted return-shape assertions. Genuinely dead, but low value
-for the churn — do it when those storage tests are touched anyway.
-
 ## 2026-06-11 — Linux readiness: remaining unverified pieces
 
 A Linux-readiness audit found the process layer already platform-branched (POSIX kill via
