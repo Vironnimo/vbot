@@ -1200,3 +1200,45 @@ def test_stream_raises_provider_error_for_non_object_json() -> None:
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def test_build_payload_translates_user_image_media_block() -> None:
+    payload = build_responses_payload(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {"type": "media", "media_type": "image/png", "base64": "aW1n"},
+                ],
+            }
+        ],
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+    )
+
+    assert payload["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "What is this?"},
+                {"type": "input_image", "image_url": "data:image/png;base64,aW1n"},
+            ],
+        }
+    ]
+
+
+def test_build_payload_rejects_non_image_media_block() -> None:
+    with pytest.raises(ProviderError, match="only image media blocks"):
+        build_responses_payload(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "media", "media_type": "audio/wav", "base64": "YXVkaW8="}
+                    ],
+                }
+            ],
+            model_id="gpt-5.4",
+            policy=responses_policy(),
+        )

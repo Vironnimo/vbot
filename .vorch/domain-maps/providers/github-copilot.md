@@ -52,5 +52,6 @@ Endpoint selection uses sanitized model metadata first:
 
 - Exact-model quirks belong in `core/providers/github_copilot_policy.py`, not hand-edited `resources/models/github-copilot.json`.
 - Copilot Responses tool calls may use nested `function.{name,arguments}`; helper code must preserve a non-empty name from either top-level or nested fields.
+- All three wire builders carry user image `media` blocks for vision models: `/chat/completions` via the inherited OpenAI-compatible path (`image_url`), `/v1/messages` as an Anthropic-style `image`/`source` block, `/responses` as an `input_image` data-URI part. Non-image media raises `ProviderError` rather than being dropped. A new wire builder must translate `media` blocks too — the vision-capability gate (`block_resolver.py`, `chat.md`) only resolves images for vision models, so by the time a `media` block reaches a wire builder it must be sent, never silently filtered to text.
 - Partial metadata stays conservative: omit uncertain controls instead of forwarding them.
 - Token values must never be logged.
