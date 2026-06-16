@@ -479,7 +479,7 @@ class ChannelConversationEngine:
 
     async def _process_queued_work(self, queued: _QueuedWork) -> None:
         if isinstance(queued, _QueuedObservedMessage):
-            self._process_queued_observed_message(queued)
+            await self._process_queued_observed_message(queued)
             return
         if isinstance(queued, _QueuedCommandAction):
             await self._handle_command_action(queued.action, queued.route, queued.reply_plan)
@@ -489,14 +489,17 @@ class ChannelConversationEngine:
             return
         await self._process_queued_message(queued)
 
-    def _process_queued_observed_message(self, queued: _QueuedObservedMessage) -> None:
+    async def _process_queued_observed_message(self, queued: _QueuedObservedMessage) -> None:
         route, session = self._ensure_channel_session(queued.conversation)
         reply_plan = ReplyPlanFacts(
             channel_id=self._config.id,
             platform_target=queued.conversation.chat_id,
         )
         self._update_session_metadata(route, queued.conversation, reply_plan)
-        session.add_note(queued.note)
+        # Wait for any open tool cycle on this shared session (a Run via another
+        # accessor) so the observed note lands after the cycle, never inside it.
+        async with self._chat_sessions.write_lock(route.agent_id, route.session_id):
+            session.add_note(queued.note)
 
     async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
         command_text = _command_text_from_content(queued.message.content)

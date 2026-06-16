@@ -15,6 +15,23 @@ from core.tools.channel import (
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope, tool_failure
 
 
+class _NullAsyncContext:
+    """Stand-in for the per-session write lock in mocked chat-session managers."""
+
+    async def __aenter__(self) -> _NullAsyncContext:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+
+def make_chat_sessions() -> Mock:
+    """Return a mock ``ChatSessionManager`` whose ``write_lock`` is async-usable."""
+    chat_sessions = Mock()
+    chat_sessions.write_lock.return_value = _NullAsyncContext()
+    return chat_sessions
+
+
 def make_context(workspace: Path, tool_name: str = CHANNEL_SEND_TOOL_NAME) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
@@ -69,7 +86,7 @@ def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
 
@@ -104,7 +121,7 @@ def test_channel_send_records_outbound_note_in_target_session(tmp_path: Path) ->
     channel_service.ensure_outbound_session.return_value = RouteFacts(
         agent_id="agent-1", session_id="ch-tg-assistant-12345"
     )
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     session = Mock()
     chat_sessions.get_or_create.return_value = session
     registry = ToolRegistry()
@@ -142,7 +159,7 @@ def test_channel_send_outbound_note_lists_attached_file_names(tmp_path: Path) ->
     channel_service.ensure_outbound_session.return_value = RouteFacts(
         agent_id="agent-1", session_id="ch-tg-assistant-12345"
     )
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     session = Mock()
     chat_sessions.get_or_create.return_value = session
     registry = ToolRegistry()
@@ -171,7 +188,7 @@ def test_channel_send_succeeds_even_when_note_recording_fails(tmp_path: Path) ->
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
     channel_service.ensure_outbound_session.side_effect = RuntimeError("boom")
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
 
@@ -196,7 +213,7 @@ def test_channel_send_resolves_platform_target_from_session_metadata(tmp_path: P
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     chat_sessions.get_metadata.return_value = {
         "last_reply_target": {
             "channel_id": "tg-assistant",
@@ -235,7 +252,7 @@ def test_channel_send_ignores_session_metadata_for_other_channel(tmp_path: Path)
     channel_service.list_channels.return_value = [
         make_channel_config(channel_id="tg-private", allowed_chat_ids=[8506476339])
     ]
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     chat_sessions.get_metadata.return_value = {
         "last_reply_target": {
             "channel_id": "tg-other",
@@ -272,7 +289,7 @@ def test_channel_send_resolves_platform_target_from_unique_allowed_chat_id(tmp_p
     channel_service.list_channels.return_value = [
         make_channel_config(channel_id="tg-private", allowed_chat_ids=[8506476339]),
     ]
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     chat_sessions.get_metadata.return_value = {}
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
@@ -304,7 +321,7 @@ def test_channel_send_requires_message_or_file_paths(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = []
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
 
@@ -333,7 +350,7 @@ def test_channel_send_file_paths_only_forwards_files(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
 
@@ -369,7 +386,7 @@ def test_channel_send_message_and_file_paths_forwarded(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
 
@@ -401,7 +418,7 @@ def test_channel_send_nonexistent_file_path_returns_failure(tmp_path: Path) -> N
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = []
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
 
@@ -428,7 +445,7 @@ def test_channel_send_fails_when_platform_target_is_missing_everywhere(tmp_path:
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     chat_sessions.get_metadata.return_value = {}
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
@@ -457,7 +474,7 @@ def test_channel_send_unknown_channel_returns_failure_envelope(tmp_path: Path) -
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = []
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
 
@@ -481,7 +498,7 @@ def test_channel_send_rejects_channel_owned_by_other_agent(tmp_path: Path) -> No
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config(agent_id="agent-2")]
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
 
@@ -510,7 +527,7 @@ def test_channel_send_disabled_channel_returns_failure_envelope(tmp_path: Path) 
     channel_service.send = AsyncMock()
     channel_service.send.side_effect = ChannelNotFoundError("Channel not active: tg-disabled")
     channel_service.list_channels.return_value = [make_channel_config(channel_id="tg-disabled")]
-    chat_sessions = Mock()
+    chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
 

@@ -155,7 +155,7 @@ def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     return {"sessions": sessions}
 
 
-def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
+async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"agent_id", "session_id", "channel_id", "platform_conv_id"}
     unsupported_fields = sorted(set(params) - supported_fields)
     if unsupported_fields:
@@ -190,13 +190,16 @@ def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
             }
         )
         state.runtime.chat_sessions.set_metadata(agent_id, session_id, metadata)
-        session.add_note(
-            channel_system_reminder(
-                platform_display_name=channel_config.platform.capitalize(),
-                channel_id=channel_id,
-                chat_id=platform_conv_id,
+        # Serialize the channel-link note against any open tool cycle on this
+        # session (a Run via another accessor) so it cannot split that cycle.
+        async with state.runtime.chat_sessions.write_lock(agent_id, session_id):
+            session.add_note(
+                channel_system_reminder(
+                    platform_display_name=channel_config.platform.capitalize(),
+                    channel_id=channel_id,
+                    chat_id=platform_conv_id,
+                )
             )
-        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"ok": True}
