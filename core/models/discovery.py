@@ -1,8 +1,8 @@
 """Dynamic model discovery pipeline.
 
 The discovery pipeline fetches provider model metadata, normalizes it into the
-same JSON shape consumed by :class:`ModelRegistry`, applies optional overrides,
-and writes the resulting provider model file.
+same JSON shape consumed by :class:`ModelRegistry`, and writes the resulting
+provider model file.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from typing import Any, Protocol
 import httpx
 
 from core.models.models import (
-    REASONING_CONTROLS,
     Model,
     ModelRegistry,
     ReasoningCapabilities,
@@ -41,12 +40,10 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
-from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
-OVERRIDE_FILE_SUFFIX = ".overrides.json"
 _LOGGER = get_logger("models.discovery")
 
 
@@ -411,40 +408,6 @@ def _has_canonical_join(catalog: ModelsDevCatalog, pointer: str | None, wire_id:
     return wire_id in catalog.models
 
 
-def apply_overrides(
-    models: Mapping[str, Model | Mapping[str, Any]], overrides_path: Path
-) -> dict[str, dict[str, Any]]:
-    """Apply optional field-level model overrides to normalized model data.
-
-    Retained for callers/tests that still want the explicit merge helper.
-    Refresh itself no longer bakes overrides into ``<provider>.json`` — that
-    cross-file merge moved to LOAD (Phase 2). The override file is now read at
-    load time, not at refresh time.
-    """
-
-    merged = {model_id: _model_to_data(model) for model_id, model in models.items()}
-    if not overrides_path.exists():
-        return merged
-
-    override_data = json.loads(overrides_path.read_text(encoding="utf-8"))
-    override_models = override_data.get("models", {})
-    if not isinstance(override_models, dict):
-        raise ValueError(f"Override file '{overrides_path}' must contain a models object")
-
-    for model_id, model_override in override_models.items():
-        if not isinstance(model_override, dict):
-            raise ValueError(f"Override for model '{model_id}' must be an object")
-
-        if model_id in merged:
-            merged[model_id] = {**merged[model_id], **model_override}
-        else:
-            merged[model_id] = dict(model_override)
-
-        _validate_override_model_data(model_id, merged[model_id], overrides_path)
-
-    return merged
-
-
 async def _fetch_raw_models(
     url: str,
     provider_config: ProviderConfig,
@@ -690,72 +653,6 @@ def _plain_data(value: Any) -> Any:
     return value
 
 
-def _overrides_path(resources_dir: Path, provider_id: str) -> Path:
-    return resources_dir / "models" / f"{provider_id}{OVERRIDE_FILE_SUFFIX}"
-
-
-def _validate_override_model_data(
-    model_id: str,
-    model_data: Mapping[str, Any],
-    overrides_path: Path,
-) -> None:
-    try:
-        _validate_model_data(model_id, model_data)
-    except ValueError as exc:
-        raise ValueError(
-            f"Invalid override for model '{model_id}' in '{overrides_path}': {exc}"
-        ) from exc
-
-
-def _validate_model_data(model_id: str, model_data: Mapping[str, Any]) -> None:
-    caps = _read_mapping(model_data, "capabilities")
-    reasoning = _read_mapping(caps, "reasoning")
-    _read_string(model_data, "name")
-    _read_bool(caps, "vision")
-    _read_bool(caps, "tools")
-    _read_bool(caps, "json_mode")
-    _validate_reasoning(reasoning)
-    _read_string_list(caps, "input_modalities")
-    _read_string_list(caps, "output_modalities")
-    _read_string_list(caps, "supported_parameters")
-    _read_string_list(caps, "task_types")
-    _read_optional_int(model_data, "context_window")
-    _read_optional_int(model_data, "max_output_tokens")
-    _read_optional_string(model_data, "family")
-    if not model_id:
-        raise ValueError("Override-only model id must not be empty")
-
-
-def _validate_reasoning(reasoning: Mapping[str, Any]) -> None:
-    """Validate the typed reasoning block, accepting the minimal form.
-
-    ``supported`` is required; ``control``/``levels``/``budget_max`` are all
-    optional (Phase 1 carries no ladder data, so ``{"supported": true}`` with
-    no control is valid). When present, ``control`` must be one of the allowed
-    kinds, every ``levels`` value must be a known thinking effort, and
-    ``budget_max`` must be an int.
-    """
-
-    _read_bool(reasoning, "supported")
-    control = reasoning.get("control")
-    if control is not None and (not isinstance(control, str) or control not in REASONING_CONTROLS):
-        allowed = ", ".join(REASONING_CONTROLS)
-        raise ValueError(f"Expected 'control' to be one of [{allowed}] or null")
-    levels = reasoning.get("levels")
-    if levels is not None:
-        if not isinstance(levels, list) or not all(isinstance(item, str) for item in levels):
-            raise ValueError("Expected 'levels' to be a list of strings")
-        unknown = [level for level in levels if level not in THINKING_EFFORT_ORDER]
-        if unknown:
-            allowed = ", ".join(THINKING_EFFORT_ORDER)
-            raise ValueError(
-                f"Expected 'levels' values to be thinking efforts [{allowed}]; "
-                f"got unknown {unknown}"
-            )
-    if "budget_max" in reasoning:
-        _read_optional_int(reasoning, "budget_max")
-
-
 def _adapter_class_for_discovery(adapter: str):
     adapter_class = _DISCOVERY_ADAPTER_MAP.get(adapter)
     if adapter_class is None:
@@ -796,52 +693,6 @@ def _append_query_params(url: str, params: dict[str, str]) -> str:
     separator = "&" if "?" in url else "?"
     encoded = "&".join(f"{k}={v}" for k, v in params.items())
     return f"{url}{separator}{encoded}"
-
-
-def _read_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
-    value = data.get(key)
-    if not isinstance(value, dict):
-        raise ValueError(f"Expected '{key}' to be an object")
-    return value
-
-
-def _read_string(data: Mapping[str, Any], key: str) -> str:
-    value = data.get(key)
-    if not isinstance(value, str):
-        raise ValueError(f"Expected '{key}' to be a string")
-    return value
-
-
-def _read_optional_string(data: Mapping[str, Any], key: str) -> str | None:
-    value = data.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError(f"Expected '{key}' to be a string or absent")
-    return value
-
-
-def _read_optional_int(data: Mapping[str, Any], key: str) -> int | None:
-    value = data.get(key)
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"Expected '{key}' to be an integer or null")
-    return value
-
-
-def _read_bool(data: Mapping[str, Any], key: str) -> bool:
-    value = data.get(key)
-    if not isinstance(value, bool):
-        raise ValueError(f"Expected '{key}' to be a boolean")
-    return value
-
-
-def _read_string_list(data: Mapping[str, Any], key: str) -> list[str]:
-    value = data.get(key)
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"Expected '{key}' to be a list of strings")
-    return value
 
 
 _DISCOVERY_ADAPTER_MAP = {
