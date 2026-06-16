@@ -342,6 +342,22 @@ class StubModels:
                     matches.append((provider_id, model))
         return sorted(matches, key=lambda item: (item[0], item[1].model_id))
 
+    def reload(self, resources_dir: Path) -> None:
+        """Mirror ``ModelRegistry.reload``: swap contents in place from disk.
+
+        Refresh writes new ``<provider>.json`` layer files; an in-place swap keeps
+        this instance's identity so holders that captured it (the command
+        dispatcher, task targets, recall) see the new catalog. The freshly written
+        files are assembled through the real registry and regrouped here.
+        """
+
+        ModelRegistry.invalidate(resources_dir)
+        loaded = ModelRegistry.load(resources_dir)
+        regrouped: dict[str, list[Model]] = {}
+        for provider_id, model in loaded.query(ModelQuery.from_filters({})):
+            regrouped.setdefault(provider_id, []).append(model)
+        self._models = regrouped
+
 
 class EmptyStubModels(StubModels):
     def list_for_provider(self, provider_id: str) -> list[object]:
@@ -2513,6 +2529,41 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
 
 
 @pytest.mark.asyncio
+async def test_model_refresh_db_updates_registry_in_place_for_captured_holders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refresh reloads the registry in place rather than rebinding it.
+
+    Services that captured the registry at construction (task-model targets for
+    speech/image/embeddings, the status display, the recall backend) hold the
+    same instance, so the refreshed catalog must reach them without a restart.
+    """
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    # The instance every holder captured at construction time.
+    registry_before = state.runtime.models
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}},
+    )
+
+    assert response["ok"] is True
+    # Not rebound: holders still share this same instance...
+    assert state.runtime.models is registry_before
+    # ...and it now carries the refreshed catalog.
+    assert registry_before.get("openrouter", "fresh-model").name == "Fresh Model"
+
+
+@pytest.mark.asyncio
 async def test_model_refresh_db_without_params_refreshes_only_eligible_providers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2612,7 +2663,9 @@ async def test_model_refresh_db_empty_params_reloads_runtime_registry_after_glob
     response = await dispatch_rpc(state, {"method": "model.refresh_db", "params": {}})
 
     assert response["ok"] is True
-    assert state.runtime.models is not previous_models
+    # The global refresh reloads the registry in place: the same instance every
+    # holder captured stays, now carrying the refreshed catalog.
+    assert state.runtime.models is previous_models
     assert state.runtime.models.get("openrouter", "fresh-model").name == "Fresh Model"
 
 

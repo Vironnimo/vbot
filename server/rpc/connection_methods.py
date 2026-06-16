@@ -10,7 +10,6 @@ from typing import Any
 import httpx
 
 from core.models.discovery import ModelDiscoveryError, refresh_models
-from core.models.models import ModelRegistry
 from core.models.models_dev import (
     ModelsDevCatalog,
     ModelsDevError,
@@ -575,8 +574,11 @@ async def _refresh_provider_connections(
 
 
 def _reload_runtime_model_registry(runtime: Any, resources_dir: Path) -> None:
-    ModelRegistry.invalidate(resources_dir)
-    runtime._models = ModelRegistry.load(resources_dir)
+    # Reload in place rather than rebinding ``runtime._models``: services that
+    # captured the registry at construction (task-model targets for
+    # speech/image/embeddings, the status display, the recall backend) hold the
+    # same instance, so an in-place swap reaches all of them without re-wiring.
+    runtime.models.reload(resources_dir)
 
 
 def _model_count(result: JsonObject) -> int:
