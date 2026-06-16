@@ -307,6 +307,7 @@ export const englishCatalog = Object.freeze({
   'cron.status.active': 'Active',
   'cron.status.paused': 'Paused',
   'cron.status.completed': 'Completed',
+  'cron.status.failed': 'Failed',
   'cron.notAvailable': '—',
   'cron.systemDefault': 'System default',
   'cron.actions.enable': 'Enable',
