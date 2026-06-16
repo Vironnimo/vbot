@@ -2846,6 +2846,67 @@ async def test_model_refresh_db_iterates_every_refreshable_connection(
 
 
 @pytest.mark.asyncio
+async def test_global_refresh_counts_multi_connection_provider_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider with several connections counts as one provider, one catalog.
+
+    The global refresh walks every connection (here two credentialed ones),
+    but the summary reports per provider, not per connection: ``refreshed_count``
+    is the number of distinct providers and ``model_count`` is the provider's
+    catalog size counted once — not summed across its connections.
+    """
+
+    monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
+    monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(
+        SimpleNamespace(
+            id="openai",
+            name="OpenAI",
+            adapter="openai",
+            base_url="https://api.openai.com/v1",
+            defaults={},
+            extra_headers={},
+            models_endpoint=None,
+            connections=[
+                SimpleNamespace(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    base_url="https://api.openai.com/v1",
+                    models_endpoint="/v1/models",
+                    auth=SimpleNamespace(credential_key="OPENAI_PRIMARY_KEY"),
+                ),
+                SimpleNamespace(
+                    id="secondary",
+                    type="api_key",
+                    label="Secondary",
+                    base_url="https://api.openai.com/v1",
+                    models_endpoint="/v1/models",
+                    auth=SimpleNamespace(credential_key="OPENAI_SECONDARY_KEY"),
+                ),
+            ],
+        )
+    )
+
+    response = await dispatch_rpc(state, {"method": "model.refresh_db"})
+
+    assert response["ok"] is True, response
+    # Both connections were refreshed...
+    assert FAKE_REFRESH_MODEL_PROVIDER_IDS == ["openai", "openai"]
+    # ...yet the summary collapses them to one provider and one catalog.
+    result = response["result"]
+    assert result["refreshed_count"] == 1
+    assert result["model_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_model_refresh_db_skips_connections_without_effective_endpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
