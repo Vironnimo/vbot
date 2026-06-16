@@ -308,6 +308,22 @@ describe('App', () => {
     ).toBeTruthy();
   });
 
+  it('renders the statistics navigation item with a bar-chart icon', () => {
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    const statisticsButton = Array.from(
+      document.querySelectorAll('nav button'),
+    ).find((button) => button.textContent?.includes('Statistics'));
+
+    expect(statisticsButton).toBeTruthy();
+    expect(
+      statisticsButton?.querySelector(
+        'svg.app-shell__nav-icon path[d="M4.5 13.5V10.5M8 13.5V8M11.5 13.5V5"]',
+      ),
+    ).toBeTruthy();
+  });
+
   it('opens the same sub-agent session again after returning to the parent', async () => {
     const agents = [
       {
