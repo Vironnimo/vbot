@@ -380,12 +380,63 @@ def test_build_payload_haiku_ignores_budget_controls_from_bundled_metadata_shape
     assert "output_config" not in payload
 
 
-def test_build_payload_runtime_metadata_without_adaptive_thinking_omits_visible_thinking() -> None:
+def test_build_payload_budget_only_model_sends_native_thinking_budget() -> None:
+    """A budget-capable model with no adaptive thinking derives a native budget."""
     model_id = "claude-haiku-4.5-runtime-metadata"
     policy = _messages_policy(
         model_id=model_id,
         reasoning_efforts=[],
         adaptive_thinking=False,
+    )
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Think."}],
+        model_id=model_id,
+        policy=policy,
+        thinking_effort="high",
+        temperature=0.25,
+    )
+
+    # high → 0.75 * 32000 = 24000, clamped strictly under the default 8192 max.
+    assert payload == {
+        "model": model_id,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
+        "thinking": {"type": "enabled", "budget_tokens": 8191},
+        "max_tokens": 8192,
+        "temperature": 0.25,
+    }
+    assert "output_config" not in payload
+
+
+def test_build_payload_budget_only_model_scales_budget_under_explicit_max_tokens() -> None:
+    """With headroom, the budget scales with the effort and stays under max_tokens."""
+    model_id = "claude-haiku-4.5-runtime-metadata"
+    policy = _messages_policy(
+        model_id=model_id,
+        reasoning_efforts=[],
+        adaptive_thinking=False,
+    )
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Think."}],
+        model_id=model_id,
+        policy=policy,
+        thinking_effort="medium",
+        max_tokens=64000,
+    )
+
+    # medium → 0.50 * 32000 = 16000, under the 64000 output allowance.
+    assert payload["thinking"] == {"type": "enabled", "budget_tokens": 16000}
+
+
+def test_build_payload_without_budget_or_adaptive_thinking_omits_visible_thinking() -> None:
+    model_id = "claude-haiku-4.5-runtime-metadata"
+    policy = _messages_policy(
+        model_id=model_id,
+        reasoning_efforts=[],
+        adaptive_thinking=False,
+        min_thinking_budget=None,
+        max_thinking_budget=None,
     )
 
     payload = build_copilot_messages_payload(
