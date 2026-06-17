@@ -10,7 +10,7 @@ provider-specific behavior can subclass this adapter.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -31,11 +31,18 @@ from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup, Provider
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
-    closest_supported_effort,
+    REASONING_INTENT_BUDGET,
+    REASONING_INTENT_EFFORT,
+    REASONING_INTENT_OFF,
+    REASONING_INTENT_ON,
+    ReasoningIntent,
+    model_reasoning_budget_max,
+    model_reasoning_control,
     model_reasoning_levels,
     model_reasoning_supported,
     normalize_thinking_effort,
     remove_reasoning_kwargs,
+    resolve_reasoning_intent,
     warn_effort_swallowed,
     warn_rejected_effort,
 )
@@ -294,12 +301,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             "messages": [self._format_message(message) for message in messages],
         }
         _apply_openai_tools(payload, request_kwargs)
-        _apply_openai_reasoning(
-            payload,
-            request_kwargs,
-            reasoning_supported=self._model_reasoning_supported(model_id),
-            supported_efforts=self._supported_reasoning_efforts(model_id),
-        )
+        self._apply_reasoning(payload, request_kwargs, model_id)
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
@@ -329,6 +331,69 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         if self._config.id in OPENAI_NONE_REASONING_PROVIDER_IDS:
             return OPENAI_REASONING_EFFORTS_WITH_NONE
         return OPENAI_REASONING_EFFORTS
+
+    def _apply_reasoning(
+        self,
+        payload: dict[str, Any],
+        request_kwargs: dict[str, Any],
+        model_id: str,
+    ) -> None:
+        """Resolve the shared reasoning intent and render it onto the payload.
+
+        Consumes ``thinking_effort``/``reasoning_effort`` from ``request_kwargs``,
+        resolves the provider-neutral intent via :func:`resolve_reasoning_intent`,
+        and renders it (see :meth:`_render_reasoning`). A catalog-known
+        non-reasoning model strips the raw reasoning controls and sends nothing,
+        exactly as before.
+        """
+
+        thinking_effort = request_kwargs.pop("thinking_effort", "")
+        reasoning_effort = request_kwargs.pop("reasoning_effort", "")
+        reasoning_supported = self._model_reasoning_supported(model_id)
+        if reasoning_supported is False:
+            remove_reasoning_kwargs(request_kwargs, *REASONING_PARAMETER_NAMES)
+            return
+        intent = resolve_reasoning_intent(
+            supported=reasoning_supported,
+            control=model_reasoning_control(self._model_lookup, model_id),
+            levels=tuple(self._supported_reasoning_efforts(model_id)),
+            effort=thinking_effort or reasoning_effort,
+            budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
+            # The generic ``/chat/completions`` wire has no native token budget,
+            # so a budget intent degrades to an effort and the budget is never
+            # materialized — passing ``max_tokens`` would not change the output.
+            max_tokens=None,
+        )
+        self._render_reasoning(payload, intent, reasoning_supported=reasoning_supported)
+
+    def _render_reasoning(
+        self,
+        payload: dict[str, Any],
+        intent: ReasoningIntent,
+        *,
+        reasoning_supported: bool | None,
+    ) -> None:
+        """Render a reasoning intent onto the generic OpenAI-compatible wire.
+
+        The base wire only speaks ``reasoning_effort``: an ``effort`` intent maps
+        straight through; ``budget``/``on`` have no native field and degrade to
+        the snapped effort; ``off`` sends ``reasoning_effort: "none"`` only for an
+        OpenAI-style provider that proves it supports the ``none`` value
+        (``effort_level == "none"`` and reasoning confirmed), otherwise nothing;
+        ``default`` leaves the provider default untouched.
+        """
+
+        if intent.kind == REASONING_INTENT_EFFORT:
+            payload["reasoning_effort"] = intent.effort_level
+        elif intent.kind in (REASONING_INTENT_BUDGET, REASONING_INTENT_ON):
+            if intent.effort_level is not None:
+                payload["reasoning_effort"] = intent.effort_level
+        elif (
+            intent.kind == REASONING_INTENT_OFF
+            and reasoning_supported is True
+            and intent.effort_level == "none"
+        ):
+            payload["reasoning_effort"] = "none"
 
     # ------------------------------------------------------------------
     # send() — non-streaming
@@ -811,29 +876,6 @@ def _selected_thinking_effort(kwargs: Mapping[str, Any]) -> str:
     thinking_effort = kwargs.get("thinking_effort") or ""
     reasoning_effort = kwargs.get("reasoning_effort") or ""
     return normalize_thinking_effort(thinking_effort or reasoning_effort)
-
-
-def _apply_openai_reasoning(
-    payload: dict[str, Any],
-    kwargs: dict[str, Any],
-    *,
-    reasoning_supported: bool | None,
-    supported_efforts: Iterable[str],
-) -> None:
-    thinking_effort = kwargs.pop("thinking_effort", "")
-    reasoning_effort = kwargs.pop("reasoning_effort", "")
-    if reasoning_supported is False:
-        remove_reasoning_kwargs(kwargs, *REASONING_PARAMETER_NAMES)
-        return
-    supported_effort = closest_supported_effort(
-        thinking_effort or reasoning_effort,
-        supported_efforts,
-    )
-    if supported_effort is None:
-        return
-    if supported_effort == "none" and reasoning_supported is not True:
-        return
-    payload["reasoning_effort"] = supported_effort
 
 
 def _merge_stream_usage_options(payload: dict[str, Any]) -> None:
