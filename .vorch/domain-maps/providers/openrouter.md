@@ -12,9 +12,11 @@ OpenAI-compatible provider with OpenRouter-specific reasoning and multi-modality
 
 ## Reasoning
 
-- Non-empty vBot `thinking_effort` and raw `reasoning_effort` map to OpenRouter efforts from `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`.
-- vBot `max` maps to `xhigh`.
-- Runtime sends `reasoning: {effort}` plus `include_reasoning: true` when reasoning is active.
+- Reasoning is resolved through the shared `resolve_reasoning_intent(...)` (see `providers.md` → "Reasoning is one policy, many renders") and rendered by `_render_openrouter_reasoning`. The effort snaps against the model's feed ladder or the `OPENROUTER_REASONING_EFFORTS` floor (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`; vBot `max` → `xhigh`).
+  - **effort** *and* **budget** → `reasoning: {effort}` + `include_reasoning: true`. OpenRouter maps effort→budget internally, so a `budget`-control model deliberately sends an effort here, **never** a token budget (the adapter needs no `budget_max`).
+  - **on** (an `on_off`-control model) → `reasoning: {enabled: true}` + `include_reasoning: true`.
+  - **off** → the byte-identical `reasoning: {effort: "none"}` for an effort-spelled-off wire (a `levels`/unknown control whose ladder has a `none` rung), else the documented toggle off-shape `reasoning: {enabled: false}` for an `on_off` model. The exact `on_off` off-shape is **not live-verified** (no OpenRouter probe in this environment — see FLAGGED.md).
+  - **default** (no effort selected) → no `reasoning` field.
 - If injected `model_lookup` says reasoning is unsupported, `reasoning`, `include_reasoning`, and generic `reasoning_effort` controls are stripped.
 - Reasoning replay policy: `current_run`, and this is the genuinely correct target (not a deferred placeholder). OpenRouter's [reasoning-tokens docs](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens) frame `reasoning`/`reasoning_details` preservation as in-run ("useful specifically for tool calling"); cross-run replay is undocumented. The in-run hard requirements are met — some upstreams 400 without echoed reasoning (Gemini "thought_signature" in `reasoning_details` of the `reasoning.encrypted` type), and `current_run` keeps `reasoning_meta` within the run, round-tripped by `_apply_openai_reasoning_meta` and pinned by a test. Replayed blocks must match the original sequence unmodified (docs: "you cannot rearrange or modify the sequence of these blocks"). **Billing of replayed `reasoning_details` is inferred, not documented** — the docs only state that generation bills as output. Revisit `full_history` only per upstream family (the hook's `model_id` supports a split) and only with probes; the same-model gate already blocks cross-model replay.
 
