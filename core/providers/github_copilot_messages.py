@@ -15,6 +15,7 @@ from core.providers.anthropic import apply_anthropic_cache_usage
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
+from core.providers.reasoning import effort_to_budget
 
 TEXT_BLOCK_TYPE = "text"
 IMAGE_BLOCK_TYPE = "image"
@@ -367,12 +368,15 @@ def _apply_safe_messages_thinking(
     kwargs.pop("reasoning_effort", None)
     kwargs.pop("reasoning", None)
     kwargs.pop("include_reasoning", None)
+    # A thinking ``budget_tokens`` is part of the Messages output allowance, so a
+    # budget derived from effort is kept strictly under the resolved max tokens.
+    max_tokens = _resolve_messages_max_tokens(dict(kwargs))
 
     safe_thinking = _safe_explicit_thinking(thinking, policy)
     if safe_thinking is None:
         safe_thinking = _thinking_from_budget(thinking_budget, policy)
     if safe_thinking is None:
-        safe_thinking = _thinking_from_effort(thinking_effort, policy)
+        safe_thinking = _thinking_from_effort(thinking_effort, policy, max_tokens=max_tokens)
     if safe_thinking is not None:
         payload["thinking"] = safe_thinking
 
@@ -418,6 +422,8 @@ def _thinking_from_budget(
 def _thinking_from_effort(
     thinking_effort: Any,
     policy: GitHubCopilotModelPolicy,
+    *,
+    max_tokens: int | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(thinking_effort, str) or not thinking_effort:
         return None
@@ -428,7 +434,43 @@ def _thinking_from_effort(
         return {"type": "adaptive", "display": "summarized"}
     if policy.supports_adaptive_thinking and not policy.allowed_reasoning_efforts:
         return {"type": "adaptive", "display": "summarized"}
+    # A budget-only Claude (thinking budget, no adaptive thinking) gets a native
+    # ``budget_tokens`` derived from the effort via the shared budget policy.
+    budget = _budget_tokens_from_effort(thinking_effort, policy, max_tokens)
+    if budget is not None:
+        return {"type": "enabled", "budget_tokens": budget}
     return None
+
+
+def _budget_tokens_from_effort(
+    thinking_effort: str,
+    policy: GitHubCopilotModelPolicy,
+    max_tokens: int | None,
+) -> int | None:
+    """Map an effort to a thinking budget for a budget-capable Copilot model.
+
+    Uses the shared :func:`effort_to_budget` policy with the model's
+    ``max_thinking_budget`` as the ceiling, then clamps into the policy's
+    ``[min_thinking_budget, max_thinking_budget]`` bounds and keeps it strictly
+    under ``max_tokens``. Returns ``None`` when the model has no thinking budget
+    or no valid budget fits.
+    """
+
+    if not policy.supports_thinking_budget:
+        return None
+    budget = effort_to_budget(
+        thinking_effort,
+        budget_max=policy.facts.max_thinking_budget,
+        max_tokens=max_tokens,
+    )
+    if budget is None:
+        return None
+    min_budget = policy.facts.min_thinking_budget
+    if min_budget is not None:
+        budget = max(budget, min_budget)
+    if max_tokens is not None and budget >= max_tokens:
+        return None
+    return budget if _budget_allowed(budget, policy) else None
 
 
 def _safe_output_config(
