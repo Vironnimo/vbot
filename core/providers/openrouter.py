@@ -13,9 +13,24 @@ from core.providers.openai_compatible import (
     _read_string,
     _read_string_list,
 )
-from core.providers.reasoning import closest_supported_effort, model_reasoning_levels
+from core.providers.reasoning import (
+    REASONING_INTENT_BUDGET,
+    REASONING_INTENT_EFFORT,
+    REASONING_INTENT_OFF,
+    REASONING_INTENT_ON,
+    ReasoningIntent,
+    model_reasoning_budget_max,
+    model_reasoning_control,
+    model_reasoning_levels,
+    resolve_reasoning_intent,
+)
 
 OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
+# OpenRouter's documented off-shape for a native thinking toggle (``on_off``
+# models). An effort-spelled-off wire (``levels``/unknown control with a ``none``
+# rung) keeps the byte-identical ``{"effort": "none"}`` instead — see the render.
+OPENROUTER_REASONING_OFF = {"enabled": False}
+OPENROUTER_NONE_EFFORT = "none"
 
 # OpenRouter uses the ``output_modalities`` query parameter to filter models
 # by their output capability.  The default ``/models`` call returns only
@@ -119,7 +134,8 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         thinking_effort = kwargs.pop("thinking_effort", "")
         reasoning_effort = kwargs.pop("reasoning_effort", "")
         payload = super()._build_payload(messages, model_id, **kwargs)
-        if self._model_reasoning_supported(model_id) is False:
+        reasoning_supported = self._model_reasoning_supported(model_id)
+        if reasoning_supported is False:
             payload.pop("reasoning", None)
             payload.pop("include_reasoning", None)
             return payload
@@ -127,17 +143,48 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         # Snap against the effective per-model ladder when the DB carries one;
         # the provider-global constant is only the floor for a model without a
         # feed ladder.
-        ladder = (
-            model_reasoning_levels(self._model_lookup, model_id) or OPENROUTER_REASONING_EFFORTS
+        intent = resolve_reasoning_intent(
+            supported=reasoning_supported,
+            control=model_reasoning_control(self._model_lookup, model_id),
+            levels=(
+                model_reasoning_levels(self._model_lookup, model_id)
+                or tuple(OPENROUTER_REASONING_EFFORTS)
+            ),
+            effort=thinking_effort or reasoning_effort,
+            budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
+            # OpenRouter resolves a budget from the effort internally, so vBot
+            # deliberately never sends a token budget here (no ``max_tokens``).
+            max_tokens=None,
         )
-        supported_effort = closest_supported_effort(
-            thinking_effort or reasoning_effort,
-            ladder,
-        )
-        if supported_effort is not None:
-            payload["reasoning"] = {"effort": supported_effort}
-            payload["include_reasoning"] = True
+        _render_openrouter_reasoning(payload, intent)
         return payload
+
+
+def _render_openrouter_reasoning(payload: dict[str, Any], intent: ReasoningIntent) -> None:
+    """Render a reasoning intent onto an OpenRouter payload.
+
+    OpenRouter speaks ``reasoning: {effort}`` / ``{enabled}``. An ``effort``
+    intent maps straight through; ``budget`` also renders as an effort (OpenRouter
+    maps effort→budget internally, so no token budget is sent); ``on`` toggles
+    ``enabled: true``. ``off`` keeps the byte-identical ``{"effort": "none"}`` for
+    an effort-spelled-off wire (``effort_level == "none"``) and falls back to the
+    documented ``{"enabled": false}`` toggle otherwise; ``default`` omits the
+    field entirely.
+    """
+
+    if intent.kind == REASONING_INTENT_ON:
+        payload["reasoning"] = {"enabled": True}
+        payload["include_reasoning"] = True
+    elif intent.kind in (REASONING_INTENT_EFFORT, REASONING_INTENT_BUDGET):
+        if intent.effort_level is not None:
+            payload["reasoning"] = {"effort": intent.effort_level}
+            payload["include_reasoning"] = True
+    elif intent.kind == REASONING_INTENT_OFF:
+        if intent.effort_level == OPENROUTER_NONE_EFFORT:
+            payload["reasoning"] = {"effort": OPENROUTER_NONE_EFFORT}
+            payload["include_reasoning"] = True
+        else:
+            payload["reasoning"] = dict(OPENROUTER_REASONING_OFF)
 
 
 def _openrouter_runtime_metadata(architecture: Mapping[str, Any]) -> Mapping[str, Any]:
