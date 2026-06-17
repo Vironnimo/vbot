@@ -267,6 +267,72 @@ async def test_openrouter_falls_back_to_constant_without_ladder(
     assert request_body["reasoning"] == {"effort": "low"}
 
 
+def _control_lookup(control: str):
+    def model_lookup(model_id: str) -> Model:
+        return Model(
+            model_id=model_id,
+            name=model_id,
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True, control=control),
+            ),
+            context_window=128000,
+            max_output_tokens=4096,
+        )
+
+    return model_lookup
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_on_off_model_toggles_enabled(
+    openrouter_config: ProviderConfig,
+) -> None:
+    """An ``on_off`` model toggles ``reasoning.enabled`` rather than sending an effort."""
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+    adapter = OpenRouterAdapter(openrouter_config, API_KEY, model_lookup=_control_lookup("on_off"))
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="some/toggle-model", thinking_effort="high")
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning"] == {"enabled": True}
+    assert request_body["include_reasoning"] is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_on_off_model_disables_on_none(
+    openrouter_config: ProviderConfig,
+) -> None:
+    """An ``on_off`` model sends the native off-shape for a ``none`` selection."""
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+    adapter = OpenRouterAdapter(openrouter_config, API_KEY, model_lookup=_control_lookup("on_off"))
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="some/toggle-model", thinking_effort="none")
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning"] == {"enabled": False}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_budget_model_renders_as_effort(
+    openrouter_config: ProviderConfig,
+) -> None:
+    """A ``budget`` model renders as an effort — OpenRouter maps effort→budget itself."""
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+    adapter = OpenRouterAdapter(openrouter_config, API_KEY, model_lookup=_control_lookup("budget"))
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="anthropic/claude-opus-4-1", thinking_effort="high")
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning"] == {"effort": "high"}
+    assert request_body["include_reasoning"] is True
+    assert "budget_tokens" not in request_body
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_openrouter_stream_requests_usage(openrouter_adapter: OpenRouterAdapter) -> None:
