@@ -40,13 +40,26 @@ from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup, Provider
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
+    BUDGET_FLOOR_TOKENS,
+    REASONING_INTENT_BUDGET,
+    REASONING_INTENT_EFFORT,
+    REASONING_INTENT_OFF,
+    REASONING_INTENT_ON,
     REASONING_REPLAY_FULL_HISTORY,
+    ReasoningIntent,
     ReasoningReplayPolicy,
+    model_reasoning_budget_max,
+    model_reasoning_control,
+    model_reasoning_levels,
     model_reasoning_supported,
     remove_reasoning_kwargs,
+    resolve_reasoning_intent,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
+from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+
+_LOGGER = get_logger("providers.anthropic")
 
 # ---------------------------------------------------------------------------
 # Anthropic-specific constants
@@ -59,6 +72,13 @@ _HTTP_OVERLOADED = 529
 MESSAGES_ENDPOINT = "/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 ANTHROPIC_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
+# The active-effort floor snapped against when a Claude has no feed ladder (the
+# bare-stub catalog today). It spans every active effort, so a selected effort
+# passes through unchanged — keeping the effort path byte-identical.
+ANTHROPIC_EFFORT_FLOOR = ("minimal", "low", "medium", "high", "xhigh", "max")
+# An effort above ``minimal`` carries an ``output_config.effort``; ``minimal``
+# rides on adaptive thinking alone.
+ANTHROPIC_MINIMAL_EFFORT = "minimal"
 ANTHROPIC_REASONING_PARAMETER_NAMES = {
     "thinking",
     "thinking_budget",
@@ -239,9 +259,10 @@ class AnthropicAdapter(ProviderAdapter):
             payload["system"] = system_content
         _apply_anthropic_tools(payload, request_kwargs)
         reasoning_supported = self._model_reasoning_supported(model_id)
-        _apply_anthropic_reasoning(
+        self._apply_reasoning(
             payload,
             request_kwargs,
+            model_id,
             reasoning_supported=reasoning_supported,
         )
 
@@ -277,6 +298,90 @@ class AnthropicAdapter(ProviderAdapter):
 
     def _model_reasoning_supported(self, model_id: str) -> bool | None:
         return model_reasoning_supported(self._model_lookup, model_id)
+
+    def _apply_reasoning(
+        self,
+        payload: dict[str, Any],
+        request_kwargs: dict[str, Any],
+        model_id: str,
+        *,
+        reasoning_supported: bool | None,
+    ) -> None:
+        """Resolve the shared reasoning intent and render it onto the payload.
+
+        A catalog-known non-reasoning model strips every Anthropic thinking
+        control and sends nothing. Otherwise the provider-neutral intent
+        (:func:`resolve_reasoning_intent`) is rendered into Anthropic's
+        ``thinking``/``output_config`` shape — including native ``budget_tokens``
+        for a ``budget`` Claude.
+        """
+
+        thinking_effort = request_kwargs.pop("thinking_effort", "")
+        if reasoning_supported is False:
+            remove_reasoning_kwargs(request_kwargs, *ANTHROPIC_REASONING_PARAMETER_NAMES)
+            return
+        max_tokens = self._resolve_max_tokens(request_kwargs)
+        intent = resolve_reasoning_intent(
+            supported=reasoning_supported,
+            control=model_reasoning_control(self._model_lookup, model_id),
+            levels=model_reasoning_levels(self._model_lookup, model_id) or ANTHROPIC_EFFORT_FLOOR,
+            effort=thinking_effort,
+            budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
+            max_tokens=max_tokens,
+        )
+        self._render_reasoning(payload, intent, model_id=model_id, max_tokens=max_tokens)
+
+    def _render_reasoning(
+        self,
+        payload: dict[str, Any],
+        intent: ReasoningIntent,
+        *,
+        model_id: str,
+        max_tokens: int | None,
+    ) -> None:
+        """Render a reasoning intent onto Anthropic's ``thinking`` shape.
+
+        * ``effort`` → adaptive thinking (summarized) plus ``output_config.effort``
+          for efforts above ``minimal``.
+        * ``budget`` → native ``thinking: {type: enabled, budget_tokens}``.
+        * ``on`` → enabled with a floor budget; skipped with a warning when even
+          the floor cannot fit under ``max_tokens`` (D3).
+        * ``off`` → ``thinking: {type: disabled}``.
+        * ``default`` → leave the provider default untouched (omit ``thinking``).
+        """
+
+        if intent.kind == REASONING_INTENT_EFFORT:
+            payload["thinking"] = {"type": "adaptive", "display": "summarized"}
+            if intent.effort_level != ANTHROPIC_MINIMAL_EFFORT:
+                payload["output_config"] = {"effort": intent.effort_level}
+        elif intent.kind == REASONING_INTENT_BUDGET:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": intent.budget_tokens}
+        elif intent.kind == REASONING_INTENT_ON:
+            budget = _anthropic_floor_budget(max_tokens)
+            if budget is None:
+                _LOGGER.warning(
+                    "Skipping reasoning for %s: floor budget (%d) does not fit max_tokens (%s)",
+                    model_id,
+                    BUDGET_FLOOR_TOKENS,
+                    max_tokens,
+                )
+                return
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        elif intent.kind == REASONING_INTENT_OFF:
+            payload["thinking"] = {"type": "disabled"}
+
+    def _resolve_max_tokens(self, request_kwargs: dict[str, Any]) -> int | None:
+        """Return the effective ``max_tokens`` (caller kwarg, else provider default).
+
+        Used to keep a thinking ``budget_tokens`` strictly under the output
+        allowance — caller value wins over the provider default, mirroring payload
+        assembly precedence.
+        """
+
+        value = request_kwargs.get("max_tokens")
+        if value is None and self._config.defaults:
+            value = self._config.defaults.get("max_tokens")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
 
     # ------------------------------------------------------------------
     # Error detail helper (Anthropic-specific)
@@ -930,26 +1035,17 @@ def _apply_anthropic_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> N
     ]
 
 
-def _apply_anthropic_reasoning(
-    payload: dict[str, Any],
-    kwargs: dict[str, Any],
-    *,
-    reasoning_supported: bool | None,
-) -> None:
-    thinking_effort = kwargs.pop("thinking_effort", "")
-    if reasoning_supported is False:
-        remove_reasoning_kwargs(kwargs, *ANTHROPIC_REASONING_PARAMETER_NAMES)
-        return
-    if not thinking_effort:
-        return
-    if thinking_effort == "none":
-        payload["thinking"] = {"type": "disabled"}
-        return
-    if thinking_effort in ANTHROPIC_EFFORTS:
-        payload["thinking"] = {"type": "adaptive"}
-        if thinking_effort != "minimal":
-            payload["output_config"] = {"effort": thinking_effort}
-        payload["thinking"]["display"] = "summarized"
+def _anthropic_floor_budget(max_tokens: int | None) -> int | None:
+    """Return the floor thinking budget, or ``None`` when it cannot fit ``max_tokens``.
+
+    Anthropic counts ``budget_tokens`` against the output allowance, so the floor
+    budget must stay strictly under a positive ``max_tokens``; when it cannot, no
+    valid budget can be sent (D3 skip).
+    """
+
+    if max_tokens is not None and max_tokens <= BUDGET_FLOOR_TOKENS:
+        return None
+    return BUDGET_FLOOR_TOKENS
 
 
 def _anthropic_thinking_active(

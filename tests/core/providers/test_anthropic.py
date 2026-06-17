@@ -256,6 +256,31 @@ def _anthropic_test_model(model_id: str, *, reasoning: bool) -> Model:
     )
 
 
+def _anthropic_control_model(
+    model_id: str,
+    *,
+    control: str,
+    budget_max: int | None = None,
+) -> Model:
+    """A reasoning Claude with a specific wire control (``budget`` / ``on_off``)."""
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(
+                supported=True,
+                control=control,
+                budget_max=budget_max,
+            ),
+        ),
+        context_window=200000,
+        max_output_tokens=8192,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Constructor contract
 # ---------------------------------------------------------------------------
@@ -1081,6 +1106,98 @@ class TestSendRequestFormat:
         assert "thinking" not in request_body
         assert "output_config" not in request_body
         assert "include_reasoning" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_budget_model_sends_native_budget_tokens(self):
+        """A budget-control Claude sends native ``thinking.budget_tokens`` from effort."""
+        route = respx.post(MINIMAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(model_id, control="budget"),
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-opus-4-1",
+            temperature=0.5,
+            thinking_effort="high",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 16384}
+        assert "output_config" not in request_body
+        # Thinking is active, so temperature must be dropped.
+        assert "temperature" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_budget_model_scales_with_budget_max(self):
+        """A published ``budget_max`` makes the budget proportional to the effort."""
+        route = respx.post(MINIMAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(
+                model_id, control="budget", budget_max=40000
+            ),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="medium")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 20000}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_budget_model_clamps_under_max_tokens(self):
+        """The budget stays strictly under the output ``max_tokens`` allowance."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            ANTHROPIC_CONFIG,  # provider default max_tokens=4096
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(model_id, control="budget"),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="high")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 4095}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_budget_model_disables_thinking_on_none(self):
+        """A ``none`` selection disables thinking even on a budget model."""
+        route = respx.post(MINIMAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(model_id, control="budget"),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="none")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "disabled"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_on_off_model_enables_with_floor_budget(self):
+        """An ``on_off`` Claude enables thinking with the floor budget."""
+        route = respx.post(MINIMAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(model_id, control="on_off"),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="high")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 
 # ---------------------------------------------------------------------------
