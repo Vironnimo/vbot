@@ -106,6 +106,7 @@ def make_status_handler(
                     agent.thinking_effort,
                     model_details.reasoning_levels,
                     model_details.reasoning_control,
+                    model_details.reasoning_budget_max,
                 ),
             )
         except Exception:

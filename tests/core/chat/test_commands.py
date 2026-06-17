@@ -622,7 +622,7 @@ def test_resolve_actual_thinking_effort_none_without_ladder_or_selection() -> No
 
 
 def test_resolve_actual_thinking_effort_on_off_reports_state() -> None:
-    """A toggle/budget model has no effort ladder, so report on/off instead of '—'.
+    """A toggle model has no effort ladder, so report on/off instead of '—'.
 
     This is the minimax-m3 (opencode-go, on_off control) case the user hit: any
     non-``none`` selection means reasoning is on; ``none`` means off; no selection
@@ -631,8 +631,17 @@ def test_resolve_actual_thinking_effort_on_off_reports_state() -> None:
     assert resolve_actual_thinking_effort("minimal", (), "on_off") == "on"
     assert resolve_actual_thinking_effort("none", (), "on_off") == "off"
     assert resolve_actual_thinking_effort("", (), "on_off") is None
-    # A budget-controlled model reports the same on/off state.
-    assert resolve_actual_thinking_effort("medium", (), "budget") == "on"
+
+
+def test_resolve_actual_thinking_effort_budget_reports_rendered_budget() -> None:
+    """A budget model reports the rendered token budget, not a bare 'on'."""
+    # No budget_max → absolute fallback ladder (medium → 8192).
+    assert resolve_actual_thinking_effort("medium", (), "budget") == "on (8,192 tokens)"
+    # A seeded budget_max scales the budget proportionally (high → 0.75 * 32000).
+    assert (
+        resolve_actual_thinking_effort("high", (), "budget", 32000) == "on (24,000 tokens)"
+    )
+    # ``none`` still reports off.
     assert resolve_actual_thinking_effort("none", (), "budget") == "off"
 
 
