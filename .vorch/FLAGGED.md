@@ -100,27 +100,6 @@ A Linux-readiness audit found the process layer already platform-branched (POSIX
 
 ## 2026-06-15 — Model DB Phase 7 (docs): consciously deferred rebuild items
 
-Gathered while making the living docs describe the as-built Model DB. None block a
-configured provider today; recorded so the deliberate scope-outs have a trail. (The
-unseeded canonical ladders and the github-copilot/minimax not-regenerated blockers
-are already flagged above under the Phase-3 entries and are not repeated here.)
-
-1. **`budget` / `on_off` reasoning control — no WIRE support yet.** The typed
-   `reasoning.control` projects `"budget"` and `"on_off"` at refresh
-   (`derive_reasoning_control` in `core/models/models_dev.py`), and the data model
-   carries `budget_max`, but no adapter currently *sends* a token budget or a
-   binary thinking toggle on the wire — only `"levels"` (effort) is wired through
-   snapping (`closest_supported_effort`). A `budget`/`on_off` model still works
-   (effort snaps against the adapter floor); it just can't use its native control
-   shape. Wiring those request shapes is deferred until a reachable model needs it.
-
-2. **Native `pdf` / `video` input modalities have no wire path.** The canonical
-   projection stores modality lists VERBATIM (incl. `pdf`/`video`) from models.dev,
-   and `task_types` derivation understands `file`/`video` inputs, but no provider
-   adapter builds a native PDF or video request part — these modalities are carried
-   as facts/filters only, not yet sent. Deferred until a target provider + use case
-   exists.
-
 3. **No second model-DB read-root for custom user providers.** `ModelRegistry.load`
    reads exactly one `<resources_dir>/models` tree and caches by that resolved path.
    A user-defined provider whose model files live outside the bundled `resources/`

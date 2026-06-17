@@ -95,4 +95,5 @@ skill — it handles triage, the interview, and writing the entry into `.vorch/G
 ## Plans
 
 If the user wants to design a plan with you, read `.opencode/agents/planner.md` first for the format
-we use (file-scoped tasks, `⚡` parallel markers, saved under `docs/plans/`, never committed).
+we use (file-scoped tasks, `⚡` parallel markers, never committed). The planner defines where plans are
+saved.
