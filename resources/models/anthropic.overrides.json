@@ -1,0 +1,22 @@
+{
+  "models": {
+    "claude-opus-4-20250219": {
+      "capabilities": {
+        "reasoning": {
+          "supported": true,
+          "control": "budget",
+          "budget_max": 32000
+        }
+      }
+    },
+    "claude-sonnet-4-20250219": {
+      "capabilities": {
+        "reasoning": {
+          "supported": true,
+          "control": "budget",
+          "budget_max": 64000
+        }
+      }
+    }
+  }
+}

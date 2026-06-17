@@ -13,6 +13,7 @@ from core.models.models import (
     ReasoningCapabilities,
     derive_model_task_types,
 )
+from core.providers.reasoning import resolve_reasoning_intent
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -1350,6 +1351,29 @@ class TestModelRegistryRealResources:
         # carries the chat models). It loads because overrides apply at load.
         tts = registry.get("openai", "tts-1")
         assert tts.capabilities.task_types == ("text_to_speech", "audio_generation")
+
+    def test_anthropic_budget_override_seeds_budget_max(self):
+        """``anthropic.overrides.json`` seeds ``budget`` control + a ``budget_max``
+        for the reachable budget Claudes, so the native ``budget_tokens`` render
+        scales with the hand-seeded ceiling instead of the absolute fallback."""
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        opus = registry.get("anthropic", "claude-opus-4-20250219")
+        assert opus.capabilities.reasoning.control == "budget"
+        assert opus.capabilities.reasoning.budget_max == 32000
+
+        # high → 0.75 * 32000 = 24000, proving the budget scales with budget_max
+        # (the absolute fallback ladder would give 16384 instead).
+        intent = resolve_reasoning_intent(
+            supported=opus.capabilities.reasoning.supported,
+            control=opus.capabilities.reasoning.control,
+            levels=opus.capabilities.reasoning.levels,
+            effort="high",
+            budget_max=opus.capabilities.reasoning.budget_max,
+        )
+        assert intent.kind == "budget"
+        assert intent.budget_tokens == 24000
 
     @pytest.mark.parametrize(
         "provider_id",
