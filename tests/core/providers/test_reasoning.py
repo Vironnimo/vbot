@@ -5,14 +5,35 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+import pytest
+
+from core.models.models import (
+    REASONING_CONTROL_BUDGET,
+    REASONING_CONTROL_LEVELS,
+    REASONING_CONTROL_ON_OFF,
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+)
 from core.providers.reasoning import (
+    BUDGET_FLOOR_TOKENS,
+    REASONING_INTENT_BUDGET,
+    REASONING_INTENT_DEFAULT,
+    REASONING_INTENT_EFFORT,
+    REASONING_INTENT_KINDS,
+    REASONING_INTENT_OFF,
+    REASONING_INTENT_ON,
     REASONING_REPLAY_POLICIES,
+    ReasoningIntent,
     closest_supported_effort,
     detail_names_rejected_effort,
+    effort_to_budget,
+    model_reasoning_budget_max,
+    model_reasoning_control,
     model_reasoning_levels,
     model_reasoning_supported,
     reasoning_token_count,
+    resolve_reasoning_intent,
     warn_effort_swallowed,
     warn_rejected_effort,
 )
@@ -101,6 +122,258 @@ def test_model_reasoning_levels_none_without_ladder() -> None:
         ReasoningCapabilities(supported=True)
     )
     assert model_reasoning_levels(empty_ladder_lookup, "budget-only") is None
+
+
+# ---------------------------------------------------------------------------
+# Reasoning control / budget_max accessors
+# ---------------------------------------------------------------------------
+
+
+def test_model_reasoning_control_reads_control_and_strips_suffix() -> None:
+    def model_lookup(model_id: str) -> Model | None:
+        assert model_id == "anthropic/claude-opus-4-1"
+        return _model_with_reasoning(
+            ReasoningCapabilities(supported=True, control=REASONING_CONTROL_BUDGET)
+        )
+
+    assert (
+        model_reasoning_control(model_lookup, "anthropic/claude-opus-4-1::api-key")
+        == REASONING_CONTROL_BUDGET
+    )
+
+
+def test_model_reasoning_control_none_without_lookup_or_model() -> None:
+    assert model_reasoning_control(None, "anything") is None
+    assert model_reasoning_control(lambda _model_id: None, "missing") is None
+
+
+def test_model_reasoning_budget_max_reads_value_and_strips_suffix() -> None:
+    def model_lookup(model_id: str) -> Model | None:
+        assert model_id == "google/gemini-2.5-pro"
+        return _model_with_reasoning(
+            ReasoningCapabilities(
+                supported=True, control=REASONING_CONTROL_BUDGET, budget_max=24576
+            )
+        )
+
+    assert model_reasoning_budget_max(model_lookup, "google/gemini-2.5-pro::api-key") == 24576
+
+
+def test_model_reasoning_budget_max_none_without_lookup_or_model() -> None:
+    assert model_reasoning_budget_max(None, "anything") is None
+    assert model_reasoning_budget_max(lambda _model_id: None, "missing") is None
+
+
+# ---------------------------------------------------------------------------
+# effort_to_budget — the single effort→token-budget policy (D1/D3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [
+        ("minimal", 1024),
+        ("low", 4096),
+        ("medium", 8192),
+        ("high", 16384),
+        ("xhigh", 24576),
+        ("max", 32768),
+    ],
+)
+def test_effort_to_budget_uses_absolute_ladder_without_ceiling(effort: str, expected: int) -> None:
+    """No ``budget_max`` → the absolute fallback ladder (one rung per effort)."""
+    assert effort_to_budget(effort, budget_max=None) == expected
+
+
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [
+        ("low", 25000),  # 0.25 * 100_000
+        ("medium", 50000),
+        ("high", 75000),
+        ("max", 100000),
+    ],
+)
+def test_effort_to_budget_is_proportional_to_ceiling(effort: str, expected: int) -> None:
+    """A positive ``budget_max`` → that ceiling times the effort fraction."""
+    assert effort_to_budget(effort, budget_max=100_000) == expected
+
+
+def test_effort_to_budget_applies_floor() -> None:
+    """A tiny ceiling fraction is lifted to the budget floor."""
+    # 0.10 * 5000 == 500, below the 1024 floor.
+    assert effort_to_budget("minimal", budget_max=5000) == BUDGET_FLOOR_TOKENS
+
+
+def test_effort_to_budget_caps_at_ceiling() -> None:
+    assert effort_to_budget("max", budget_max=20000) == 20000
+
+
+def test_effort_to_budget_clamps_under_max_tokens() -> None:
+    """The budget must stay strictly under a positive ``max_tokens``."""
+    assert effort_to_budget("max", budget_max=None, max_tokens=10000) == 9999
+
+
+def test_effort_to_budget_skips_when_floor_does_not_fit() -> None:
+    """When even the floor cannot fit under ``max_tokens`` no budget is formed."""
+    assert effort_to_budget("high", budget_max=None, max_tokens=BUDGET_FLOOR_TOKENS) is None
+    assert effort_to_budget("high", budget_max=None, max_tokens=500) is None
+
+
+def test_effort_to_budget_none_for_empty_or_none_effort() -> None:
+    assert effort_to_budget("", budget_max=50000) is None
+    assert effort_to_budget("none", budget_max=50000) is None
+    assert effort_to_budget(None) is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_reasoning_intent — the single decision layer (D1/D2/D3)
+# ---------------------------------------------------------------------------
+
+_LADDER = ("none", "low", "medium", "high")
+_ACTIVE_LADDER = ("low", "medium", "high")
+
+
+def test_reasoning_intent_kinds_are_pinned() -> None:
+    assert REASONING_INTENT_KINDS == ("default", "off", "effort", "budget", "on")
+
+
+def test_resolve_intent_off_when_reasoning_unsupported() -> None:
+    intent = resolve_reasoning_intent(
+        supported=False,
+        control=REASONING_CONTROL_LEVELS,
+        levels=_LADDER,
+        effort="high",
+    )
+    assert intent == ReasoningIntent(REASONING_INTENT_OFF)
+
+
+@pytest.mark.parametrize("effort", ["", None, "bogus"])
+def test_resolve_intent_default_when_no_effort_selected(effort: Any) -> None:
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=REASONING_CONTROL_LEVELS,
+        levels=_LADDER,
+        effort=effort,
+    )
+    assert intent == ReasoningIntent(REASONING_INTENT_DEFAULT)
+
+
+def test_resolve_intent_none_on_levels_with_none_rung_carries_snapped_none() -> None:
+    """An effort-spelled-off wire (``none`` rung) keeps ``effort_level='none'``."""
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=REASONING_CONTROL_LEVELS,
+        levels=_LADDER,
+        effort="none",
+    )
+    assert intent == ReasoningIntent(REASONING_INTENT_OFF, effort_level="none")
+
+
+def test_resolve_intent_none_on_levels_without_none_rung_is_bare_off() -> None:
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=REASONING_CONTROL_LEVELS,
+        levels=_ACTIVE_LADDER,
+        effort="none",
+    )
+    assert intent == ReasoningIntent(REASONING_INTENT_OFF, effort_level=None)
+
+
+@pytest.mark.parametrize("control", [REASONING_CONTROL_ON_OFF, REASONING_CONTROL_BUDGET])
+def test_resolve_intent_none_on_native_control_is_bare_off(control: str) -> None:
+    """A native toggle/budget wire spells off itself — no carried effort level."""
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=control,
+        levels=_LADDER,
+        effort="none",
+    )
+    assert intent == ReasoningIntent(REASONING_INTENT_OFF)
+
+
+@pytest.mark.parametrize(
+    ("effort", "expected_level"),
+    [("low", "low"), ("medium", "medium"), ("high", "high"), ("max", "high")],
+)
+def test_resolve_intent_levels_snaps_active_effort(effort: str, expected_level: str) -> None:
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=REASONING_CONTROL_LEVELS,
+        levels=_ACTIVE_LADDER,
+        effort=effort,
+    )
+    assert intent == ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=expected_level)
+
+
+def test_resolve_intent_levels_default_when_nothing_snaps() -> None:
+    """An empty ladder cannot snap an active effort → leave the provider default."""
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=REASONING_CONTROL_LEVELS,
+        levels=(),
+        effort="high",
+    )
+    assert intent == ReasoningIntent(REASONING_INTENT_DEFAULT)
+
+
+def test_resolve_intent_unknown_control_takes_levels_path() -> None:
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=None,
+        levels=_ACTIVE_LADDER,
+        effort="high",
+    )
+    assert intent == ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high")
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "max"])
+def test_resolve_intent_on_off_is_on_for_any_active_effort(effort: str) -> None:
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=REASONING_CONTROL_ON_OFF,
+        levels=_ACTIVE_LADDER,
+        effort=effort,
+    )
+    assert intent.kind == REASONING_INTENT_ON
+
+
+def test_resolve_intent_budget_without_ceiling_uses_absolute_ladder() -> None:
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=REASONING_CONTROL_BUDGET,
+        levels=_ACTIVE_LADDER,
+        effort="high",
+        budget_max=None,
+    )
+    assert intent == ReasoningIntent(
+        REASONING_INTENT_BUDGET, effort_level="high", budget_tokens=16384
+    )
+
+
+def test_resolve_intent_budget_with_ceiling_is_proportional() -> None:
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=REASONING_CONTROL_BUDGET,
+        levels=_ACTIVE_LADDER,
+        effort="medium",
+        budget_max=40000,
+    )
+    assert intent.kind == REASONING_INTENT_BUDGET
+    assert intent.budget_tokens == 20000
+
+
+def test_resolve_intent_budget_falls_back_to_on_when_no_budget_fits() -> None:
+    """When even the floor cannot fit ``max_tokens`` budget degrades to a plain on."""
+    intent = resolve_reasoning_intent(
+        supported=True,
+        control=REASONING_CONTROL_BUDGET,
+        levels=_ACTIVE_LADDER,
+        effort="high",
+        budget_max=None,
+        max_tokens=500,
+    )
+    assert intent.kind == REASONING_INTENT_ON
 
 
 # ---------------------------------------------------------------------------
