@@ -778,6 +778,41 @@ class TestSendRequestFormat:
         assert "reasoning" not in request_body
         assert "include_reasoning" not in request_body
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_degrades_budget_control_to_effort_on_generic_wire(self):
+        """A budget-control model on the generic wire degrades to a plain effort.
+
+        The base ``/chat/completions`` wire has no native token-budget field, so a
+        ``budget`` model snaps the effort to the adapter floor and sends only
+        ``reasoning_effort`` — never a token budget.
+        """
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        budget_model = Model(
+            model_id="gpt-5.2",
+            name="gpt-5.2",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True, control="budget"),
+            ),
+            context_window=128000,
+            max_output_tokens=4096,
+        )
+        adapter = OpenAICompatibleAdapter(
+            OPENAI_CONFIG,
+            API_KEY,
+            model_lookup=lambda _model_id: budget_model,
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="high")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["reasoning_effort"] == "high"
+        assert "thinking" not in request_body
+        assert "budget_tokens" not in request_body
+
 
 # ---------------------------------------------------------------------------
 # send() — headers and auth

@@ -12,12 +12,23 @@ from core.providers.openai_compatible import (
     _read_string,
 )
 from core.providers.reasoning import (
+    REASONING_INTENT_DEFAULT,
+    REASONING_INTENT_OFF,
     REASONING_REPLAY_FULL_HISTORY,
+    ReasoningIntent,
     ReasoningReplayPolicy,
-    normalize_thinking_effort,
+    model_reasoning_control,
+    model_reasoning_levels,
+    resolve_reasoning_intent,
 )
 
 MINIMAX_M3_MODEL_ID = "MiniMax-M3"
+
+# MiniMax M3 engages reasoning as a binary thinking toggle (``adaptive`` on /
+# ``disabled`` off), not a per-level effort, so the resolver only needs to tell
+# active efforts from ``none``. This floor lets any active effort resolve to an
+# ``effort`` intent (rendered as adaptive) while ``none`` resolves to ``off``.
+MINIMAX_M3_EFFORT_FLOOR = ("minimal", "low", "medium", "high", "xhigh", "max")
 MINIMAX_M2_SUPPORTED_PARAMETERS = (
     "max_tokens",
     "reasoning_split",
@@ -155,15 +166,13 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             payload.setdefault("reasoning_split", True)
             return payload
 
-        effort = normalize_thinking_effort(thinking_effort or reasoning_effort)
-        if effort == "none":
-            payload.setdefault("thinking", {"type": "disabled"})
-            payload.pop("reasoning_split", None)
-        elif effort:
-            payload.setdefault("thinking", {"type": "adaptive"})
-            payload.setdefault("reasoning_split", True)
-        else:
-            payload.setdefault("reasoning_split", True)
+        intent = resolve_reasoning_intent(
+            supported=self._model_reasoning_supported(model_id),
+            control=model_reasoning_control(self._model_lookup, model_id),
+            levels=model_reasoning_levels(self._model_lookup, model_id) or MINIMAX_M3_EFFORT_FLOOR,
+            effort=thinking_effort or reasoning_effort,
+        )
+        _render_minimax_m3_thinking(payload, intent)
         return payload
 
     def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
@@ -192,6 +201,26 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             if reasoning:
                 normalized["reasoning"] = reasoning
         return normalized
+
+
+def _render_minimax_m3_thinking(payload: dict[str, Any], intent: ReasoningIntent) -> None:
+    """Render a reasoning intent onto a MiniMax M3 payload.
+
+    M3 has a binary thinking toggle and a ``reasoning_split`` capture flag, no
+    native token budget — so ``budget``/``on`` intents render the same as an
+    ``effort`` (adaptive thinking). ``off`` disables thinking and drops the
+    split; ``default`` (no effort selected) keeps M3's reason-by-default with the
+    split on. A caller-set value is left untouched (``setdefault``/guarded pop).
+    """
+
+    if intent.kind == REASONING_INTENT_OFF:
+        payload.setdefault("thinking", {"type": "disabled"})
+        payload.pop("reasoning_split", None)
+    elif intent.kind == REASONING_INTENT_DEFAULT:
+        payload.setdefault("reasoning_split", True)
+    else:
+        payload.setdefault("thinking", {"type": "adaptive"})
+        payload.setdefault("reasoning_split", True)
 
 
 def _extract_reasoning_details_text(reasoning_meta: Any) -> str | None:
