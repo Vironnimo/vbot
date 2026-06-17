@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, MutableMapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
+from core.models.models import (
+    REASONING_CONTROL_BUDGET,
+    REASONING_CONTROL_ON_OFF,
+)
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("providers.reasoning")
@@ -146,6 +151,238 @@ def model_reasoning_levels(
     if not levels:
         return None
     return tuple(levels)
+
+
+def model_reasoning_control(
+    model_lookup: Callable[[str], Any] | None,
+    model_id: str,
+) -> str | None:
+    """Return the model's wire reasoning ``control`` kind, or ``None`` when unknown.
+
+    Mirrors :func:`model_reasoning_levels`: strips the connection-pin suffix
+    before lookup and returns ``None`` when there is no lookup or the model is
+    unknown. The value is one of ``REASONING_CONTROLS`` (``levels`` / ``on_off``
+    / ``budget``) or ``None`` (no control projected yet); the resolver treats an
+    unknown control like ``levels`` (effort path).
+    """
+
+    if model_lookup is None:
+        return None
+    model = model_lookup(model_id.split("::", 1)[0])
+    if model is None:
+        return None
+    control = model.capabilities.reasoning.control
+    return control if isinstance(control, str) else None
+
+
+def model_reasoning_budget_max(
+    model_lookup: Callable[[str], Any] | None,
+    model_id: str,
+) -> int | None:
+    """Return the model's max thinking-token budget, or ``None`` when unknown.
+
+    Mirrors :func:`model_reasoning_levels`. ``None`` means the budget ceiling is
+    not known (every Anthropic budget Claude today, until hand-seeded in the
+    override layer); :func:`effort_to_budget` then uses its absolute fallback
+    ladder instead of a proportional fraction.
+    """
+
+    if model_lookup is None:
+        return None
+    model = model_lookup(model_id.split("::", 1)[0])
+    if model is None:
+        return None
+    budget_max = model.capabilities.reasoning.budget_max
+    return budget_max if isinstance(budget_max, int) and not isinstance(budget_max, bool) else None
+
+
+# ---------------------------------------------------------------------------
+# Reasoning intent — one policy, many renders
+# ---------------------------------------------------------------------------
+#
+# A provider-neutral description of what the *next request* should ask of the
+# model's reasoning. ``resolve_reasoning_intent`` is the single place that turns
+# ``(model control, agent effort)`` into one of these; each adapter only renders
+# the intent into its own wire vocabulary. Adding a future provider or control
+# kind is a new render, never new policy.
+
+REASONING_INTENT_DEFAULT = "default"
+REASONING_INTENT_OFF = "off"
+REASONING_INTENT_EFFORT = "effort"
+REASONING_INTENT_BUDGET = "budget"
+REASONING_INTENT_ON = "on"
+REASONING_INTENT_KINDS = (
+    REASONING_INTENT_DEFAULT,
+    REASONING_INTENT_OFF,
+    REASONING_INTENT_EFFORT,
+    REASONING_INTENT_BUDGET,
+    REASONING_INTENT_ON,
+)
+
+# The lower bound for any thinking-token budget. A budget below this is not worth
+# spending a thinking turn on, so it is the floor of the clamp range and the
+# threshold below which a budget cannot be formed (see ``effort_to_budget``).
+BUDGET_FLOOR_TOKENS = 1024
+
+# D1 — proportional mapping used when the model publishes a ``budget_max``: the
+# vBot effort picks a fraction of that ceiling.
+_EFFORT_BUDGET_FRACTIONS = {
+    "minimal": 0.10,
+    "low": 0.25,
+    "medium": 0.50,
+    "high": 0.75,
+    "xhigh": 0.90,
+    "max": 1.0,
+}
+
+# D1 — absolute fallback ladder used when ``budget_max`` is unknown (every
+# Anthropic budget Claude today). Each rung is a concrete token budget.
+_EFFORT_BUDGET_ABSOLUTE = {
+    "minimal": 1024,
+    "low": 4096,
+    "medium": 8192,
+    "high": 16384,
+    "xhigh": 24576,
+    "max": 32768,
+}
+
+
+@dataclass(frozen=True)
+class ReasoningIntent:
+    """Provider-neutral description of the reasoning request for one turn.
+
+    ``kind`` is one of :data:`REASONING_INTENT_KINDS`:
+
+    * ``default`` — no effort selected; leave the provider default untouched
+      (adapters omit every reasoning field).
+    * ``off`` — do not reason. ``effort_level`` is set to ``"none"`` only when
+      the wire spells *off* as an effort value (``levels``/unknown control with a
+      ``none`` rung), so OpenAI/OpenRouter can reproduce that exact shape; for a
+      native toggle/budget wire it stays ``None`` and the adapter sends its own
+      off-shape.
+    * ``effort`` — reason at ``effort_level`` (already snapped to the model's
+      ladder).
+    * ``budget`` — reason within ``budget_tokens``; ``effort_level`` also carries
+      the snapped effort so an adapter without a native budget field can degrade
+      to an effort.
+    * ``on`` — reason (binary toggle on); ``effort_level`` carries the snapped
+      effort for adapters that degrade ``on`` to an effort.
+    """
+
+    kind: str
+    effort_level: str | None = None
+    budget_tokens: int | None = None
+
+
+def effort_to_budget(
+    effort: Any,
+    budget_max: int | None = None,
+    max_tokens: int | None = None,
+) -> int | None:
+    """Map a vBot effort to a thinking-token budget, or ``None`` when none fits.
+
+    The single home of the effort→budget policy (D1/D3):
+
+    * With a positive ``budget_max`` the budget is that ceiling times the
+      effort's fraction; without one it reads the absolute fallback ladder.
+    * The result is clamped into ``[BUDGET_FLOOR_TOKENS, budget_max]`` and kept
+      strictly under a positive ``max_tokens`` (the budget is part of the output
+      allowance).
+    * Returns ``None`` when the effort is empty/``none`` or when even
+      ``BUDGET_FLOOR_TOKENS`` cannot fit under ``max_tokens`` (D3 skip) — the
+      caller then falls back to a plain *on* or warns.
+    """
+
+    normalized = normalize_thinking_effort(effort)
+    if not normalized or normalized == _NONE_EFFORT:
+        return None
+
+    ceiling = (
+        budget_max
+        if isinstance(budget_max, int) and not isinstance(budget_max, bool) and budget_max > 0
+        else None
+    )
+    if ceiling is not None:
+        fraction = _EFFORT_BUDGET_FRACTIONS.get(normalized)
+        if fraction is None:
+            return None
+        budget = round(ceiling * fraction)
+    else:
+        absolute = _EFFORT_BUDGET_ABSOLUTE.get(normalized)
+        if absolute is None:
+            return None
+        budget = absolute
+
+    budget = max(budget, BUDGET_FLOOR_TOKENS)
+    if ceiling is not None and ceiling >= BUDGET_FLOOR_TOKENS:
+        budget = min(budget, ceiling)
+
+    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0:
+        if max_tokens <= BUDGET_FLOOR_TOKENS:
+            return None
+        budget = min(budget, max_tokens - 1)
+
+    return budget
+
+
+def resolve_reasoning_intent(
+    *,
+    supported: bool | None,
+    control: str | None,
+    levels: Iterable[str],
+    effort: Any,
+    budget_max: int | None = None,
+    max_tokens: int | None = None,
+) -> ReasoningIntent:
+    """Turn ``(model control, agent effort)`` into a provider-neutral intent.
+
+    The single decision layer (D1/D2/D3 live here, nowhere else):
+
+    * ``supported is False`` → ``off``.
+    * no effort selected → ``default``.
+    * effort ``none`` → ``off`` (carrying the snapped ``"none"`` for an
+      effort-spelled-off wire; bare for a native toggle/budget wire).
+    * ``on_off`` control → ``on``.
+    * ``budget`` control → ``budget`` with :func:`effort_to_budget`, or ``on``
+      when no budget can be formed.
+    * ``levels``/unknown control → ``effort`` snapped to ``levels`` (or
+      ``default`` when nothing snaps).
+
+    ``levels`` is the *effective* ladder the caller wants snapping against — the
+    model's feed ladder, or the adapter's floor when it has none — so the snap
+    always runs against a concrete ladder.
+    """
+
+    if supported is False:
+        return ReasoningIntent(REASONING_INTENT_OFF)
+
+    normalized = normalize_thinking_effort(effort)
+    if not normalized:
+        return ReasoningIntent(REASONING_INTENT_DEFAULT)
+
+    snapped = closest_supported_effort(normalized, levels)
+
+    if normalized == _NONE_EFFORT:
+        if control in (REASONING_CONTROL_ON_OFF, REASONING_CONTROL_BUDGET):
+            return ReasoningIntent(REASONING_INTENT_OFF)
+        return ReasoningIntent(REASONING_INTENT_OFF, effort_level=snapped)
+
+    if control == REASONING_CONTROL_ON_OFF:
+        return ReasoningIntent(REASONING_INTENT_ON, effort_level=snapped)
+
+    if control == REASONING_CONTROL_BUDGET:
+        budget = effort_to_budget(normalized, budget_max, max_tokens)
+        if budget is None:
+            return ReasoningIntent(REASONING_INTENT_ON, effort_level=snapped)
+        return ReasoningIntent(
+            REASONING_INTENT_BUDGET,
+            effort_level=snapped,
+            budget_tokens=budget,
+        )
+
+    if snapped is None:
+        return ReasoningIntent(REASONING_INTENT_DEFAULT)
+    return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=snapped)
 
 
 def remove_reasoning_kwargs(
