@@ -172,3 +172,28 @@ ships with one live-verified fetcher and two blind ones.
    remaining-vs-total count keys (MiniMax misnames "usage" as "remaining") — is an
    assumption pinned only by unit tests. Live-verify when a MiniMax Token Plan key is
    available; the percent could be inverted if the count semantics differ.
+
+
+## 2026-06-17 — Native reasoning wiring landed; provider assumptions unverified
+
+The unified reasoning-intent layer is built and all five adapters render through it
+(`resolve_reasoning_intent` in `core/providers/reasoning.py`). This **resolves** the
+previously-flagged "no wire support for `budget`/`on_off`" items (2026-06-15 Phase-7 #1
+and 2026-06-15 live-test #2): budget Claudes now send native `thinking_budget`, `on_off`
+models toggle natively, and `/status` reports the rendered budget/state. Remaining
+unverified pieces (no credentials in this environment — the Phase-0 gate could not probe):
+
+1. **Anthropic `budget_max` numbers are hand-seeded, not live-verified.**
+   `resources/models/anthropic.overrides.json` seeds `control: budget` +
+   `budget_max` for `claude-opus-4-20250219` (32000) and `claude-sonnet-4-20250219`
+   (64000), using each model's max output as the budget ceiling. The feed leaves
+   `budget_max` `None` for every Claude, so these are conservative estimates pinned by
+   tests. Live-verify the accepted thinking budget (and whether these older Claudes
+   accept `budget_tokens` vs the newer adaptive `output_config.effort`) when Anthropic
+   credentials exist; correct the override numbers if the API disagrees.
+
+2. **OpenRouter `on_off` off-shape is assumed.** A `none` selection on an `on_off`
+   OpenRouter model renders `reasoning: {enabled: false}` (a documented OpenRouter
+   param); the exact disable shape (`enabled:false` vs `exclude` vs omit) was not
+   probed. Effort-spelled-off wires keep the byte-identical `{effort: "none"}`.
+   Live-verify when an OpenRouter key + a reachable `on_off` model exist.

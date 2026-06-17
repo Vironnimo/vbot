@@ -19,7 +19,13 @@ Anthropic Messages API adapter and Anthropic-style request/response normalizatio
 
 ## Reasoning
 
-- `thinking_effort: none` sends `thinking: {type: disabled}`. Active Anthropic efforts send adaptive thinking, summarized display, and `output_config.effort` for efforts above `minimal`.
+- Reasoning is resolved through the shared `resolve_reasoning_intent(...)` (see `providers.md` → "Reasoning is one policy, many renders") and rendered onto Anthropic's `thinking` shape. `_apply_reasoning` snaps against the model's feed ladder or `ANTHROPIC_EFFORT_FLOOR` (every active effort, so the effort path is byte-identical), then `_render_reasoning` materializes the intent:
+  - **effort** → `thinking: {type: adaptive, display: summarized}` plus `output_config.effort` for efforts above `minimal`.
+  - **budget** (a `budget`-control Claude) → native `thinking: {type: enabled, budget_tokens: N}`, where `N` is the effort→budget mapping scaled by `budget_max` when seeded (else the absolute fallback ladder), clamped strictly under `max_tokens`.
+  - **on** → enabled with the floor budget; skipped with a `warn` when even the floor cannot fit `max_tokens`.
+  - **off** (`thinking_effort: none`) → `thinking: {type: disabled}`.
+  - **default** (no effort selected) → `thinking` omitted.
+- `budget_max` for the reachable budget Claudes is hand-seeded in `resources/models/anthropic.overrides.json` (the feed leaves it `None`); the numbers are conservative and **not live-verified** (no Anthropic credentials — see FLAGGED.md).
 - Anthropic rejects a sampling `temperature` while thinking is active. When the outgoing request activates thinking (adaptive via effort, or a raw `thinking` kwarg with type `adaptive`/`enabled`), `_build_payload` drops the caller `temperature` and skips the provider-default `temperature`. `thinking: {type: disabled}` does not conflict — temperature stays.
 - If injected `model_lookup` says reasoning is unsupported, Anthropic thinking/reasoning controls are stripped.
 - **Replay policy:** `reasoning_replay_policy` returns `full_history` — persisted `reasoning`/`reasoning_meta` replay across runs for assistant entries that pass the chat layer's same-model gate (Anthropic guidance: thinking blocks go back unchanged for the whole same-model conversation; stripping risks signature/ordering 400s and provider-side prompt-cache misses). Cross-model entries are stripped by the gate; same-model reasoning-only turns stay in the request history.

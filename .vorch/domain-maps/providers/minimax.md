@@ -30,7 +30,7 @@ MiniMax is wired as an OpenAI-compatible chat-completions provider with provider
 ## Reasoning
 
 - MiniMax's OpenAI-compatible API does not use OpenAI-style `reasoning_effort`. `MiniMaxAdapter` strips generic OpenAI reasoning payload keys before applying MiniMax controls.
-- For `MiniMax-M3`, active vBot efforts map to `thinking: {type: adaptive}` and `none` maps to `thinking: {type: disabled}`.
+- For `MiniMax-M3`, the shared `resolve_reasoning_intent(...)` (see `providers.md` → "Reasoning is one policy, many renders") classifies the selection, then `_render_minimax_m3_thinking` maps it onto MiniMax's binary toggle: an active effort (incl. a degraded `budget`/`on` intent — M3 has no native token budget) → `thinking: {type: adaptive}`, `none`/off → `thinking: {type: disabled}`, no effort selected → reason-by-default (no `thinking` key).
 - For M2.x models the adapter suppresses `thinking` (those models reason by default).
 - The adapter defaults `reasoning_split: true` whenever reasoning is active (M2.x always; M3 unless thinking is disabled), so the thinking trace is returned separately as `reasoning_details` instead of inline `<think>…</think>` in `content`. A caller-set `reasoning_split` is left alone; catalog reasoning-unsupported strips it. This is the capture half of the replay policy below — `reasoning_details` is what gets persisted in `reasoning_meta` and replayed.
 - Non-streaming responses with `reasoning_details` expose their text as visible `reasoning` while preserving the original details in `reasoning_meta`.
