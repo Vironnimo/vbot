@@ -128,11 +128,16 @@ that *deviates* from the lab ladder gets its own block stamped on `<provider>.js
 (`provider_reasoning_block`); a non-deviating provider drops its bare `reasoning`
 so the canonical ladder is inherited at load.
 
-**Snapping is per-model against the effective ladder.** Adapters resolve the
-assembled `capabilities.reasoning.levels` via `model_reasoning_levels` and snap
-the selected effort with `closest_supported_effort`; the hardcoded per-adapter
-constant survives only as the **floor** when a model has no feed ladder
-(empty `levels`). Details in `providers.md` → Conventions.
+**One reasoning policy, many renders.** The wire layer turns
+`(capabilities.reasoning.control, agent effort)` into a provider-neutral intent
+via `resolve_reasoning_intent(...)` and each adapter renders it: `levels` snaps
+the effort against `capabilities.reasoning.levels` (via `model_reasoning_levels`,
+falling back to the adapter floor for an empty ladder), `on_off` toggles, and
+`budget` derives a native token budget scaled by `budget_max`
+(`model_reasoning_control` / `model_reasoning_budget_max` are the accessors). The
+hand-seeded budget Claudes carry `budget_max` in
+`resources/models/anthropic.overrides.json`. Full wiring in `providers.md` →
+"Reasoning is one policy, many renders".
 
 ## Wire selectors as data
 
