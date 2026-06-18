@@ -173,11 +173,15 @@ describe('buildModelSelectOptions', () => {
   it('drops a restricted model entirely when no allowed connection is usable', () => {
     const options = buildModelSelectOptions({
       models: [catalogModel('openai/gpt-5.2', 'openai', ['api-key'])],
-      connections: [usableConnection('openai:subscription', 'openai', 'Subscription')],
+      connections: [
+        usableConnection('openai:subscription', 'openai', 'Subscription'),
+      ],
       emptyLabel: 'None',
     });
 
-    expect(options).toEqual([{ value: '', label: 'None', isUnavailable: false }]);
+    expect(options).toEqual([
+      { value: '', label: 'None', isUnavailable: false },
+    ]);
   });
 
   it('marks a saved selection on a now-forbidden connection as unavailable', () => {
@@ -196,7 +200,9 @@ describe('buildModelSelectOptions', () => {
       label: 'Unavailable / custom: openai/gpt-5.4 (API Key)',
       isUnavailable: true,
     });
-    expect(options.some((option) => option.value === 'openai/gpt-5.4::subscription')).toBe(true);
+    expect(
+      options.some((option) => option.value === 'openai/gpt-5.4::subscription'),
+    ).toBe(true);
   });
 
   it('marks a selection pinned to an unknown account as unavailable with the account in the label', () => {

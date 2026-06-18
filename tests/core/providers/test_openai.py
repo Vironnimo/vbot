@@ -17,8 +17,8 @@ import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers.errors import ProviderAuthError
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
+from core.providers.errors import ProviderAuthError
 from core.providers.openai import (
     CODEX_EXTRA_HEADERS,
     CODEX_RESPONSES_ENDPOINT,

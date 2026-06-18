@@ -189,8 +189,16 @@ function makeUsageReport(overrides = {}) {
         display_name: 'OpenAI',
         plan: 'Plus',
         windows: [
-          { label: '5h', used_percent: 42.5, reset_at: '2099-06-16T15:00:00+00:00' },
-          { label: 'Week', used_percent: 88, reset_at: '2099-06-20T00:00:00+00:00' },
+          {
+            label: '5h',
+            used_percent: 42.5,
+            reset_at: '2099-06-16T15:00:00+00:00',
+          },
+          {
+            label: 'Week',
+            used_percent: 88,
+            reset_at: '2099-06-20T00:00:00+00:00',
+          },
         ],
         error: null,
       },

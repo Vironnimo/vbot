@@ -1111,7 +1111,9 @@ class TestSendRequestFormat:
     @pytest.mark.asyncio
     async def test_send_budget_model_sends_native_budget_tokens(self):
         """A budget-control Claude sends native ``thinking.budget_tokens`` from effort."""
-        route = respx.post(MINIMAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
         adapter = AnthropicAdapter(
             NO_DEFAULTS_CONFIG,
             API_KEY,
@@ -1135,7 +1137,9 @@ class TestSendRequestFormat:
     @pytest.mark.asyncio
     async def test_send_budget_model_scales_with_budget_max(self):
         """A published ``budget_max`` makes the budget proportional to the effort."""
-        route = respx.post(MINIMAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
         adapter = AnthropicAdapter(
             NO_DEFAULTS_CONFIG,
             API_KEY,
@@ -1171,7 +1175,9 @@ class TestSendRequestFormat:
     @pytest.mark.asyncio
     async def test_send_budget_model_disables_thinking_on_none(self):
         """A ``none`` selection disables thinking even on a budget model."""
-        route = respx.post(MINIMAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
         adapter = AnthropicAdapter(
             NO_DEFAULTS_CONFIG,
             API_KEY,
@@ -1187,7 +1193,9 @@ class TestSendRequestFormat:
     @pytest.mark.asyncio
     async def test_send_on_off_model_enables_with_floor_budget(self):
         """An ``on_off`` Claude enables thinking with the floor budget."""
-        route = respx.post(MINIMAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
         adapter = AnthropicAdapter(
             NO_DEFAULTS_CONFIG,
             API_KEY,

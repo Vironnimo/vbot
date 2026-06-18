@@ -159,11 +159,13 @@ def test_translate_maps_existing_mirror_file():
 def test_translate_falls_back_to_mirror_directory_with_note():
     module = _load_quality_module()
 
-    test_paths, notes = module.translate_to_test_paths(["core/settings/validation.py"])
+    # A package __init__.py has no dedicated mirror test by nature, so it always
+    # exercises the fallback: no owned test_*.py, run the mirror directory + note.
+    test_paths, notes = module.translate_to_test_paths(["core/settings/__init__.py"])
 
     assert test_paths == ["tests/core/settings"]
     assert len(notes) == 1
-    assert "core/settings/validation.py" in notes[0]
+    assert "core/settings/__init__.py" in notes[0]
     assert "tests/core/settings" in notes[0]
 
 

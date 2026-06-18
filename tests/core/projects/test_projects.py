@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -117,7 +118,7 @@ def test_project_from_dict_defaults_optional_fields() -> None:
 def test_project_is_frozen(tmp_path: Path) -> None:
     project = build_project("vbot", "vBot", tmp_path)
 
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         project.display_name = "changed"  # type: ignore[misc]
 
 

@@ -375,9 +375,7 @@ async def test_project_run_resolves_config_agent_through_resolver(tmp_path: Path
     identity_agent = StubAgent(id="orchestrator", model="openai/gpt-5.2", allowed_tools=["*"])
     # The config agent shares the agent id but carries a distinct resolved model,
     # so the model reaching the wire proves the config profile was used.
-    config_agent = StubAgent(
-        id="orchestrator", model="openai/gpt-5.2-config", allowed_tools=["*"]
-    )
+    config_agent = StubAgent(id="orchestrator", model="openai/gpt-5.2-config", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello from config agent", "tool_calls": None}])
     runtime = _project_runtime(
         tmp_path,
@@ -388,9 +386,7 @@ async def test_project_run_resolves_config_agent_through_resolver(tmp_path: Path
     )
     runtime.projects.create("acme", "Acme", repo_dir)
 
-    await ChatLoop(runtime).send(
-        "orchestrator", "Hi", session_id="session-one", project_id="acme"
-    )
+    await ChatLoop(runtime).send("orchestrator", "Hi", session_id="session-one", project_id="acme")
 
     # The resolver was asked for the project agent, and its model reached the wire.
     assert ("acme", "orchestrator") in [
@@ -439,9 +435,7 @@ async def test_unresolvable_project_agent_raises_clear_error(tmp_path: Path) -> 
     runtime.projects.create("acme", "Acme", repo_dir)
 
     with pytest.raises(AgentResolutionError, match="not on project 'acme' team"):
-        await ChatLoop(runtime).send(
-            "coder", "Hi", session_id="session-one", project_id="acme"
-        )
+        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one", project_id="acme")
 
 
 def persisted_roles_of(messages: list[ChatMessage]) -> list[str]:

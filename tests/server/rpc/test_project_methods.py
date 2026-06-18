@@ -20,9 +20,11 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
+from core.agents.agents import AgentStore
 from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
@@ -113,7 +115,8 @@ def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNames
     data_dir = tmp_path / "data"
     projects = ProjectStore(data_dir)
     resolver = AgentResolver(
-        agents=SimpleNamespace(),  # identity path is unused in these tests
+        # The identity path is unused in these project-scoped tests.
+        agents=cast(AgentStore, SimpleNamespace()),
         projects=projects,
         model_checker=_openai_configured(),
         global_default_model=lambda: "",

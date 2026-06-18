@@ -420,9 +420,19 @@ class TestSendRequestFormat:
     @pytest.mark.parametrize(
         "part",
         [
-            {"type": "document", "base64": None, "media_type": "application/pdf", "filename": "r.pdf"},
+            {
+                "type": "document",
+                "base64": None,
+                "media_type": "application/pdf",
+                "filename": "r.pdf",
+            },
             {"type": "document", "base64": "JVBERi0=", "media_type": "", "filename": "r.pdf"},
-            {"type": "document", "base64": "JVBERi0=", "media_type": "application/pdf", "filename": ""},
+            {
+                "type": "document",
+                "base64": "JVBERi0=",
+                "media_type": "application/pdf",
+                "filename": "",
+            },
         ],
     )
     def test_invalid_document_part_raises(self, part):

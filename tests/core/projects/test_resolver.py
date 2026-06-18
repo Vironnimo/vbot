@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 from core.agents.agents import AgentStore
-from core.projects.projects import build_project
 from core.projects.resolver import (
     AgentResolutionError,
     AgentResolver,
@@ -103,8 +102,10 @@ def _openai_configured() -> ModelConfigurationChecker:
 def _write_agent(repo: Path, filename: str, *, model: str = "", body: str = "Body.") -> Path:
     agents_dir = repo.joinpath(*OPENCODE_AGENTS_SUBPATH)
     agents_dir.mkdir(parents=True, exist_ok=True)
-    front = f"description: An agent.\nmodel: {model}\ntemperature: 0.3\n" if model else (
-        "description: An agent.\ntemperature: 0.3\n"
+    front = (
+        f"description: An agent.\nmodel: {model}\ntemperature: 0.3\n"
+        if model
+        else ("description: An agent.\ntemperature: 0.3\n")
     )
     path = agents_dir / filename
     path.write_text(f"---\n{front}---\n{body}\n", encoding="utf-8")
@@ -207,9 +208,7 @@ def test_model_chain_falls_back_to_global_default(
     # Arrange: no agent model, no project default; global default configured.
     _write_agent(repo, "writer.md", model="")
     project = _project(projects, repo, default_model="")
-    resolver = _resolver(
-        agents, projects, _openai_configured(), global_default="openai/gpt-5.2"
-    )
+    resolver = _resolver(agents, projects, _openai_configured(), global_default="openai/gpt-5.2")
 
     # Act
     runtime_agent = resolver.resolve_agent(project.project_id, "writer")
@@ -351,6 +350,7 @@ def test_single_agent_config_is_read_fresh_per_resolve(
     runtime_agent = resolver.resolve_agent(project.project_id, "builder")
 
     # Assert: config (model + body) reflects the live file, not the cached scan.
+    assert isinstance(runtime_agent, ConfigAgent)
     assert runtime_agent.model == "openai/gpt-mini"
     assert runtime_agent.body == "v2\n"
 

@@ -23,7 +23,6 @@ from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.provider_usage_methods import _provider_usage
 
-
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
@@ -46,7 +45,9 @@ class _FakeTransport:
     def __init__(self, payload: Any) -> None:
         self._payload = payload
 
-    async def get(self, url: str, *, headers: Any, timeout: float, params: Any = None) -> _FakeResponse:
+    async def get(
+        self, url: str, *, headers: Any, timeout: float, params: Any = None
+    ) -> _FakeResponse:
         return _FakeResponse(self._payload)
 
 
@@ -67,7 +68,9 @@ class _FakeProviders:
 
 
 class _FakeRuntime:
-    def __init__(self, *, usable: set[str], extras: dict[str, dict[str, str]] | None = None) -> None:
+    def __init__(
+        self, *, usable: set[str], extras: dict[str, dict[str, str]] | None = None
+    ) -> None:
         self._providers = _FakeProviders({"openai": _openai_provider_config()})
         self._credentials = _FakeCredentials(usable)
         self._extras = extras or {}
