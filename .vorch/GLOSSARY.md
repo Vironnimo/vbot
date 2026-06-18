@@ -116,3 +116,7 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 ## Workspace
 **Definition:** The agent's home directory at `<datadir>/workspace-<agent-id>/`. Contains Markdown files the agent reads and maintains itself, primarily `SOUL.md`, `USER.md`, and `MEMORY.md`. Tools resolve relative paths against the workspace by default; absolute paths bypass it.
 **Not:** The app source directory. Not the sessions directory. The workspace is agent-owned and agent-maintained — sessions are system-owned persisted chat history.
+
+## Project
+**Definition:** A first-class entity (not just a cwd), keyed by a stable `project_id` slug with a changeable display name, that bundles a cwd (the repo directory tools resolve relative paths against), an auto-load file list, a project-default-agent, a default-model, a team scanned live from the repo, and Sessions. The minimal Project is just a cwd — team, `AGENTS.md`, and auto-load files are all optional, so an empty folder is a valid Project.
+**Not:** A bare cwd, a Workspace, or an Agent. The cwd is one field of a Project; a Workspace is an Agent's identity home in the data-dir, never the project repo. vBot reads the repo (to discover the Team) but never writes it — runtime data (the project anchor, Sessions) lives in the data-dir.
