@@ -226,3 +226,16 @@ deliberately not fixed in the client-only Plan 2.
    server-side and shows on the next history load. Fixing it needs a backend change —
    add `project_id` to the run lifecycle event payload so the client can rebuild the
    address key — which is out of scope for the client-only Plan 2.
+
+
+## 2026-06-19 — RESOLVED: project-agent /ws backstop (the 2026-06-18 Plan 2 item)
+
+Fixed. The Run's `project_id` now rides every run-lifecycle/run-output event
+(`RunEvent` → `to_dict()` → `_server_event_from_run_event`) **and** the
+`connection_ready` `active_runs` snapshot (`_active_runs_snapshot` in `server/app.py`);
+`agent_id` stays bare. `chatRunStream` rebuilds the outside `agent@projekt` address with
+`formatAgentAddress(agent_id, project_id)` at both ingestion seams (`runEventFromServerEvent`
+and `applyConnectionSnapshot`), so the `/ws` re-attach/catch-up path and cross-session
+sub-agent status now match the address-keyed project-agent session. Identity runs carry no
+`project_id`, so the rebuild yields the bare id — identity path byte-identical. Domain maps
+updated: `runs.md`, `server.md`, `webui.md`.
