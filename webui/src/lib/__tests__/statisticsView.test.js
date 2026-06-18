@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DAILY_GRANULARITIES,
   STATISTICS_SUB_VIEWS,
+  agentDisplay,
   barFractions,
   clampUsagePercent,
   donutSegments,
@@ -223,5 +224,27 @@ describe('statisticsView chart geometry', () => {
 
   it('returns no donut segments when the total is zero', () => {
     expect(donutSegments([{ key: 'completed', value: 0 }])).toEqual([]);
+  });
+});
+
+describe('agentDisplay (project-aware agent rendering)', () => {
+  it('returns the bare name and null project for an identity agent', () => {
+    expect(agentDisplay('researcher')).toEqual({
+      name: 'researcher',
+      projectId: null,
+    });
+  });
+
+  it('splits a project-agent address into name + project for the badge', () => {
+    expect(agentDisplay('builder@vbot')).toEqual({
+      name: 'builder',
+      projectId: 'vbot',
+    });
+  });
+
+  it('falls back to identity rendering for an unexpected/empty value', () => {
+    expect(agentDisplay('')).toEqual({ name: '', projectId: null });
+    expect(agentDisplay(null)).toEqual({ name: '', projectId: null });
+    expect(agentDisplay('a@b@c')).toEqual({ name: 'a@b@c', projectId: null });
   });
 });

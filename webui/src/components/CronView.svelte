@@ -13,13 +13,17 @@
     disableCronJob,
     enableCronJob,
     listCronJobs,
+    listProjects,
     rpc,
+    showProject,
     updateCronJob,
   } from '$lib/api.js';
   import {
     applyAgentListResponse,
     applyCronListResponse,
     buildCreateCronPayload,
+    buildCronAgentDropdownOptions,
+    buildCronAgentOptions,
     buildUpdateCronPayload,
     createCronFormValues,
     createCronViewState,
@@ -27,6 +31,8 @@
     CRON_SCHEDULE_TYPE_ONCE,
     CRON_STATUS_ACTIVE,
     describeCronExpression,
+    projectIdsFromList,
+    projectTeamEntry,
     visibleCronJobs,
   } from '$lib/cronView.js';
   import { t } from '$lib/i18n.js';
@@ -45,6 +51,14 @@
   let submittingForm = $state(false);
   let mutatingJobId = $state('');
 
+  // Project teams power the project-agent options in the cron dropdown. They are
+  // loaded lazily the first time the modal opens and cached for the lifetime of
+  // the view, so the N+1 `project.show` scan (one per project) never runs on
+  // every render — only once, on demand (plan risk mitigation).
+  let projectTeams = $state([]);
+  let projectTeamsLoaded = false;
+  let projectTeamsRequestId = 0;
+
   let destroyed = false;
   let jobsRequestId = 0;
   let agentsRequestId = 0;
@@ -60,15 +74,27 @@
       ? t('cron.modal.createTitle', 'Create cron job')
       : t('cron.modal.editTitle', 'Edit cron job'),
   );
+  // Identity agents (bare ids, unchanged) plus project agents addressed as
+  // `agent@projekt`. A project option's value IS the address, so saving sends it
+  // straight through as the `agent_id` param. Group headers are inserted only
+  // when project agents exist, so the identity-only dropdown is unchanged.
   let agentOptions = $derived(
-    viewState.agents.map((agent) => ({
-      value: agent.id,
-      label: agent.name,
-      secondaryLabel: agent.id,
-    })),
+    buildCronAgentDropdownOptions(viewState.agents, projectTeams, {
+      identityGroupLabel: t('cron.form.agentGroup.identity', 'Identity agents'),
+      projectGroupLabel: t('cron.form.agentGroup.project', 'Project agents'),
+    }),
   );
-  let agentNameById = $derived(
-    new Map(viewState.agents.map((agent) => [agent.id, agent.name])),
+  // Map every selectable option value (bare id or address) to its label so the
+  // job table can render a readable target. Built from the header-free options so
+  // the group separators never enter the map; an identity agent maps to its name
+  // as before, a project agent to its `agent@projekt` address.
+  let agentLabelByValue = $derived(
+    new Map(
+      buildCronAgentOptions(viewState.agents, projectTeams).map((option) => [
+        option.value,
+        option.label,
+      ]),
+    ),
   );
 
   onMount(() => {
@@ -142,12 +168,54 @@
     }
   }
 
+  // Lazily scan project teams the first time the cron modal opens (and cache the
+  // result), so the dropdown can offer project agents as `agent@projekt` without
+  // an N+1 `project.show` per render. A failure is non-fatal: the dropdown still
+  // shows identity agents, and the team scan can be retried on the next open.
+  async function loadProjectTeams() {
+    if (projectTeamsLoaded) {
+      return;
+    }
+
+    const requestId = projectTeamsRequestId + 1;
+    projectTeamsRequestId = requestId;
+
+    try {
+      const listResult = await listProjects();
+      if (destroyed || requestId !== projectTeamsRequestId) {
+        return;
+      }
+
+      const projectIds = projectIdsFromList(listResult);
+      const showResults = await Promise.all(
+        projectIds.map((projectId) =>
+          showProject(projectId)
+            .then((showResult) => projectTeamEntry(projectId, showResult))
+            .catch(() => null),
+        ),
+      );
+      if (destroyed || requestId !== projectTeamsRequestId) {
+        return;
+      }
+
+      projectTeams = showResults.filter((entry) => entry !== null);
+      projectTeamsLoaded = true;
+    } catch {
+      // Identity agents remain available; leave projectTeams empty and allow a
+      // retry on the next modal open (projectTeamsLoaded stays false).
+      if (!destroyed && requestId === projectTeamsRequestId) {
+        projectTeams = [];
+      }
+    }
+  }
+
   function openCreateModal() {
     formMode = FORM_MODE_CREATE;
     formValues = createCronFormValues();
     formValues.agent_id = viewState.agents[0]?.id ?? '';
     formErrorMessage = '';
     isModalOpen = true;
+    loadProjectTeams();
   }
 
   function openEditModal(job) {
@@ -158,6 +226,7 @@
     }
     formErrorMessage = '';
     isModalOpen = true;
+    loadProjectTeams();
   }
 
   function closeModal() {
@@ -300,9 +369,13 @@
     }
   }
 
-  function agentLabel(agentId) {
+  // `target` is the readable cron target: a bare agent name for an identity job,
+  // the `agent@projekt` address for a project job (normalizeCronJob put the full
+  // address on `job.agent_id`). When the agent is in the loaded options we show
+  // its friendly label; otherwise the address itself is already readable.
+  function agentLabel(target) {
     return (
-      agentNameById.get(agentId) || agentId || t('common.unknown', 'Unknown')
+      agentLabelByValue.get(target) || target || t('common.unknown', 'Unknown')
     );
   }
 
