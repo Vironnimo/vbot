@@ -46,6 +46,13 @@ from cli.extensions_management import extensions_disable, extensions_enable, ext
 from cli.log_management import log_list, log_read
 from cli.model_management import model_list, model_refresh
 from cli.parser import parse_args
+from cli.project_management import (
+    project_add,
+    project_list,
+    project_remove,
+    project_set,
+    project_show,
+)
 from cli.prompt_management import prompt_list, prompt_preview, prompt_reset, prompt_update
 from cli.provider_management import (
     provider_connect,
@@ -180,6 +187,11 @@ def run(
             update_agent=update_agent,
             delete_agent=delete_agent,
         )
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "project":
+        result = dispatch_project_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -347,6 +359,59 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["allowed_skills"] = list(args.allowed_skills)
     if getattr(args, "current_session_id", None) is not None:
         changes["current_session_id"] = args.current_session_id
+    return changes
+
+
+def dispatch_project_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    add_project_fn: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = project_add,
+    list_projects_fn: Callable[[ServerInstance], CommandResult] = project_list,
+    show_project_fn: Callable[[ServerInstance, str], CommandResult] = project_show,
+    set_project_fn: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = project_set,
+    remove_project_fn: Callable[[ServerInstance, str], CommandResult] = project_remove,
+) -> CommandResult:
+    """Dispatch one parsed project command against the server RPC client."""
+
+    if args.command == "add":
+        return add_project_fn(instance, args.cwd, _project_add_fields_from_args(args))
+    if args.command == "list":
+        return list_projects_fn(instance)
+    if args.command == "show":
+        return show_project_fn(instance, args.id)
+    if args.command == "set":
+        return set_project_fn(instance, args.id, _project_set_changes_from_args(args))
+    if args.command == "rm":
+        return remove_project_fn(instance, args.id)
+    raise ValueError(f"Unsupported project command: {args.command}")
+
+
+def _project_add_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    if args.name is not None:
+        fields["display_name"] = args.name
+    if args.default_agent is not None:
+        fields["default_agent"] = args.default_agent
+    if args.default_model is not None:
+        fields["default_model"] = args.default_model
+    if args.auto_load is not None:
+        fields["auto_load"] = list(args.auto_load)
+    return fields
+
+
+def _project_set_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    changes: dict[str, Any] = {}
+    if args.cwd is not None:
+        changes["cwd"] = args.cwd
+    if args.name is not None:
+        changes["display_name"] = args.name
+    if args.default_agent is not None:
+        changes["default_agent"] = args.default_agent
+    if args.default_model is not None:
+        changes["default_model"] = args.default_model
+    if args.auto_load is not None:
+        changes["auto_load"] = list(args.auto_load)
     return changes
 
 

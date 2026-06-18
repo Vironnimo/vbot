@@ -27,6 +27,7 @@ TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
     "agent": "Inspect and manage agent configs",
+    "project": "Inspect and manage projects and their scanned teams",
     "session": "Inspect and manage agent chat sessions",
     "channel": "Inspect and manage channel configs",
     "tool": "Inspect public tool catalog",
@@ -54,6 +55,13 @@ AGENT_HELP = {
     "create": "Create an agent config",
     "update": "Update an agent config",
     "delete": "Delete an agent config",
+}
+PROJECT_HELP = {
+    "add": "Add a project from a repo directory and show its scan preview",
+    "list": "List configured projects",
+    "show": "Show one project's config, team, and scan report",
+    "set": "Update one project's config",
+    "rm": "Remove a project, archiving its anchor",
 }
 SESSION_HELP = {
     "list": "List one agent's chat sessions",
@@ -138,6 +146,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="area", required=True)
     _add_server_parsers(subparsers)
     _add_agent_parsers(subparsers)
+    _add_project_parsers(subparsers)
     _add_session_parsers(subparsers)
     _add_channel_parsers(subparsers)
     _add_tool_parsers(subparsers)
@@ -267,6 +276,76 @@ def _add_agent_change_arguments(
         parser.add_argument("--current-session-id", help="Switch the agent's current session")
 
 
+def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    project_parser = subparsers.add_parser(
+        "project",
+        help=AREA_HELP["project"],
+        description=AREA_HELP["project"],
+    )
+    project_subparsers = project_parser.add_subparsers(dest="command", required=True)
+
+    add_parser = _add_command_parser(
+        project_subparsers,
+        "add",
+        PROJECT_HELP["add"],
+        example="project add ./my-repo --name vbot --default-agent orchestrator",
+    )
+    add_parser.add_argument(
+        "cwd", metavar="<path>", help="Repo directory the project's tools resolve paths against"
+    )
+    add_parser.add_argument("--name", metavar="<display-name>", help="Project display name")
+    add_parser.add_argument("--default-agent", metavar="<agent-id>", help="Project default agent")
+    add_parser.add_argument(
+        "--default-model",
+        metavar="<provider/model-id>",
+        help="Project default model as <provider>/<model-id>",
+    )
+    add_parser.add_argument(
+        "--auto-load",
+        nargs="*",
+        metavar="<file>",
+        help="Repo files auto-loaded into project agent prompts",
+    )
+
+    _add_command_parser(project_subparsers, "list", PROJECT_HELP["list"], example="project list")
+
+    show_parser = _add_command_parser(
+        project_subparsers, "show", PROJECT_HELP["show"], example="project show vbot"
+    )
+    show_parser.add_argument("id", metavar="<project-id>", help="Project id to show")
+
+    set_parser = _add_command_parser(
+        project_subparsers,
+        "set",
+        PROJECT_HELP["set"],
+        example="project set vbot --default-agent builder",
+    )
+    set_parser.add_argument("id", metavar="<project-id>", help="Project id to update")
+    set_parser.add_argument(
+        "--cwd", metavar="<path>", help="Re-point the repo directory of the project"
+    )
+    set_parser.add_argument("--name", metavar="<display-name>", help="New project display name")
+    set_parser.add_argument(
+        "--default-agent", metavar="<agent-id>", help="New project default agent"
+    )
+    set_parser.add_argument(
+        "--default-model",
+        metavar="<provider/model-id>",
+        help="New project default model as <provider>/<model-id>",
+    )
+    set_parser.add_argument(
+        "--auto-load",
+        nargs="*",
+        metavar="<file>",
+        help="Replace the full auto-load file list",
+    )
+
+    rm_parser = _add_command_parser(
+        project_subparsers, "rm", PROJECT_HELP["rm"], example="project rm vbot"
+    )
+    rm_parser.add_argument("id", metavar="<project-id>", help="Project id to remove")
+
+
 def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     session_parser = subparsers.add_parser(
         "session",
@@ -276,17 +355,21 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     session_subparsers = session_parser.add_subparsers(dest="command", required=True)
 
     list_parser = _add_command_parser(
-        session_subparsers, "list", SESSION_HELP["list"], example="session list assistant"
+        session_subparsers, "list", SESSION_HELP["list"], example="session list orchestrator@vbot"
     )
-    list_parser.add_argument("agent", metavar="<agent-id>", help="Agent whose sessions to list")
+    list_parser.add_argument(
+        "agent", metavar="<agent>", help="Agent whose sessions to list, as agent or agent@projekt"
+    )
 
     create_parser = _add_command_parser(
         session_subparsers,
         "create",
         SESSION_HELP["create"],
-        example="session create assistant --make-current",
+        example="session create orchestrator@vbot --make-current",
     )
-    create_parser.add_argument("agent", metavar="<agent-id>", help="Agent to create a session for")
+    create_parser.add_argument(
+        "agent", metavar="<agent>", help="Agent to create a session for, as agent or agent@projekt"
+    )
     create_parser.add_argument(
         "--id", metavar="<session-id>", help="Explicit session id; omitted means server-generated"
     )
@@ -676,9 +759,11 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         cron_subparsers,
         "create",
         CRON_HELP["create"],
-        example='cron create assistant --prompt "Check the news" --cron "0 9 * * *"',
+        example='cron create builder@vbot --prompt "Check the news" --cron "0 9 * * *"',
     )
-    create_parser.add_argument("agent", metavar="<agent-id>", help="Agent that runs the job")
+    create_parser.add_argument(
+        "agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@projekt"
+    )
     create_parser.add_argument(
         "--prompt", required=True, help="Prompt text injected when the job fires"
     )
@@ -693,7 +778,9 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         example="cron update <job-id> --status paused",
     )
     update_parser.add_argument("id", metavar="<job-id>", help="Cron job id to update")
-    update_parser.add_argument("--agent", metavar="<agent-id>", help="Agent that runs the job")
+    update_parser.add_argument(
+        "--agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@projekt"
+    )
     update_parser.add_argument("--prompt", help="Prompt text injected when the job fires")
     update_schedule_group = update_parser.add_mutually_exclusive_group()
     _add_cron_schedule_arguments(update_schedule_group)
