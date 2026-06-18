@@ -26,6 +26,12 @@ AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thi
 # letter or digit, then up to 63 more of letter/digit/hyphen/underscore. Shared
 # by file-schema validation, the agent store, and prompt-fragment storage.
 AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+# Single authority for the project-id format (filesystem-safe slug). Same shape
+# as the agent-id rule: a leading letter or digit, then up to 63 more of
+# letter/digit/hyphen/underscore. Shared by the project store and the central
+# file-schema validator. Lives here (not in core.projects) so validation.py can
+# import it without an import cycle through the projects package.
+PROJECT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 # Appearance chat-width preference (the WebUI chat reading-column width). The
@@ -451,6 +457,11 @@ def _positive_integer(value: Any, label: str) -> int:
 def is_valid_agent_id(value: Any) -> bool:
     """Return whether ``value`` is a filesystem-safe agent id per the canonical rule."""
     return isinstance(value, str) and AGENT_ID_PATTERN.fullmatch(value) is not None
+
+
+def is_valid_project_id(value: Any) -> bool:
+    """Return whether ``value`` is a filesystem-safe project id per the canonical rule."""
+    return isinstance(value, str) and PROJECT_ID_PATTERN.fullmatch(value) is not None
 
 
 def validate_temperature(

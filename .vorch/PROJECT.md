@@ -57,6 +57,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/attachments.md` | `core/attachments/` | Blob storage, MIME sniffing, attachment metadata, text extraction |
 | `.vorch/domain-maps/extensions.md` | `core/extensions/` | Extension hook loading, handler registration, runtime/chat event contracts |
 | `.vorch/domain-maps/agent.md` | `core/agents/` | Agent schema, persistence, workspace lifecycle, archive-on-delete |
+| `.vorch/domain-maps/projects.md` | `core/projects/` | Project entity, `project.json` schema, data-dir anchor lifecycle, cwd normalization/duplicate key, archive-on-remove |
 | `.vorch/domain-maps/subagents.md` | `core/subagents/` | Sub-agent coordinator, in-memory batch tracking, parent-child run linkage |
 | `.vorch/domain-maps/tools.md` | `core/tools/` | Tool domain overview and index to tool-specific maps |
 | `.vorch/domain-maps/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |
