@@ -27,6 +27,10 @@ vi.mock('$lib/api.js', () => ({
 
 const { default: ProjectsView } = await import('../ProjectsView.svelte');
 
+// Just above the component's 800ms auto-save debounce, so the timer has fired
+// by the time the test inspects the mock.
+const AUTO_SAVE_WAIT_MS = 900;
+
 describe('ProjectsView', () => {
   let mountedComponent;
 
@@ -216,6 +220,44 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('auto-saves edited fields after the debounce without a Save click', async () => {
+    // The reload after the auto-save returns the renamed project so the form
+    // reads clean again and the debounce does not re-fire.
+    listProjectsMock
+      .mockResolvedValueOnce({
+        projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+      })
+      .mockResolvedValue({
+        projects: [project({ project_id: 'demo', display_name: 'Renamed' })],
+      });
+    setProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo', display_name: 'Renamed' }),
+      scan: { team: [], report: { clean: true, findings: [] } },
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-toggle-demo"]'),
+    );
+    buttonByTestId('project-toggle-demo').click();
+    flushSync();
+
+    await waitForCondition(() => inputById('project-edit-name'));
+    setInputValue('project-edit-name', 'Renamed');
+
+    // No Save click: wait out the 800ms auto-save debounce, then let the request
+    // settle. The edit persists on its own through the same sparse project.set.
+    await wait(AUTO_SAVE_WAIT_MS);
+    flushSync();
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      display_name: 'Renamed',
+    });
+  });
+
   it('re-points a project with a missing cwd through project.set with the new cwd', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [
@@ -364,6 +406,10 @@ function setInputValue(id, value) {
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
   flushSync();
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function waitForCondition(condition, maxAttempts = 20) {
