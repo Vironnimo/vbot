@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, cast
 
-from core.agents import AgentNotFoundError, InvalidAgentIdError
 from core.chat import (
     ChatMessage,
     ChatSessionError,
 )
+from core.projects import AgentResolutionError
 from core.runs import (
     ActiveRunError,
     Run,
@@ -154,7 +154,10 @@ async def _handle_subagent(
         if context.is_cancelled():
             return tool_failure("run_cancelled", "Parent run was cancelled before sub-agent spawn")
 
-        validation_error = _validate_target_agent(runtime, target_agent_id)
+        # Resolve under the parent run's project: a config target must be on the
+        # project Team, an identity target (``project_id=None``) resolves the store
+        # agent exactly as before.
+        validation_error = _validate_target_agent(runtime, target_agent_id, context.project_id)
         if validation_error is not None:
             return validation_error
 
@@ -610,10 +613,21 @@ def _positive_int(value: Any, default: int) -> int:
     return default
 
 
-def _validate_target_agent(runtime: RuntimeServices, target_agent_id: str) -> JsonObject | None:
+def _validate_target_agent(
+    runtime: RuntimeServices, target_agent_id: str, project_id: str | None
+) -> JsonObject | None:
+    """Validate the spawn target resolves under the parent run's project.
+
+    Routes through the one resolver seam: ``project_id=None`` resolves the store
+    identity agent (unchanged), a set ``project_id`` requires the target to be on
+    that project's Team with a usable model. Any resolver failure (unknown
+    agent/project, off-Team target, or a model chain that fell through) becomes
+    the validation failure envelope so the tool returns a clean result instead of
+    letting the error escape the tool boundary.
+    """
     try:
-        runtime.agents.get(target_agent_id)
-    except (AgentNotFoundError, InvalidAgentIdError) as error:
+        runtime.agent_resolver.resolve_agent(project_id, target_agent_id)
+    except AgentResolutionError as error:
         return tool_failure("agent_not_found", str(error))
     return None
 

@@ -9,6 +9,7 @@ from core.projects.paths import (
     cwd_exists,
     cwd_identity_key,
     normalize_cwd,
+    slugify_agent_id,
     slugify_project_id,
 )
 from core.projects.projects import (
@@ -20,20 +21,35 @@ from core.projects.projects import (
     build_project,
     project_from_dict,
 )
+from core.projects.resolver import (
+    AgentResolutionError,
+    AgentResolver,
+    ConfigAgent,
+    ModelConfigurationChecker,
+    RuntimeAgent,
+    build_agent_resolver,
+)
 from core.projects.store import ProjectStore, project_sessions_dir
 
 __all__ = [
+    "AgentResolutionError",
+    "AgentResolver",
+    "ConfigAgent",
     "InvalidProjectIdError",
+    "ModelConfigurationChecker",
     "Project",
     "ProjectAlreadyExistsError",
     "ProjectError",
     "ProjectNotFoundError",
     "ProjectStore",
+    "RuntimeAgent",
+    "build_agent_resolver",
     "build_project",
     "cwd_exists",
     "cwd_identity_key",
     "normalize_cwd",
     "project_from_dict",
     "project_sessions_dir",
+    "slugify_agent_id",
     "slugify_project_id",
 ]

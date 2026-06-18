@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from core.agents.agents import Agent, AgentStore
     from core.chat.chat import ChatMessage
     from core.models.models import ModelRegistry
+    from core.projects import RuntimeAgent
     from core.providers.providers import ProviderRegistry
     from core.sessions import ChatSessionManager
 else:
@@ -32,6 +33,7 @@ else:
     ChatSessionManager = Any
     ModelRegistry = Any
     ProviderRegistry = Any
+    RuntimeAgent = Any
 
 CommandActionName = Literal["compact", "handoff", "new_session", "retry_last_turn"]
 StatusActivityName = Literal["idle", "running"]
@@ -377,7 +379,7 @@ class StatusModelDetails:
 
 
 def resolve_status_model_details(
-    agent: Agent | None,
+    agent: RuntimeAgent | None,
     models: ModelRegistry | None,
     providers: ProviderRegistry | None = None,
 ) -> StatusModelDetails:
@@ -478,7 +480,7 @@ def resolve_actual_thinking_effort(
 
 
 def build_status_reply(
-    agent: Agent | None,
+    agent: RuntimeAgent | None,
     messages: list[ChatMessage],
     context_window: int | None,
     started_at: datetime | None,
@@ -502,7 +504,7 @@ def build_status_reply(
 
 
 def build_status_text(
-    agent: Agent | None,
+    agent: RuntimeAgent | None,
     messages: list[ChatMessage],
     context_window: int | None,
     started_at: datetime | None,

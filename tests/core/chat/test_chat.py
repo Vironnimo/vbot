@@ -8,7 +8,7 @@ import pytest
 
 from core.chat import ChatMessage, ChatMessageValidationError
 from core.chat.chat import ChatLoop, _validate_assistant_message
-from core.projects import ProjectStore
+from core.projects import AgentResolutionError, ProjectStore
 from core.runs import RunCancelledError
 from core.tools import ToolContext, ToolRegistry, register_write_tool, tool_success
 
@@ -122,16 +122,33 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
     assert persisted[-1].status == "cancelled"
 
 
-def _project_runtime(tmp_path: Path, *, agent: Any, adapter: Any, tools: Any) -> Any:
+def _project_runtime(
+    tmp_path: Path,
+    *,
+    agent: Any,
+    adapter: Any,
+    tools: Any,
+    project_agents: dict[tuple[str, str], Any] | None = None,
+    unresolvable_agents: set[tuple[str, str]] | None = None,
+) -> Any:
     """Build a StubRuntime with a real ProjectStore wired onto it.
 
     The chat loop reads ``runtime.projects.get(project_id).cwd`` to resolve a
     project session's tool cwd, so a real store (not a stub) exercises the full
-    ``str``-cwd → ``Path`` hand-off end-to-end.
+    ``str``-cwd → ``Path`` hand-off end-to-end. ``project_agents`` /
+    ``unresolvable_agents`` drive the resolver's config branch so a test can prove
+    a project run resolves a config agent (or fails cleanly) through the one seam.
     """
     from tests.core.chat.test_chat_loop import StubRuntime
 
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        project_agents=project_agents,
+        unresolvable_agents=unresolvable_agents,
+    )
     runtime.projects = ProjectStore(tmp_path)
     return runtime
 
@@ -339,6 +356,86 @@ async def test_identity_run_leaves_tool_context_project_id_none(tmp_path: Path) 
     await ChatLoop(runtime).send("coder", "Probe", session_id="session-one")
 
     assert seen == [None]
+
+
+@pytest.mark.asyncio
+async def test_project_run_resolves_config_agent_through_resolver(tmp_path: Path) -> None:
+    # A project run must resolve the project's config agent (not the identity
+    # store agent) through the one resolver seam, and run on its resolved model.
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    identity_agent = StubAgent(id="orchestrator", model="openai/gpt-5.2", allowed_tools=["*"])
+    # The config agent shares the agent id but carries a distinct resolved model,
+    # so the model reaching the wire proves the config profile was used.
+    config_agent = StubAgent(
+        id="orchestrator", model="openai/gpt-5.2-config", allowed_tools=["*"]
+    )
+    adapter = StubAdapter([{"content": "Hello from config agent", "tool_calls": None}])
+    runtime = _project_runtime(
+        tmp_path,
+        agent=identity_agent,
+        adapter=adapter,
+        tools=ToolRegistry(),
+        project_agents={("acme", "orchestrator"): config_agent},
+    )
+    runtime.projects.create("acme", "Acme", repo_dir)
+
+    await ChatLoop(runtime).send(
+        "orchestrator", "Hi", session_id="session-one", project_id="acme"
+    )
+
+    # The resolver was asked for the project agent, and its model reached the wire.
+    assert ("acme", "orchestrator") in [
+        (project_id, agent_id) for project_id, agent_id in runtime.agent_resolver.calls
+    ]
+    assert adapter.requests[0]["model_id"] == "gpt-5.2-config"
+
+
+@pytest.mark.asyncio
+async def test_identity_run_resolves_store_agent_unchanged(tmp_path: Path) -> None:
+    # The identity path resolves with project_id=None and runs the store agent's
+    # model exactly as before — no project profile involved.
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=ToolRegistry())
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    # Every resolve on this path is the identity branch (project_id=None); the
+    # store agent's model reaches the wire unchanged. (send resolves in both
+    # _start_run and _execute_run, hence more than one call.)
+    assert runtime.agent_resolver.calls
+    assert all(call == (None, "coder") for call in runtime.agent_resolver.calls)
+    assert adapter.requests[0]["model_id"] == "gpt-5.2"
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_project_agent_raises_clear_error(tmp_path: Path) -> None:
+    # A project agent that the resolver cannot resolve (off-Team / no usable model)
+    # surfaces a clear AgentResolutionError instead of crashing the run path.
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "unused", "tool_calls": None}])
+    runtime = _project_runtime(
+        tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=ToolRegistry(),
+        unresolvable_agents={("acme", "coder")},
+    )
+    runtime.projects.create("acme", "Acme", repo_dir)
+
+    with pytest.raises(AgentResolutionError, match="not on project 'acme' team"):
+        await ChatLoop(runtime).send(
+            "coder", "Hi", session_id="session-one", project_id="acme"
+        )
 
 
 def persisted_roles_of(messages: list[ChatMessage]) -> list[str]:

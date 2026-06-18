@@ -139,6 +139,17 @@ class StubAgents:
         return self._agent
 
 
+class StubAgentResolver:
+    """Identity-only resolver seam for the debug-path runtime stub."""
+
+    def __init__(self, agents: StubAgents) -> None:
+        self._agents = agents
+
+    def resolve_agent(self, project_id: str | None, agent_id: str) -> StubAgent:
+        assert project_id is None
+        return self._agents.get(agent_id)
+
+
 class StubProviders:
     def __init__(self, provider_ids: set[str]) -> None:
         self._provider_ids = provider_ids
@@ -206,6 +217,7 @@ class StubRuntime:
         tools: ToolRegistry | None = None,
     ) -> None:
         self.agents = StubAgents(agent)
+        self.agent_resolver = StubAgentResolver(self.agents)
         self.chat_sessions = ChatSessionManager(data_dir)
         self.system_prompts = StubPrompts()
         self.tools = tools or ToolRegistry()
