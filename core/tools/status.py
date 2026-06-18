@@ -9,10 +9,11 @@ from core.chat.commands import (
     resolve_actual_thinking_effort,
     resolve_status_activity,
     resolve_status_model_details,
+    resolve_status_project_label,
 )
 from core.chat.errors import ChatSessionError
 from core.models.models import ModelRegistry
-from core.projects import AgentResolutionError, AgentResolver
+from core.projects import AgentResolutionError, AgentResolver, ProjectStore
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
@@ -59,6 +60,7 @@ def make_status_handler(
     chat_runs: ChatRunManager,
     started_at: datetime | None,
     providers: ProviderRegistry | None = None,
+    projects: ProjectStore | None = None,
 ):
     """Create a status tool handler bound to runtime services."""
 
@@ -113,6 +115,7 @@ def make_status_handler(
                     model_details.reasoning_control,
                     model_details.reasoning_budget_max,
                 ),
+                project_label=resolve_status_project_label(projects, context.project_id),
             )
         except Exception:
             _LOGGER.error("Failed to build status tool reply", exc_info=True)
@@ -141,13 +144,16 @@ def register_status_tool(
     chat_runs: ChatRunManager,
     started_at: datetime | None,
     providers: ProviderRegistry | None = None,
+    projects: ProjectStore | None = None,
 ) -> None:
     """Register the status tool with a vBot tool registry."""
     registry.register(
         STATUS_TOOL_NAME,
         STATUS_TOOL_DESCRIPTION,
         STATUS_TOOL_PARAMETERS,
-        make_status_handler(agent_resolver, sessions, models, chat_runs, started_at, providers),
+        make_status_handler(
+            agent_resolver, sessions, models, chat_runs, started_at, providers, projects
+        ),
         display=ToolDisplay(),
     )
 
