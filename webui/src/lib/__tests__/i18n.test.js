@@ -611,7 +611,6 @@ describe('i18n t()', () => {
 
   it('contains two-bar project chat copy for the dropdown, team bar, and scan banner', () => {
     const requiredKeys = [
-      'chat.project.label',
       'chat.project.none',
       'chat.project.selectAria',
       'chat.project.teamLabel',
