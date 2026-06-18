@@ -512,6 +512,87 @@ describe('i18n t()', () => {
     expect(t('statistics.subview.runs')).toBe('Runs & errors');
   });
 
+  it('contains Projects tab copy for navigation, add, list, manage, report, and re-point', () => {
+    const requiredKeys = [
+      'navigation.projects',
+      'projects.eyebrow',
+      'projects.title',
+      'projects.subtitle',
+      'projects.refresh',
+      'projects.loading',
+      'projects.loadError',
+      'projects.emptyTitle',
+      'projects.emptySubtitle',
+      'projects.add.title',
+      'projects.add.subtitle',
+      'projects.add.cwd',
+      'projects.add.cwdPlaceholder',
+      'projects.add.cwdHelp',
+      'projects.add.displayName',
+      'projects.add.defaultAgent',
+      'projects.add.defaultModel',
+      'projects.add.autoLoad',
+      'projects.add.submit',
+      'projects.add.submitting',
+      'projects.add.missingCwd',
+      'projects.add.error',
+      'projects.add.success',
+      'projects.list.title',
+      'projects.list.defaultAgent',
+      'projects.list.defaultModel',
+      'projects.list.none',
+      'projects.manage',
+      'projects.manage.title',
+      'projects.manage.displayName',
+      'projects.manage.defaultAgent',
+      'projects.manage.defaultModel',
+      'projects.manage.autoLoad',
+      'projects.manage.save',
+      'projects.manage.saving',
+      'projects.manage.noChanges',
+      'projects.manage.saveError',
+      'projects.manage.saveSuccess',
+      'projects.remove',
+      'projects.remove.confirm',
+      'projects.remove.error',
+      'projects.remove.success',
+      'projects.remove.busy',
+      'projects.remove.inUse',
+      'projects.team.title',
+      'projects.team.empty',
+      'projects.team.noModel',
+      'projects.report.title',
+      'projects.report.clean',
+      'projects.report.findingCount',
+      'projects.report.group.slug_collision',
+      'projects.report.group.unslugifiable_name',
+      'projects.report.group.bad_model',
+      'projects.report.group.orphan',
+      'projects.report.finding.agent',
+      'projects.report.finding.source',
+      'projects.rePoint.title',
+      'projects.rePoint.description',
+      'projects.rePoint.cwd',
+      'projects.rePoint.submit',
+      'projects.rePoint.submitting',
+      'projects.rePoint.missingCwd',
+      'projects.rePoint.error',
+      'projects.rePoint.success',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(t('navigation.projects')).toBe('Projects');
+    expect(t('projects.report.findingCount', undefined, { count: 3 })).toBe(
+      '3 issues found',
+    );
+    expect(
+      t('projects.report.finding.agent', undefined, { agentId: 'builder' }),
+    ).toBe('Agent builder');
+    expect(t('projects.manage.title', undefined, { name: 'Demo' })).toBe(
+      'Manage Demo',
+    );
+  });
+
   it('does not expose Components showcase labels in the live catalog', () => {
     expect(englishCatalog['components.title']).toBeUndefined();
     expect(englishCatalog['components.toast.errorMessage']).toBeUndefined();
