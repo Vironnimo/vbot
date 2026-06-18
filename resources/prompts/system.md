@@ -1,6 +1,6 @@
-{include:SOUL.md}
+{agent_body}{include:SOUL.md}
 
-{memory}
+{memory}{project_files}
 
 {runtime}
 

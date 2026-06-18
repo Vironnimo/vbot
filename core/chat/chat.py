@@ -123,6 +123,8 @@ from core.chat.tool_dispatch import (
 )
 from core.debug import DebugContext
 from core.extensions import HookContext
+from core.projects import runtime_agent_body
+from core.prompts import ProjectPromptContext
 from core.providers.errors import NetworkError
 from core.providers.providers import resolve_context_window
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
@@ -521,6 +523,11 @@ class ChatLoop:
             project_id,
         )
         project_cwd = self._resolve_project_cwd(project_id)
+        # System-prompt inputs for a project-born session: the config-agent body
+        # (verbatim) and the project files. Both empty for an identity session, so
+        # the assembled prompt stays byte-identical to today.
+        agent_body = runtime_agent_body(agent)
+        project_prompt_context = self._resolve_project_prompt_context(project_id)
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
@@ -562,6 +569,8 @@ class ChatLoop:
                 session,
                 replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
                 wire_media_types=_resolve_wire_media_support(adapter, model_id),
+                agent_body=agent_body,
+                project_context=project_prompt_context,
             )
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
@@ -734,6 +743,46 @@ class ChatLoop:
             return None
         return Path(self._runtime.projects.get(project_id).cwd)
 
+    def _resolve_project_prompt_context(
+        self, project_id: str | None
+    ) -> ProjectPromptContext | None:
+        """Build the prompt-time project context for a project-born session.
+
+        ``None`` for an identity session (``project_id is None``) → the
+        ``{project_files}`` placeholder collapses and the prompt is unchanged. For
+        a project session it carries the repo cwd + the project's auto-load list,
+        so the system prompt renders AGENTS.md and the configured files.
+        """
+        if project_id is None:
+            return None
+        project = self._runtime.projects.get(project_id)
+        return ProjectPromptContext.from_project(project.cwd, project.auto_load)
+
+    def inject_visiting_project_files(
+        self, session: ChatSession, project_context: ProjectPromptContext
+    ) -> bool:
+        """Inject a visited project's files into a session as a system reminder.
+
+        The visiting case (plan: a main/identity agent told "work on the project
+        at <path>", cwd unchanged): the project files must reach the model as a
+        ``<system-reminder>`` — **not** the system prompt — because the session is
+        not born in the project. It renders the files with the **same**
+        ``render_project_files`` used for the system-prompt placeholder (one
+        source), then persists the result through ``session.add_note``, vBot's
+        existing reminder mechanism (a ``role: "note"`` the chat loop later embeds
+        in ``<system-reminder>`` tags). Returns whether a reminder was added (no
+        files → no empty reminder).
+
+        This wires the reminder **mechanism**. The structural visit *trigger*
+        (where the main agent is handed "work on <path>") is not part of this
+        phase; a later phase calls this from that entry point.
+        """
+        rendered = self._runtime.system_prompts.render_project_files(project_context)
+        if not rendered.strip():
+            return False
+        session.add_note(rendered)
+        return True
+
     async def _build_request_messages(
         self,
         agent: Any,
@@ -741,8 +790,17 @@ class ChatLoop:
         *,
         replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
         wire_media_types: frozenset[str] = frozenset(),
+        agent_body: str = "",
+        project_context: ProjectPromptContext | None = None,
     ) -> list[JsonObject]:
-        system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
+        # For a project-born session the project files land in the system prompt;
+        # for an identity session both are empty and the prompt is unchanged. The
+        # config-agent body is inserted verbatim (never re-expanded) by the builder.
+        system_prompt = self._runtime.system_prompts.build_system_prompt(
+            agent,
+            agent_body=agent_body,
+            project_context=project_context,
+        )
         system_messages = (
             [ChatMessage.system(system_prompt, agent.model).to_dict()]
             if system_prompt.strip()
@@ -907,6 +965,7 @@ class ChatLoop:
                             messages,
                             usage=assistant_message.usage,
                             run=run,
+                            project_id=project_id,
                         )
                     return assistant_message
 
@@ -954,6 +1013,7 @@ class ChatLoop:
                     messages,
                     usage=None,
                     run=run,
+                    project_id=project_id,
                 )
 
         raise ToolIterationLimitError("maximum tool iterations exceeded")
@@ -1011,6 +1071,7 @@ class ChatLoop:
         usage: JsonObject | None,
         *,
         run: Run,
+        project_id: str | None = None,
     ) -> list[JsonObject]:
         """Auto-compact when configured token thresholds are exceeded."""
         if self._compaction_service is None:
@@ -1071,6 +1132,8 @@ class ChatLoop:
             session,
             replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
+            agent_body=runtime_agent_body(agent),
+            project_context=self._resolve_project_prompt_context(project_id),
         )
         return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)
 

@@ -28,6 +28,7 @@ from core.projects.resolver import (
     ModelConfigurationChecker,
     RuntimeAgent,
     build_agent_resolver,
+    runtime_agent_body,
 )
 from core.projects.store import ProjectStore, project_sessions_dir
 
@@ -50,6 +51,7 @@ __all__ = [
     "normalize_cwd",
     "project_from_dict",
     "project_sessions_dir",
+    "runtime_agent_body",
     "slugify_agent_id",
     "slugify_project_id",
 ]

@@ -455,6 +455,19 @@ class AgentResolver:
         ]
 
 
+def runtime_agent_body(agent: RuntimeAgent) -> str:
+    """Return the verbatim prompt body of a runtime agent, or ``""``.
+
+    The single seam that maps the resolver's two agent forms onto the prompt
+    builder's ``agent_body`` parameter: a :class:`ConfigAgent` carries an imported
+    body, an identity ``Agent`` carries none. Keeping this here (not in the prompt
+    domain) lets prompt assembly stay on its Protocols without importing
+    ``ConfigAgent`` or probing types — the chat loop calls this on the agent it
+    already resolved and hands the result over as an explicit argument.
+    """
+    return agent.body if isinstance(agent, ConfigAgent) else ""
+
+
 def _build_config_agent(scanned: ScannedAgent, resolved_model: str) -> ConfigAgent:
     return ConfigAgent(
         id=scanned.agent_id,

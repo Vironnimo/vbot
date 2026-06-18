@@ -19,6 +19,11 @@ from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 
+# Auto-loaded before any user-configured project file: the open, tool-neutral
+# project-instruction standard. CLAUDE.md is deliberately ignored (Claude-Code
+# specific); only AGENTS.md is implicit, the rest the user adds explicitly.
+PROJECT_AGENTS_FILE = "AGENTS.md"
+
 EDITABLE_PROMPT_FRAGMENT_NAMES = (
     "system.md",
     "runtime.md",
@@ -28,7 +33,15 @@ EDITABLE_PROMPT_FRAGMENT_NAMES = (
 )
 PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
     "system.md": [
+        {
+            "placeholder": "{agent_body}",
+            "description": "Imported config-agent prompt body (empty for identity agents)",
+        },
         {"placeholder": "{memory}", "description": "Rendered memory fragment"},
+        {
+            "placeholder": "{project_files}",
+            "description": "Auto-loaded project files (empty when no project context)",
+        },
         {"placeholder": "{runtime}", "description": "Rendered runtime fragment"},
         {"placeholder": "{tools}", "description": "Rendered tools fragment"},
         {"placeholder": "{channels}", "description": "Rendered channels fragment"},
@@ -60,6 +73,17 @@ PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
     ],
 }
 INCLUDE_PATTERN = re.compile(r"\{include:([^{}]+)\}")
+# The two collapsing project placeholders. Both render to "" when their input is
+# empty, so the surrounding blank lines in ``system.md`` close up and an identity
+# agent at home gets byte-identical output to before these placeholders existed.
+AGENT_BODY_PLACEHOLDER = "{agent_body}"
+PROJECT_FILES_PLACEHOLDER = "{project_files}"
+# The blank-line separator the two project placeholders carry when they render
+# content. Each placeholder absorbs its own separator (body trails one, project
+# files lead with one) and the root template puts NO blank line around them, so
+# an empty placeholder collapses spurlessly — an identity agent at home gets a
+# byte-identical prompt to before these placeholders existed.
+_BLOCK_SEPARATOR = "\n\n"
 _LOGGER = get_logger("prompts")
 
 
@@ -73,6 +97,26 @@ class PromptScope:
 
     type: str
     agent_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ProjectPromptContext:
+    """The project inputs the prompt builder needs to render ``{project_files}``.
+
+    Passed explicitly into ``build_system_prompt`` (and ``render_project_files``)
+    so the prompt domain never imports project or agent classes — the caller (the
+    chat loop) owns where ``cwd`` / ``auto_load`` come from. ``cwd`` is the project
+    repo root; ``auto_load`` is the user-ordered extra-file list (AGENTS.md is
+    prepended automatically, not part of this list).
+    """
+
+    cwd: Path
+    auto_load: tuple[str, ...] = ()
+
+    @classmethod
+    def from_project(cls, cwd: str | Path, auto_load: Sequence[str]) -> ProjectPromptContext:
+        """Build a context from a project's raw ``cwd`` string and auto-load list."""
+        return cls(cwd=Path(cwd), auto_load=tuple(auto_load))
 
 
 class PromptAgent(Protocol):
@@ -425,8 +469,22 @@ class SystemPromptManager:
         """Replace the skill registry used for prompt and provider tool decisions."""
         self._skill_registry = skill_registry
 
-    def build_system_prompt(self, agent: PromptAgent, scope: Any = None) -> str:
-        """Build the complete system prompt for an agent."""
+    def build_system_prompt(
+        self,
+        agent: PromptAgent,
+        scope: Any = None,
+        *,
+        agent_body: str = "",
+        project_context: ProjectPromptContext | None = None,
+    ) -> str:
+        """Build the complete system prompt for an agent.
+
+        ``agent_body`` is a config agent's imported prompt body, inserted verbatim
+        (empty for identity agents). ``project_context`` carries the project's cwd
+        and auto-load list so ``{project_files}`` renders the repo files (``None``
+        for an identity session). Both placeholders collapse to ``""`` when their
+        input is empty, so an identity agent at home gets the unchanged prompt.
+        """
         prompt_scope = self._resolve_build_scope(agent, scope)
         prompt = self._read_prompt_fragment(prompt_scope, agent.id, "system.md")
 
@@ -434,6 +492,12 @@ class SystemPromptManager:
             prompt = prompt.replace("{app_version}", self._app_version)
         if "{memory}" in prompt:
             prompt = prompt.replace("{memory}", self._build_memory_block(agent))
+        if PROJECT_FILES_PLACEHOLDER in prompt:
+            project_files = self.render_project_files(project_context)
+            # Lead with the separator so an empty render collapses to "" and the
+            # surrounding template has no blank line of its own to leave behind.
+            project_block = f"{_BLOCK_SEPARATOR}{project_files}" if project_files else ""
+            prompt = prompt.replace(PROJECT_FILES_PLACEHOLDER, project_block)
         if "{runtime}" in prompt:
             prompt = prompt.replace("{runtime}", self._build_runtime_block(agent, prompt_scope))
         if "{tools}" in prompt:
@@ -443,7 +507,57 @@ class SystemPromptManager:
         if "{skills}" in prompt:
             prompt = prompt.replace("{skills}", self._build_skills_block(agent, prompt_scope))
 
-        return self._replace_workspace_includes(prompt, Path(agent.workspace))
+        prompt = self._replace_workspace_includes(prompt, Path(agent.workspace))
+
+        # The agent body is substituted LAST and literally — like an {include},
+        # never as a template. Because every vBot placeholder and {include} is
+        # already resolved by now and nothing runs after this replace, any "{...}"
+        # inside the body is left untouched (plan risk "Body-Wörtlichkeit"). It
+        # trails with the separator so an empty body collapses spurlessly.
+        body_block = f"{agent_body}{_BLOCK_SEPARATOR}" if agent_body else ""
+        return prompt.replace(AGENT_BODY_PLACEHOLDER, body_block)
+
+    def render_project_files(self, project_context: ProjectPromptContext | None) -> str:
+        """Render the project's auto-loaded files as ``<file>``-wrapped blocks.
+
+        AGENTS.md first (when present), then the ``auto_load`` files in list order;
+        each existing file wrapped exactly like ``{include}`` (one source of wrap
+        logic). Only the project root is read, never subfolders. Lazy: returns
+        ``""`` when there is no project context or no readable file, so the
+        placeholder collapses. No size limit, truncation, or warning on large
+        files — the technical user gets the file 1:1.
+
+        This is the single render used both for ``{project_files}`` in the system
+        prompt (project-born sessions) and for the visiting main agent's
+        ``<system-reminder>`` (same content, different delivery).
+        """
+        if project_context is None:
+            return ""
+
+        ordered_names: list[str] = [PROJECT_AGENTS_FILE, *project_context.auto_load]
+        blocks: list[str] = []
+        for name in ordered_names:
+            block = self._read_project_file_block(project_context.cwd, name)
+            if block is not None:
+                blocks.append(block)
+        return "\n".join(blocks)
+
+    def _read_project_file_block(self, cwd: Path, filename: str) -> str | None:
+        """Read one project-root file and wrap it, or ``None`` when absent.
+
+        Reuses the same flat-filename safety check and ``<file>`` wrap as
+        ``{include}`` so the two paths cannot drift. A missing file is skipped
+        silently (lazy rendering); an unreadable file raises, matching includes.
+        """
+        _validate_workspace_include(filename)
+        file_path = cwd / filename
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise PromptError(f"Cannot read project file {filename}: {exc}") from exc
+        return _wrap_include_file(filename, content)
 
     def provider_tool_definitions(self, agent: PromptAgent) -> list[dict[str, Any]]:
         """Return provider tool definitions filtered by the agent allowlist."""
@@ -584,9 +698,18 @@ class SystemPromptManager:
                 return ""
             except OSError as exc:
                 raise PromptError(f"Cannot read workspace include {filename}: {exc}") from exc
-            return f'<file name="{filename}">\n{content}\n</file>'
+            return _wrap_include_file(filename, content)
 
         return INCLUDE_PATTERN.sub(replace_include, prompt)
+
+
+def _wrap_include_file(filename: str, content: str) -> str:
+    """Wrap a file's content in the canonical ``<file name="…">`` block.
+
+    The single wrap used by both workspace includes and project files so the two
+    rendering paths produce identical framing.
+    """
+    return f'<file name="{filename}">\n{content}\n</file>'
 
 
 def _validate_workspace_include(filename: str) -> None:

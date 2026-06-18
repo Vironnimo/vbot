@@ -39,8 +39,18 @@ MP4_BYTES = b"\x00\x00\x00\x18ftypisomvideo-payload"
 
 
 class _StubPrompts:
-    def build_system_prompt(self, _agent: object) -> str:
+    def build_system_prompt(
+        self,
+        _agent: object,
+        scope: object = None,
+        *,
+        agent_body: str = "",
+        project_context: object = None,
+    ) -> str:
         return "System prompt"
+
+    def render_project_files(self, project_context: object) -> str:
+        return "" if project_context is None else "RENDERED-PROJECT-FILES"
 
 
 class _StubModels:

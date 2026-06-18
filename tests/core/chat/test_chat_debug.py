@@ -173,8 +173,18 @@ class _StubProviderConfig:
 class StubPrompts:
     app_dir = Path("app")
 
-    def build_system_prompt(self, agent: StubAgent) -> str:
+    def build_system_prompt(
+        self,
+        agent: StubAgent,
+        scope: Any = None,
+        *,
+        agent_body: str = "",
+        project_context: Any = None,
+    ) -> str:
         return f"System for {agent.id}"
+
+    def render_project_files(self, project_context: Any) -> str:
+        return "" if project_context is None else "RENDERED-PROJECT-FILES"
 
     def provider_tool_definitions(self, agent: StubAgent) -> list[JsonObject]:
         return [
