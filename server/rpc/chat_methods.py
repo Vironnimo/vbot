@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from core.chat import CommandAction, CommandHandled, parse_handoff_argument
 from core.chat.content_blocks import ContentBlock, TextBlock
+from core.projects import (
+    AgentResolutionError,
+    InvalidAgentAddressError,
+    format_agent_address,
+    parse_agent_address,
+)
 from core.runs import ActiveRunError, ChatRunManager
 from server.rpc.agent_methods import _create_session
 from server.rpc.dispatcher import RpcMethodHandler
@@ -34,6 +40,7 @@ from server.rpc.validation import (
     _optional_positive_integer,
     _optional_string,
     _parse_chat_content,
+    _required_agent_address,
     _required_string,
 )
 
@@ -71,14 +78,13 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             f"unsupported chat.history fields: {', '.join(unsupported_fields)}",
         )
 
-    agent_id = _required_string(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     limit = _optional_positive_integer(params, "limit", max_value=MAX_CHAT_HISTORY_LIMIT)
     before = _optional_string(params, "before")
     try:
-        agent = state.runtime.agents.get(agent_id)
-        active_session_id = session_id or agent.current_session_id
-        session = state.runtime.chat_sessions.get(agent_id, active_session_id)
+        active_session_id = _resolve_history_session_id(state, agent_id, session_id, project_id)
+        session = state.runtime.chat_sessions.get(agent_id, active_session_id, project_id)
         visible_messages = [
             _visible_message(message)
             for message in session.load()
@@ -97,6 +103,27 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     if active_run is not None:
         response["active_run"] = active_run
     return response
+
+
+def _resolve_history_session_id(
+    state: Any, agent_id: str, session_id: str | None, project_id: str | None
+) -> str:
+    """Pick the session to read history from for an identity or project address.
+
+    Identity (``project_id is None``) keeps today's behavior exactly: an explicit
+    ``session_id`` wins, otherwise the identity agent's ``current_session_id``. A
+    project session has no anchor-level current pointer (the config agent carries
+    none), so an explicit ``session_id`` is required and a missing one is a clean
+    client error.
+    """
+    if session_id is not None:
+        return session_id
+    if project_id is None:
+        return cast(str, state.runtime.agents.get(agent_id).current_session_id)
+    raise RpcError(
+        RPC_ERROR_INVALID_REQUEST,
+        "params.session_id is required for a project agent address",
+    )
 
 
 def _history_page(
@@ -166,6 +193,7 @@ async def _dispatch_chat_command(
     command_text: str,
     *,
     streaming: bool,
+    project_id: str | None = None,
 ) -> JsonObject | None:
     try:
         command_result = _state_command_dispatcher(state).dispatch(
@@ -185,6 +213,7 @@ async def _dispatch_chat_command(
             session_id,
             command_result,
             streaming=streaming,
+            project_id=project_id,
         )
     return None
 
@@ -196,6 +225,7 @@ async def _handle_command_action(
     command_action: CommandAction,
     *,
     streaming: bool,
+    project_id: str | None = None,
 ) -> JsonObject:
     match command_action.name:
         case "compact":
@@ -204,16 +234,30 @@ async def _handle_command_action(
             )
         case "handoff":
             return await _handle_handoff_command(
-                state, agent_id, session_id, command_action.argument
+                state, agent_id, session_id, command_action.argument, project_id=project_id
             )
         case "new_session":
-            return _handle_new_session_command(state, agent_id, session_id)
+            return _handle_new_session_command(state, agent_id, session_id, project_id=project_id)
         case "retry_last_turn":
-            return await _retry_chat_for_ids(state, agent_id, session_id, streaming=streaming)
+            return await _retry_chat_for_ids(
+                state, agent_id, session_id, streaming=streaming, project_id=project_id
+            )
     raise AssertionError(f"unsupported command action: {command_action.name}")
 
 
-def _handle_new_session_command(state: Any, agent_id: str, session_id: str) -> JsonObject:
+def _format_session_agent(agent_id: str, project_id: str | None) -> str:
+    """Build the ``session.create`` ``agent_id`` value for an (agent, project) pair.
+
+    ``session.create`` re-parses the address at its own entry (the single seam),
+    so chat hands it back the outside spelling: a bare id for an identity
+    session, ``agent@projekt`` for a project session.
+    """
+    return format_agent_address(agent_id, project_id)
+
+
+def _handle_new_session_command(
+    state: Any, agent_id: str, session_id: str, *, project_id: str | None = None
+) -> JsonObject:
     try:
         active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
         if active_run is not None:
@@ -223,7 +267,7 @@ def _handle_new_session_command(state: Any, agent_id: str, session_id: str) -> J
 
         response = _create_session(
             state,
-            {"agent_id": agent_id, "make_current": True},
+            {"agent_id": _format_session_agent(agent_id, project_id), "make_current": True},
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -257,13 +301,63 @@ def _build_handoff_prompt(instruction: str | None) -> str:
     )
 
 
+async def _start_handoff_run(
+    state: Any,
+    agent_id: str,
+    message: str,
+    *,
+    session_id: str,
+    project_id: str | None,
+    internal: bool,
+) -> Any:
+    """Start a handoff run, identity through the trigger service, project on the loop.
+
+    An identity handoff (``project_id is None``) stays byte-identical to before:
+    it runs through ``trigger_service.trigger_run`` (with its queue-on-busy
+    fallback). A project handoff has no project-aware trigger service yet
+    (automation is a separate task), so it goes straight through the chat loop,
+    which already threads ``project_id`` into the session anchor and run.
+    """
+    if project_id is None:
+        return await state.runtime.trigger_service.trigger_run(
+            agent_id,
+            message,
+            session_id=session_id,
+            internal=internal,
+        )
+    return await state.chat_loop.start_run(
+        agent_id,
+        message,
+        session_id=session_id,
+        internal=internal,
+        project_id=project_id,
+    )
+
+
 async def _handle_handoff_command(
     state: Any,
     agent_id: str,
     session_id: str,
     argument: str | None,
+    *,
+    project_id: str | None = None,
 ) -> JsonObject:
     parsed = parse_handoff_argument(argument)
+
+    # The handoff target may itself be project-qualified (``agent:orchestrator@vbot``).
+    # Parse it through the single address seam; with no explicit target the handoff
+    # stays in the source's (agent, project) scope.
+    try:
+        if parsed.target_agent_id is not None:
+            target_agent_id, target_project_id = parse_agent_address(parsed.target_agent_id)
+        else:
+            target_agent_id, target_project_id = agent_id, project_id
+    except InvalidAgentAddressError:
+        return _command_handled_response(
+            f"Cannot handoff to invalid agent address: {parsed.target_agent_id}",
+        )
+
+    target_display = format_agent_address(target_agent_id, target_project_id)
     try:
         active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
         if active_run is not None:
@@ -271,19 +365,20 @@ async def _handle_handoff_command(
                 "A handoff can be started after the current run finishes.",
             )
 
-        target = parsed.target_agent_id or agent_id
-        if target != agent_id:
+        if (target_agent_id, target_project_id) != (agent_id, project_id):
             try:
-                state.runtime.agents.get(target)
-            except KeyError:
+                state.runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
+            except AgentResolutionError:
                 return _command_handled_response(
-                    f"Cannot handoff to unknown agent: {target}",
+                    f"Cannot handoff to unknown agent: {target_display}",
                 )
 
-        handoff_run = await state.runtime.trigger_service.trigger_run(
+        handoff_run = await _start_handoff_run(
+            state,
             agent_id,
             _build_handoff_prompt(parsed.instruction),
             session_id=session_id,
+            project_id=project_id,
             internal=True,
         )
         handoff_message = await handoff_run.wait()
@@ -297,17 +392,23 @@ async def _handle_handoff_command(
     try:
         response = _create_session(
             state,
-            {"agent_id": target, "make_current": True},
+            {
+                "agent_id": _format_session_agent(target_agent_id, target_project_id),
+                "make_current": True,
+            },
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     new_session_id = _required_string(response, "session_id")
 
     try:
-        run = await state.runtime.trigger_service.trigger_run(
-            target,
+        run = await _start_handoff_run(
+            state,
+            target_agent_id,
             handoff_text,
             session_id=new_session_id,
+            project_id=target_project_id,
+            internal=False,
         )
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
@@ -315,11 +416,11 @@ async def _handle_handoff_command(
 
     return _command_handled_response(
         CommandHandled(
-            reply=f"Handoff sent to {target}, session {new_session_id}.",
+            reply=f"Handoff sent to {target_display}, session {new_session_id}.",
             data={
                 "command": "handoff",
                 "session_id": new_session_id,
-                "agent_id": target,
+                "agent_id": target_display,
             },
         ),
         output="action",
@@ -335,7 +436,7 @@ def _extract_handoff_text(content: str | list[ContentBlock] | None) -> str:
 
 
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
-    agent_id = _required_string(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
@@ -348,19 +449,23 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
             session_id,
             command_text,
             streaming=False,
+            project_id=project_id,
         )
         if command_response is not None:
             return command_response
 
     try:
         if input_origin is None:
-            run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
+            run = await state.chat_loop.start_run(
+                agent_id, content, session_id=session_id, project_id=project_id
+            )
         else:
             run = await state.chat_loop.start_run(
                 agent_id,
                 content,
                 session_id=session_id,
                 input_origin=input_origin,
+                project_id=project_id,
             )
     except ActiveRunError:
         try:
@@ -369,6 +474,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                     agent_id,
                     content,
                     session_id=session_id,
+                    project_id=project_id,
                 )
             else:
                 queued_item = await state.chat_loop.queue_run(
@@ -376,6 +482,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                     content,
                     session_id=session_id,
                     input_origin=input_origin,
+                    project_id=project_id,
                 )
             _bridge_queued_item_to_event_bus(state, queued_item)
         except Exception as exc:
@@ -393,7 +500,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
-    agent_id = _required_string(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
@@ -406,6 +513,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
             session_id,
             command_text,
             streaming=True,
+            project_id=project_id,
         )
         if command_response is not None:
             return command_response
@@ -413,13 +521,16 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     streaming_chat_loop = _streaming_chat_loop(state)
     try:
         if input_origin is None:
-            run = await streaming_chat_loop.start_run(agent_id, content, session_id=session_id)
+            run = await streaming_chat_loop.start_run(
+                agent_id, content, session_id=session_id, project_id=project_id
+            )
         else:
             run = await streaming_chat_loop.start_run(
                 agent_id,
                 content,
                 session_id=session_id,
                 input_origin=input_origin,
+                project_id=project_id,
             )
     except ActiveRunError:
         try:
@@ -428,6 +539,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
                     agent_id,
                     content,
                     session_id=session_id,
+                    project_id=project_id,
                 )
             else:
                 queued_item = await streaming_chat_loop.queue_run(
@@ -435,6 +547,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
                     content,
                     session_id=session_id,
                     input_origin=input_origin,
+                    project_id=project_id,
                 )
             _bridge_queued_item_to_event_bus(state, queued_item)
         except Exception as exc:
@@ -463,9 +576,11 @@ async def _handle_compact_command(
 
 
 async def _retry_chat(state: Any, params: JsonObject) -> JsonObject:
-    agent_id = _required_string(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
-    return await _retry_chat_for_ids(state, agent_id, session_id, streaming=True)
+    return await _retry_chat_for_ids(
+        state, agent_id, session_id, streaming=True, project_id=project_id
+    )
 
 
 async def _retry_chat_for_ids(
@@ -474,10 +589,11 @@ async def _retry_chat_for_ids(
     session_id: str,
     *,
     streaming: bool,
+    project_id: str | None = None,
 ) -> JsonObject:
     try:
         chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
-        run = await chat_loop.retry_run(agent_id, session_id)
+        run = await chat_loop.retry_run(agent_id, session_id, project_id=project_id)
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc

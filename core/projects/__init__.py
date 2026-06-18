@@ -5,6 +5,11 @@ errors, the :class:`ProjectStore` anchor CRUD, and the cwd-normalization helpers
 that the rest of the system uses for duplicate detection and re-point.
 """
 
+from core.projects.address import (
+    InvalidAgentAddressError,
+    format_agent_address,
+    parse_agent_address,
+)
 from core.projects.paths import (
     cwd_exists,
     cwd_identity_key,
@@ -36,6 +41,7 @@ __all__ = [
     "AgentResolutionError",
     "AgentResolver",
     "ConfigAgent",
+    "InvalidAgentAddressError",
     "InvalidProjectIdError",
     "ModelConfigurationChecker",
     "Project",
@@ -48,7 +54,9 @@ __all__ = [
     "build_project",
     "cwd_exists",
     "cwd_identity_key",
+    "format_agent_address",
     "normalize_cwd",
+    "parse_agent_address",
     "project_from_dict",
     "project_sessions_dir",
     "runtime_agent_body",

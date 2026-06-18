@@ -69,7 +69,9 @@ class RetryLoopStub:
         self._run = run
         self.calls: list[tuple[str, str]] = []
 
-    async def retry_run(self, agent_id: str, session_id: str) -> Run:
+    async def retry_run(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> Run:
         self.calls.append((agent_id, session_id))
         return self._run
 
@@ -435,11 +437,13 @@ async def test_chat_stream_returns_queued_response_when_session_is_busy() -> Non
         "agent-1",
         "Queued message",
         session_id="session-1",
+        project_id=None,
     )
     streaming_chat_loop.queue_run.assert_awaited_once_with(
         "agent-1",
         "Queued message",
         session_id="session-1",
+        project_id=None,
     )
 
 
