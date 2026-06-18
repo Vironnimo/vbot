@@ -31,8 +31,14 @@ def _agent_reference_ids(state: Any, agent_id: str) -> list[str]:
 
     cron_service = getattr(runtime, "cron_service", None)
     if cron_service is not None:
+        # Only bare (``project_id is None``) cron jobs count against the identity
+        # agent. A job qualified with a ``project_id`` targets that project's
+        # Team agent, not the same-named identity agent, so it must not block the
+        # identity delete (the project removal guard owns that lock instead).
         references.extend(
-            f"cron:{job.id}" for job in cron_service.list_jobs() if job.agent_id == agent_id
+            f"cron:{job.id}"
+            for job in cron_service.list_jobs()
+            if job.agent_id == agent_id and job.project_id is None
         )
 
     return sorted(references)
