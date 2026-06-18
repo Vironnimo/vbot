@@ -57,6 +57,12 @@ Stack, der headless auf dem Pi läuft.
 - **Deployment Linux / Dev Windows:** Pfad-Logik beidflavorig; cwd-Normalisierung (Symlinks,
   trailing slash, Groß/Klein) explizit festlegen und testen.
 - **Neues Modul `core/projects/`** ist eine Plan-Entscheidung (siehe Architektur-Entscheidungen).
+- **Doc-Pflege ist Teil jeder Phase, nicht aufgeschoben** (CLAUDE.md): wer einen Domänen-Vertrag
+  ändert, aktualisiert dessen Domain-Map in **derselben** Task; shared Docs (`GLOSSARY.md`,
+  `PROJECT.md`-Index) werden **sequenziell von je einer** zuständigen Task pro Phase gepflegt (nie
+  parallel). Die „Done when" jeder Phase schließt die Map-/Glossar-Updates ein — siehe Tabelle
+  „Doc-Pflege pro Phase" unten. Vor dem Anlegen/Ändern einer Map zuerst
+  `.vorch/workflows/domain-map-workflow.md` lesen.
 
 ### Architektur-Entscheidungen (vor den Tasks)
 
@@ -105,10 +111,13 @@ Stack, der headless auf dem Pi läuft.
   erkannt) — files: [core/projects/paths.py, tests/core/projects/test_paths.py]
 - Schema-Validierung in die zentrale Validierung einhängen — files: [core/settings/validation.py,
   tests/core/settings/test_validation.py]
+- Neue Domain-Map `projects.md` + Eintrag im Domain-Maps-Index (Pflicht für ein neues Modul) —
+  read: [.vorch/workflows/domain-map-workflow.md], files: [.vorch/domain-maps/projects.md, .vorch/PROJECT.md]
 
 **Dependencies:** keine.
 **Done when:** `core/projects/` legt ein Projekt an, liest/listet es, archiviert es; `project.json`
-geht durch die zentrale Validierung; cwd-Dubletten + fehlende cwd werden erkannt; Unit-Tests grün.
+geht durch die zentrale Validierung; cwd-Dubletten + fehlende cwd werden erkannt; `projects.md`
+existiert und steht im Domain-Maps-Index; Unit-Tests grün.
 
 #### Phase 2: Adressierungs-Rückgrat (M2)
 **Goal:** `project_id` fließt durch die gesamte Session/Run/Tool-Adressierung; cwd ist getrennt.
@@ -216,11 +225,26 @@ geblockt.
   Projekt verwalten/entfernen. Keine WebUI nötig.
 - `python scripts/quality.py` grün für alle berührten Backend-Pakete.
 
+### Doc-Pflege pro Phase (Teil der jeweiligen „Done when")
+
+| Phase | Domain-Maps / Docs zu aktualisieren (in derselben Arbeit) |
+|---|---|
+| 1 | **Neu:** `.vorch/domain-maps/projects.md` + Index in `.vorch/PROJECT.md` |
+| 2 | `sessions.md`, `runs.md`, `tools.md`, `chat.md`, `subagents.md`, `recall.md`, `statistics.md`; **`GLOSSARY.md`: Workspace-Eintrag auf cwd präzisieren** (Datei-Tools lösen gegen cwd, nicht mehr Workspace) |
+| 3 | `agent.md` (Resolver / zwei Quellen / Model-Kette); **`GLOSSARY.md`: neue Begriffe** Config-Agent, Identity-Agent, Team, Project Agent (+ Besuch, Projekt-Anker), jeweils sobald als Code real |
+| 4 | `prompts.md` (`{agent_body}` / `{project_files}`, Projekt-Kontext im Bau) |
+| 5 | `server.md`, `cli.md`, `automation.md`; `resources/skills/vbot-cli/` (bereits eigener Task) |
+
+Shared Docs (`GLOSSARY.md`, `PROJECT.md`) berührt **je eine** Task pro Phase → keine
+Parallel-Konflikte. GLOSSARY wird in Phase 2 (Workspace→cwd) und Phase 3 (neue Begriffe) berührt —
+verschiedene Phasen, sequenziell, kollisionsfrei.
+
 ### Risks & Mitigations
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | `project_id`-Durchstich verfehlt eine Aufrufstelle → Projekt-Session nicht gefunden | High | High | Phase 2 zuerst und vollständig; grep-Inventar aller `(agent_id, session_id)`-Aufrufer; Tests pro Aufrufpfad |
+| Doc-/Map-/Glossar-Pflege wird trotz Tabelle übersprungen | Med | Med | In jeder „Done when" verankert; Map-Datei steht im `files:`-Scope der jeweiligen Domänen-Task, nicht als Nachklapp-Phase |
 | Datei-Tool übersieht cwd-Umstellung → schreibt in Workspace statt Repo | Med | High | Ein Task fasst alle Datei-Tools; Test pro Tool, dass relative Pfade gegen cwd auflösen |
 | Resolver-Fork wird an einer Lauf-Stelle umgangen → Projekt-Agent nicht ladbar | Med | High | Phase 3 stellt alle Lauf-Pfade um; grep auf `runtime.agents.get` als Checkliste |
 | cwd-Normalisierung Windows≠Linux → Dubletten/Re-Point unzuverlässig | Med | Med | Eigener `paths.py` + beidflavorige Tests; Entscheidung dokumentieren |
