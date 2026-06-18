@@ -200,6 +200,7 @@ async def _dispatch_chat_command(
             agent_id,
             session_id,
             command_text,
+            project_id,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

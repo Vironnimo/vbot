@@ -52,7 +52,9 @@ class _RecordingLoop:
 class _NoCommandDispatcher:
     """Treats every message as plain chat (no slash command recognized)."""
 
-    def dispatch(self, agent_id: str, session_id: str, text: str) -> None:
+    def dispatch(
+        self, agent_id: str, session_id: str, text: str, project_id: str | None = None
+    ) -> None:
         return None
 
 
@@ -184,7 +186,9 @@ def _make_handoff_state(loop: _HandoffLoop, resolver: _FakeResolver) -> SimpleNa
 
 
 class _HandoffDispatcher:
-    def dispatch(self, agent_id: str, session_id: str, text: str) -> CommandAction:
+    def dispatch(
+        self, agent_id: str, session_id: str, text: str, project_id: str | None = None
+    ) -> CommandAction:
         # Pass the slash text after ``/handoff`` through as the action argument,
         # mirroring the real dispatcher's ``optional`` argument handling.
         argument = text[len("/handoff") :].strip() or None
