@@ -25,6 +25,7 @@ from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
+from core.projects.resolver import AgentResolutionError
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
     ProviderAccount,
@@ -166,6 +167,25 @@ class StubAgents:
         self._get_raw(agent_id)
         del self._agents[agent_id]
         return Path("archive") / agent_id
+
+
+class StubAgentResolver:
+    """Resolver seam the chat loop calls; identity path delegates to ``StubAgents``.
+
+    ``project_id=None`` returns the same agent ``StubAgents.get`` would (byte-for-byte
+    today's identity path); an unknown agent surfaces as :class:`AgentResolutionError`,
+    matching the real resolver's failure surface. These server tests never exercise the
+    config/project path.
+    """
+
+    def __init__(self, agents: StubAgents) -> None:
+        self._agents = agents
+
+    def resolve_agent(self, _project_id: str | None, agent_id: str) -> StubAgent:
+        try:
+            return self._agents.get(agent_id)
+        except KeyError as error:
+            raise AgentResolutionError(str(error)) from error
 
 
 class InstrumentedAgentDeleteLock:
@@ -857,7 +877,14 @@ class StubStorage:
 class StubPrompts:
     app_dir = Path("app")
 
-    def build_system_prompt(self, agent: StubAgent, scope: object = None) -> str:
+    def build_system_prompt(
+        self,
+        agent: StubAgent,
+        scope: object = None,
+        *,
+        agent_body: str = "",
+        project_context: object = None,
+    ) -> str:
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
             return f"Custom system for {scope_agent_id}"
@@ -999,6 +1026,7 @@ class StubRuntime:
             StubAgent(id="coder", allowed_tools=["*"]),
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
         )
+        self.agent_resolver = StubAgentResolver(self.agents)
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.system_prompts = StubPrompts()
         self.tools = ToolRegistry()

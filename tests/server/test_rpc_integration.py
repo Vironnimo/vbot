@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.chat import ChatLoop, ChatSessionManager, CommandDispatcher
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.query import ModelQuery
+from core.projects.resolver import AgentResolutionError
 from core.providers.accounts import ProviderAccount
 from core.runs import ChatRunManager
 from core.tools import ToolContext, ToolRegistry, tool_success
@@ -42,6 +43,24 @@ class IntegrationAgents:
         if agent_id != self._agent.id:
             raise KeyError(agent_id)
         return self._agent
+
+
+class IntegrationAgentResolver:
+    """Resolver seam the chat loop calls; identity path delegates to ``IntegrationAgents``.
+
+    ``project_id=None`` returns the same agent ``IntegrationAgents.get`` would (byte-for-byte
+    today's identity path); an unknown agent surfaces as :class:`AgentResolutionError`. These
+    integration tests never exercise the config/project path.
+    """
+
+    def __init__(self, agents: IntegrationAgents) -> None:
+        self._agents = agents
+
+    def resolve_agent(self, _project_id: str | None, agent_id: str) -> IntegrationAgent:
+        try:
+            return self._agents.get(agent_id)
+        except KeyError as error:
+            raise AgentResolutionError(str(error)) from error
 
 
 class IntegrationProviders:
@@ -209,7 +228,14 @@ class IntegrationPrompts:
         self._tools = tools
         self.app_dir = Path("app")
 
-    def build_system_prompt(self, agent: IntegrationAgent) -> str:
+    def build_system_prompt(
+        self,
+        agent: IntegrationAgent,
+        scope: object = None,
+        *,
+        agent_body: str = "",
+        project_context: object = None,
+    ) -> str:
         return f"System prompt for {agent.id}"
 
     def provider_tool_definitions(self, agent: IntegrationAgent) -> list[JsonObject]:
@@ -296,6 +322,7 @@ class IntegrationRuntime:
         self.agents = IntegrationAgents(
             IntegrationAgent(id="coder", allowed_tools=["lookup", "slow_tool"])
         )
+        self.agent_resolver = IntegrationAgentResolver(self.agents)
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.storage = IntegrationStorage(tmp_path)
         self.system_prompts = IntegrationPrompts(self.tools)
