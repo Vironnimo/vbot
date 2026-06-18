@@ -19,6 +19,11 @@ from core.utils.errors import VBotError
 JsonObject = dict[str, Any]
 RunExecutor = Callable[["Run"], Awaitable[Any]]
 CancelCallback = Callable[[], Any]
+# Session identity used to key active runs and queues. ``project_id`` is
+# ``None`` for a global/identity session and the project slug for a
+# project-scoped session: a session UUID alone is not unique enough to find the
+# session's transcript path, so the project dimension is part of the key.
+SessionKey = tuple[str | None, str, str]
 _LOGGER = logging.getLogger("vbot.runs")
 DEFAULT_RUN_EVENT_RETENTION_LIMIT = 4096
 DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT = 4096
@@ -390,8 +395,8 @@ class ChatRunManager:
         if run_event_retention_limit < 1:
             raise ValueError("run_event_retention_limit must be positive")
         self._lock = asyncio.Lock()
-        self._active_by_session: dict[tuple[str, str], Run] = {}
-        self._queues: dict[tuple[str, str], deque[QueuedRunItem]] = {}
+        self._active_by_session: dict[SessionKey, Run] = {}
+        self._queues: dict[SessionKey, deque[QueuedRunItem]] = {}
         self._runs: dict[str, Run] = {}
         self._run_started_callbacks: list[Callable[[Run], None]] = []
         self._completed_run_retention_limit = completed_run_retention_limit
@@ -407,9 +412,21 @@ class ChatRunManager:
 
         return remove_callback
 
-    async def start(self, *, agent_id: str, session_id: str, executor: RunExecutor) -> Run:
-        """Start one run if the session has no active run."""
-        session_key = (agent_id, session_id)
+    async def start(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        executor: RunExecutor,
+        project_id: str | None = None,
+    ) -> Run:
+        """Start one run if the session has no active run.
+
+        ``project_id=None`` keys the run to the global/identity session; a set
+        ``project_id`` keys it to that project's session, so a global and a
+        project-scoped session sharing one id are distinct turn slots.
+        """
+        session_key = (project_id, agent_id, session_id)
         async with self._lock:
             active_run = self._active_by_session.get(session_key)
             if active_run is not None and active_run.status == RunStatus.RUNNING:
@@ -429,9 +446,10 @@ class ChatRunManager:
         executor: RunExecutor,
         display_content: str = "",
         internal: bool = False,
+        project_id: str | None = None,
     ) -> QueuedRunItem:
         """Start immediately when idle or append one item to the session queue."""
-        session_key = (agent_id, session_id)
+        session_key = (project_id, agent_id, session_id)
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = QueuedRunItem(
             item_id=str(uuid.uuid4()),
@@ -457,13 +475,17 @@ class ChatRunManager:
             self._queues.setdefault(session_key, deque()).append(item)
             return item
 
-    def list_queued(self, agent_id: str, session_id: str) -> list[QueuedRunItem]:
+    def list_queued(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> list[QueuedRunItem]:
         """Return queued items for one session in FIFO order."""
-        return list(self._queues.get((agent_id, session_id), ()))
+        return list(self._queues.get((project_id, agent_id, session_id), ()))
 
-    def remove_queued(self, agent_id: str, session_id: str, item_id: str) -> bool:
+    def remove_queued(
+        self, agent_id: str, session_id: str, item_id: str, project_id: str | None = None
+    ) -> bool:
         """Remove one queued item if present."""
-        session_key = (agent_id, session_id)
+        session_key = (project_id, agent_id, session_id)
         queue = self._queues.get(session_key)
         if queue is None:
             return False
@@ -486,9 +508,10 @@ class ChatRunManager:
         item_id: str,
         new_executor: RunExecutor,
         new_display_content: str,
+        project_id: str | None = None,
     ) -> bool:
         """Replace the queued executor and display text for one item."""
-        queue = self._queues.get((agent_id, session_id))
+        queue = self._queues.get((project_id, agent_id, session_id))
         if queue is None:
             return False
 
@@ -514,17 +537,21 @@ class ChatRunManager:
         await run._done.wait()  # noqa: SLF001 - manager owns run lifecycle internals.
         return run
 
-    def cancel_by_session(self, agent_id: str, session_id: str) -> Run:
+    def cancel_by_session(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> Run:
         """Request cancellation for the active run in one session."""
-        run = self._active_by_session.get((agent_id, session_id))
+        run = self._active_by_session.get((project_id, agent_id, session_id))
         if run is None or run.status != RunStatus.RUNNING:
             raise RunNotFoundError(f"no active run for agent '{agent_id}' session '{session_id}'")
         run.request_cancel()
         return run
 
-    def active_run(self, *, agent_id: str, session_id: str) -> Run | None:
+    def active_run(
+        self, *, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> Run | None:
         """Return the active run for a session, if one exists."""
-        run = self._active_by_session.get((agent_id, session_id))
+        run = self._active_by_session.get((project_id, agent_id, session_id))
         if run is None or run.status != RunStatus.RUNNING:
             return None
         return run
@@ -541,19 +568,23 @@ class ChatRunManager:
         return [run for run in self._active_by_session.values() if run.status == RunStatus.RUNNING]
 
     def has_activity_for_agent(self, agent_id: str) -> bool:
-        """Return whether an agent owns any running run or queued run item."""
-        for (active_agent_id, _session_id), run in self._active_by_session.items():
+        """Return whether an agent owns any running run or queued run item.
+
+        Matches the agent across every project scope (and the global scope),
+        since the busy check is per agent id, not per project session.
+        """
+        for (_project_id, active_agent_id, _session_id), run in self._active_by_session.items():
             if active_agent_id == agent_id and run.status == RunStatus.RUNNING:
                 return True
         return any(
             queued_agent_id == agent_id and bool(queue)
-            for (queued_agent_id, _session_id), queue in self._queues.items()
+            for (_project_id, queued_agent_id, _session_id), queue in self._queues.items()
         )
 
     async def _execute(
         self,
         run: Run,
-        session_key: tuple[str, str],
+        session_key: SessionKey,
         executor: RunExecutor,
     ) -> None:
         timing_started_at = datetime.now(UTC)
@@ -596,7 +627,7 @@ class ChatRunManager:
                 self._prune_terminal_runs_locked()
             await self._drain_next(session_key)
 
-    async def _drain_next(self, session_key: tuple[str, str]) -> None:
+    async def _drain_next(self, session_key: SessionKey) -> None:
         async with self._lock:
             active_run = self._active_by_session.get(session_key)
             if active_run is not None and active_run.status == RunStatus.RUNNING:
@@ -611,7 +642,7 @@ class ChatRunManager:
             if not queue:
                 self._queues.pop(session_key, None)
 
-            agent_id, session_id = session_key
+            _project_id, agent_id, session_id = session_key
             run = self._start_run_locked(
                 session_key=session_key,
                 agent_id=agent_id,
@@ -625,7 +656,7 @@ class ChatRunManager:
     def _start_run_locked(
         self,
         *,
-        session_key: tuple[str, str],
+        session_key: SessionKey,
         agent_id: str,
         session_id: str,
         executor: RunExecutor,

@@ -39,7 +39,9 @@ _SQLITE_BUSY_TIMEOUT_MS = 1000
 # v2 → chunk-keyed metadata (one row per chunk, not per session).
 # v3 → empty-text chunks (e.g. run_summary-only windows) are no longer indexed;
 #      older indexes hold constant-vector noise rows that must be purged.
-_SCHEMA_VERSION = 3
+# v4 → chunk keys are project-scoped (``project_id`` column) so the same session
+#      UUID under a project vs. the global scope never collides in the index.
+_SCHEMA_VERSION = 4
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
@@ -86,6 +88,11 @@ class ChunkVectorRecord:
     messages), not the session as a whole. ``mtime_ns`` and ``size_bytes``
     are still the session's, copied onto every chunk row so the freshness
     diff (``list_indexed_sessions``) stays a session-level check.
+
+    ``project_id`` is the chunk's scope key — the recall backend stores the
+    identity/global scope as ``""`` and a project scope as the project id, so a
+    same-UUID session in two scopes is two distinct index keys. Defaulted to
+    ``""`` so identity-only callers/tests stay unchanged.
     """
 
     session_id: str
@@ -98,6 +105,7 @@ class ChunkVectorRecord:
     chunk_index: int
     start_message_id: str
     end_message_id: str
+    project_id: str = ""
 
 
 class VectorStore:
@@ -142,6 +150,7 @@ class VectorStore:
               rowid INTEGER PRIMARY KEY,
               session_id TEXT NOT NULL,
               agent_id TEXT NOT NULL,
+              project_id TEXT NOT NULL,
               started_at TEXT NOT NULL,
               mtime_ns INTEGER NOT NULL,
               size_bytes INTEGER NOT NULL,
@@ -150,13 +159,13 @@ class VectorStore:
               chunk_index INTEGER NOT NULL,
               start_message_id TEXT NOT NULL,
               end_message_id TEXT NOT NULL,
-              UNIQUE (agent_id, session_id, chunk_index)
+              UNIQUE (project_id, agent_id, session_id, chunk_index)
             );
 
             CREATE INDEX IF NOT EXISTS idx_chunks_agent
-              ON {_CHUNK_TABLE_NAME}(agent_id);
+              ON {_CHUNK_TABLE_NAME}(project_id, agent_id);
             CREATE INDEX IF NOT EXISTS idx_chunks_agent_session
-              ON {_CHUNK_TABLE_NAME}(agent_id, session_id);
+              ON {_CHUNK_TABLE_NAME}(project_id, agent_id, session_id);
             """
 
     @staticmethod
@@ -280,15 +289,15 @@ class VectorStore:
     # Chunk upsert / delete
     # ------------------------------------------------------------------
 
-    def delete_session(self, agent_id: str, session_id: str) -> None:
-        """Remove all chunk rows for an agent+session (used for staleness cleanup)."""
+    def delete_session(self, agent_id: str, project_id: str, session_id: str) -> None:
+        """Remove all chunk rows for a scope+agent+session (used for staleness cleanup)."""
 
         with closing(self._connect()) as connection, connection:
             # On a fresh index the chunk table does not exist yet — there is
             # nothing to delete, and querying it would raise ``no such table``.
             if not self._has_chunk_table(connection):
                 return
-            self._delete_session_rows(connection, agent_id, session_id)
+            self._delete_session_rows(connection, agent_id, project_id, session_id)
 
     def upsert_many_chunks(
         self,
@@ -298,8 +307,8 @@ class VectorStore:
     ) -> int:
         """Bulk-upsert chunks; replaces all chunks of any touched session.
 
-        Each distinct ``(agent_id, session_id)`` seen in *records* has its
-        existing chunk rows deleted **once** before the new chunks are
+        Each distinct ``(project_id, agent_id, session_id)`` seen in *records*
+        has its existing chunk rows deleted **once** before the new chunks are
         inserted. Per-row delete is unsafe here: deleting chunk 1 between
         inserting chunk 0 and chunk 2 would clobber chunk 0 via the
         session-wide delete. We collect the distinct session set up front
@@ -315,12 +324,13 @@ class VectorStore:
         with closing(self._connect()) as connection:
             self._initialize_schema(connection, expected_header=header)
             with connection:
-                # Delete each session's existing chunks exactly once.
+                # Delete each scope+session's existing chunks exactly once.
                 distinct_sessions = {
-                    (record.agent_id, record.session_id) for record, _ in materialized
+                    (record.agent_id, record.project_id, record.session_id)
+                    for record, _ in materialized
                 }
-                for agent_id, session_id in distinct_sessions:
-                    self._delete_session_rows(connection, agent_id, session_id)
+                for agent_id, project_id, session_id in distinct_sessions:
+                    self._delete_session_rows(connection, agent_id, project_id, session_id)
                 for record, vector in materialized:
                     if len(vector) != header.dimension:
                         raise VectorStoreError(
@@ -331,14 +341,15 @@ class VectorStore:
                     cursor = connection.execute(
                         f"""
                         INSERT INTO {_CHUNK_TABLE_NAME} (
-                          session_id, agent_id, started_at, mtime_ns, size_bytes,
+                          session_id, agent_id, project_id, started_at, mtime_ns, size_bytes,
                           anchor_message_id, snippet, chunk_index,
                           start_message_id, end_message_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             record.session_id,
                             record.agent_id,
+                            record.project_id,
                             record.started_at,
                             record.mtime_ns,
                             record.size_bytes,
@@ -367,9 +378,10 @@ class VectorStore:
     def _delete_session_rows(
         connection: sqlite3.Connection,
         agent_id: str,
+        project_id: str,
         session_id: str,
     ) -> None:
-        # Deletes *all* chunk rows for an (agent, session) — re-used for
+        # Deletes *all* chunk rows for a (scope, agent, session) — re-used for
         # re-indexing, staleness drops, and the pre-insert wipe in
         # ``upsert_many_chunks``. Any matching vec0 rowids are removed
         # first so the vec0 table never dangles.
@@ -377,9 +389,9 @@ class VectorStore:
             connection.execute(
                 f"""
                 SELECT rowid FROM {_CHUNK_TABLE_NAME}
-                WHERE agent_id = ? AND session_id = ?
+                WHERE project_id = ? AND agent_id = ? AND session_id = ?
                 """,
-                (agent_id, session_id),
+                (project_id, agent_id, session_id),
             )
         )
         for row in rows:
@@ -388,20 +400,25 @@ class VectorStore:
                 (int(row["rowid"]),),
             )
         connection.execute(
-            f"DELETE FROM {_CHUNK_TABLE_NAME} WHERE agent_id = ? AND session_id = ?",
-            (agent_id, session_id),
+            f"DELETE FROM {_CHUNK_TABLE_NAME} "
+            "WHERE project_id = ? AND agent_id = ? AND session_id = ?",
+            (project_id, agent_id, session_id),
         )
 
     # ------------------------------------------------------------------
     # Freshness + KNN query
     # ------------------------------------------------------------------
 
-    def list_indexed_sessions(self, agent_id: str) -> dict[str, tuple[int, int]]:
-        """Return ``{session_id: (mtime_ns, size_bytes)}`` for indexed sessions of one agent.
+    def list_indexed_sessions(
+        self, agent_id: str, project_id: str = ""
+    ) -> dict[str, tuple[int, int]]:
+        """Return ``{session_id: (mtime_ns, size_bytes)}`` for a scope+agent's indexed sessions.
 
         With chunk-keyed storage, a session has one row per chunk; we
         dedup to one entry per ``session_id`` (every chunk row of a
         session shares the session's ``mtime_ns``/``size_bytes``).
+        ``project_id`` is the scope key (``""`` for identity/global) so two
+        scopes' same-UUID sessions stay distinct freshness entries.
         """
 
         with closing(self._connect()) as connection:
@@ -410,17 +427,19 @@ class VectorStore:
             rows = connection.execute(
                 f"""
                 SELECT session_id, mtime_ns, size_bytes FROM {_CHUNK_TABLE_NAME}
-                WHERE agent_id = ?
+                WHERE project_id = ? AND agent_id = ?
                 GROUP BY session_id
                 """,
-                (agent_id,),
+                (project_id, agent_id),
             ).fetchall()
         return {
             str(row["session_id"]): (int(row["mtime_ns"]), int(row["size_bytes"])) for row in rows
         }
 
-    def drop_indexed_sessions(self, agent_id: str, session_ids: Iterable[str]) -> int:
-        """Remove indexed session rows that no longer exist in JSONL."""
+    def drop_indexed_sessions(
+        self, agent_id: str, project_id: str, session_ids: Iterable[str]
+    ) -> int:
+        """Remove a scope+agent's indexed session rows that no longer exist in JSONL."""
 
         removed = 0
         with closing(self._connect()) as connection, connection:
@@ -430,9 +449,9 @@ class VectorStore:
                 rows_before = connection.execute(
                     f"""
                         SELECT rowid FROM {_CHUNK_TABLE_NAME}
-                        WHERE agent_id = ? AND session_id = ?
+                        WHERE project_id = ? AND agent_id = ? AND session_id = ?
                         """,
-                    (agent_id, session_id),
+                    (project_id, agent_id, session_id),
                 ).fetchall()
                 if not rows_before:
                     continue
@@ -444,9 +463,9 @@ class VectorStore:
                 connection.execute(
                     f"""
                         DELETE FROM {_CHUNK_TABLE_NAME}
-                        WHERE agent_id = ? AND session_id = ?
+                        WHERE project_id = ? AND agent_id = ? AND session_id = ?
                         """,
-                    (agent_id, session_id),
+                    (project_id, agent_id, session_id),
                 )
                 removed += 1
         return removed
@@ -494,7 +513,7 @@ class VectorStore:
                 return {}
             rows = connection.execute(
                 f"""
-                SELECT rowid, session_id, agent_id, started_at, mtime_ns, size_bytes,
+                SELECT rowid, session_id, agent_id, project_id, started_at, mtime_ns, size_bytes,
                        anchor_message_id, snippet, chunk_index, start_message_id, end_message_id
                 FROM {_CHUNK_TABLE_NAME}
                 WHERE rowid IN ({placeholders})
@@ -505,6 +524,7 @@ class VectorStore:
             int(row["rowid"]): ChunkVectorRecord(
                 session_id=str(row["session_id"]),
                 agent_id=str(row["agent_id"]),
+                project_id=str(row["project_id"]),
                 started_at=str(row["started_at"]),
                 mtime_ns=int(row["mtime_ns"]),
                 size_bytes=int(row["size_bytes"]),

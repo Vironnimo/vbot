@@ -22,6 +22,7 @@ and writes nothing. Every figure is derived from persisted ``ChatMessage`` data
 
 from __future__ import annotations
 
+import builtins
 import json
 import math
 from collections import Counter
@@ -51,6 +52,12 @@ RUN_STATUSES = ("completed", "failed", "cancelled")
 
 UNKNOWN_MODEL_KEY = "unknown"
 
+# Outer address form for a project-scoped agent in the report (GLOSSARY → Project,
+# plan requirement: ``agent@projekt`` is the outside spelling). Identity agents
+# stay under their bare id; only project sessions get qualified, so "builder"
+# stays unambiguous across projects in every per-agent figure.
+PROJECT_ADDRESS_SEPARATOR = "@"
+
 # Output lists that would otherwise grow with data volume are bounded to a stable
 # top-N; the WebUI does any further top-N / share selection from these.
 TOP_LONGEST_RUNS = 10
@@ -73,6 +80,24 @@ class AgentDirectory(Protocol):
     def list(self) -> list[_AgentLike]: ...
 
 
+class _ProjectLike(Protocol):
+    @property
+    def project_id(self) -> str: ...
+
+
+class ProjectDirectory(Protocol):
+    """The project-scope source for the scan (satisfied by ``ProjectStore``).
+
+    Beyond listing projects it enumerates, per project, the agents that own at
+    least one session under the project anchor — the single discovery point for
+    project-scoped sessions, so statistics never re-derives the anchor layout.
+    """
+
+    def list(self) -> builtins.list[_ProjectLike]: ...
+
+    def session_owning_agents(self, project_id: str) -> builtins.list[str]: ...
+
+
 class SessionHandle(Protocol):
     """One session whose canonical messages can be loaded in append order."""
 
@@ -80,11 +105,22 @@ class SessionHandle(Protocol):
 
 
 class SessionSource(Protocol):
-    """Path-free session access (satisfied by ``ChatSessionManager``)."""
+    """Path-free session access (satisfied by ``ChatSessionManager``).
 
-    def list_with_metadata(self, agent_id: str) -> list[JsonObject]: ...
+    ``project_id`` is the session scope: ``None`` is the global identity layout
+    (``agents/<id>/sessions/``); a set value resolves the project anchor
+    (``projects/<pid>/agents/<id>/sessions/``). The statistics scan passes it
+    through unchanged, so a project session and an identity session never share
+    a path even when they share a session id.
+    """
 
-    def get(self, agent_id: str, session_id: str) -> SessionHandle: ...
+    def list_with_metadata(
+        self, agent_id: str, project_id: str | None = None
+    ) -> list[JsonObject]: ...
+
+    def get(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> SessionHandle: ...
 
 
 # ---------------------------------------------------------------------------
@@ -946,29 +982,71 @@ class _Aggregator:
 class StatisticsService:
     """Compute a full :class:`StatisticsReport` from persisted Sessions.
 
-    Pure read side: the service only reads through the injected session source
-    and agent directory and writes nothing. One scan walks every agent → session
-    → message exactly once and produces the structured report.
+    Pure read side: the service only reads through the injected session source,
+    agent directory, and project directory, and writes nothing. One scan walks
+    every session scope — the global identity agents plus every project-scoped
+    agent that owns sessions under a project anchor — and visits each session's
+    messages exactly once.
+
+    Project sessions feed the same report as identity sessions; a project agent
+    appears under its outer address form ``agent@project`` so it stays distinct
+    from the bare identity id and from the same agent in another project. Without
+    any projects (or with an absent project directory) the report is identical to
+    the identity-only scan — project scopes live under a different anchor path,
+    so the same session id under both scopes is two different files, never a
+    double count.
     """
 
-    def __init__(self, chat_sessions: SessionSource, agents: AgentDirectory) -> None:
+    def __init__(
+        self,
+        chat_sessions: SessionSource,
+        agents: AgentDirectory,
+        projects: ProjectDirectory | None = None,
+    ) -> None:
         self._sessions = chat_sessions
         self._agents = agents
+        self._projects = projects
 
     def report(
         self, *, since: datetime | None = None, until: datetime | None = None
     ) -> StatisticsReport:
-        """Scan all sessions once and return the aggregated report."""
+        """Scan all session scopes once and return the aggregated report."""
         aggregator = _Aggregator(since=since, until=until)
         for agent in self._agents.list():
-            agent_id = agent.id
-            summaries = self._sessions.list_with_metadata(agent_id)
-            aggregator.register_agent(agent_id, summaries)
-            for summary in summaries:
-                session_id = str(summary["id"])
-                messages = self._sessions.get(agent_id, session_id).load()
-                aggregator.process_session(agent_id, session_id, messages)
+            self._scan_scope(aggregator, project_id=None, agent_id=agent.id, display_key=agent.id)
+        for project_id, agent_id in self._project_scopes():
+            display_key = f"{agent_id}{PROJECT_ADDRESS_SEPARATOR}{project_id}"
+            self._scan_scope(
+                aggregator, project_id=project_id, agent_id=agent_id, display_key=display_key
+            )
         return aggregator.build()
+
+    def _project_scopes(self) -> list[tuple[str, str]]:
+        """Return ``(project_id, agent_id)`` for every session-owning project agent."""
+        if self._projects is None:
+            return []
+        scopes: list[tuple[str, str]] = []
+        for project in self._projects.list():
+            project_id = project.project_id
+            for agent_id in self._projects.session_owning_agents(project_id):
+                scopes.append((project_id, agent_id))
+        return scopes
+
+    def _scan_scope(
+        self,
+        aggregator: _Aggregator,
+        *,
+        project_id: str | None,
+        agent_id: str,
+        display_key: str,
+    ) -> None:
+        """Aggregate one session scope under its report display key."""
+        summaries = self._sessions.list_with_metadata(agent_id, project_id)
+        aggregator.register_agent(display_key, summaries)
+        for summary in summaries:
+            session_id = str(summary["id"])
+            messages = self._sessions.get(agent_id, session_id, project_id).load()
+            aggregator.process_session(display_key, session_id, messages)
 
 
 # ---------------------------------------------------------------------------

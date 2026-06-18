@@ -23,6 +23,7 @@ from core.extensions import ExtensionRegistry
 from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.models import Model, ModelRegistry
+from core.projects import ProjectStore
 from core.prompts import SkillPromptRegistry, SystemPromptManager
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -160,6 +161,7 @@ class Runtime:
         self._skills: SkillRegistry | None = None
         self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
+        self._projects: ProjectStore | None = None
         self._recall_backend_registry: RecallBackendRegistry | None = None
         self._recall_backend: RecallBackend | None = None
         self._chat_run_manager: ChatRunManager | None = None
@@ -293,6 +295,7 @@ class Runtime:
                 failed_extension_count,
             )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
+        self._projects = ProjectStore(self._storage.data_dir)
         self._ensure_bootstrap_agent()
         recall_registry = self._build_recall_backend_registry()
         self._recall_backend_registry = recall_registry
@@ -451,6 +454,7 @@ class Runtime:
         self._skills = None
         self._extensions = None
         self._chat_sessions = None
+        self._projects = None
         self._recall_backend_registry = None
         self._recall_backend = None
         self._channel_service = None
@@ -944,6 +948,14 @@ class Runtime:
         if self._chat_sessions is None:
             raise RuntimeError("Chat session service not available")
         return self._chat_sessions
+
+    @property
+    def projects(self) -> ProjectStore:
+        """Access to persisted project anchors (cwd, defaults, sessions)."""
+        self._ensure_started()
+        if self._projects is None:
+            raise RuntimeError("Project service not available")
+        return self._projects
 
     @property
     def recall_backend(self) -> RecallBackend:

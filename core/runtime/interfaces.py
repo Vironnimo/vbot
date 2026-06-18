@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from core.chat import ChatLoop
     from core.extensions import ExtensionRegistry
     from core.models.models import ModelRegistry
+    from core.projects import ProjectStore
     from core.prompts import SystemPromptManager
     from core.providers.adapter import ProviderAdapter
     from core.providers.providers import ProviderRegistry
@@ -244,6 +245,11 @@ class RuntimeServices(Protocol):
     @property
     def chat_sessions(self) -> ChatSessionManager:
         """Persisted chat session manager."""
+        ...
+
+    @property
+    def projects(self) -> ProjectStore:
+        """Persisted project anchor store (cwd, default agent/model, sessions)."""
         ...
 
     @property

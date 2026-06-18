@@ -117,7 +117,7 @@ def _resolve_read_path(context: ToolContext, path: str) -> Path:
     candidate = Path(path).expanduser()
     if candidate.is_absolute():
         return candidate.resolve()
-    return (context.workspace / candidate).resolve()
+    return (context.effective_cwd / candidate).resolve()
 
 
 def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> str:

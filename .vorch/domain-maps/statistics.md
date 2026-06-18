@@ -11,9 +11,17 @@ data ([core/chat/messages.py](../../core/chat/messages.py)). This is a hard
 constraint from the user: statistics must be derivable from currently persisted
 data, with no new backend storage to feed them.
 
-`StatisticsService(chat_sessions, agents)` is constructor-injected (DI via
+`StatisticsService(chat_sessions, agents, projects=None)` is constructor-injected (DI via
 minimal `Protocol`s, no globals). `report(since=None, until=None)` walks every
 agent → session → message exactly once and returns a frozen dataclass tree;
+the scan covers identity agents (global, `project_id=None`) **and** every
+project-scoped session — for each project it enumerates the session-owning agents
+under the anchor (`ProjectDirectory.session_owning_agents(project_id)`) and loads
+them with that `project_id`. Project agents appear in the report under the
+address form `agent@projekt` (so a bare `builder` stays unambiguous across
+projects); identity agents keep their bare id, so a report with no projects is
+byte-identical to before. A global and a project session sharing a UUID live
+under different anchors, so there is no double-counting.
 `StatisticsReport.to_dict()` (uses `dataclasses.asdict`) yields the JSON payload
 the RPC returns. Out of scope by decision: any new persistence or derived cache,
 cost/pricing, authoritative fallback/subagent attribution, and a per-session
@@ -44,11 +52,13 @@ The report tree (frozen dataclasses in `statistics.py`, all JSON-native fields):
 
 ## Interfaces
 
-- `StatisticsService(chat_sessions: SessionSource, agents: AgentDirectory)`.
-  `SessionSource` needs `list_with_metadata(agent_id)` + `get(agent_id, id).load()`
+- `StatisticsService(chat_sessions: SessionSource, agents: AgentDirectory, projects: ProjectDirectory | None = None)`.
+  `SessionSource` needs `list_with_metadata(agent_id, project_id=None)` + `get(agent_id, id, project_id=None).load()`
   (satisfied by `ChatSessionManager`); `AgentDirectory` needs `list()` returning
-  objects with `.id` (satisfied by `AgentStore`). Wired in the RPC from
-  `runtime.chat_sessions` and `runtime.agents`.
+  objects with `.id` (satisfied by `AgentStore`); `ProjectDirectory` needs `list()` +
+  `session_owning_agents(project_id)` (satisfied by `ProjectStore`). Wired in the RPC from
+  `runtime.chat_sessions`, `runtime.agents`, and `runtime.projects` (omitting `projects`
+  keeps the identity-only scan).
 - **RPC `statistics.report`** ([server/rpc/statistics_methods.py](../../server/rpc/statistics_methods.py)):
   optional params `{since?, until?}` (ISO-8601, `Z` accepted), validated —
   unknown fields and inverted/malformed windows are rejected with
