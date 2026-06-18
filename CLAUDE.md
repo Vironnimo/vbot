@@ -91,6 +91,11 @@ skill — it handles triage, the interview, and writing the entry into `.vorch/G
 - One logical unit per commit; never batch unrelated changes; never commit broken code.
 - Before committing, run the quality gates (PROJECT.md → Testing) for what you changed — all green
   first. Write tests together with the feature.
+- **The quality gates auto-fix (ruff format, prettier, eslint --fix). KEEP every change they make —
+  never revert a gate's auto-fix, even on files you did not touch. Letting the tools do their work
+  across the repo is the whole point of running the full gates. Reverting their output is forbidden.**
+  When a gate reports a real failure (test/type/lint error it cannot auto-fix), fix the underlying
+  problem rather than working around it.
 
 ## Plans
 
