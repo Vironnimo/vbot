@@ -104,7 +104,10 @@ def _format_job_row(job: object) -> str:
         return "- invalid cron job entry"
 
     job_id = _string_or_default(job.get("id"), "?")
-    agent_id = _string_or_default(job.get("agent_id"), "?")
+    # Prefer the server-provided address form so a project target shows as
+    # ``builder@projekt`` and a bare identity target stays ``builder``; fall back
+    # to the raw agent id for older payloads without ``target``.
+    agent_id = _string_or_default(job.get("target"), _string_or_default(job.get("agent_id"), "?"))
     status = _string_or_default(job.get("status"), "?")
     schedule = _format_schedule(job)
     next_fire_at = _string_or_default(job.get("next_fire_at"), "-")
