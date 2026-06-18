@@ -176,3 +176,30 @@ unverified pieces (no credentials in this environment — the Phase-0 gate could
    param); the exact disable shape (`enabled:false` vs `exclude` vs omit) was not
    probed. Effort-spelled-off wires keep the byte-identical `{effort: "none"}`.
    Live-verify when an OpenRouter key + a reachable `on_off` model exist.
+
+
+## 2026-06-18 — Projects (Plan 1, kern+cli): consciously deferred edges
+
+Found during a plan-vs-code audit of the project feature. Each is a small,
+out-of-scope-for-Plan-1 gap, deliberately not fixed.
+
+1. **`channel` tool still resolves a path against `workspace`, not `effective_cwd`.**
+   The workspace→cwd switch covered `read`/`write`/`edit`/`search`/`grep`/`glob`/`bash`
+   (and `memory` deliberately stays on workspace). The `channel` tool
+   (`core/tools/channel.py`, the path-resolving line) was not switched. Low impact:
+   channels-on-project is deferred, so a channel session never carries a project cwd and
+   `effective_cwd` would fall back to `workspace` anyway. Switch it to `effective_cwd`
+   when channels learn projects, for consistency.
+
+2. **Project-agent prompt preview has no project context.** `prompt.preview`
+   (`server/rpc/operations_methods.py`) calls `build_system_prompt` without a project
+   context, so previewing a config/project agent shows the body but **not** the project
+   files (`{project_files}`). The preview RPC has no `project_id` param. Wire project
+   context through the preview path when the WebUI project-agent preview lands (Plan 2).
+
+3. **`/status` in a project session degrades to empty.** The `CommandDispatcher` carries
+   no `project_id`, so the `/status` slash command's agent lookup
+   (`core/chat/commands.py`, `self._agents.get`) stays identity-only and returns
+   `agent=None` for a project session (handled, not a crash). Threading `project_id`
+   through the dispatcher to resolve the config agent is a broader change, out of M5
+   scope.
