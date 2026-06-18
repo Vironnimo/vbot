@@ -512,6 +512,22 @@ describe('i18n t()', () => {
     expect(t('statistics.subview.runs')).toBe('Runs & errors');
   });
 
+  it('contains the project-agent badge label for the statistics tab', () => {
+    expect(englishCatalog['statistics.agent.projectBadgeTitle']).toBeTruthy();
+    expect(
+      t('statistics.agent.projectBadgeTitle', undefined, { project: 'vbot' }),
+    ).toBe('Project: vbot');
+  });
+
+  it('contains cron project-agent dropdown group labels', () => {
+    expectCatalogKeys([
+      'cron.form.agentGroup.identity',
+      'cron.form.agentGroup.project',
+    ]);
+    expect(t('cron.form.agentGroup.identity')).toBe('Identity agents');
+    expect(t('cron.form.agentGroup.project')).toBe('Project agents');
+  });
+
   it('contains Projects tab copy for navigation, add, list, manage, report, and re-point', () => {
     const requiredKeys = [
       'navigation.projects',
