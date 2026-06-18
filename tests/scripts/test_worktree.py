@@ -3,6 +3,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = PROJECT_ROOT / "scripts" / "worktree.py"
 
@@ -177,6 +179,41 @@ def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
         (["npm", "run", "build"], webui_path),
     ]
     assert not (worktree_path / ".vorch" / "WORKTREE.md").exists()
+
+
+@pytest.mark.parametrize(
+    ("from_branch", "expected_branch"),
+    [(None, "fresh-worktree"), ("main", "main")],
+)
+def test_cmd_create_reports_branch_in_output(
+    tmp_path, monkeypatch, capsys, from_branch, expected_branch
+):
+    module = _load_worktree_module()
+
+    name = "fresh-worktree"
+    worktrees_dir = tmp_path / ".worktrees"
+    worktree_path = worktrees_dir / name
+    webui_path = worktree_path / "webui"
+
+    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
+    monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", _write_data_dir_template(tmp_path))
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8421)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    def fake_run_command(command, *, cwd=None):
+        if command[:3] == ["git", "rev-parse", "--verify"]:
+            return 1, ""
+        if command[:3] == ["git", "worktree", "add"]:
+            webui_path.mkdir(parents=True, exist_ok=True)
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module.cmd_create(argparse.Namespace(name=name, from_branch=from_branch))
+
+    assert result == 0
+    assert f"branch: {expected_branch}" in capsys.readouterr().out
 
 
 def test_cmd_create_seeds_data_dir_and_rewrites_main_agent_workspace(tmp_path, monkeypatch):
