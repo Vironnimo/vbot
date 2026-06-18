@@ -71,6 +71,7 @@ class RecordingTriggerService:
         session_id: str | None = None,
         *,
         internal: bool = False,
+        project_id: str | None = None,
     ) -> Run:
         if self.error is not None:
             raise self.error

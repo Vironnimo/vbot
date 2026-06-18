@@ -129,9 +129,7 @@ class _StubSessions:
         self._created_session_id = created_session_id
         self.create_calls: list[str] = []
 
-    def get(
-        self, _agent_id: str, _session_id: str, _project_id: str | None = None
-    ) -> _StubSession:
+    def get(self, _agent_id: str, _session_id: str, _project_id: str | None = None) -> _StubSession:
         return self._session
 
     def create(self, agent_id: str) -> _StubCreatedSession:
