@@ -593,6 +593,28 @@ describe('i18n t()', () => {
     );
   });
 
+  it('contains two-bar project chat copy for the dropdown, team bar, and scan banner', () => {
+    const requiredKeys = [
+      'chat.project.label',
+      'chat.project.none',
+      'chat.project.selectAria',
+      'chat.project.teamLabel',
+      'chat.project.teamEmpty',
+      'chat.project.loadError',
+      'chat.project.sessionError',
+      'chat.project.scanBanner',
+      'chat.project.scanBannerCount',
+      'chat.project.scanBannerLink',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(t('chat.project.none')).toBe('No project');
+    expect(t('chat.project.scanBannerCount', undefined, { count: 2 })).toContain(
+      '2',
+    );
+    expect(t('chat.project.scanBannerLink').toLowerCase()).toContain('project');
+  });
+
   it('does not expose Components showcase labels in the live catalog', () => {
     expect(englishCatalog['components.title']).toBeUndefined();
     expect(englishCatalog['components.toast.errorMessage']).toBeUndefined();
