@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from core.chat.errors import ChatMessageValidationError, ChatSessionError
+from core.projects.store import project_sessions_dir
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -320,67 +321,99 @@ class ChatSessionManager:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
 
-    def sessions_dir(self, agent_id: str) -> Path:
-        """Return the sessions directory for an agent."""
+    def sessions_dir(self, agent_id: str, project_id: str | None = None) -> Path:
+        """Return the sessions directory for an agent.
+
+        ``project_id=None`` keeps the global identity layout
+        ``agents/<agent-id>/sessions/``. A set ``project_id`` resolves the
+        project-anchor layout ``projects/<project-id>/agents/<agent-id>/sessions/``
+        through :func:`core.projects.store.project_sessions_dir`, so the
+        anchor path stays defined in one place (the projects domain).
+        """
         if not agent_id:
             raise ChatSessionError("agent id must not be empty")
-        return self.data_dir / "agents" / agent_id / "sessions"
+        if project_id is None:
+            return self.data_dir / "agents" / agent_id / "sessions"
+        return project_sessions_dir(self.data_dir, project_id, agent_id)
 
-    def write_lock(self, agent_id: str, session_id: str) -> _SessionWriteLock:
+    def write_lock(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> _SessionWriteLock:
         """Return the shared append lock for one session's transcript file.
 
         Hold it around any append that must stay contiguous with neighbouring
         appends — see the class note. Single one-off appends still acquire it so
         they wait for an open tool cycle on the same session instead of splitting
-        it.
+        it. The lock is keyed by the resolved transcript path, so a global and a
+        project-scoped session sharing one session id resolve to different
+        locks — the project anchor is part of the resolved path.
         """
         _validate_session_id(session_id)
-        key = str((self.sessions_dir(agent_id) / f"{session_id}{SESSION_FILE_EXTENSION}").resolve())
+        session_path = (
+            self.sessions_dir(agent_id, project_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
+        )
+        key = str(session_path.resolve())
         lock = ChatSessionManager._write_locks.get(key)
         if lock is None:
             lock = _SessionWriteLock()
             ChatSessionManager._write_locks[key] = lock
         return lock
 
-    def create(self, agent_id: str, session_id: str | None = None) -> ChatSession:
+    def create(
+        self, agent_id: str, session_id: str | None = None, project_id: str | None = None
+    ) -> ChatSession:
         """Create a new session for an agent."""
-        return ChatSession.create(self.sessions_dir(agent_id), session_id=session_id)
+        return ChatSession.create(self.sessions_dir(agent_id, project_id), session_id=session_id)
 
-    def exists(self, agent_id: str, session_id: str) -> bool:
+    def exists(self, agent_id: str, session_id: str, project_id: str | None = None) -> bool:
         """Return whether a valid session exists for an agent."""
         try:
-            self.get(agent_id, session_id)
+            self.get(agent_id, session_id, project_id)
         except ChatSessionError:
             return False
         return True
 
-    def get_or_create(self, agent_id: str, session_id: str) -> ChatSession:
+    def get_or_create(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> ChatSession:
         """Return an existing session handle or create a new one."""
         _validate_session_id(session_id)
-        session_path = self.sessions_dir(agent_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
+        session_path = (
+            self.sessions_dir(agent_id, project_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
+        )
         if session_path.exists():
             return ChatSession(session_path)
-        return self.create(agent_id, session_id=session_id)
+        return self.create(agent_id, session_id=session_id, project_id=project_id)
 
-    def get(self, agent_id: str, session_id: str) -> ChatSession:
+    def get(self, agent_id: str, session_id: str, project_id: str | None = None) -> ChatSession:
         """Return a session handle for an existing agent session."""
         _validate_session_id(session_id)
-        session_path = self.sessions_dir(agent_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
+        session_path = (
+            self.sessions_dir(agent_id, project_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
+        )
         if not session_path.exists():
             raise ChatSessionError(f"session does not exist: {session_id}")
         return ChatSession(session_path)
 
-    def get_metadata(self, agent_id: str, session_id: str) -> JsonObject:
+    def get_metadata(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> JsonObject:
         """Load session metadata from sidecar JSON or return an empty object."""
-        session = self.get(agent_id, session_id)
+        session = self.get(agent_id, session_id, project_id)
         return self._load_sidecar(session)
 
-    def set_metadata(self, agent_id: str, session_id: str, data: dict[str, Any]) -> None:
+    def set_metadata(
+        self,
+        agent_id: str,
+        session_id: str,
+        data: dict[str, Any],
+        project_id: str | None = None,
+    ) -> None:
         """Persist session metadata to sidecar JSON using atomic replace."""
         if not isinstance(data, dict):
             raise ChatSessionError("session metadata must be an object")
 
-        session = self.get(agent_id, session_id)
+        session = self.get(agent_id, session_id, project_id)
         sidecar_path = session.sidecar_path
         sidecar_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = sidecar_path.with_name(f".{sidecar_path.name}.{uuid.uuid4().hex}.tmp")
@@ -398,9 +431,9 @@ class ChatSessionManager:
         finally:
             temp_path.unlink(missing_ok=True)
 
-    def list(self, agent_id: str) -> list[ChatSession]:
+    def list(self, agent_id: str, project_id: str | None = None) -> list[ChatSession]:
         """List session handles for an agent sorted by filename."""
-        sessions_dir = self.sessions_dir(agent_id)
+        sessions_dir = self.sessions_dir(agent_id, project_id)
         if not sessions_dir.exists():
             return []
         return [
@@ -409,10 +442,12 @@ class ChatSessionManager:
             if _is_valid_session_id(path.stem)
         ]
 
-    def list_with_metadata(self, agent_id: str) -> builtins.list[dict[str, Any]]:
+    def list_with_metadata(
+        self, agent_id: str, project_id: str | None = None
+    ) -> builtins.list[dict[str, Any]]:
         """List sessions with activity timestamps plus merged sidecar metadata."""
         sessions_with_metadata: builtins.list[dict[str, Any]] = []
-        for session in self.list(agent_id):
+        for session in self.list(agent_id, project_id):
             created_at, last_active_at = self._activity_timestamps(session)
             metadata = self._load_sidecar(session)
 
@@ -423,9 +458,9 @@ class ChatSessionManager:
             sessions_with_metadata.append(session_data)
         return sessions_with_metadata
 
-    def delete(self, agent_id: str, session_id: str) -> None:
+    def delete(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
         """Delete one agent session file."""
-        self.get(agent_id, session_id).delete()
+        self.get(agent_id, session_id, project_id).delete()
 
     def _load_sidecar(self, session: ChatSession) -> JsonObject:
         sidecar_path = session.sidecar_path

@@ -31,7 +31,7 @@ GLOB_TOOL_PARAMETERS: JsonObject = {
         },
         "path": {
             "type": "string",
-            "description": "Directory to search in (default: agent workspace).",
+            "description": "Directory to search in (default: working directory).",
         },
     },
     "required": ["pattern"],

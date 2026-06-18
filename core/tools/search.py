@@ -12,20 +12,22 @@ if TYPE_CHECKING:
 
 
 def resolve_search_path(context: ToolContext, path: str | None) -> Path:
-    """Resolve an optional tool path against the workspace.
+    """Resolve an optional tool path against the tool working directory.
 
-    Search tools default to the agent workspace. Supplied paths may be absolute
-    or relative to the workspace, and ``~`` is expanded before resolution.
+    Search tools default to the working directory (``ToolContext.effective_cwd``:
+    the project repo in a project session, otherwise the agent workspace).
+    Supplied paths may be absolute or relative to that directory, and ``~`` is
+    expanded before resolution.
     """
     if path is None:
-        return context.workspace.expanduser().resolve()
+        return context.effective_cwd.expanduser().resolve()
     if not isinstance(path, str) or not path.strip():
         raise ValueError("path must be a non-empty string")
 
     candidate = Path(path).expanduser()
     if candidate.is_absolute():
         return candidate.resolve()
-    return (context.workspace / candidate).resolve()
+    return (context.effective_cwd / candidate).resolve()
 
 
 def normalize_file_filter_pattern(

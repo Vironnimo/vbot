@@ -36,7 +36,7 @@ BASH_TOOL_PARAMETERS: JsonObject = {
         },
         "workdir": {
             "type": "string",
-            "description": "Working directory. Relative paths resolve from the workspace.",
+            "description": "Working directory. Relative paths resolve from the working directory.",
         },
         "env": {
             "type": "object",
@@ -403,12 +403,12 @@ def _coerce_optional_positive_float(value: object, *, field_name: str) -> float 
 
 def _resolve_workdir(context: ToolContext, workdir: object) -> Path:
     if workdir is None:
-        return context.workspace.resolve()
+        return context.effective_cwd.resolve()
 
     candidate = Path(str(workdir)).expanduser()
     if candidate.is_absolute():
         return candidate.resolve()
-    return (context.workspace / candidate).resolve()
+    return (context.effective_cwd / candidate).resolve()
 
 
 def _shell_argv(command: str) -> list[str]:

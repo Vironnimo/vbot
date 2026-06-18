@@ -147,6 +147,7 @@ class _ParsedSearchRequest:
     context_messages: int
     bookend_messages: int
     sort: RecallSortMode
+    project_id: str | None
 
     def to_recall_request(self) -> RecallRequest:
         return RecallRequest(
@@ -162,6 +163,7 @@ class _ParsedSearchRequest:
             context_messages=self.context_messages,
             bookend_messages=self.bookend_messages,
             sort=self.sort,
+            project_id=self.project_id,
         )
 
 
@@ -235,6 +237,11 @@ def _parse_search_request(context: ToolContext, arguments: JsonObject) -> _Parse
         query=query,
         since=since,
         until=until,
+        # The recall scope follows the running run's project: a project run
+        # recalls its project's Sessions, an identity run the global ones. The
+        # tool exposes ``agent_id`` (cross-agent recall) but not a project
+        # override — scope is the run's, taken from the ToolContext.
+        project_id=context.project_id,
         roles=_roles(arguments.get("roles")),
         match_mode=cast(
             RecallMatchMode,

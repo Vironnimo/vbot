@@ -124,6 +124,21 @@ _SEMANTIC_FAILED_NOTICE = (
     "Semantic search failed for this query and fell back to literal keyword matching. "
     "Results may miss meaning-related sessions; retry, or check the embedding provider."
 )
+# Sentinel stored for the identity/global scope (``project_id is None``) in the
+# chunk-key tuple. An empty string keeps the store's UNIQUE constraint reliable —
+# SQLite treats NULLs as distinct, which would break per-scope uniqueness.
+_GLOBAL_PROJECT_SCOPE = ""
+
+
+def _project_scope(project_id: str | None) -> str:
+    """Map a recall project scope to the vector store's stored scope value.
+
+    ``None`` (identity/global recall) maps to the ``_GLOBAL_PROJECT_SCOPE``
+    sentinel so the on-disk chunk rows for the global scope never share a key
+    with a project's same-UUID session.
+    """
+
+    return project_id if project_id is not None else _GLOBAL_PROJECT_SCOPE
 
 
 @dataclass(frozen=True)
@@ -196,7 +211,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 self._fallback.search(request), _SEMANTIC_UNAVAILABLE_NOTICE
             )
 
-        self._ensure_fresh_index(request.agent_id, summaries, binding_header)
+        self._ensure_fresh_index(request, summaries, binding_header)
 
         # After the backfill the cached ``_resolved_header`` holds the real
         # dimension observed from the embedding provider. Use that for the
@@ -228,12 +243,19 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         # seen for each session so a single session cannot dominate the
         # results with several of its own chunks. Then drop everything
         # past the relevance cutoff and hydrate the survivors.
+        # KNN spans the whole vec0 table (all scopes/agents). Keep only chunks
+        # whose ``(project_id, agent_id)`` match this request's scope, so a
+        # same-UUID session in another scope never collides with this scope's
+        # summaries. The store is keyed by ``(project_id, agent_id, session_id)``.
+        request_scope = _project_scope(request.project_id)
         nearest_by_session: dict[str, tuple[ChunkVectorRecord, float]] = {}
         for rowid, distance in candidates:
             if distance > _MAX_DISTANCE:
                 continue
             record = rowid_to_record.get(rowid)
             if record is None:
+                continue
+            if record.agent_id != request.agent_id or record.project_id != request_scope:
                 continue
             session_id = record.session_id
             if session_id in nearest_by_session:
@@ -449,26 +471,28 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
     def _ensure_fresh_index(
         self,
-        agent_id: str,
+        request: RecallRequest,
         summaries: list[JsonObject],
         header: VectorHeader,
     ) -> None:
-        """Make sure every JSONL session for this agent has fresh chunk vectors."""
+        """Make sure every JSONL session in this scope has fresh chunk vectors."""
 
+        agent_id = request.agent_id
+        scope = _project_scope(request.project_id)
         active = {str(summary["id"]): summary for summary in summaries}
-        indexed = self.store.list_indexed_sessions(agent_id)
+        indexed = self.store.list_indexed_sessions(agent_id, scope)
 
         # Drop JSONL sessions that have been removed since last index.
         stale_to_remove = sorted(set(indexed) - set(active))
         if stale_to_remove:
-            self.store.drop_indexed_sessions(agent_id, stale_to_remove)
+            self.store.drop_indexed_sessions(agent_id, scope, stale_to_remove)
 
         # Collect every (session summary, mtime, size) that's missing or
         # whose JSONL changed since the last backfill. Sessions whose
         # mtime/size already match are skipped.
         stale_sessions: list[tuple[JsonObject, int, int, list[Any]]] = []
         for session_id, summary in active.items():
-            session = self.sessions.get(agent_id, session_id)
+            session = self.sessions.get(agent_id, session_id, request.project_id)
             stat = session.path.stat()
             cached = indexed.get(session_id)
             if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
@@ -488,7 +512,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         for summary, mtime_ns, size_bytes, messages in stale_sessions:
             chunks = build_session_chunks(messages)
             if not chunks:
-                self.store.delete_session(agent_id, str(summary["id"]))
+                self.store.delete_session(agent_id, scope, str(summary["id"]))
                 continue
             for chunk in chunks:
                 all_chunks.append((summary, mtime_ns, size_bytes, chunk))
@@ -501,9 +525,9 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             raise VectorStoreError("embedding provider returned no vectors")
 
         # Per-session running counter: chunk_index must be unique within
-        # ``(agent_id, session_id)`` and start at 0 — the store's
-        # ``UNIQUE(agent_id, session_id, chunk_index)`` constraint will
-        # reject duplicates, so a stable, ordered counter is required.
+        # ``(project_id, agent_id, session_id)`` and start at 0 — the store's
+        # ``UNIQUE(project_id, agent_id, session_id, chunk_index)`` constraint
+        # will reject duplicates, so a stable, ordered counter is required.
         records: list[tuple[ChunkVectorRecord, list[float]]] = []
         per_session_index: dict[str, int] = {}
         for (summary, mtime_ns, size_bytes, chunk), vector in zip(all_chunks, vectors, strict=True):
@@ -515,6 +539,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                     ChunkVectorRecord(
                         session_id=session_id,
                         agent_id=agent_id,
+                        project_id=scope,
                         started_at=format_started_at(summary.get("created_at")),
                         mtime_ns=mtime_ns,
                         size_bytes=size_bytes,
@@ -554,7 +579,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
     ) -> JsonObject | None:
         """Hydrate a per-chunk result anchored at a request-eligible message."""
 
-        messages = self.sessions.get(request.agent_id, record.session_id).load()
+        messages = self.sessions.get(request.agent_id, record.session_id, request.project_id).load()
         if not messages:
             return None
         anchor_index = self._resolve_request_anchor(messages, record, request)

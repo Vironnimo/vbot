@@ -41,7 +41,7 @@ def _resolve_write_path(context: ToolContext, path: str) -> Path:
     candidate = Path(path).expanduser()
     if candidate.is_absolute():
         return candidate.resolve()
-    return (context.workspace / candidate).resolve()
+    return (context.effective_cwd / candidate).resolve()
 
 
 def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:

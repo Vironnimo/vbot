@@ -511,6 +511,96 @@ class TestChatSessionManager:
         assert manager_b.write_lock("coder", "session-one") is lock
         assert manager_a.write_lock("coder", "session-two") is not lock
 
+    def test_sessions_dir_without_project_keeps_global_layout(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        assert manager.sessions_dir("coder") == tmp_path / "agents" / "coder" / "sessions"
+
+    def test_sessions_dir_with_project_uses_anchor_layout(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        assert (
+            manager.sessions_dir("coder", project_id="acme")
+            == tmp_path / "projects" / "acme" / "agents" / "coder" / "sessions"
+        )
+
+    def test_sessions_dir_matches_project_store_layout(self, tmp_path):
+        from core.projects.store import ProjectStore
+
+        manager = ChatSessionManager(tmp_path)
+        store = ProjectStore(tmp_path)
+
+        assert manager.sessions_dir("coder", project_id="acme") == store.sessions_dir(
+            "acme", "coder"
+        )
+
+    def test_create_with_project_places_session_under_anchor(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        session = manager.create("coder", session_id="session-one", project_id="acme")
+
+        assert (
+            session.path
+            == tmp_path
+            / "projects"
+            / "acme"
+            / "agents"
+            / "coder"
+            / "sessions"
+            / "session-one.jsonl"
+        )
+
+    def test_global_and_project_session_with_same_id_are_separate_files(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        global_session = manager.create("coder", session_id="shared")
+        project_session = manager.create("coder", session_id="shared", project_id="acme")
+
+        assert global_session.path != project_session.path
+        assert manager.exists("coder", "shared") is True
+        assert manager.exists("coder", "shared", project_id="acme") is True
+        # A project session does not leak into the global scope and vice versa.
+        manager.delete("coder", "shared", project_id="acme")
+        assert manager.exists("coder", "shared") is True
+        assert manager.exists("coder", "shared", project_id="acme") is False
+
+    def test_project_scope_isolates_get_or_create_and_list(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        manager.get_or_create("coder", "shared")
+        manager.get_or_create("coder", "shared", project_id="acme")
+        manager.get_or_create("coder", "project-only", project_id="acme")
+
+        assert [session.id for session in manager.list("coder")] == ["shared"]
+        assert [session.id for session in manager.list("coder", project_id="acme")] == [
+            "project-only",
+            "shared",
+        ]
+
+    def test_project_scope_isolates_metadata(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="shared")
+        manager.create("coder", session_id="shared", project_id="acme")
+
+        manager.set_metadata("coder", "shared", {"scope": "global"})
+        manager.set_metadata("coder", "shared", {"scope": "project"}, project_id="acme")
+
+        assert manager.get_metadata("coder", "shared") == {"scope": "global"}
+        assert manager.get_metadata("coder", "shared", project_id="acme") == {"scope": "project"}
+        assert [
+            entry["scope"] for entry in manager.list_with_metadata("coder", project_id="acme")
+        ] == ["project"]
+
+    def test_write_lock_separates_global_and_project_scope(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        global_lock = manager.write_lock("coder", "shared")
+        project_lock = manager.write_lock("coder", "shared", project_id="acme")
+
+        assert global_lock is not project_lock
+        # Same project + id resolves back to the same lock.
+        assert manager.write_lock("coder", "shared", project_id="acme") is project_lock
+
     def test_write_lock_is_task_reentrant(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 

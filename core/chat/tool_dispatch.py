@@ -229,6 +229,8 @@ async def _dispatch_tool_calls(
     run: Run,
     *,
     nesting_depth: int,
+    project_cwd: Path | None = None,
+    project_id: str | None = None,
 ) -> tuple[list[ChatMessage], list[JsonObject]]:
     run.raise_if_cancelled()
     emitting_registry = _EmittingToolRegistry(
@@ -238,6 +240,7 @@ async def _dispatch_tool_calls(
         note_hook=session.add_note,
     )
     executor = ToolExecutor(emitting_registry)
+    workspace = _agent_workspace(agent, Path(runtime.storage.data_dir))
     results = await executor.execute_many(
         [
             ScheduledToolCall(
@@ -251,9 +254,13 @@ async def _dispatch_tool_calls(
             agent_id=run.agent_id,
             session_id=run.session_id,
             run_id=run.id,
-            workspace=_agent_workspace(agent, Path(runtime.storage.data_dir)),
+            workspace=workspace,
             app_root=Path(runtime.system_prompts.app_dir),
             data_root=Path(runtime.storage.data_dir),
+            cwd=_resolve_tool_cwd(project_cwd, workspace),
+            # The owning run's project rides onto every ToolContext so the
+            # subagent tool can inherit it; None keeps the identity path.
+            project_id=project_id,
             allowed_tools=_runtime_allowed_tools(agent, runtime.tools),
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
             emit_hook=lambda event_type, payload: _emit_tool_context_event(
@@ -483,6 +490,18 @@ def _agent_workspace(agent: Any, data_root: Path) -> Path:
         return Path(workspace)
 
     return data_root / f"workspace-{agent.id}"
+
+
+def _resolve_tool_cwd(project_cwd: Path | None, workspace: Path) -> Path:
+    """Choose the tool working directory: project cwd when set, else workspace.
+
+    A project session supplies the repo ``project_cwd`` so file/shell tools
+    resolve relative paths against the repo. Without one (identity sessions and
+    every current caller, since the chat loop does not yet thread a project cwd),
+    the working directory stays the agent workspace — today's behavior. The chat
+    loop will pass the real project cwd later via ``_dispatch_tool_calls``.
+    """
+    return project_cwd if project_cwd is not None else workspace
 
 
 def _triggered_skill_names(content: str) -> list[str]:

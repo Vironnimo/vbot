@@ -13,7 +13,9 @@ from core.tools.edit import (
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
 
-def make_context(workspace: Path, tool_name: str = EDIT_TOOL_NAME) -> ToolContext:
+def make_context(
+    workspace: Path, tool_name: str = EDIT_TOOL_NAME, *, cwd: Path | None = None
+) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
@@ -24,6 +26,7 @@ def make_context(workspace: Path, tool_name: str = EDIT_TOOL_NAME) -> ToolContex
         workspace=workspace,
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
+        cwd=cwd,
     )
 
 
@@ -49,6 +52,28 @@ def assert_failure_envelope(result: dict[str, object], code: str) -> dict[str, s
     assert isinstance(error["message"], str)
     assert error["message"]
     return error  # type: ignore[return-value]
+
+
+def test_edit_resolves_relative_path_against_cwd_not_workspace(tmp_path: Path) -> None:
+    # The edit must target the repo (cwd) copy; the workspace copy stays untouched.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_file = workspace / "notes.txt"
+    workspace_file.write_text("keep me", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    repo_file = repo / "notes.txt"
+    repo_file.write_text("old value", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace, cwd=repo),
+        {"path": "notes.txt", "old_string": "old value", "new_string": "new value"},
+    )
+
+    data = assert_success_envelope(result)
+    assert repo_file.read_text(encoding="utf-8") == "new value"
+    assert workspace_file.read_text(encoding="utf-8") == "keep me"
+    assert data["path"] == str(repo_file.resolve())
 
 
 def test_register_edit_tool_exposes_provider_schema() -> None:

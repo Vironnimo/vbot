@@ -158,11 +158,13 @@ async def _handle_subagent(
         if validation_error is not None:
             return validation_error
 
+        # The child inherits the parent run's project end-to-end: its session is
+        # created/opened under the project anchor (``None`` = identity layout).
         if session_id is None:
-            session = runtime.chat_sessions.create(target_agent_id)
+            session = runtime.chat_sessions.create(target_agent_id, project_id=context.project_id)
         else:
             try:
-                session = runtime.chat_sessions.get(target_agent_id, session_id)
+                session = runtime.chat_sessions.get(target_agent_id, session_id, context.project_id)
             except ChatSessionError:
                 return tool_failure("session_not_found", f"session does not exist: {session_id}")
 
@@ -191,6 +193,7 @@ async def _handle_subagent(
                 session_id=session.id,
                 executor=executor,
                 display_content=content,
+                project_id=context.project_id,
             )
             await _emit_subagent_session_started(
                 context,
@@ -336,18 +339,24 @@ async def _handle_subagent_result(
             run = runtime.chat_run_manager.get(resolved_run_id)
         except RunNotFoundError:
             result = await _poll_result_from_session(
-                runtime, agent_id, session_id, run_id=resolved_run_id
+                runtime, agent_id, session_id, run_id=resolved_run_id, project_id=context.project_id
             )
         else:
             result = await _wait_for_subagent_result(run)
             if _should_poll_session_result(result):
                 session_result = await _poll_result_from_session(
-                    runtime, agent_id, session_id, run_id=resolved_run_id
+                    runtime,
+                    agent_id,
+                    session_id,
+                    run_id=resolved_run_id,
+                    project_id=context.project_id,
                 )
                 if _session_result_has_output(session_result) or not result.get("result"):
                     result = session_result
     else:
-        result = await _poll_result_from_session(runtime, agent_id, session_id, run_id=None)
+        result = await _poll_result_from_session(
+            runtime, agent_id, session_id, run_id=None, project_id=context.project_id
+        )
 
     return tool_success(result)
 
@@ -364,6 +373,7 @@ async def _start_subagent_run(
         agent_id=agent_id,
         session_id=session_id,
         executor=executor,
+        project_id=context.project_id,
     )
 
 
@@ -374,11 +384,12 @@ def _make_subagent_executor(
 ) -> tuple[ChatLoop, RunExecutor]:
     # Child Runs must match normal live Runs: the parent streaming loop
     # carries its attachment resolver and compaction service into the
-    # child; only the nesting depth differs.
+    # child; only the nesting depth differs. The parent run's project rides the
+    # executor closure so the child run executes project-scoped (cwd = repo).
     sub_loop = runtime.streaming_chat_loop.child_loop(
         nesting_depth=context.nesting_depth + 1,
     )
-    return sub_loop, sub_loop.run_executor(content)
+    return sub_loop, sub_loop.run_executor(content, project_id=context.project_id)
 
 
 def _track_subagent_completion(
@@ -450,10 +461,16 @@ def _cancelled_result_dict(run: Run) -> JsonObject:
 
 
 def _result_from_session(
-    runtime: RuntimeServices, agent_id: str, session_id: str, run_id: str | None
+    runtime: RuntimeServices,
+    agent_id: str,
+    session_id: str,
+    run_id: str | None,
+    project_id: str | None = None,
 ) -> JsonObject:
     try:
-        session = runtime.chat_sessions.get(agent_id, session_id)
+        # Read the child session under the parent run's project anchor so a
+        # project-scoped child is found; ``None`` keeps the identity layout.
+        session = runtime.chat_sessions.get(agent_id, session_id, project_id)
         messages = session.load()
     except ChatSessionError as error:
         return {
@@ -494,16 +511,17 @@ async def _poll_result_from_session(
     session_id: str,
     run_id: str | None,
     *,
+    project_id: str | None = None,
     attempts: int = SESSION_RESULT_RETRY_ATTEMPTS,
     delay_seconds: float = SESSION_RESULT_RETRY_DELAY_SECONDS,
 ) -> JsonObject:
     bounded_attempts = max(1, attempts)
-    result = _result_from_session(runtime, agent_id, session_id, run_id)
+    result = _result_from_session(runtime, agent_id, session_id, run_id, project_id)
     for _ in range(1, bounded_attempts):
         if _session_result_has_output(result):
             return result
         await asyncio.sleep(delay_seconds)
-        result = _result_from_session(runtime, agent_id, session_id, run_id)
+        result = _result_from_session(runtime, agent_id, session_id, run_id, project_id)
     return result
 
 
@@ -606,8 +624,13 @@ def _mark_subagent_session(
     sub_session_id: str,
     context: ToolContext,
 ) -> None:
+    # The child session's metadata is the durable side of the parent→child link.
+    # It is addressed under the project anchor (``context.project_id``) so a
+    # project-scoped child's sidecar lives next to its session, and the link
+    # records ``project_id`` so the child session is fully addressable after a
+    # restart (its anchor cannot be derived from the parent ids alone).
     session_manager = runtime.chat_sessions
-    metadata = dict(session_manager.get_metadata(sub_agent_id, sub_session_id))
+    metadata = dict(session_manager.get_metadata(sub_agent_id, sub_session_id, context.project_id))
     metadata[SUBAGENT_SESSION_METADATA_FLAG] = True
     metadata[SUBAGENT_PARENT_METADATA_KEY] = {
         "agent_id": context.agent_id,
@@ -615,8 +638,9 @@ def _mark_subagent_session(
         "run_id": context.run_id,
         "tool_call_id": context.tool_call_id,
         "tool_call_index": context.tool_call_index,
+        "project_id": context.project_id,
     }
-    session_manager.set_metadata(sub_agent_id, sub_session_id, metadata)
+    session_manager.set_metadata(sub_agent_id, sub_session_id, metadata, context.project_id)
 
 
 async def _emit_subagent_session_started(

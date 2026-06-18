@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.chat.messages import ChatMessage
+from core.projects import ProjectStore
 from core.sessions import ChatSessionManager
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
@@ -48,7 +49,11 @@ def _timing(start: datetime, duration_ms: int) -> dict:
 
 def _state(tmp_path: Path, agent_ids: list[str]) -> tuple[SimpleNamespace, ChatSessionManager]:
     manager = ChatSessionManager(tmp_path)
-    runtime = SimpleNamespace(chat_sessions=manager, agents=_FakeAgents(agent_ids))
+    runtime = SimpleNamespace(
+        chat_sessions=manager,
+        agents=_FakeAgents(agent_ids),
+        projects=ProjectStore(tmp_path),
+    )
     return SimpleNamespace(runtime=runtime), manager
 
 
@@ -143,6 +148,32 @@ def test_report_empty_data_returns_zeroed_report(tmp_path: Path) -> None:
     assert result["overview"]["total_runs"] == 0
     assert result["errors"]["total_errors"] == 0
     assert result["tools"]["tools"] == []
+
+
+def test_report_includes_project_sessions_under_address_form(tmp_path: Path) -> None:
+    state, manager = _state(tmp_path, ["main"])
+    _seed_session(manager, "main")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state.runtime.projects.create("vbot", "vBot", repo)
+    project_session = manager.create("builder", project_id="vbot")
+    project_session.append(
+        ChatMessage.assistant(model="openai/gpt-5", content="hi", timestamp=BASE)
+    )
+    project_session.append(
+        ChatMessage.run_summary(
+            run_id="p1",
+            status="completed",
+            timing=_timing(BASE + timedelta(seconds=1), 800),
+            timestamp=BASE + timedelta(seconds=2),
+        )
+    )
+
+    result = _statistics_report(state, {})
+
+    agent_ids = {agent["agent_id"] for agent in result["overview"]["agents"]}
+    assert agent_ids == {"main", "builder@vbot"}
+    assert result["overview"]["total_runs"] == 2
 
 
 def test_statistics_report_is_registered() -> None:

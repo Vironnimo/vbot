@@ -113,7 +113,15 @@ class FakeRunManager:
         self.next_result: Any | None = None
         self.next_error: BaseException | None = None
 
-    async def start(self, *, agent_id: str, session_id: str, executor: Any) -> Run:
+    async def start(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        executor: Any,
+        project_id: str | None = None,
+    ) -> Run:
+        del project_id
         if self.start_error is not None:
             raise self.start_error
         if (agent_id, session_id) in self.busy_sessions:
@@ -136,7 +144,9 @@ class FakeRunManager:
         executor: Any,
         display_content: str = "",
         internal: bool = False,
+        project_id: str | None = None,
     ) -> Any:
+        del project_id
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = SimpleNamespace(
             future=future,
@@ -243,7 +253,8 @@ class FakeChatLoop:
         self.seen_streaming.append(child._streaming)
         return child
 
-    def run_executor(self, content: str) -> Any:
+    def run_executor(self, content: str, *, project_id: str | None = None) -> Any:
+        del project_id
         return lambda run: self._execute_run(run, content)
 
     async def _execute_run(self, run: Run, content: str) -> ChatMessage:
@@ -527,6 +538,7 @@ async def test_subagent_tool_marks_created_session_with_parent_metadata(
         "run_id": context.run_id,
         "tool_call_id": context.tool_call_id,
         "tool_call_index": context.tool_call_index,
+        "project_id": None,
     }
 
 

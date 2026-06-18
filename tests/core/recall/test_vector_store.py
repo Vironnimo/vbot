@@ -250,7 +250,7 @@ def test_vector_store_drop_indexed_sessions_removes_only_listed(tmp_path: Path) 
     for sid in ("keep-1", "drop-1", "keep-2", "drop-2"):
         _upsert_one(store, header=header, record=_record(sid), vector=[0.1, 0.2])
 
-    removed = store.drop_indexed_sessions("coder", ["drop-1", "drop-2"])
+    removed = store.drop_indexed_sessions("coder", "", ["drop-1", "drop-2"])
     assert removed == 2
     assert set(store.list_indexed_sessions("coder")) == {"keep-1", "keep-2"}
 
@@ -268,14 +268,14 @@ def test_vector_store_delete_session_is_noop_when_chunk_table_missing(tmp_path: 
     # vector backend deletes empty sessions during eager backfill before any
     # upsert creates the schema; that must not raise ``no such table: chunks``.
     store = VectorStore(tmp_path)
-    store.delete_session("coder", "never-indexed")  # must not raise
+    store.delete_session("coder", "", "never-indexed")  # must not raise
 
 
 def test_vector_store_drop_indexed_sessions_is_noop_when_chunk_table_missing(
     tmp_path: Path,
 ) -> None:
     store = VectorStore(tmp_path)
-    assert store.drop_indexed_sessions("coder", ["a", "b"]) == 0  # must not raise
+    assert store.drop_indexed_sessions("coder", "", ["a", "b"]) == 0  # must not raise
 
 
 def test_vector_store_truncate_to_input_limit_uses_context_window(tmp_path: Path) -> None:
@@ -314,6 +314,7 @@ def _chunk_record(
     chunk_index: int,
     *,
     agent_id: str = "coder",
+    project_id: str = "",
     mtime_ns: int = 1,
     size_bytes: int = 1,
     anchor: str = "m1",
@@ -325,6 +326,7 @@ def _chunk_record(
     return ChunkVectorRecord(
         session_id=session_id,
         agent_id=agent_id,
+        project_id=project_id,
         started_at=datetime(2026, 5, 1, 12, tzinfo=UTC).isoformat(),
         mtime_ns=mtime_ns,
         size_bytes=size_bytes,
@@ -537,3 +539,91 @@ def test_vector_store_knn_search_returns_nearest_chunk_across_sessions(
     nearest = hydrated[nearest_rowid]
     assert nearest.session_id == "s1"
     assert nearest.chunk_index == 0
+
+
+# ---------------------------------------------------------------------------
+# Project-scoped chunk keys — same UUID across scopes must not collide
+# ---------------------------------------------------------------------------
+
+
+def test_vector_store_same_uuid_in_two_scopes_are_distinct_chunks(tmp_path: Path) -> None:
+    """A global and a project session with the same UUID index as separate rows.
+
+    The chunk key is ``(project_id, agent_id, session_id, chunk_index)``, so the
+    project-scoped chunk must not overwrite the global one (or vice versa).
+    """
+
+    store = VectorStore(tmp_path)
+    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
+
+    records = [
+        (_chunk_record("shared", 0, project_id="", anchor="g1"), [1.0, 0.0, 0.0]),
+        (_chunk_record("shared", 0, project_id="proj", anchor="p1"), [0.0, 1.0, 0.0]),
+    ]
+    store.upsert_many_chunks(header=header, records=records)
+
+    # Both scopes keep their own freshness entry for the same UUID.
+    assert set(store.list_indexed_sessions("coder", "")) == {"shared"}
+    assert set(store.list_indexed_sessions("coder", "proj")) == {"shared"}
+    # Two rows on disk — no overwrite.
+    assert _vec0_row_count(store.path) == 2
+
+
+def test_vector_store_reupsert_one_scope_leaves_other_scope_intact(tmp_path: Path) -> None:
+    """Re-indexing the project scope of a shared UUID must not wipe the global scope."""
+
+    store = VectorStore(tmp_path)
+    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
+
+    store.upsert_many_chunks(
+        header=header,
+        records=[(_chunk_record("shared", 0, project_id="", anchor="g1"), [1.0, 0.0, 0.0])],
+    )
+    store.upsert_many_chunks(
+        header=header,
+        records=[(_chunk_record("shared", 0, project_id="proj", anchor="p1"), [0.0, 1.0, 0.0])],
+    )
+
+    # Re-upsert only the project scope — the delete-once wipe is scoped to it.
+    store.upsert_many_chunks(
+        header=header,
+        records=[(_chunk_record("shared", 0, project_id="proj", anchor="p2"), [0.0, 0.0, 1.0])],
+    )
+
+    assert set(store.list_indexed_sessions("coder", "")) == {"shared"}
+    assert set(store.list_indexed_sessions("coder", "proj")) == {"shared"}
+    assert _vec0_row_count(store.path) == 2
+
+
+def test_vector_store_drop_indexed_sessions_only_affects_named_scope(tmp_path: Path) -> None:
+    """Dropping a session in one scope leaves the same-UUID session in another scope."""
+
+    store = VectorStore(tmp_path)
+    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
+    store.upsert_many_chunks(
+        header=header,
+        records=[
+            (_chunk_record("shared", 0, project_id=""), [1.0, 0.0, 0.0]),
+            (_chunk_record("shared", 0, project_id="proj"), [0.0, 1.0, 0.0]),
+        ],
+    )
+
+    removed = store.drop_indexed_sessions("coder", "proj", ["shared"])
+
+    assert removed == 1
+    assert set(store.list_indexed_sessions("coder", "")) == {"shared"}
+    assert store.list_indexed_sessions("coder", "proj") == {}
+
+
+def test_vector_store_get_chunks_by_rowids_returns_project_id(tmp_path: Path) -> None:
+    """The hydrated chunk record carries its ``project_id`` scope key."""
+
+    store = VectorStore(tmp_path)
+    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
+    store.upsert_many_chunks(
+        header=header,
+        records=[(_chunk_record("s1", 0, project_id="proj"), [1.0, 0.0, 0.0])],
+    )
+
+    hydrated = store.get_chunks_by_rowids([1])
+    assert hydrated[1].project_id == "proj"

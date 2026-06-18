@@ -61,7 +61,9 @@ class _FakeSpeech:
         return SpeechTranscriptionResult(text=self._text)
 
 
-def make_context(workspace: Path, tool_name: str = READ_TOOL_NAME) -> ToolContext:
+def make_context(
+    workspace: Path, tool_name: str = READ_TOOL_NAME, *, cwd: Path | None = None
+) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
@@ -72,6 +74,7 @@ def make_context(workspace: Path, tool_name: str = READ_TOOL_NAME) -> ToolContex
         workspace=workspace,
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
+        cwd=cwd,
     )
 
 
@@ -144,6 +147,23 @@ async def test_read_reads_relative_workspace_path(tmp_path: Path) -> None:
 
     data = assert_success_envelope(result)
     assert data["content"] == "hello\nworkspace\n"
+
+
+@pytest.mark.asyncio
+async def test_read_resolves_relative_path_against_cwd_not_workspace(tmp_path: Path) -> None:
+    # A same-named file exists in both locations; with cwd set to the repo, the
+    # relative path must read the repo copy, not the workspace copy.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_bytes(b"workspace copy\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    repo.joinpath("notes.txt").write_bytes(b"repo copy\n")
+
+    result = await make_handler()(make_context(workspace, cwd=repo), {"path": "notes.txt"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "repo copy\n"
 
 
 @pytest.mark.asyncio

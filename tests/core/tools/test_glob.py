@@ -12,7 +12,9 @@ from core.tools.glob import (
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
 
-def make_context(workspace: Path, tool_name: str = GLOB_TOOL_NAME) -> ToolContext:
+def make_context(
+    workspace: Path, tool_name: str = GLOB_TOOL_NAME, *, cwd: Path | None = None
+) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
@@ -23,6 +25,7 @@ def make_context(workspace: Path, tool_name: str = GLOB_TOOL_NAME) -> ToolContex
         workspace=workspace,
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
+        cwd=cwd,
     )
 
 
@@ -55,6 +58,23 @@ def assert_failure_envelope(result: dict[str, object], code: str) -> dict[str, s
     assert isinstance(error["message"], str)
     assert error["message"]
     return error  # type: ignore[return-value]
+
+
+def test_glob_default_search_root_is_cwd_not_workspace(tmp_path: Path) -> None:
+    # With no path argument, glob searches the working directory; a project
+    # session points that at the repo (cwd), not the agent workspace.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("only_in_workspace.py").write_text("", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    repo.joinpath("only_in_repo.py").write_text("", encoding="utf-8")
+
+    content = get_success_content(
+        glob_handler(make_context(workspace, cwd=repo), {"pattern": "*.py"})
+    )
+
+    assert content == "only_in_repo.py"
 
 
 def test_register_glob_tool_exposes_provider_schema() -> None:

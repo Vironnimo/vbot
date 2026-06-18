@@ -22,6 +22,7 @@ The duplicate-cwd guard lives here: two projects may not point at the same repo
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import shutil
@@ -49,6 +50,27 @@ _PROJECTS_DIRNAME = "projects"
 _AGENTS_DIRNAME = "agents"
 _SESSIONS_DIRNAME = "sessions"
 _WORKSPACE_DIRNAME = "workspace"
+
+# Session-file recognition for anchor ownership enumeration. Kept local rather
+# than imported from ``core.sessions`` because that module imports this one
+# (``project_sessions_dir``); duplicating one extension literal avoids the cycle.
+_SESSION_FILE_GLOB = "*.jsonl"
+
+
+def project_sessions_dir(data_dir: Path, project_id: str, agent_id: str) -> Path:
+    """Return the project-scoped sessions directory for one agent.
+
+    ``<data_dir>/projects/<project-id>/agents/<agent-id>/sessions/``. This is the
+    single source of the project-anchor session layout: both
+    :meth:`ProjectStore.sessions_dir` and the session backbone
+    (:class:`core.sessions.ChatSessionManager`) resolve project-scoped session
+    paths through here, so the layout literal lives in exactly one place.
+    """
+    return (
+        data_dir / _PROJECTS_DIRNAME / project_id / _AGENTS_DIRNAME / agent_id / _SESSIONS_DIRNAME
+    )
+
+
 # Project archives live under their own subtree so a project id can never
 # collide with an agent id in the shared archive namespace.
 _ARCHIVE_PROJECTS_DIRNAME = "projects"
@@ -198,10 +220,32 @@ class ProjectStore:
         """Return the project-scoped sessions directory for one agent.
 
         ``projects/<project-id>/agents/<agent-id>/sessions/``. This is the
-        on-disk path that the project-scoped session backbone (Phase 2) will use
-        in place of the global ``agents/<id>/sessions/``.
+        on-disk path the project-scoped session backbone uses in place of the
+        global ``agents/<id>/sessions/``; the layout lives in
+        :func:`project_sessions_dir` so the session manager shares it.
         """
-        return self._agent_anchor_dir(project_id, agent_id) / _SESSIONS_DIRNAME
+        return project_sessions_dir(self._data_dir, project_id, agent_id)
+
+    def session_owning_agents(self, project_id: str) -> builtins.list[str]:
+        """Return the agent ids that own at least one session under this anchor.
+
+        Walks ``projects/<project-id>/agents/<agent-id>/sessions/`` and keeps an
+        agent only when its sessions directory actually holds a session file.
+        This is the single enumeration point for project-scoped session
+        discovery (statistics, recall): it reflects what the anchor owns *now*,
+        so an agent dir created without sessions, or one whose sessions were all
+        removed, does not appear. Returns ids sorted for determinism; an unknown
+        project yields an empty list rather than raising.
+        """
+        agents_dir = self._project_dir(project_id) / _AGENTS_DIRNAME
+        if not agents_dir.exists():
+            return []
+        owners = [
+            agent_dir.name
+            for agent_dir in agents_dir.iterdir()
+            if agent_dir.is_dir() and _has_session_file(agent_dir / _SESSIONS_DIRNAME)
+        ]
+        return sorted(owners)
 
     def workspace_dir(self, project_id: str, agent_id: str) -> Path:
         """Return the rooted-identity-agent workspace dir under the anchor.
@@ -256,6 +300,13 @@ class ProjectStore:
                 f"expected {config_path.parent.name}, got {project.project_id}"
             )
         return project
+
+
+def _has_session_file(sessions_dir: Path) -> bool:
+    """Return whether a sessions directory holds at least one session file."""
+    if not sessions_dir.is_dir():
+        return False
+    return any(sessions_dir.glob(_SESSION_FILE_GLOB))
 
 
 def _utc_now() -> str:

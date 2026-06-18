@@ -1120,6 +1120,99 @@ def test_vector_backend_default_search_snippet_is_conversation_not_tool_headline
     assert "ansi" not in match["snippet"].lower()
 
 
+def _project_request(
+    *,
+    query: str,
+    project_id: str | None,
+    limit: int = 5,
+) -> RecallRequest:
+    return RecallRequest(
+        agent_id="coder",
+        session_id=None,
+        around_message_id=None,
+        query=query,
+        since=None,
+        until=None,
+        roles=("user", "assistant", "tool", "error", "compaction_checkpoint"),
+        match_mode="all_terms",
+        limit=limit,
+        context_messages=0,
+        bookend_messages=2,
+        sort="newest",
+        project_id=project_id,
+    )
+
+
+def test_vector_backend_project_recall_finds_only_project_sessions(tmp_path: Path) -> None:
+    """A project-scoped recall searches the project's Sessions, not the global ones."""
+
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="global-fruit").append(
+        ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1))
+    )
+    sessions.create("coder", session_id="proj-fruit", project_id="alpha").append(
+        ChatMessage.user("I love bananas and fruit too", timestamp=timestamp(2))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    project = recall.search(_project_request(query="fruit", project_id="alpha"))
+    identity = recall.search(_project_request(query="fruit", project_id=None))
+
+    assert [m["session_id"] for m in project["matches"]] == ["proj-fruit"]
+    assert [m["session_id"] for m in identity["matches"]] == ["global-fruit"]
+
+
+def test_vector_backend_same_uuid_global_and_project_do_not_collide(tmp_path: Path) -> None:
+    """The same session UUID under global and project scope index separately.
+
+    Each scope must surface its own session content — the project session's
+    chunk must not overwrite the global one in the shared vector index.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    shared_id = "11111111-1111-1111-1111-111111111111"
+    sessions.create("coder", session_id=shared_id).append(
+        ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
+    )
+    sessions.create("coder", session_id=shared_id, project_id="alpha").append(
+        ChatMessage.user("I love bananas and fruit", timestamp=timestamp(2))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    # Global scope: "carrot" hits; "fruit" (only in the project session) does not.
+    global_carrot = recall.search(_project_request(query="carrot", project_id=None))
+    assert [m["session_id"] for m in global_carrot["matches"]] == [shared_id]
+
+    # Project scope: "fruit" hits the project session of the same UUID.
+    project_fruit = recall.search(_project_request(query="fruit", project_id="alpha"))
+    assert [m["session_id"] for m in project_fruit["matches"]] == [shared_id]
+    # The project chunk did not overwrite the global one — both vec0 rows exist.
+    assert _count_vec_rows(recall.store.path, "coder", shared_id) == 2
+
+
+def test_vector_backend_identity_recall_unchanged_by_project_field(tmp_path: Path) -> None:
+    """An identity recall (``project_id=None``) behaves exactly as the legacy default.
+
+    Passing ``project_id=None`` explicitly must match the implicit-default
+    behavior: same sessions, same matches, distances present.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="cars").append(
+        ChatMessage.user("My car broke down", timestamp=timestamp(1))
+    )
+    sessions.create("coder", session_id="vehicles").append(
+        ChatMessage.user("I was driving my vehicle", timestamp=timestamp(2))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    explicit_none = recall.search(_project_request(query="car", project_id=None, limit=2))
+    default = recall.search(request(query="car", limit=2))
+
+    assert [m["session_id"] for m in explicit_none["matches"]] == ["cars", "vehicles"]
+    assert [m["session_id"] for m in default["matches"]] == ["cars", "vehicles"]
+
+
 def test_vector_backend_does_not_match_its_own_search_output(tmp_path: Path) -> None:
     """A session_search result is excluded from the index — no self-matching loop.
 
