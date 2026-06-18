@@ -11,6 +11,11 @@
       labelFallback: 'Agents',
     },
     {
+      id: 'projects',
+      labelKey: 'navigation.projects',
+      labelFallback: 'Projects',
+    },
+    {
       id: 'cron',
       labelKey: 'navigation.cron',
       labelFallback: 'Cron',
@@ -52,6 +57,7 @@
   import CronView from './components/CronView.svelte';
   import DebugView from './components/DebugView.svelte';
   import LogsView from './components/LogsView.svelte';
+  import ProjectsView from './components/ProjectsView.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import StatisticsView from './components/StatisticsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
@@ -524,6 +530,8 @@
       onAgentSelected={selectAgent}
       onToast={showToast}
     />
+  {:else if activeViewId === 'projects'}
+    <ProjectsView />
   {:else if activeViewId === 'cron'}
     <CronView />
   {:else if activeViewId === 'system-prompt'}

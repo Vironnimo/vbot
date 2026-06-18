@@ -511,6 +511,86 @@ export function disableCronJob(id, options = {}) {
   return rpc('cron.disable', { id }, options);
 }
 
+export function addProject(params = {}, options = {}) {
+  if (!isPlainObject(params)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project payload must be an object',
+      {
+        method: 'project.add',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(params.cwd)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project cwd must be a non-empty string',
+      {
+        method: 'project.add',
+      },
+    );
+  }
+
+  return rpc('project.add', params, options);
+}
+
+export function listProjects(options = {}) {
+  return rpc('project.list', {}, options);
+}
+
+export function showProject(projectId, options = {}) {
+  if (!isNonEmptyString(projectId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project id must be a non-empty string',
+      {
+        method: 'project.show',
+      },
+    );
+  }
+
+  return rpc('project.show', { project_id: projectId }, options);
+}
+
+export function setProject(projectId, changes = {}, options = {}) {
+  if (!isNonEmptyString(projectId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project id must be a non-empty string',
+      {
+        method: 'project.set',
+      },
+    );
+  }
+
+  if (!isPlainObject(changes)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project changes must be an object',
+      {
+        method: 'project.set',
+      },
+    );
+  }
+
+  return rpc('project.set', { ...changes, project_id: projectId }, options);
+}
+
+export function removeProject(projectId, options = {}) {
+  if (!isNonEmptyString(projectId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project id must be a non-empty string',
+      {
+        method: 'project.rm',
+      },
+    );
+  }
+
+  return rpc('project.rm', { project_id: projectId }, options);
+}
+
 export function listSessions(agentId, options = {}) {
   if (!isNonEmptyString(agentId)) {
     throw new ApiClientError(
