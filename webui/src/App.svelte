@@ -596,7 +596,7 @@
       onToast={showToast}
     />
   {:else if activeViewId === 'projects'}
-    <ProjectsView />
+    <ProjectsView onToast={showToast} />
   {:else if activeViewId === 'cron'}
     <CronView />
   {:else if activeViewId === 'system-prompt'}
