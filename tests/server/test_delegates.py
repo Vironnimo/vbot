@@ -80,7 +80,13 @@ class CommandHandledDispatcher(CommandDispatcher):
         self._reply = reply
         self.calls: list[tuple[str, str, str]] = []
 
-    def dispatch(self, agent_id: str, session_id: str, message_text: str) -> CommandHandled:
+    def dispatch(
+        self,
+        agent_id: str,
+        session_id: str,
+        message_text: str,
+        project_id: str | None = None,
+    ) -> CommandHandled:
         self.calls.append((agent_id, session_id, message_text))
         return CommandHandled(reply=self._reply)
 
