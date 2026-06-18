@@ -570,8 +570,10 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(f"npm run build failed: {stderr}" if stderr else "npm run build failed")
         return 1
 
+    branch = name if managed_branch else args.from_branch
     print_ok(
         name=name,
+        branch=branch,
         port=port,
         **{"data-dir": data_dir_tilde},
         path=worktree_path,
