@@ -1344,6 +1344,40 @@ async def test_identity_run_leaves_project_id_none() -> None:
     await run.wait()
 
 
+async def test_emitted_events_carry_run_project_id() -> None:
+    """Every emitted event (and its to_dict) carries the run's project anchor.
+
+    The WebSocket backstop rebuilds the outside ``agent@projekt`` address from
+    this field, so a project run's events must surface it while an identity
+    run's events keep it ``None`` (the byte-identical identity path).
+    """
+    manager = ChatRunManager()
+
+    async def execute(run: Run) -> str:
+        run.emit("visible", {"content": "hello"})
+        return "done"
+
+    project_run = await manager.start(
+        agent_id="coder",
+        session_id="sess-uuid",
+        executor=execute,
+        project_id="acme",
+    )
+    await project_run.wait()
+    assert all(event.project_id == "acme" for event in project_run.events)
+    visible = next(event for event in project_run.events if event.type == "visible")
+    assert visible.to_dict()["project_id"] == "acme"
+
+    identity_run = await manager.start(
+        agent_id="coder",
+        session_id="sess-uuid-2",
+        executor=execute,
+    )
+    await identity_run.wait()
+    assert all(event.project_id is None for event in identity_run.events)
+    assert identity_run.events[0].to_dict()["project_id"] is None
+
+
 async def test_queued_project_run_carries_project_id_when_drained() -> None:
     """A project_id passed to enqueue rides the Run created when the item drains."""
     manager = ChatRunManager()
