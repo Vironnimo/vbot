@@ -14,9 +14,14 @@ import {
   RUN_EVENT_TOOL_CALL_STDOUT,
   RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
+  addProject,
   cancelRun,
   cancelToolCall,
   createRpcEnvelope,
+  listProjects,
+  removeProject,
+  setProject,
+  showProject,
   getTaskModelOptions,
   listTaskModelTargets,
   listQueue,
@@ -284,6 +289,157 @@ describe('rpc()', () => {
         content: 'Updated content',
       },
     });
+  });
+});
+
+describe('project.* wrappers', () => {
+  it('adds a project through project.add', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { project: { project_id: 'demo' }, scan: { team: [] } },
+      }),
+    );
+
+    await expect(
+      addProject(
+        {
+          cwd: 'C:/repos/demo',
+          display_name: 'Demo',
+          default_agent: 'builder',
+          default_model: 'openai/gpt-5.2',
+          auto_load: ['AGENTS.md'],
+        },
+        { fetch: fetchFunction },
+      ),
+    ).resolves.toEqual({ project: { project_id: 'demo' }, scan: { team: [] } });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'project.add',
+      params: {
+        cwd: 'C:/repos/demo',
+        display_name: 'Demo',
+        default_agent: 'builder',
+        default_model: 'openai/gpt-5.2',
+        auto_load: ['AGENTS.md'],
+      },
+    });
+  });
+
+  it('rejects a missing cwd before sending project.add', () => {
+    expect(() => addProject({ display_name: 'Demo' })).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.add',
+      }),
+    );
+    expect(() => addProject({ cwd: '' })).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.add',
+      }),
+    );
+  });
+
+  it('lists projects through project.list with no params', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { projects: [] } }));
+
+    await expect(listProjects({ fetch: fetchFunction })).resolves.toEqual({
+      projects: [],
+    });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'project.list',
+      params: {},
+    });
+  });
+
+  it('shows a project through project.show', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { project: { project_id: 'demo' } } }),
+      );
+
+    await showProject('demo', { fetch: fetchFunction });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'project.show',
+      params: { project_id: 'demo' },
+    });
+  });
+
+  it('rejects an empty project id before sending project.show', () => {
+    expect(() => showProject('')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.show',
+      }),
+    );
+  });
+
+  it('updates a project through project.set with the id merged in', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { project: { project_id: 'demo' } } }),
+      );
+
+    await setProject(
+      'demo',
+      { display_name: 'Renamed', cwd: 'C:/repos/moved' },
+      { fetch: fetchFunction },
+    );
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'project.set',
+      params: {
+        display_name: 'Renamed',
+        cwd: 'C:/repos/moved',
+        project_id: 'demo',
+      },
+    });
+  });
+
+  it('rejects an empty project id or non-object changes before sending project.set', () => {
+    expect(() => setProject('', { cwd: 'x' })).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.set',
+      }),
+    );
+    expect(() => setProject('demo', null)).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.set',
+      }),
+    );
+  });
+
+  it('removes a project through project.rm', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { project_id: 'demo', archived: true } }),
+      );
+
+    await removeProject('demo', { fetch: fetchFunction });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'project.rm',
+      params: { project_id: 'demo' },
+    });
+  });
+
+  it('rejects an empty project id before sending project.rm', () => {
+    expect(() => removeProject('')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.rm',
+      }),
+    );
   });
 });
 
