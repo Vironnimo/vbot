@@ -1,143 +1,229 @@
-## Plan: Projekte — WebUI / Desktop
+## Plan: Projekte — WebUI / Desktop (code-grounded, v2)
 
-**Goal:** Projekte sind aus der WebUI (und damit Desktop) voll bedienbar: ein Projekte-Tab zum
-Hinzufügen/Verwalten und ein Zwei-Bar-Chat mit Projekt-Dropdown — als reine Client-Schicht auf
-dem RPC-Vertrag aus Plan 1.
+**Goal:** Projekte sind aus der WebUI (und damit Desktop) voll bedienbar — eigener Projekte-Tab
+zum Hinzufügen/Verwalten, ein Zwei-Bar-Chat mit Projekt-Dropdown, Cron auf `agent@projekt`, und
+projekt-aware Statistik — als reine Client-Schicht auf dem **bereits gemergten** Plan-1-RPC.
 
-**Context:** Design-Grundlage `stuff/add-projects.md` → Abschnitt „Accessor-/UI-Fläche"
-(Stand 2026-06-18) — **vor Phase 1 lesen**, dazu `.vorch/DESIGN.md`. Zweiter von zwei Plänen;
-**hängt vollständig an Plan 1** (`projekte-1-kern-cli.md`): erst wenn dessen `project.*`-RPC und die
-projekt-skopierten Session/Chat/Cron-Methoden stehen, kann diese Schicht gebaut werden. Die WebUI
-importiert keinen Backend-Code — nur HTTP/RPC/SSE/WS.
+**Context:** Plan 1 (Backend + CLI) ist in `main` gemergt; der `project.*`-RPC, die projekt-aware
+Session/Chat/Cron-Methoden und die `agent@projekt`-Adressierung existieren real. Design-Soll ist
+`stuff/add-projects.md` → „Accessor-/UI-Fläche". **Wichtig:** Dieser Plan basiert auf dem
+**verifizierten realen RPC-Vertrag** (siehe unten), nicht auf dem vor-Plan-1 geratenen alten Text.
+Drei bewusste Abweichungen vom Design-Doc sind eingearbeitet:
+1. **Kein Dry-Run-Scan vor dem Anlegen.** `project.add` validiert die cwd, **legt das Projekt an**
+   und liefert den Scan zurück — es gibt keinen „nur scannen, ohne anzulegen"-RPC. Die
+   „Scan-Vorschau" des Designs wird zur **Add-dann-Review-**Fläche (entschieden — kein
+   Backend-Nachtrag; unerwünscht → `project.rm` archiviert reversibel).
+2. **Statistik ist projekt-aware** (entgegen dem Handoff): der Report keyt Projekt-Agents als
+   `agent@projekt`. → von „OUT" nach „IN" gezogen.
+3. **Re-Point ist kein eigener Endpoint**, sondern `project.set {project_id, cwd}`; fehlende cwd
+   erkennt die UI am `cwd_exists`-Flag.
 
-**Requirements (entschieden in der Design-Phase, verbatim):**
-- **Chat: zwei Bars, kein Modus-Umschalter.** Obere Bar = Identitäts-Agents, immer sichtbar/wählbar.
-  Projekt-Dropdown (Default „Kein Projekt" = Persönlich); ein Projekt wählen → **eine zweite Bar**
-  darunter mit dessen Team. Ein Projekt zur Zeit.
-- **Projekt wählen = öffnen:** re-scannt, füllt die zweite Bar, springt auf den Projekt-Default-Agent.
-  Unsauberes aus dem Scan → schmales, **nicht-blockierendes Banner** im Chat, das in den
-  Projekte-Tab verlinkt.
-- Identitäts-Agents arbeiten unabhängig von der zweiten Bar an Projekten; leeres Projekt = leere
-  zweite Bar, **kein Fehlerfall**.
-- **Projekte-Tab:** Hinzufügen über **Pfad von Hand** (Server-Pfad!) + server-seitige Validierung mit
-  **Scan-Vorschau**; Liste; Verwalten pro Projekt (cwd / Default-Agent / Default-Model /
-  Auto-Load-Liste, entfernen); Scan-Report lebt hier.
-- **Scan-Report:** nicht-blockierend; informativ in v1, mit *einer* aktionablen Ausnahme **Re-Point**
-  bei fehlender cwd.
-- **Cron:** kein Projekt-Picker — eine Agent-Liste = Identitäts-Agents + Projekt-Agents, Projekt-Agents
-  in der Adressform **`agent@projekt`** angezeigt und gespeichert.
-- **Desktop:** erbt WebUI 1:1; in v1 **kein** nativer Picker (gleiche Pfad-Eingabe, weil Server remote
-  auf dem Pi liegen kann).
+### Verifizierter RPC-Vertrag (Quelle der Wahrheit für diesen Plan)
+
+**`project.*`** (`server/rpc/project_methods.py`):
+
+| Methode | Params | Ergebnis |
+|---|---|---|
+| `project.add` | `{cwd*, display_name?, default_agent?, default_model?, auto_load?}` | `{project, scan}` — `project_id` wird **server-seitig** aus `display_name` (sonst cwd-Basename) abgeleitet; **cwd muss existieren** (sonst `invalid_request`) |
+| `project.list` | `{}` | `{projects: [project…]}` |
+| `project.show` | `{project_id*}` | `{project, scan}` — **live re-scan** |
+| `project.set` | `{project_id*, cwd?, display_name?, default_agent?, default_model?, auto_load?}` (≥1 Änderung) | `{project, scan}`; cwd-Wechsel verlangt existierende cwd + invalidiert Team-Cache |
+| `project.rm` | `{project_id*}` | `{project_id, archived:true, archive_path}`; Fehler `project_busy` (aktiver/queued Run) / `project_in_use` (Cron zeigt drauf) |
+
+- **`project`-Shape:** `{project_id, display_name, cwd, cwd_exists, default_agent, default_model,
+  auto_load[], created_at, updated_at}`.
+- **`scan`-Shape:** `{team: [{agent_id, display_name, description, model, temperature,
+  source_format, source_path}], report: {clean:bool, findings: [{type, detail, agent_id,
+  source_path}]}}`.
+- **`finding.type`:** `slug_collision` | `unslugifiable_name` | `bad_model` | `orphan`.
+
+**`agent@projekt`-Adressform** (`core/projects/address.py`, eine Parse/Format-Naht): überall, wo ein
+Agent adressiert wird, trägt der **`agent_id`-Param** die Außenschreibweise. Bare `builder` →
+Identität; `builder@vbot` → Projekt-Agent. WebUI baut/zeigt die Adresse, der Server parst sie.
+
+**Session/Chat** (`server/rpc/agent_methods.py`, `chat_methods.py`) — **zwei Param-Sorten, nicht
+eine** (verifiziert am Code):
+- **Adresse parsend** (`_required_agent_address`, nimmt `agent@projekt`): `session.create`,
+  `session.list`, `chat.history`, `chat.send`, `chat.stream`, `chat.retry_last_turn`.
+- **Bare Agent-ID** (`agent_id` als plain string; Run/Queue keyt auf `(agent_id, session_id)` mit
+  der **bare** ID): `chat.queue_list` / `chat.queue_remove` / `chat.queue_update` und
+  `chat.cancel_tool_call` — hier die **project-id-freie** ID übergeben (`builder`, nicht
+  `builder@vbot`), sonst greift der Queue-Lookup ins Leere. `chat.cancel` keyt rein auf `run_id`.
+- **Falle 1 (current session):** `session.create` setzt `make_current` **nur für Identität**
+  (`project_id is None`) — ein **Projekt-Agent hat keine server-getrackte current session**; die
+  WebUI wählt sie selbst (jüngste aus `session.list`, sonst neu).
+- **Falle 2 (bare vs. Adresse):** für *denselben* Projekt-Agent geht an Chat/Session/History die
+  **volle** Adresse, an Queue/Cancel-Tool aber die **bare** ID.
+
+**Cron** (`server/rpc/automation_methods.py`): `cron.create`/`cron.update` nehmen das Ziel als
+Adresse im `agent_id`-Param. `cron.list` liefert je Job `{agent_id, project_id, target, …}` —
+`target` = `agent@projekt` (fertig formatiert).
+
+**Statistik** (`core/statistics`, `statistics.report`): **keine** Param-Änderung; der Report
+enthält Projekt-Agents bereits, gekeyt als `agent@projekt` im Agent-Schlüssel.
+
+**Recall / Logs:** Recall ist backend-seitig projekt-aware, aber rein Chat-Tool — **keine** eigene
+WebUI-Fläche. Logs sind globale Tagesdateien, **nicht** projekt-skopiert → bleibt draußen.
 
 **Scope:**
-- **In:** API-Client-Wrapper für `project.*`; Projekte-Tab (Hinzufügen/Liste/Verwalten/Report);
-  Chat Zwei-Bar + Projekt-Dropdown + Report-Banner; Cron-Agent-Liste mit `agent@projekt`; i18n;
-  Desktop-Capability-Check (kein Picker).
-- **Out:** Backend/RPC (Plan 1); nativer Ordner-Picker; Projekt-Filter in Statistik/Logs;
-  Projekt-Verwaltung über die CLI (steckt in Plan 1).
+- **In:** `project.*`-Aufrufe in `api.js`; Projekte-Tab (Hinzufügen/Liste/Verwalten/Report/Re-Point);
+  Chat Zwei-Bar + Projekt-Dropdown + Report-Banner + Projekt-Agent-Session-Wahl; Cron-Agent-Liste
+  mit `agent@projekt`; **Statistik zeigt Projekt-Agents** sauber an; i18n; Desktop-Capability-Check.
+- **Out:** Backend/RPC (Plan 1); nativer Ordner-Picker; **Logs**-Projektfilter (nicht projekt-aware);
+  Projekt-Verwaltung über CLI (in Plan 1); **System-Prompt-Vorschau für Projekt-Agents** (Backend-
+  `prompt.preview` hat kein `project_id` — FLAGGED 2026-06-18 #2; v1 bleibt identitäts-skopiert).
 
 **Assumptions & Constraints:**
-- Svelte + JavaScript (kein TS); alle sichtbaren Strings über `i18n.js`; Svelte-5-Callback-Props,
-  keine neuen Event-Dispatcher; UI-Primitive aus `components/ui/` wiederverwenden (`.vorch/DESIGN.md`).
-- Der „ausgewählte Agent"-State (heute App-level + localStorage) wird um einen **Projekt-Kontext**
-  erweitert; die zweite Bar ist eine Projektion des `project.show`/Scan-Ergebnisses, **keine** zweite
-  Wahrheit.
-- Projekt-Sessions kommen über die in Plan 1 projekt-aware gemachten Session/History-RPCs — die
-  WebUI baut nie Pfade.
-- **Doc-Pflege ist Teil jeder Phase, nicht aufgeschoben** (CLAUDE.md): die berührten Frontend-Maps
-  werden in derselben Arbeit aktualisiert; die „Done when" schließt das ein — siehe „Doc-Pflege pro
-  Phase" unten.
+- Svelte 5 + JS (kein TS); alle Strings über `i18n.js`; Callback-Props, keine Event-Dispatcher;
+  UI-Primitive aus `components/ui/` (`Button`/`Modal`/`TextField`/`StatusChip`/`Dropdown`).
+- **Datei-Layout (verifiziert):** Haupt-Views liegen **flach** unter `webui/src/components/`
+  (`ProjectsView.svelte`, `CronView.svelte`, `StatisticsView.svelte`); Sub-Komponenten in
+  Feature-Unterordnern (`chat/`); Lib-Helfer flach in `webui/src/lib/`. Tests spiegeln die Quelle
+  (`components/__tests__/`, `components/chat/__tests__/`, `lib/__tests__/`). **Es gibt kein
+  `components/projects/` und kein `components/cron/`** — der alte Plan lag hier falsch.
+- Zweite Bar + Projekt-Dropdown sind reine **Projektion** von `project.show`/Scan, **keine** zweite
+  Wahrheit; lokal werden nur Auswahl-States gehalten (analog `vbot.selectedAgentId`-Muster).
+- Doc-Pflege ist Teil jeder Phase (`webui.md`, `desktop.md`).
 
 ### Milestones
 
 | # | Milestone | Deliverable (verifizierbar) |
 |---|---|---|
-| M1 | Transport + Projekte-Tab | `project.*` im API-Client; Projekte-Tab listet/fügt hinzu/verwaltet; Scan-Vorschau + Report sichtbar |
-| M2 | Zwei-Bar-Chat | Identitäts-Bar immer; Projekt-Dropdown → zweite Team-Bar; Öffnen springt auf Default-Agent; Report-Banner |
-| M3 | Cron + Politur | Cron-Agent-Liste zeigt `agent@projekt`; i18n vollständig; Desktop ohne Picker |
+| M1 | Transport + Projekte-Tab | `project.*` in `api.js`; Projekte-Tab listet/fügt hinzu/verwaltet/entfernt; Scan-Team + Report + Re-Point sichtbar |
+| M2 | Zwei-Bar-Chat | Identitäts-Bar immer; Projekt-Dropdown → zweite Team-Bar; Öffnen springt auf Default-Agent; Projekt-Agent-Session-Wahl funktioniert; Report-Banner |
+| M3 | Cron + Statistik + Politur | Cron-Agent-Liste zeigt/speichert `agent@projekt`; Statistik zeigt Projekt-Agents lesbar; i18n vollständig; Desktop ohne Picker |
 
 ### Phase Breakdown
 
 #### Phase 1: Transport + Projekte-Tab (M1)
-**Goal:** Projekte hinzufügen/verwalten in eigenem Tab; Scan-Vorschau + Report sichtbar.
-**Can run in parallel with:** Phase 2 erst nach dem API-Client-Task
+**Goal:** Projekte in eigenem Tab hinzufügen/verwalten/entfernen; Scan-Team + Report sichtbar;
+fehlende cwd bietet Re-Point.
+**Can run in parallel with:** Phase 2 erst nach dem `api.js`-Task.
 
-- API-Client: dünne Wrapper für `project.add/list/show/set/rm` (+ scan) — read: [.vorch/domain-maps/webui.md],
+- `api.js`: dünne Wrapper `addProject/listProjects/showProject/setProject/removeProject` exakt nach
+  obigem Vertrag (Param-Validierung wie bei den vorhandenen Wrappern; sonst `rpc(...)` direkt) —
+  read: [.vorch/domain-maps/webui.md, .vorch/domain-maps/projects.md],
   files: [webui/src/lib/api.js, webui/src/lib/__tests__/api.test.js]
-- Reiner Helfer für Projekte-View-State (Add-Payload, Pfad-Validierungs-Spiegel, Manage-Payloads,
-  Report-Normalisierung) ⚡ *parallel mit nächstem Task* — files: [webui/src/lib/projectsView.js,
-  webui/src/lib/__tests__/projectsView.test.js]
-- `ProjectsView.svelte`: Hinzufügen (Pfad-Eingabe → Scan-Vorschau: gefundenes Team + Probleme),
-  Liste, Verwalten (cwd/Default-Agent/Default-Model/Auto-Load, Entfernen), Report-Anzeige mit
-  Re-Point-Aktion bei fehlender cwd ⚡ *parallel mit vorigem Task* —
-  files: [webui/src/components/projects/ProjectsView.svelte, webui/src/components/projects/__tests__/ProjectsView.test.js]
-- Navigation: neuen Tab „Projekte" in den Shell hängen — files: [webui/src/App.svelte]
+- `projectsView.js` (reiner Helfer) ⚡ *parallel mit nächstem Task* — Add-Payload-Bau, sparse
+  Manage-Payload für `project.set`, Report-Normalisierung (Findings nach `type` gruppieren, leerer/
+  clean Report = normal), `cwd_exists===false`→Re-Point-Payload (`{project_id, cwd}`),
+  Team-Projektion — files: [webui/src/lib/projectsView.js, webui/src/lib/__tests__/projectsView.test.js]
+- `ProjectsView.svelte` (**flach**) ⚡ *parallel mit vorigem Task* — Hinzufügen per Server-Pfad
+  (cwd-Eingabe → `project.add` → Team + Report aus der Antwort anzeigen), Liste (`project.list`),
+  Verwalten je Projekt (cwd/Default-Agent/Default-Model/Auto-Load via `project.set`, Entfernen via
+  `project.rm` mit `project_busy`/`project_in_use`-Fehlertexten), Report-Anzeige + **Re-Point**-
+  Aktion wenn `cwd_exists===false` —
+  files: [webui/src/components/ProjectsView.svelte, webui/src/components/__tests__/ProjectsView.test.js]
+- Navigation: Tab `projects` in das Nav-Array hängen + `<ProjectsView/>` rendern (Tab-Reihenfolge:
+  nach „Agents") — files: [webui/src/App.svelte]
+- i18n: Strings für Projekte-Tab/Manage/Report/Re-Point —
+  files: [webui/src/lib/i18n.js, webui/src/lib/__tests__/i18n.test.js]
 
-**Dependencies:** Plan 1 (RPC steht).
-**Done when:** Im Projekte-Tab lässt sich ein Server-Pfad eingeben, die Scan-Vorschau zeigt Team +
-Probleme, ein Projekt wird angelegt/verwaltet/entfernt; fehlende cwd bietet Re-Point; Vitest grün.
+**Dependencies:** Plan 1 (gemergt).
+**Done when:** Server-Pfad eingeben legt ein Projekt an und zeigt Team + Report; Projekt
+verwalten/entfernen funktioniert; ein Projekt mit `cwd_exists:false` bietet Re-Point (`project.set`
+mit neuer cwd); `python scripts/quality-frontend.py webui/src/components/ProjectsView.svelte
+webui/src/lib/projectsView.js webui/src/lib/api.js` grün.
 
 #### Phase 2: Zwei-Bar-Chat + Projekt-Dropdown (M2)
-**Goal:** Chat zeigt Identitäts-Bar immer + Team-Bar je nach Projekt-Dropdown; Öffnen verhält sich
-wie spezifiziert.
-**Can run in parallel with:** none (berührt App- und ChatView-Kern)
+**Goal:** Chat zeigt die Identitäts-Bar immer + eine zweite Team-Bar je nach Projekt-Dropdown;
+Öffnen verhält sich wie spezifiziert; Projekt-Agent-Sessions laden korrekt.
+**Can run in parallel with:** none (berührt App- und ChatView-Kern).
 
-- App-State: Projekt-Kontext neben „selected agent" (Dropdown-Auswahl inkl. „Kein Projekt"),
-  Persistenz analog localStorage-Muster — read: [.vorch/domain-maps/webui.md],
-  files: [webui/src/App.svelte]
-- ChatView: Projekt-Dropdown + zweite Agent-Bar (Team aus `project.show`/Scan), Auswahl eines
-  Agents aus beiden Bars, „Öffnen" springt auf Default-Agent; Sessions des gewählten (Projekt-)Agents
-  über die projekt-aware History/Session-RPCs — files: [webui/src/components/chat/ChatView.svelte,
-  webui/src/lib/chatState.js, webui/src/components/chat/__tests__/ChatView.test.js]
-- Report-Banner: schmales nicht-blockierendes Banner bei Projekt-Öffnen mit Problemen, verlinkt in
-  den Projekte-Tab — files: [webui/src/components/chat/ProjectScanBanner.svelte,
+- App-State: Projekt-Kontext neben `selectedAgentId` (`selectedProjectId`, Default „Kein Projekt",
+  Persistenz analog `localStorage`); `project.list` für das Dropdown laden; an ChatView
+  durchreichen — read: [.vorch/domain-maps/webui.md], files: [webui/src/App.svelte]
+- ChatView + `chatState.js`: Projekt-Dropdown („Kein Projekt" = Persönlich); bei Projektwahl
+  `project.show(pid)` → zweite Bar = `scan.team`, **springt auf `default_agent`** (sonst erstes
+  Team-Mitglied); Auswahl eines Agents aus beiden Bars. **Adress-Disziplin (siehe RPC-Vertrag,
+  Falle 2):** Chat/Session/History eines Projekt-Agents unter der vollen Adresse `agent@projekt`,
+  Queue/Cancel-Tool unter der **bare** ID. **Projekt-Agent-Session-Wahl lokal**, da keine
+  server-`current_session_id`: jüngste aus `session.list`, sonst neue via `session.create`. Leeres
+  Team = leere zweite Bar (kein Fehler) —
+  files: [webui/src/components/ChatView.svelte, webui/src/lib/chatState.js,
+  webui/src/components/__tests__/ChatView.test.js]
+- `ProjectScanBanner.svelte` (**Sub-Komponente in `components/chat/`**): schmales nicht-blockierendes
+  Banner bei `report.clean===false` beim Öffnen, verlinkt in den Projekte-Tab —
+  files: [webui/src/components/chat/ProjectScanBanner.svelte,
   webui/src/components/chat/__tests__/ProjectScanBanner.test.js]
+- i18n: Dropdown-/Bar-/Banner-Strings — files: [webui/src/lib/i18n.js, webui/src/lib/__tests__/i18n.test.js]
 
-**Dependencies:** Phase 1 (API-Client + View-Helfer), Plan 1.
-**Done when:** Identitäts-Agents sind immer in der oberen Bar; Auswahl eines Projekts im Dropdown
-zeigt dessen Team in einer zweiten Bar und springt auf den Default-Agent; ein leeres Projekt zeigt
-eine leere zweite Bar ohne Fehler; ein unsauberer Scan zeigt das Banner; Vitest grün.
+**Dependencies:** Phase 1 (`api.js`-Wrapper, `projectsView.js`), Plan 1.
+**Done when:** Identitäts-Agents immer in der oberen Bar; ein Projekt im Dropdown zeigt sein Team in
+der zweiten Bar und springt auf den Default-Agent; ein Chat mit einem Projekt-Agent lädt dessen
+Sessions und sendet unter `agent@projekt`; leeres Projekt = leere zweite Bar ohne Fehler; unsauberer
+Scan zeigt das Banner; Vitest grün.
 
-#### Phase 3: Cron + Politur (M3)
-**Goal:** Cron-Agent-Auswahl kennt Projekt-Agents; i18n vollständig; Desktop sauber.
-**Can run in parallel with:** Tasks untereinander ⚡ (getrennte Dateien)
+#### Phase 3: Cron + Statistik + Politur (M3)
+**Goal:** Cron kennt Projekt-Agents; Statistik zeigt Projekt-Agents lesbar; i18n vollständig;
+Desktop sauber.
+**Can run in parallel with:** Tasks untereinander ⚡ (getrennte Dateien).
 
-- Cron-View: Agent-Liste = Identitäts-Agents + Projekt-Agents, Projekt-Agents als `agent@projekt`
-  angezeigt/gespeichert ⚡ — read: [.vorch/domain-maps/webui.md, .vorch/domain-maps/automation.md],
-  files: [webui/src/components/cron/CronView.svelte, webui/src/lib/cronView.js, webui/src/lib/__tests__/cronView.test.js]
-- i18n: alle neuen Strings (Projekte-Tab, Dropdown, Banner, Cron-Labels) in en + vorhandene Sprachen ⚡ —
-  files: [webui/src/lib/i18n.js, webui/src/lib/__tests__/i18n.test.js]
-- Desktop: Capability-Check bestätigt „kein nativer Picker in v1" (gleiche Pfad-Eingabe); kein
-  eigener Bau nötig, nur verifizieren ⚡ — read: [.vorch/domain-maps/desktop.md], files: [desktop/* (nur lesen/prüfen)]
+- Cron `CronView.svelte` + `cronView.js` ⚡ — Agent-Liste = Identitäts-Agents (`agent.list`) +
+  Projekt-Agents (`project.list` → je Projekt `project.show` → `scan.team`), Projekt-Agents im
+  Dropdown als `agent@projekt` angezeigt **und so gespeichert** (`agent_id`-Param der
+  `cron.create/update`); bestehende Jobs über das **`target`-Feld** der `cron.list`-Antwort anzeigen/
+  editieren — read: [.vorch/domain-maps/webui.md, .vorch/domain-maps/automation.md],
+  files: [webui/src/components/CronView.svelte, webui/src/lib/cronView.js, webui/src/lib/__tests__/cronView.test.js]
+- Statistik `StatisticsView.svelte` + `statisticsView.js` ⚡ — der `statistics.report` enthält
+  Projekt-Agents als `agent@projekt`-Schlüssel; Adresse parsen (Reuse `parse`/Format-Idee) und die
+  Projekt-Zugehörigkeit lesbar darstellen (Label/Badge statt roher `builder@vbot`-String), kein
+  Layout-Bruch. Tiefe entschieden: **nur lesbar**, kein Projekt-Filter (siehe Entscheidungen) —
+  read: [.vorch/domain-maps/webui.md,
+  .vorch/domain-maps/statistics.md], files: [webui/src/components/StatisticsView.svelte,
+  webui/src/lib/statisticsView.js, webui/src/lib/__tests__/statisticsView.test.js]
+- i18n + Desktop ⚡ — alle neuen Strings (Cron-Labels, Statistik-Projekt-Label) vollständig;
+  Desktop-Capability-Check bestätigt „kein nativer Picker in v1" (nur verifizieren, kein Bau) —
+  read: [.vorch/domain-maps/desktop.md], files: [webui/src/lib/i18n.js,
+  webui/src/lib/__tests__/i18n.test.js, desktop/* (nur lesen/prüfen)]
 
 **Dependencies:** Phase 1, Phase 2.
-**Done when:** Cron zeigt Projekt-Agents als `agent@projekt` und speichert die Adresse; keine
-hardcodierten Strings; Desktop zeigt denselben Add-Flow wie die WebUI; `python scripts/quality-frontend.py` grün.
+**Done when:** Cron bietet Projekt-Agents als `agent@projekt` und speichert die Adresse; bestehende
+Projekt-Jobs zeigen ihr `target`; die Statistik listet Projekt-Agents lesbar (mit Projekt-Label) ohne
+Layout-Bruch; keine hardcodierten Strings; Desktop zeigt denselben Add-Flow wie die WebUI;
+`python scripts/quality-frontend.py` grün.
 
 ### Done when (Plan gesamt)
-- Nutzer kann in der WebUI ein Projekt per Pfad hinzufügen (mit Scan-Vorschau), es verwalten/entfernen,
-  im Chat über das Dropdown öffnen, dessen Team in der zweiten Bar sehen, mit Projekt- und
-  Identitäts-Agents chatten und einen Cron-Job auf `agent@projekt` setzen.
+- Nutzer kann in der WebUI ein Projekt per Server-Pfad hinzufügen (Team + Report sichtbar), es
+  verwalten/entfernen, fehlende cwd per Re-Point heilen, im Chat über das Dropdown öffnen, dessen
+  Team in der zweiten Bar sehen, mit Projekt- und Identitäts-Agents chatten, einen Cron-Job auf
+  `agent@projekt` setzen und Projekt-Agents in der Statistik sehen.
 - `python scripts/quality-frontend.py` grün.
 
 ### Doc-Pflege pro Phase (Teil der jeweiligen „Done when")
 
-| Phase | Domain-Maps / Docs zu aktualisieren (in derselben Arbeit) |
+| Phase | Domain-Maps / Docs (in derselben Arbeit) |
 |---|---|
-| 1 | `webui.md` (API-Client `project.*`, neuer Projekte-Tab + View-Helfer) |
-| 2 | `webui.md` (Zwei-Bar-Chat, Projekt-Dropdown, Report-Banner, Projekt-Kontext im App-State) |
-| 3 | `webui.md` (Cron-Agent-Liste `agent@projekt`), `desktop.md` (kein nativer Picker in v1 bestätigt) |
+| 1 | `webui.md` (`project.*`-Wrapper, Projekte-Tab + View-Helfer, Re-Point) |
+| 2 | `webui.md` (Zwei-Bar-Chat, Projekt-Dropdown, Report-Banner, Projekt-Agent-Session-Wahl, Projekt-Kontext im App-State) |
+| 3 | `webui.md` (Cron `agent@projekt`, Statistik-Projekt-Agents), `desktop.md` (kein nativer Picker in v1 bestätigt) |
 
 ### Risks & Mitigations
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Zwei-Bar + Dropdown verkompliziert den ohnehin dichten ChatView/App-State | Med | Med | View-Logik in Helfer (`chatState.js`/`projectsView.js`) auslagern, Komponenten dünn halten; an bestehender selected-agent-Mechanik andocken |
-| Doc-/Map-Pflege wird trotz Tabelle übersprungen | Med | Med | In jeder „Done when" verankert; `webui.md`/`desktop.md` im `files:`-Scope der jeweiligen Phase mitführen |
-| Projekt-Kontext wird zweite Wahrheit neben Server-State | Med | Med | Zweite Bar + Dropdown sind reine Projektion von `project.show`/Scan; keine lokale Mutation der Server-Wahrheit |
-| Re-Point/Manage-Aktionen brauchen RPC, das Plan 1 nicht liefert | Low | Med | Vor Phase 1 RPC-Vertrag aus Plan 1 gegenprüfen; fehlende Methoden als Plan-1-Lücke melden, nicht clientseitig basteln |
-| Plan 1 noch nicht fertig → Plan 2 blockiert | High | High | Plan 2 erst starten, wenn Plan 1 M5 steht; bis dahin nur gegen den dokumentierten RPC-Vertrag designen |
+| Projekt-Agent ohne server-`current_session_id` bricht die ChatView-„current session"-Annahme | High | High | In Phase 2 explizit: Session-Wahl für Projekt-Agents lokal (jüngste aus `session.list`, sonst `session.create`); nicht auf `agent.current_session_id` verlassen |
+| Queue/Cancel-Tool mit voller Adresse statt bare ID aufgerufen → Queue-Lookup leer, stilles Fehlverhalten | Med | High | RPC-Vertrag Falle 2 befolgen: volle Adresse nur an Chat/Session/History, bare ID an `chat.queue_*`/`cancel_tool_call`; Vitest deckt beide Pfade ab |
+| Cron-Agent-Liste braucht N+1 `project.show` (eins pro Projekt) | Med | Low | Teams lazy beim Öffnen des Cron-Modals laden, Ergebnis cachen; nicht pro Render scannen |
+| Zwei-Bar + Dropdown verkompliziert den dichten ChatView/App-State | Med | Med | Logik in `chatState.js`/`projectsView.js` auslagern, Komponenten dünn; an bestehende selected-agent-Mechanik andocken |
+| „Add legt sofort an" überrascht (kein Preview) | Med | Med | Entschieden: anlegen + Review. UX klar als „angelegt + Review" benennen; Entfernen = archivieren (reversibel) |
+| Doc-/Map-Pflege übersprungen | Med | Med | In jeder „Done when" verankert; Maps im `files:`-Scope mitführen |
 
-### Open decisions (für den Reviewer)
-- **Dropdown-Platzierung** (in der Agent-Bar vs. Top-Bar) und **Tab-Reihenfolge** „Projekte" — reine
-  Kosmetik, beim Bau entscheidbar; Default: Dropdown direkt über der zweiten Bar, Tab nach „Agents".
+### Entscheidungen (getroffen)
+- **Scan-Vorschau vor dem Anlegen: nein.** `project.add` legt sofort an und liefert den Scan;
+  Add-dann-Review ist die Fläche. Kein Backend-Dry-Run, kein Plan-1-Nachtrag. Unerwünschtes Projekt →
+  `project.rm` (archiviert, reversibel). *Verworfene Alternative:* `project.scan_preview {cwd}`.
+- **Statistik-Tiefe: erst nur lesbar.** Projekt-Agents werden lesbar dargestellt (Adresse geparst,
+  Projekt-Label statt rohem `builder@vbot`) — minimale, sichere Darstellung, **kein** Projekt-Filter/
+  Gruppierung in v1. *Verworfen für jetzt:* Filter/Gruppierung (später nachrüstbar, wenn gewünscht).
+
+### Offen (Kosmetik, beim Bau entscheidbar)
+- Dropdown-Platzierung (Default: über der zweiten Bar), Tab-Reihenfolge (Default: Projekte nach
+  „Agents").
+
+### Bekannte Backend-Lücken (FLAGGED 2026-06-18, relevant aber out-of-scope hier)
+- `prompt.preview` hat kein `project_id` → eine System-Prompt-Vorschau eines Projekt-Agents zeigt den
+  Body, aber **nicht** `{project_files}`. Falls die WebUI später Projekt-Agent-Prompt-Vorschau will,
+  braucht es einen Backend-Param. v1: System-Prompt-View bleibt identitäts-skopiert.
+- `/status` in einer Projekt-Session liefert leer (Dispatcher kennt kein `project_id`). Reines
+  Backend-Thema, nicht WebUI.
