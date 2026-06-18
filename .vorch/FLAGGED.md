@@ -1,6 +1,6 @@
 # Flagged Concerns
 
-Append-only log of deferred concerns. Newest at the bottom. Don't reorganize.
+log of deferred concerns. Newest at the bottom. Don't reorganize.
 
 ---
 
@@ -190,57 +190,3 @@ out-of-scope-for-Plan-1 gap, deliberately not fixed.
    channels-on-project is deferred, so a channel session never carries a project cwd and
    `effective_cwd` would fall back to `workspace` anyway. Switch it to `effective_cwd`
    when channels learn projects, for consistency.
-
-2. **Project-agent prompt preview has no project context.** `prompt.preview`
-   (`server/rpc/operations_methods.py`) calls `build_system_prompt` without a project
-   context, so previewing a config/project agent shows the body but **not** the project
-   files (`{project_files}`). The preview RPC has no `project_id` param. Wire project
-   context through the preview path when the WebUI project-agent preview lands (Plan 2).
-
-3. **`/status` in a project session degrades to empty.** The `CommandDispatcher` carries
-   no `project_id`, so the `/status` slash command's agent lookup
-   (`core/chat/commands.py`, `self._agents.get`) stays identity-only and returns
-   `agent=None` for a project session (handled, not a crash). Threading `project_id`
-   through the dispatcher to resolve the config agent is a broader change, out of M5
-   scope.
-   - **RESOLVED 2026-06-19.** `CommandDispatcher.dispatch` now takes `project_id` and
-     `/status` resolves through `AgentResolver` (same seam as the run path / status tool)
-     instead of `self._agents.get`. The dispatcher also gained a `ProjectStore`, and both
-     `/status` and the `status` tool now render a `Project:` line (display name + id, or
-     placeholder for an identity session).
-
-
-## 2026-06-18 — Projects (Plan 2, WebUI): project-agent run loses the /ws backstop
-
-Found while reviewing the Phase 2 two-bar chat. One out-of-scope (backend) gap,
-deliberately not fixed in the client-only Plan 2.
-
-1. **`/ws` run-lifecycle events carry no `project_id`, so a project-agent run is not
-   re-attached through the WebSocket backstop.** The WebUI keys a project-agent's
-   session state by the full `agent@projekt` address (so chat/session/history address
-   correctly — RPC-contract trap 2), but the server's run lifecycle event
-   (`RunEvent.to_dict()` in `core/runs/runs.py`) serializes only the bare `agent_id`
-   (the project dimension rides the in-memory `Run`, not the event). So
-   `chatRunStream.handleRunServerEvent` (`webui/src/lib/chatRunStream.js`), which keys
-   on the bare `agent_id`, builds `builder::<session>` and never matches the
-   address-keyed `builder@vbot::<session>` displayed session — the `/ws` re-attach /
-   cross-session tracking path is inert for project agents. **Primary SSE foreground
-   streaming is unaffected** (the send attaches directly to the run's `sse_url`), so a
-   project-agent run streams live normally; only the WebSocket reconnect/catch-up
-   backstop and cross-session sub-agent status are missed, and the run still completes
-   server-side and shows on the next history load. Fixing it needs a backend change —
-   add `project_id` to the run lifecycle event payload so the client can rebuild the
-   address key — which is out of scope for the client-only Plan 2.
-
-
-## 2026-06-19 — RESOLVED: project-agent /ws backstop (the 2026-06-18 Plan 2 item)
-
-Fixed. The Run's `project_id` now rides every run-lifecycle/run-output event
-(`RunEvent` → `to_dict()` → `_server_event_from_run_event`) **and** the
-`connection_ready` `active_runs` snapshot (`_active_runs_snapshot` in `server/app.py`);
-`agent_id` stays bare. `chatRunStream` rebuilds the outside `agent@projekt` address with
-`formatAgentAddress(agent_id, project_id)` at both ingestion seams (`runEventFromServerEvent`
-and `applyConnectionSnapshot`), so the `/ws` re-attach/catch-up path and cross-session
-sub-agent status now match the address-keyed project-agent session. Identity runs carry no
-`project_id`, so the rebuild yields the bare id — identity path byte-identical. Domain maps
-updated: `runs.md`, `server.md`, `webui.md`.
