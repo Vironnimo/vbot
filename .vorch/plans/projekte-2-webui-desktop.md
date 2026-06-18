@@ -44,6 +44,9 @@ importiert keinen Backend-Code — nur HTTP/RPC/SSE/WS.
   Wahrheit.
 - Projekt-Sessions kommen über die in Plan 1 projekt-aware gemachten Session/History-RPCs — die
   WebUI baut nie Pfade.
+- **Doc-Pflege ist Teil jeder Phase, nicht aufgeschoben** (CLAUDE.md): die berührten Frontend-Maps
+  werden in derselben Arbeit aktualisiert; die „Done when" schließt das ein — siehe „Doc-Pflege pro
+  Phase" unten.
 
 ### Milestones
 
@@ -117,11 +120,20 @@ hardcodierten Strings; Desktop zeigt denselben Add-Flow wie die WebUI; `python s
   Identitäts-Agents chatten und einen Cron-Job auf `agent@projekt` setzen.
 - `python scripts/quality-frontend.py` grün.
 
+### Doc-Pflege pro Phase (Teil der jeweiligen „Done when")
+
+| Phase | Domain-Maps / Docs zu aktualisieren (in derselben Arbeit) |
+|---|---|
+| 1 | `webui.md` (API-Client `project.*`, neuer Projekte-Tab + View-Helfer) |
+| 2 | `webui.md` (Zwei-Bar-Chat, Projekt-Dropdown, Report-Banner, Projekt-Kontext im App-State) |
+| 3 | `webui.md` (Cron-Agent-Liste `agent@projekt`), `desktop.md` (kein nativer Picker in v1 bestätigt) |
+
 ### Risks & Mitigations
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | Zwei-Bar + Dropdown verkompliziert den ohnehin dichten ChatView/App-State | Med | Med | View-Logik in Helfer (`chatState.js`/`projectsView.js`) auslagern, Komponenten dünn halten; an bestehender selected-agent-Mechanik andocken |
+| Doc-/Map-Pflege wird trotz Tabelle übersprungen | Med | Med | In jeder „Done when" verankert; `webui.md`/`desktop.md` im `files:`-Scope der jeweiligen Phase mitführen |
 | Projekt-Kontext wird zweite Wahrheit neben Server-State | Med | Med | Zweite Bar + Dropdown sind reine Projektion von `project.show`/Scan; keine lokale Mutation der Server-Wahrheit |
 | Re-Point/Manage-Aktionen brauchen RPC, das Plan 1 nicht liefert | Low | Med | Vor Phase 1 RPC-Vertrag aus Plan 1 gegenprüfen; fehlende Methoden als Plan-1-Lücke melden, nicht clientseitig basteln |
 | Plan 1 noch nicht fertig → Plan 2 blockiert | High | High | Plan 2 erst starten, wenn Plan 1 M5 steht; bis dahin nur gegen den dokumentierten RPC-Vertrag designen |
