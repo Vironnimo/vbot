@@ -156,13 +156,9 @@ async def test_visiting_injects_project_files_as_system_reminder(tmp_path: Path)
     assert "Team rules" not in system
     request_messages = adapter.requests[0]["messages"]
     reminder_texts = [
-        str(message.get("content", ""))
-        for message in request_messages
-        if message["role"] == "user"
+        str(message.get("content", "")) for message in request_messages if message["role"] == "user"
     ]
-    assert any(
-        "<system-reminder>" in text and "Team rules" in text for text in reminder_texts
-    )
+    assert any("<system-reminder>" in text and "Team rules" in text for text in reminder_texts)
 
 
 @pytest.mark.asyncio

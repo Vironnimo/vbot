@@ -69,9 +69,7 @@ class RetryLoopStub:
         self._run = run
         self.calls: list[tuple[str, str]] = []
 
-    async def retry_run(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> Run:
+    async def retry_run(self, agent_id: str, session_id: str, project_id: str | None = None) -> Run:
         self.calls.append((agent_id, session_id))
         return self._run
 

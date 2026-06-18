@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
+from core.attachments import AttachmentRecord
 from core.channels.adapter import content_block_for_attachment
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 
 
-def _record(media_type: str, *, text_content: str | None = None) -> SimpleNamespace:
-    return SimpleNamespace(
+def _record(media_type: str, *, text_content: str | None = None) -> AttachmentRecord:
+    return AttachmentRecord(
         id="att-1",
         filename="inbound.bin",
         media_type=media_type,
+        size_bytes=0,
+        stored_at="2026-01-01T00:00:00Z",
+        file_path="inbound.bin",
         text_content=text_content,
     )
 

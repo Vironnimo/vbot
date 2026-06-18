@@ -638,9 +638,7 @@ def test_resolve_actual_thinking_effort_budget_reports_rendered_budget() -> None
     # No budget_max → absolute fallback ladder (medium → 8192).
     assert resolve_actual_thinking_effort("medium", (), "budget") == "on (8,192 tokens)"
     # A seeded budget_max scales the budget proportionally (high → 0.75 * 32000).
-    assert (
-        resolve_actual_thinking_effort("high", (), "budget", 32000) == "on (24,000 tokens)"
-    )
+    assert resolve_actual_thinking_effort("high", (), "budget", 32000) == "on (24,000 tokens)"
     # ``none`` still reports off.
     assert resolve_actual_thinking_effort("none", (), "budget") == "off"
 

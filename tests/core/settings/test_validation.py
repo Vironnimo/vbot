@@ -166,15 +166,11 @@ def test_load_validated_project_json_raises_on_invalid(tmp_path: Path) -> None:
 def test_validate_data_dir_config_includes_project_files(tmp_path: Path) -> None:
     project_dir = tmp_path / "projects" / "vbot"
     project_dir.mkdir(parents=True)
-    (project_dir / "project.json").write_text(
-        json.dumps(_valid_project_data()), encoding="utf-8"
-    )
+    (project_dir / "project.json").write_text(json.dumps(_valid_project_data()), encoding="utf-8")
 
     reports = validate_data_dir_config(tmp_path)
 
-    project_reports = [
-        report for report in reports if report.file_path.name == "project.json"
-    ]
+    project_reports = [report for report in reports if report.file_path.name == "project.json"]
     assert len(project_reports) == 1
     assert project_reports[0].ok
 

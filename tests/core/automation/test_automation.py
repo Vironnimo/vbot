@@ -61,14 +61,10 @@ async def test_trigger_run_scopes_new_session_and_run_to_project() -> None:
     chat_loop = SimpleNamespace(
         start_run=AsyncMock(return_value=make_run("run-one", "builder", session.id))
     )
-    trigger_service = TriggerService(
-        cast(Any, chat_loop), cast(Any, Mock()), cast(Any, runtime)
-    )
+    trigger_service = TriggerService(cast(Any, chat_loop), cast(Any, Mock()), cast(Any, runtime))
 
     # Act
-    run = await trigger_service.trigger_run(
-        "builder", "Run project work", project_id="vbot"
-    )
+    run = await trigger_service.trigger_run("builder", "Run project work", project_id="vbot")
 
     # Assert: the auto-session is created under the project anchor and the run is
     # project-scoped (cwd = repo, project files in the prompt downstream).

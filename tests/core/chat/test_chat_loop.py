@@ -23,7 +23,7 @@ from core.chat import (
     ToolCall,
 )
 from core.chat.streaming import StreamingChunkTimeoutError, StreamingDeltaError
-from core.projects import AgentResolutionError
+from core.projects import AgentResolutionError, ConfigAgent
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -130,7 +130,7 @@ class StubAgentResolver:
     def __init__(
         self,
         agents: StubAgents,
-        project_agents: dict[tuple[str, str], StubAgent] | None = None,
+        project_agents: dict[tuple[str, str], StubAgent | ConfigAgent] | None = None,
         unresolvable: set[tuple[str, str]] | None = None,
     ) -> None:
         self._agents = agents
@@ -138,14 +138,12 @@ class StubAgentResolver:
         self._unresolvable = set(unresolvable or set())
         self.calls: list[tuple[str | None, str]] = []
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> StubAgent:
+    def resolve_agent(self, project_id: str | None, agent_id: str) -> StubAgent | ConfigAgent:
         self.calls.append((project_id, agent_id))
         if project_id is None:
             return self._agents.get(agent_id)
         if (project_id, agent_id) in self._unresolvable:
-            raise AgentResolutionError(
-                f"agent '{agent_id}' is not on project '{project_id}' team"
-            )
+            raise AgentResolutionError(f"agent '{agent_id}' is not on project '{project_id}' team")
         return self._project_agents.get((project_id, agent_id)) or self._agents.get(agent_id)
 
 
@@ -441,14 +439,12 @@ class StubRuntime:
         tools: ToolRegistry | None = None,
         storage: Any | None = None,
         models: Any | None = None,
-        project_agents: dict[tuple[str, str], StubAgent] | None = None,
+        project_agents: dict[tuple[str, str], StubAgent | ConfigAgent] | None = None,
         unresolvable_agents: set[tuple[str, str]] | None = None,
         projects: Any | None = None,
     ) -> None:
         self.agents = StubAgents(agent)
-        self.agent_resolver = StubAgentResolver(
-            self.agents, project_agents, unresolvable_agents
-        )
+        self.agent_resolver = StubAgentResolver(self.agents, project_agents, unresolvable_agents)
         self.projects = projects if projects is not None else StubProjects({})
         self.chat_sessions = ChatSessionManager(data_dir)
         self.system_prompts = StubPrompts()
@@ -2486,7 +2482,9 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
 
 
 @pytest.mark.asyncio
-async def test_streaming_mode_missing_finish_delta_preserves_visible_partial(tmp_path: Path) -> None:
+async def test_streaming_mode_missing_finish_delta_preserves_visible_partial(
+    tmp_path: Path,
+) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
@@ -2934,11 +2932,16 @@ async def test_streaming_interrupted_partial_discards_in_flight_tool_call(
     )
     executed: list[str] = []
     tools = ToolRegistry()
+
+    def _run_weather(_context: Any, _arguments: Any) -> JsonObject:
+        executed.append("ran")
+        return tool_success({"ok": True})
+
     tools.register(
         "get_weather",
         "Get weather.",
         {"type": "object"},
-        lambda _context, arguments: (executed.append("ran") or tool_success({"ok": True})),
+        _run_weather,
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 

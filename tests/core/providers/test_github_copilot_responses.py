@@ -1234,9 +1234,7 @@ def test_build_payload_rejects_non_image_media_block() -> None:
             [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "media", "media_type": "audio/wav", "base64": "YXVkaW8="}
-                    ],
+                    "content": [{"type": "media", "media_type": "audio/wav", "base64": "YXVkaW8="}],
                 }
             ],
             model_id="gpt-5.4",

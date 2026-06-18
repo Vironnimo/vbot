@@ -325,7 +325,9 @@ async def test_openrouter_budget_model_renders_as_effort(
     route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
     adapter = OpenRouterAdapter(openrouter_config, API_KEY, model_lookup=_control_lookup("budget"))
 
-    await adapter.send(SAMPLE_MESSAGES, model_id="anthropic/claude-opus-4-1", thinking_effort="high")
+    await adapter.send(
+        SAMPLE_MESSAGES, model_id="anthropic/claude-opus-4-1", thinking_effort="high"
+    )
 
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["reasoning"] == {"effort": "high"}

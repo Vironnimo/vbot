@@ -113,8 +113,9 @@ class TestProviderAdapterABC:
 
     def test_image_wire_media_types_are_the_common_image_set(self) -> None:
         """The shared image constant covers exactly the allowlisted image types."""
-        assert IMAGE_WIRE_MEDIA_TYPES == frozenset(
-            {"image/jpeg", "image/png", "image/gif", "image/webp"}
+        assert (
+            frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+            == IMAGE_WIRE_MEDIA_TYPES
         )
 
     def test_default_normalize_response_requires_adapter_implementation(self) -> None:
