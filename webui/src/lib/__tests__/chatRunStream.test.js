@@ -631,3 +631,123 @@ describe('createChatRunStream() last-tool-name tracking for sub-agent rows', () 
     expect(harness.subAgentRunStatuses[`runTool:${CHILD_RUN_ID}`]).toBe('bash');
   });
 });
+
+describe('createChatRunStream() project-agent address reconstruction', () => {
+  let chatState;
+  const PROJECT_AGENT_ADDRESS = 'builder@vbot';
+  const BARE_AGENT_ID = 'builder';
+  const PROJECT_ID = 'vbot';
+  const SESSION_ID = 'sess-project-1';
+  const RUN_ID = 'run-project-1';
+
+  beforeEach(() => {
+    chatState = createChatState();
+  });
+
+  it('keys a project run server-event by the rebuilt agent@projekt address so the displayed project session matches and the backstop re-attaches', () => {
+    const subscribeRunEvents = vi.fn(() => ({ close: vi.fn() }));
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: PROJECT_AGENT_ADDRESS,
+      displayedSessionId: SESSION_ID,
+      subscribeRunEvents,
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: RUN_ID,
+        agent_id: BARE_AGENT_ID,
+        project_id: PROJECT_ID,
+        session_id: SESSION_ID,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+        output: { status: 'running' },
+      },
+    });
+
+    // Session state lands under the rebuilt address, not the bare id — so it
+    // matches the address-keyed displayed session instead of an orphan.
+    expect(
+      chatState.sessions[`${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`],
+    ).toBeTruthy();
+    expect(chatState.sessions[`${BARE_AGENT_ID}::${SESSION_ID}`]).toBeUndefined();
+    expect(
+      harness.subAgentRunStatuses[
+        `session:${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`
+      ],
+    ).toBe('running');
+    expect(harness.isDisplayedSession).toHaveBeenCalledWith(
+      PROJECT_AGENT_ADDRESS,
+      SESSION_ID,
+    );
+    expect(subscribeRunEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuilds the address from a snapshot active run so the project sub-agent status key and re-attach use agent@projekt', () => {
+    const subscribeRunEvents = vi.fn(() => ({ close: vi.fn() }));
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: PROJECT_AGENT_ADDRESS,
+      displayedSessionId: SESSION_ID,
+      subscribeRunEvents,
+    });
+
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      epoch: 'epoch-project',
+      last_sequence: 0,
+      active_runs: [
+        {
+          run_id: RUN_ID,
+          agent_id: BARE_AGENT_ID,
+          project_id: PROJECT_ID,
+          session_id: SESSION_ID,
+          status: 'running',
+          sse_url: `/api/runs/${RUN_ID}/events`,
+        },
+      ],
+    });
+
+    expect(
+      harness.subAgentRunStatuses[
+        `session:${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`
+      ],
+    ).toBe('running');
+    expect(harness.isDisplayedSession).toHaveBeenCalledWith(
+      PROJECT_AGENT_ADDRESS,
+      SESSION_ID,
+    );
+    expect(subscribeRunEvents).toHaveBeenCalledTimes(1);
+    expect(
+      chatState.sessions[`${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`],
+    ).toBeTruthy();
+  });
+
+  it('keys an identity run (no project_id) by the bare id, byte-identical to today', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: BARE_AGENT_ID,
+      displayedSessionId: SESSION_ID,
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: RUN_ID,
+        agent_id: BARE_AGENT_ID,
+        session_id: SESSION_ID,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+        output: { status: 'running' },
+      },
+    });
+
+    expect(chatState.sessions[`${BARE_AGENT_ID}::${SESSION_ID}`]).toBeTruthy();
+    expect(
+      harness.subAgentRunStatuses[`session:${BARE_AGENT_ID}::${SESSION_ID}`],
+    ).toBe('running');
+  });
+});
