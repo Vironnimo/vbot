@@ -6,6 +6,7 @@ import {
   FINDING_TYPE_SLUG_COLLISION,
   FINDING_TYPE_UNSLUGIFIABLE_NAME,
   buildAddProjectPayload,
+  buildDefaultAgentOptions,
   buildManageProjectPayload,
   buildRePointPayload,
   hasManageChanges,
@@ -127,6 +128,52 @@ describe('buildManageProjectPayload', () => {
       project,
     );
     expect(changes).toEqual({});
+  });
+});
+
+describe('buildDefaultAgentOptions', () => {
+  it('leads with the empty option and lists the scanned team', () => {
+    const options = buildDefaultAgentOptions({
+      team: [
+        { agent_id: 'builder', display_name: 'Builder' },
+        { agent_id: 'planner', display_name: 'planner' },
+      ],
+      currentValue: 'builder',
+      emptyLabel: 'No project default',
+    });
+
+    expect(options).toEqual([
+      { value: '', label: 'No project default' },
+      { value: 'builder', label: 'Builder', secondaryLabel: 'builder' },
+      { value: 'planner', label: 'planner', secondaryLabel: '' },
+    ]);
+  });
+
+  it('keeps a stored agent that is no longer in the team as a trailing option', () => {
+    const options = buildDefaultAgentOptions({
+      team: [{ agent_id: 'builder', display_name: 'Builder' }],
+      currentValue: 'ghost',
+      emptyLabel: '—',
+      unavailableLabel: (agentId) => `${agentId} (gone)`,
+    });
+
+    expect(options).toEqual([
+      { value: '', label: '—' },
+      { value: 'builder', label: 'Builder', secondaryLabel: 'builder' },
+      { value: 'ghost', label: 'ghost (gone)' },
+    ]);
+  });
+
+  it('does not duplicate a stored agent that is already in the team', () => {
+    const options = buildDefaultAgentOptions({
+      team: [{ agent_id: 'builder', display_name: 'Builder' }],
+      currentValue: 'builder',
+      emptyLabel: '—',
+    });
+
+    expect(options.filter((option) => option.value === 'builder')).toHaveLength(
+      1,
+    );
   });
 });
 
