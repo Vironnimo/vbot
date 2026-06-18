@@ -43,12 +43,42 @@ async def test_trigger_run_creates_new_session_and_starts_run_immediately() -> N
     run = await trigger_service.trigger_run("coder", "Start automated work")
 
     # Assert
-    runtime.chat_sessions.create.assert_called_once_with("coder")
+    runtime.chat_sessions.create.assert_called_once_with("coder", project_id=None)
     chat_loop.start_run.assert_awaited_once_with(
         "coder",
         "Start automated work",
         session_id="new-session",
         sender=None,
+        project_id=None,
+    )
+    assert run.id == "run-one"
+
+
+async def test_trigger_run_scopes_new_session_and_run_to_project() -> None:
+    # Arrange
+    session = SimpleNamespace(id="proj-session")
+    runtime = SimpleNamespace(chat_sessions=SimpleNamespace(create=Mock(return_value=session)))
+    chat_loop = SimpleNamespace(
+        start_run=AsyncMock(return_value=make_run("run-one", "builder", session.id))
+    )
+    trigger_service = TriggerService(
+        cast(Any, chat_loop), cast(Any, Mock()), cast(Any, runtime)
+    )
+
+    # Act
+    run = await trigger_service.trigger_run(
+        "builder", "Run project work", project_id="vbot"
+    )
+
+    # Assert: the auto-session is created under the project anchor and the run is
+    # project-scoped (cwd = repo, project files in the prompt downstream).
+    runtime.chat_sessions.create.assert_called_once_with("builder", project_id="vbot")
+    chat_loop.start_run.assert_awaited_once_with(
+        "builder",
+        "Run project work",
+        session_id="proj-session",
+        sender=None,
+        project_id="vbot",
     )
     assert run.id == "run-one"
 
@@ -70,7 +100,7 @@ async def test_trigger_run_starts_existing_idle_session_immediately() -> None:
 
     # Assert
     chat_loop.start_run.assert_awaited_once_with(
-        "coder", "Continue", session_id="existing", sender=None
+        "coder", "Continue", session_id="existing", sender=None, project_id=None
     )
     chat_loop.queue_run.assert_not_awaited()
     chat_run_manager.active_run.assert_not_called()
@@ -105,6 +135,7 @@ async def test_trigger_run_uses_trigger_chat_loop_when_provided() -> None:
         "Continue",
         session_id="existing",
         sender=None,
+        project_id=None,
     )
     chat_loop.start_run.assert_not_awaited()
     assert run.id == "run-streaming"
@@ -136,6 +167,7 @@ async def test_trigger_run_can_start_internal_run_without_visible_user_turn() ->
         "Sub-agent batch completed.",
         session_id="existing",
         internal=True,
+        project_id=None,
     )
     chat_loop.queue_run.assert_not_awaited()
     assert run.id == "run-one"
@@ -167,12 +199,14 @@ async def test_trigger_run_queues_busy_session_until_active_run_terminal_event()
         "Queued message",
         session_id="session-one",
         sender=None,
+        project_id=None,
     )
     chat_loop.queue_run.assert_awaited_once_with(
         "coder",
         "Queued message",
         session_id="session-one",
         sender=None,
+        project_id=None,
     )
 
     queued_item.future.set_result(queued_run)
@@ -212,12 +246,14 @@ async def test_trigger_run_preserves_internal_flag_when_queued() -> None:
         "Sub-agent batch completed.",
         session_id="session-one",
         internal=True,
+        project_id=None,
     )
     chat_loop.queue_run.assert_awaited_once_with(
         "coder",
         "Sub-agent batch completed.",
         session_id="session-one",
         internal=True,
+        project_id=None,
     )
 
 
@@ -245,12 +281,14 @@ async def test_trigger_run_queues_via_chat_run_manager_when_session_is_busy() ->
         "Queued message",
         session_id="session-one",
         sender=None,
+        project_id=None,
     )
     chat_loop.queue_run.assert_awaited_once_with(
         "coder",
         "Queued message",
         session_id="session-one",
         sender=None,
+        project_id=None,
     )
     chat_run_manager.active_run.assert_not_called()
 
@@ -276,6 +314,7 @@ async def test_trigger_run_forwards_sender_to_start_run() -> None:
         "Group message",
         session_id="existing",
         sender=sender,
+        project_id=None,
     )
     chat_loop.queue_run.assert_not_awaited()
     assert run.id == "run-one"
@@ -304,6 +343,7 @@ async def test_trigger_run_forwards_sender_when_queued() -> None:
         "Group message",
         session_id="session-one",
         sender=sender,
+        project_id=None,
     )
 
 

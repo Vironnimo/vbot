@@ -231,7 +231,9 @@ async def test_run_once_job_fires_and_marks_completed(
     await service._run_once_job(job)
 
     # Assert
-    trigger_service.trigger_run.assert_awaited_once_with("agent-one", "Once prompt", None)
+    trigger_service.trigger_run.assert_awaited_once_with(
+        "agent-one", "Once prompt", None, project_id=None
+    )
     updated = service.get_job(job.id)
     assert updated.status == "completed"
     assert updated.last_fired_at is not None
@@ -362,7 +364,9 @@ async def test_run_once_job_retries_completed_save_without_refiring(
     await service._run_once_job(job)
 
     # Assert
-    trigger_service.trigger_run.assert_awaited_once_with("agent-one", "Once prompt", None)
+    trigger_service.trigger_run.assert_awaited_once_with(
+        "agent-one", "Once prompt", None, project_id=None
+    )
     assert save_attempts == 2
     updated = service.get_job(job.id)
     assert updated.status == "completed"
@@ -433,7 +437,11 @@ async def test_run_cron_job_fires_and_updates_last_fired_at(
     monkeypatch.setattr(cron_module, "croniter", ImmediateCronIter)
 
     async def trigger_and_pause(
-        _agent_id: str, _prompt: str, _session_id: str | None = None
+        _agent_id: str,
+        _prompt: str,
+        _session_id: str | None = None,
+        *,
+        project_id: str | None = None,
     ) -> None:
         service._jobs[job.id].status = "paused"
 
@@ -443,7 +451,9 @@ async def test_run_cron_job_fires_and_updates_last_fired_at(
     await service._run_cron_job(job)
 
     # Assert
-    trigger_service.trigger_run.assert_awaited_once_with("agent-one", "Cron prompt", None)
+    trigger_service.trigger_run.assert_awaited_once_with(
+        "agent-one", "Cron prompt", None, project_id=None
+    )
     updated = service.get_job(job.id)
     assert updated.last_fired_at is not None
     assert updated.last_fired_at.endswith("+00:00")
@@ -476,7 +486,11 @@ async def test_run_cron_job_continues_after_trigger_failure(
             return self._next_fire
 
     async def trigger_then_fail_then_pause(
-        _agent_id: str, _prompt: str, _session_id: str | None = None
+        _agent_id: str,
+        _prompt: str,
+        _session_id: str | None = None,
+        *,
+        project_id: str | None = None,
     ) -> None:
         if trigger_service.trigger_run.await_count == 1:
             raise RuntimeError("boom")
@@ -532,3 +546,106 @@ def test_crud_status_or_schedule_changes_restart_tasks(
     # Assert
     assert cancelled_jobs == [job.id, job.id, job.id]
     assert started_jobs == [job.id, job.id]
+
+
+def test_project_id_defaults_to_none_and_round_trips(tmp_path: Path) -> None:
+    # Arrange
+    service, _trigger_service = make_service(tmp_path)
+
+    # Act
+    bare = service.create_job(
+        agent_id="builder",
+        prompt="Bare prompt",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+    )
+    scoped = service.create_job(
+        agent_id="builder",
+        prompt="Scoped prompt",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+        project_id="vbot",
+    )
+
+    # Assert
+    assert bare.project_id is None
+    assert scoped.project_id == "vbot"
+    # Round-trips through persistence (clone goes through to_dict/from_dict, and a
+    # fresh service re-reads the saved jobs.json).
+    reloaded_service, _ = make_service(tmp_path)
+    reloaded = {job.id: job for job in reloaded_service.list_jobs()}
+    assert reloaded[bare.id].project_id is None
+    assert reloaded[scoped.id].project_id == "vbot"
+
+
+def test_blank_project_id_normalizes_to_none(tmp_path: Path) -> None:
+    # Arrange
+    service, _trigger_service = make_service(tmp_path)
+
+    # Act
+    job = service.create_job(
+        agent_id="builder",
+        prompt="Prompt",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+        project_id="   ",
+    )
+
+    # Assert
+    assert job.project_id is None
+
+
+def test_jobs_json_schema_accepts_optional_project_id(tmp_path: Path) -> None:
+    # Arrange
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    jobs_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "job-one",
+                    "agent_id": "builder",
+                    "prompt": "Prompt",
+                    "schedule_type": "cron",
+                    "cron_expression": "* * * * *",
+                    "status": "active",
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "project_id": "vbot",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    service, _trigger_service = make_service(tmp_path)
+
+    # Act
+    jobs = service.list_jobs()
+
+    # Assert
+    assert [job.project_id for job in jobs] == ["vbot"]
+
+
+@pytest.mark.asyncio
+async def test_run_once_job_fires_with_project_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    service, trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="builder",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+        project_id="vbot",
+    )
+    monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
+
+    # Act
+    await service._run_once_job(job)
+
+    # Assert
+    trigger_service.trigger_run.assert_awaited_once_with(
+        "builder", "Once prompt", None, project_id="vbot"
+    )
+    assert service.get_job(job.id).status == "completed"

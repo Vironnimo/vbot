@@ -36,11 +36,19 @@ class TriggerService:
         *,
         internal: bool = False,
         sender: MessageSender | None = None,
+        project_id: str | None = None,
     ) -> Run:
-        """Start a run immediately, or queue it until the target session is idle."""
+        """Start a run immediately, or queue it until the target session is idle.
+
+        ``project_id=None`` keeps today's global/identity behavior. A set
+        ``project_id`` creates the auto-session under that project's anchor and
+        scopes the Run to the project (cwd = repo, project files in the prompt).
+        """
         target_session_id = session_id
         if target_session_id is None:
-            target_session_id = self._runtime.chat_sessions.create(agent_id).id
+            target_session_id = self._runtime.chat_sessions.create(
+                agent_id, project_id=project_id
+            ).id
 
         try:
             if internal:
@@ -49,12 +57,14 @@ class TriggerService:
                     message,
                     session_id=target_session_id,
                     internal=True,
+                    project_id=project_id,
                 )
             return await self._trigger_chat_loop.start_run(
                 agent_id,
                 message,
                 session_id=target_session_id,
                 sender=sender,
+                project_id=project_id,
             )
         except ActiveRunError:
             if internal:
@@ -63,6 +73,7 @@ class TriggerService:
                     message,
                     session_id=target_session_id,
                     internal=True,
+                    project_id=project_id,
                 )
             else:
                 queued_item = await self._trigger_chat_loop.queue_run(
@@ -70,6 +81,7 @@ class TriggerService:
                     message,
                     session_id=target_session_id,
                     sender=sender,
+                    project_id=project_id,
                 )
             return await queued_item.future
 

@@ -17,12 +17,18 @@ from server.delegates import dispatch_rpc
 def _state_with_cron_service(
     cron_service: Any,
     *,
-    agents: object | None = None,
+    resolver: object | None = None,
 ) -> SimpleNamespace:
-    agent_store = agents if agents is not None else Mock()
-    if isinstance(agent_store, Mock):
-        agent_store.get.return_value = SimpleNamespace(id="main")
-    return SimpleNamespace(runtime=SimpleNamespace(cron_service=cron_service, agents=agent_store))
+    # The cron RPC validates the target through the agent resolver (the same seam
+    # every run path uses), so the stub state carries one. A bare resolver Mock
+    # resolves any target; tests that exercise the rejection path inject a side
+    # effect.
+    agent_resolver = resolver if resolver is not None else Mock()
+    if isinstance(agent_resolver, Mock):
+        agent_resolver.resolve_agent.return_value = SimpleNamespace(id="main")
+    return SimpleNamespace(
+        runtime=SimpleNamespace(cron_service=cron_service, agent_resolver=agent_resolver)
+    )
 
 
 @pytest.mark.asyncio
@@ -55,6 +61,42 @@ async def test_cron_create_happy_path() -> None:
         run_at=None,
         timezone="UTC",
         session_id="session-1",
+        project_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cron_create_parses_project_qualified_target() -> None:
+    cron_service = Mock()
+    cron_service.create_job.return_value = SimpleNamespace(id="job-123")
+    state = _state_with_cron_service(cron_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "cron.create",
+            "params": {
+                "agent_id": "builder@vbot",
+                "prompt": "Run status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+            },
+        },
+    )
+
+    assert response == {"ok": True, "result": {"id": "job-123"}}
+    # The address form is split once at the edge: agent_id + project_id, never an
+    # "@" string in agent_id. The resolver validates the project target.
+    state.runtime.agent_resolver.resolve_agent.assert_called_once_with("vbot", "builder")
+    cron_service.create_job.assert_called_once_with(
+        agent_id="builder",
+        prompt="Run status check",
+        schedule_type="cron",
+        cron_expression="*/5 * * * *",
+        run_at=None,
+        timezone=None,
+        session_id=None,
+        project_id="vbot",
     )
 
 
@@ -79,7 +121,8 @@ async def test_cron_list_happy_path_includes_server_side_next_fire_at(
 
     job = SimpleNamespace(
         id="job-1",
-        agent_id="main",
+        agent_id="builder",
+        project_id="vbot",
         prompt="Check reports",
         schedule_type="cron",
         cron_expression="*/5 * * * *",
@@ -102,7 +145,9 @@ async def test_cron_list_happy_path_includes_server_side_next_fire_at(
             "jobs": [
                 {
                     "id": "job-1",
-                    "agent_id": "main",
+                    "agent_id": "builder",
+                    "project_id": "vbot",
+                    "target": "builder@vbot",
                     "prompt": "Check reports",
                     "schedule_type": "cron",
                     "cron_expression": "*/5 * * * *",
@@ -162,8 +207,8 @@ async def test_cron_update_validates_agent_when_agent_id_is_present() -> None:
     )
 
     assert response == {"ok": True, "result": {"ok": True}}
-    state.runtime.agents.get.assert_called_once_with("main")
-    cron_service.update_job.assert_called_once_with("job-1", agent_id="main")
+    state.runtime.agent_resolver.resolve_agent.assert_called_once_with(None, "main")
+    cron_service.update_job.assert_called_once_with("job-1", agent_id="main", project_id=None)
 
 
 @pytest.mark.asyncio
@@ -275,7 +320,7 @@ async def test_cron_create_wraps_expected_domain_errors() -> None:
 async def test_cron_create_rejects_unknown_agent() -> None:
     cron_service = Mock()
     state = _state_with_cron_service(cron_service)
-    state.runtime.agents.get.side_effect = KeyError("missing")
+    state.runtime.agent_resolver.resolve_agent.side_effect = KeyError("missing")
 
     response = await dispatch_rpc(
         state,
@@ -292,6 +337,32 @@ async def test_cron_create_rejects_unknown_agent() -> None:
 
     assert response == {
         "ok": False,
-        "error": {"code": "domain_error", "message": "Unknown agent_id: missing"},
+        "error": {"code": "domain_error", "message": "Unknown cron target: missing"},
+    }
+    cron_service.create_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cron_create_rejects_unknown_project_target() -> None:
+    cron_service = Mock()
+    state = _state_with_cron_service(cron_service)
+    state.runtime.agent_resolver.resolve_agent.side_effect = KeyError("not on team")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "cron.create",
+            "params": {
+                "agent_id": "ghost@vbot",
+                "prompt": "Run status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": False,
+        "error": {"code": "domain_error", "message": "Unknown cron target: ghost@vbot"},
     }
     cron_service.create_job.assert_not_called()

@@ -213,23 +213,19 @@ def _ensure_not_busy(state: Any, project_id: str) -> None:
 def _ensure_no_cron_reference(state: Any, project_id: str) -> None:
     """Reject removal while a cron job points at a Project agent.
 
-    Mirrors the Agent ``agent_in_use`` cron guard, qualified to this project: a
-    cron job counts only when its target agent belongs to *this* project's Team.
-
-    Cron qualification seam: the cron job schema is bare ``agent_id`` today (no
-    ``project_id`` column — the project-aware cron task is a separate builder), so
-    the match is "cron ``agent_id`` is a Team member of this project". Once cron
-    carries ``project_id``, tighten this to ``job.project_id == project_id`` so a
-    bare ``builder`` in another project no longer collides.
+    Mirrors the Agent ``agent_in_use`` cron guard, qualified to this project by a
+    direct ``job.project_id == project_id`` match now that cron carries the
+    project dimension. A job with ``project_id=None`` targets an identity agent,
+    so it never blocks a project removal even when its bare ``agent_id`` happens
+    to match a same-named Team member.
     """
     cron_service = getattr(state.runtime, "cron_service", None)
     if cron_service is None:
         return
-    team_agent_ids = _project_agent_ids(state, project_id)
     referencing = sorted(
         f"cron:{job.id}"
         for job in cron_service.list_jobs()
-        if _cron_targets_project_agent(job, project_id, team_agent_ids)
+        if _cron_targets_project_agent(job, project_id)
     )
     if referencing:
         raise RpcError(
@@ -238,34 +234,14 @@ def _ensure_no_cron_reference(state: Any, project_id: str) -> None:
         )
 
 
-def _cron_targets_project_agent(job: Any, project_id: str, team_agent_ids: set[str]) -> bool:
-    """Return whether a cron job points at an agent of this project.
+def _cron_targets_project_agent(job: Any, project_id: str) -> bool:
+    """Return whether a cron job points at an agent of *this* project.
 
-    Prefers an explicit ``project_id`` on the job when the cron-builder adds one
-    (precise qualification); falls back to "the bare ``agent_id`` is a current
-    Team member of this project" while cron stays project-unaware.
+    Qualified match: a cron job targets a Project agent iff its ``project_id``
+    equals this project's id. A bare job (``project_id=None``) targets an identity
+    agent, never a Project agent, even when the ids collide by name.
     """
-    job_project_id = getattr(job, "project_id", None)
-    if job_project_id is not None:
-        return bool(job_project_id == project_id)
-    return job.agent_id in team_agent_ids
-
-
-def _project_agent_ids(state: Any, project_id: str) -> set[str]:
-    """Return the agent ids that belong to this project (Team + session owners).
-
-    Combines the live Team scan (callable Project agents) with the anchor's
-    session-owning agents so a cron pointer at an agent that no longer scans but
-    still owns sessions is still recognized as project-bound.
-    """
-    projects = _projects(state)
-    try:
-        project = projects.get(project_id)
-        team = _agent_resolver(state).scan_project_report(project).team
-        team_ids = {member.agent_id for member in team}
-    except Exception:  # noqa: BLE001 - a bad repo must not break the busy check
-        team_ids = set()
-    return team_ids | set(projects.session_owning_agents(project_id))
+    return bool(job.project_id == project_id)
 
 
 def _scan_preview(state: Any, project: Project) -> JsonObject:
