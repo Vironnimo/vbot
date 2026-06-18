@@ -17,6 +17,7 @@ from core.memory import (
 )
 from core.prompts.prompts import (
     EDITABLE_PROMPT_FRAGMENT_NAMES,
+    ProjectPromptContext,
     PromptAgent,
     PromptError,
     PromptFragmentManager,
@@ -755,6 +756,218 @@ def test_prompt_fragment_manager_rejects_internal_compaction_fragment(tmp_path: 
 
     with pytest.raises(PromptError, match="unknown prompt fragment: compaction.md"):
         manager.update_fragment("compaction.md", "custom compaction")
+
+
+# --- Phase 4: {agent_body} and {project_files} placeholders -----------------
+#
+# These tests mirror the real ``resources/prompts/system.md`` slotting: the
+# config-agent body sits in the identity slot (before SOUL/memory), the project
+# files after the identity block. The emptiness-collapse rule means an identity
+# agent at home (empty body, no project context) gets the unchanged prompt.
+
+# Root fragment with the two new placeholders in their real slots. The trailing
+# ``{tools}`` etc. are dropped so these focused tests assert body/project framing
+# without channel/skill noise; ``{runtime}`` is dropped too (not under test here).
+_PROJECT_ROOT_FRAGMENT = "{agent_body}\n{include:SOUL.md}\n{memory}\n{project_files}"
+
+
+def _project_manager(
+    fragments: dict[str, str],
+    tmp_path: Path,
+    *,
+    root: str = _PROJECT_ROOT_FRAGMENT,
+) -> SystemPromptManager:
+    fragments = dict(fragments)
+    fragments["system.md"] = root
+    return SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+
+
+def test_config_agent_prompt_inserts_body_and_project_files_in_order(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    # Config agent: no SOUL/memory home, a verbatim body, AGENTS.md + one
+    # auto-load file in the repo cwd.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
+    manager = _project_manager(fragments, tmp_path)
+    # Config agent has an empty workspace, so {include:SOUL.md}/{memory} collapse.
+    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project(repo, ["CONTEXT.md"])
+
+    prompt = manager.build_system_prompt(
+        agent,
+        agent_body="You are the orchestrator.",
+        project_context=context,
+    )
+
+    # Body verbatim, then the project files (AGENTS.md first), each <file>-wrapped.
+    assert "You are the orchestrator." in prompt
+    assert '<file name="AGENTS.md">\nTeam rules\n</file>' in prompt
+    assert '<file name="CONTEXT.md">\nProject context\n</file>' in prompt
+    # Order: body before AGENTS.md before CONTEXT.md.
+    assert prompt.index("You are the orchestrator.") < prompt.index("AGENTS.md")
+    assert prompt.index("AGENTS.md") < prompt.index("CONTEXT.md")
+
+
+def test_config_agent_body_with_braces_is_not_expanded(
+    fragments: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    # Plan risk "Body-Wörtlichkeit": a "{...}" in the imported body must survive
+    # verbatim — never treated as a vBot placeholder. Use real vBot placeholder
+    # names inside the body to prove they are not substituted.
+    manager = _project_manager(fragments, tmp_path)
+    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    body = "Use {memory} and {include:SOUL.md} and {runtime} literally; also {custom}."
+
+    prompt = manager.build_system_prompt(
+        agent,
+        agent_body=body,
+        project_context=None,
+    )
+
+    assert body in prompt
+
+
+def test_identity_agent_prompt_unchanged_without_body_or_project(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    # Identity agent at home: empty body, no project context → both placeholders
+    # collapse and the prompt equals the no-placeholder build of the same root.
+    manager = _project_manager(fragments, tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
+
+    with_placeholders = manager.build_system_prompt(agent)
+
+    baseline_manager = _project_manager(
+        fragments, tmp_path, root="{include:SOUL.md}\n{memory}"
+    )
+    baseline = baseline_manager.build_system_prompt(agent)
+
+    # The collapsing placeholders leave only their surrounding blank lines, which
+    # the identity-at-home build had anyway; the substantive content is identical.
+    assert "Soul text" in with_placeholders
+    assert "Memory text" in with_placeholders
+    assert baseline.strip() == with_placeholders.strip()
+    assert "{agent_body}" not in with_placeholders
+    assert "{project_files}" not in with_placeholders
+
+
+def test_rooted_identity_agent_prompt_puts_identity_before_project(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    # Rooted identity agent: has a workspace (SOUL/memory) AND a project context.
+    # The only case where both appear in the system prompt — identity first.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    manager = _project_manager(fragments, tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
+    context = ProjectPromptContext.from_project(repo, [])
+
+    prompt = manager.build_system_prompt(agent, project_context=context)
+
+    assert "Soul text" in prompt
+    assert "Memory text" in prompt
+    assert "Team rules" in prompt
+    # Identity (SOUL, then memory) before the project files.
+    assert prompt.index("Soul text") < prompt.index("Team rules")
+    assert prompt.index("Memory text") < prompt.index("Team rules")
+
+
+def test_project_files_render_only_existing_files(
+    fragments: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    # Lazy rendering: a missing AGENTS.md is skipped silently, a missing auto-load
+    # entry is skipped, no warning/placeholder leakage.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "CONTEXT.md").write_text("Context only", encoding="utf-8")
+    manager = _project_manager(fragments, tmp_path)
+    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project(repo, ["CONTEXT.md", "MISSING.md"])
+
+    prompt = manager.build_system_prompt(agent, agent_body="", project_context=context)
+
+    assert "AGENTS.md" not in prompt
+    assert "MISSING.md" not in prompt
+    assert '<file name="CONTEXT.md">\nContext only\n</file>' in prompt
+
+
+def test_render_project_files_collapses_to_empty_without_files(
+    fragments: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    # A bare project (empty repo) renders no project block; the placeholder
+    # collapses, so render returns "".
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manager = _project_manager(fragments, tmp_path)
+    context = ProjectPromptContext.from_project(repo, [])
+
+    assert manager.render_project_files(context) == ""
+    assert manager.render_project_files(None) == ""
+
+
+def test_render_project_files_one_source_for_reminder_and_prompt(
+    fragments: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    # The visiting reminder reuses the same render as the {project_files} system
+    # prompt block — one source, identical framing.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    manager = _project_manager(fragments, tmp_path)
+    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project(repo, [])
+
+    rendered = manager.render_project_files(context)
+    in_prompt = manager.build_system_prompt(agent, project_context=context)
+
+    assert rendered == '<file name="AGENTS.md">\nTeam rules\n</file>'
+    assert rendered in in_prompt
+
+
+def test_real_system_md_identity_at_home_is_byte_identical_without_placeholders(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    # Hard requirement ("Identitäts-Agent zu Hause byte-gleich"): with the real
+    # bundled root, an identity agent at home (empty body, no project) must get a
+    # prompt byte-identical to the same root with the two new placeholders removed.
+    # Resolve relative to this test file so the read is cwd-independent.
+    repo_root = Path(__file__).resolve().parents[3]
+    real_root = (repo_root / "resources" / "prompts" / "system.md").read_text(encoding="utf-8")
+    root_without_placeholders = real_root.replace("{agent_body}", "").replace(
+        "{project_files}", ""
+    )
+
+    with_placeholders = _project_manager(fragments, tmp_path, root=real_root).build_system_prompt(
+        _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
+    )
+    without_placeholders = _project_manager(
+        fragments, tmp_path, root=root_without_placeholders
+    ).build_system_prompt(_agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER))
+
+    assert with_placeholders == without_placeholders
 
 
 def _agent(
