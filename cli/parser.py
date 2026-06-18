@@ -540,7 +540,9 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         prompt_subparsers, "preview", PROMPT_HELP["preview"], example="prompt preview assistant"
     )
     preview_parser.add_argument(
-        "agent", metavar="<agent-id>", help="Agent whose system prompt to render"
+        "agent",
+        metavar="<agent>",
+        help="Agent whose system prompt to render, as agent or agent@projekt",
     )
 
 
