@@ -36,6 +36,11 @@ class _SubAgentBatch:
     entries: dict[str, _SubAgentEntry]
     reserved_count: int = 0
     notification_sent: bool = False
+    # The parent run's project, captured when the batch is first created. The
+    # batch-completion trigger continues the parent under this project so a
+    # project (config) agent resolves on its Team instead of falling through to
+    # the identity path. ``None`` keeps the identity/global layout.
+    project_id: str | None = None
 
 
 class SubAgentBatchTracker:
@@ -60,9 +65,19 @@ class SubAgentBatchTracker:
             run_id=sub_run_id,
         )
 
-    def reserve_slot(self, parent_key: ParentKey, max_count: int) -> bool:
-        """Reserve one sub-agent slot before async session/run work begins."""
-        batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
+    def reserve_slot(
+        self, parent_key: ParentKey, max_count: int, project_id: str | None = None
+    ) -> bool:
+        """Reserve one sub-agent slot before async session/run work begins.
+
+        The first reservation for a parent run records that run's ``project_id``
+        on the batch, so the later batch-completion trigger continues the parent
+        under the same project (``None`` keeps the identity layout).
+        """
+        batch = self._batches.get(parent_key)
+        if batch is None:
+            batch = _SubAgentBatch(entries={}, project_id=project_id)
+            self._batches[parent_key] = batch
         if self._spawn_count(batch) >= max_count:
             self._prune_if_empty(parent_key, batch)
             return False
@@ -192,6 +207,7 @@ class SubAgentBatchTracker:
                 message,
                 session_id=parent_key[1],
                 internal=True,
+                project_id=batch.project_id,
             )
         )
         task.add_done_callback(

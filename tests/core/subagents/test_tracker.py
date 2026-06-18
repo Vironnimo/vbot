@@ -14,7 +14,7 @@ pytestmark = pytest.mark.asyncio
 
 class RecordingTriggerService:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str | None, bool]] = []
+        self.calls: list[tuple[str, str, str | None, bool, str | None]] = []
         self.error: BaseException | None = None
 
     async def trigger_run(
@@ -24,10 +24,11 @@ class RecordingTriggerService:
         session_id: str | None = None,
         *,
         internal: bool = False,
+        project_id: str | None = None,
     ) -> object:
         if self.error is not None:
             raise self.error
-        self.calls.append((agent_id, message, session_id, internal))
+        self.calls.append((agent_id, message, session_id, internal, project_id))
         return object()
 
 
@@ -150,6 +151,45 @@ async def test_batch_is_pruned_after_completion_note_for_unfetched_entries() -> 
     assert "first output" in trigger_service.calls[0][1]
     assert "second output" in trigger_service.calls[0][1]
     assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+
+
+async def test_completion_trigger_carries_parent_project_id() -> None:
+    # Arrange: a project (config) agent reserves its batch under a project, so the
+    # batch-completion trigger must continue the parent under that same project
+    # rather than falling through to the identity path. Regression for the
+    # "Agent not found: orchestrator" failure on a project sub-agent batch.
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("orchestrator", "parent-session", "parent-run")
+    assert tracker.reserve_slot(parent_key, max_count=8, project_id="vbot")
+    tracker.register_reserved(parent_key, "worker", "session-one", "run-one")
+
+    # Act
+    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "output"})
+    await asyncio.sleep(0)
+
+    # Assert: exactly one trigger, carrying the parent run's project_id.
+    assert len(trigger_service.calls) == 1
+    assert trigger_service.calls[0][0] == "orchestrator"
+    assert trigger_service.calls[0][4] == "vbot"
+
+
+async def test_completion_trigger_keeps_none_project_for_identity_parent() -> None:
+    # Arrange: an identity parent (no project) must keep the legacy global layout —
+    # the trigger carries project_id None, unchanged from before projects existed.
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("parent", "parent-session", "parent-run")
+    assert tracker.reserve_slot(parent_key, max_count=8)
+    tracker.register_reserved(parent_key, "worker", "session-one", "run-one")
+
+    # Act
+    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "output"})
+    await asyncio.sleep(0)
+
+    # Assert
+    assert len(trigger_service.calls) == 1
+    assert trigger_service.calls[0][4] is None
 
 
 async def test_batch_with_fetched_entries_prunes_without_second_note() -> None:
