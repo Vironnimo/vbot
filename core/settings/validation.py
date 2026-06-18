@@ -19,6 +19,7 @@ from core.settings.normalizers import (
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     AGENT_ID_PATTERN,
+    PROJECT_ID_PATTERN,
     RECALL_BACKEND_PATTERN,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SettingsValidationError,
@@ -145,6 +146,22 @@ ALLOWED_CHANNEL_DM_SCOPES = frozenset(
 )
 ALLOWED_CHANNEL_RESPONSE_MODES = frozenset({"all", "mention"})
 
+PROJECT_FIELDS = frozenset(
+    {
+        "auto_load",
+        "created_at",
+        "cwd",
+        "default_agent",
+        "default_model",
+        "display_name",
+        "project_id",
+        "updated_at",
+    }
+)
+REQUIRED_PROJECT_FIELDS = frozenset(
+    {"created_at", "cwd", "display_name", "project_id", "updated_at"}
+)
+
 
 @dataclass(frozen=True)
 class JsonDiagnostic:
@@ -266,6 +283,24 @@ def load_validated_channel_json(config_path: str | Path) -> JsonObject:
     return cast("JsonObject", document.data)
 
 
+def validate_project_file(project_path: str | Path) -> JsonValidationReport:
+    return _load_and_validate_json_file(
+        Path(project_path),
+        validate_project_data,
+        missing_ok=False,
+    ).report
+
+
+def load_validated_project_json(project_path: str | Path) -> JsonObject:
+    document = _load_and_validate_json_file(
+        Path(project_path),
+        validate_project_data,
+        missing_ok=False,
+    )
+    _raise_for_errors(document.report)
+    return cast("JsonObject", document.data)
+
+
 def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport, ...]:
     """Validate all current user-editable JSON config files in a data directory."""
 
@@ -278,6 +313,10 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     reports.extend(
         validate_channel_file(channel_path)
         for channel_path in sorted((root / "channels").glob("*/channel.json"))
+    )
+    reports.extend(
+        validate_project_file(project_path)
+        for project_path in sorted((root / "projects").glob("*/project.json"))
     )
     cron_jobs_path = root / "cron" / "jobs.json"
     if cron_jobs_path.exists():
@@ -452,6 +491,33 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
     )
     _validate_regex_list(diagnostics, "$.mention_patterns", data.get("mention_patterns", []))
     _validate_user_id_list(diagnostics, "$.owner_user_ids", data.get("owner_user_ids", []))
+    return diagnostics
+
+
+def validate_project_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``project.json`` mapping and return diagnostics."""
+
+    diagnostics: list[JsonDiagnostic] = []
+    if not isinstance(data, dict):
+        return [_error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+
+    _warn_unknown_keys(diagnostics, "$", data, PROJECT_FIELDS, "project field")
+    _validate_required_fields(diagnostics, "$", data, REQUIRED_PROJECT_FIELDS)
+    _validate_project_id(diagnostics, data.get("project_id"))
+    _validate_non_empty_string(
+        diagnostics, "$.display_name", data.get("display_name"), required=True
+    )
+    # cwd is a path string the user supplies; it may point at a folder that has
+    # moved away (re-point is a product feature), so existence is not validated
+    # here — only that it is a non-empty path string.
+    _validate_non_empty_string(diagnostics, "$.cwd", data.get("cwd"), required=True)
+    # default_agent / default_model are optional pointers; empty string means
+    # "fall through the resolution chain", so an empty string is allowed.
+    _validate_optional_string(diagnostics, "$.default_agent", data.get("default_agent"))
+    _validate_optional_string(diagnostics, "$.default_model", data.get("default_model"))
+    _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
+    _validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
+    _validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
     return diagnostics
 
 
@@ -858,6 +924,29 @@ def _validate_agent_id(diagnostics: list[JsonDiagnostic], value: Any) -> None:
             "$.id",
             "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
         )
+
+
+def _validate_project_id(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if not isinstance(value, str) or not value:
+        _error(diagnostics, "$.project_id", "must be a non-empty string")
+        return
+    if PROJECT_ID_PATTERN.fullmatch(value) is None:
+        _error(
+            diagnostics,
+            "$.project_id",
+            "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
+        )
+
+
+def _validate_auto_load_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        _error(diagnostics, path, "must be a list of strings")
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            _error(diagnostics, f"{path}[{index}]", "must be a non-empty string")
 
 
 def _validate_string(
