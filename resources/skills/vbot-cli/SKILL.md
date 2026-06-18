@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, manage agents or sessions, list providers models skills or tools, refresh models, connect OAuth providers, bind task models, update prompts or settings, inspect logs or debug traces, schedule cron jobs, or manage Telegram or Discord channels.
+description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, manage agents, projects, or sessions, talk to a project agent as agent@projekt, list providers models skills or tools, refresh models, connect OAuth providers, bind task models, update prompts or settings, inspect logs or debug traces, schedule cron jobs, or manage Telegram or Discord channels.
 ---
 
 # vBot CLI
@@ -20,7 +20,7 @@ Use this skill when the user wants you to configure, inspect, or operate vBot it
 
 ## Workflow
 
-1. Identify the requested change: server lifecycle, agents, sessions, settings, providers, models, task-model bindings, skills, tools, prompts, logs, cron jobs, debug traces, or channels.
+1. Identify the requested change: server lifecycle, agents, projects, sessions, settings, providers, models, task-model bindings, skills, tools, prompts, logs, cron jobs, debug traces, or channels.
 2. Resolve the target instance. Use defaults unless the user gives a host, port, or data directory. Add `--host`, `--port`, and `--data-dir` to every command that must target a non-default instance.
 3. Check reachability:
 
@@ -46,6 +46,7 @@ vbot tool list
 vbot prompt list
 vbot log list
 vbot agent list
+vbot project list
 vbot channel list
 vbot cron list
 ```
@@ -183,17 +184,34 @@ vbot agent delete old-agent
 
 Use `--allowed-tools` and `--allowed-skills` with zero or more values to replace the full allowlist. Quote `*` in shells that expand it.
 
-### Sessions
+### Projects
 
-Use session commands to inspect and manage an agent's chat sessions:
+A **project** points vBot at a repo directory (its `cwd`) and exposes the agents discovered in that repo (its **team**). Use project commands to add, inspect, configure, and remove projects:
 
 ```bash
+vbot project add ./my-repo --name vbot --default-agent orchestrator --auto-load AGENTS.md
+vbot project list
+vbot project show vbot
+vbot project set vbot --default-agent builder
+vbot project rm vbot
+```
+
+`project add` and `project show` print the **scan preview**: the team (callable agents found in the repo) plus a report of anything unclean under what exists (bad or unconfigured model, slug collision, unslugifiable name). An empty folder is a valid project with an empty team and a clean report — not an error. `project add` only needs the repo path; everything else is optional. `project rm` archives the project's runtime anchor (never the repo) and prints the archive path; it is blocked while a project agent has an active or queued run (`project_busy`) or a cron job points at a project agent (`project_in_use`) — clear those first.
+
+Talk to a project's agents with the address form `agent@projekt` (see Sessions and Cron Jobs below). vBot reads the repo to discover the team but never writes it.
+
+### Sessions
+
+Use session commands to inspect and manage an agent's chat sessions. The positional agent argument accepts either a bare identity agent (`assistant`) or a project agent in the address form `agent@projekt` (`orchestrator@vbot`):
+
+```bash
+vbot session list orchestrator@vbot
+vbot session create orchestrator@vbot --make-current
 vbot session list assistant
-vbot session create assistant --make-current
 vbot session link-channel assistant <session-id> --channel tg-main --conversation 12345
 ```
 
-`link-channel` routes a session's outbound replies to a channel conversation, such as a Telegram chat.
+A bare agent (no `@`) behaves exactly as before (identity agent). `agent@projekt` opens the session under that project, against the project's scanned team. `link-channel` routes a session's outbound replies to a channel conversation, such as a Telegram chat.
 
 ### Cron Jobs
 
@@ -202,6 +220,7 @@ Use cron commands to schedule recurring or one-time agent prompts:
 ```bash
 vbot cron list
 vbot cron create assistant --prompt "Check the news" --cron "0 9 * * *" --timezone Europe/Berlin
+vbot cron create builder@vbot --prompt "Nightly build" --cron "0 2 * * *"
 vbot cron create assistant --prompt "Remind me" --at 2026-07-01T09:00:00
 vbot cron update <job-id> --status paused
 vbot cron enable <job-id>
@@ -209,7 +228,7 @@ vbot cron disable <job-id>
 vbot cron delete <job-id>
 ```
 
-`create` requires exactly one of `--cron <expression>` (recurring) or `--at <iso-datetime>` (one-time).
+`create` requires exactly one of `--cron <expression>` (recurring) or `--at <iso-datetime>` (one-time). The agent argument takes a bare agent or the `agent@projekt` address form to target a project agent; firing such a job runs in that project. `cron list` shows the target in the same address form (`builder@vbot` for a project target, `assistant` for an identity target).
 
 ### Debug Traces
 
