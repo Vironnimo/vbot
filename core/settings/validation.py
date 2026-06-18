@@ -111,6 +111,7 @@ CRON_JOB_FIELDS = frozenset(
         "cron_expression",
         "id",
         "last_fired_at",
+        "project_id",
         "prompt",
         "run_at",
         "schedule_type",
@@ -442,6 +443,7 @@ def validate_cron_jobs_data(data: Any) -> list[JsonDiagnostic]:
         _validate_optional_string(diagnostics, f"{item_path}.run_at", item.get("run_at"))
         _validate_optional_string(diagnostics, f"{item_path}.timezone", item.get("timezone"))
         _validate_optional_string(diagnostics, f"{item_path}.session_id", item.get("session_id"))
+        _validate_optional_string(diagnostics, f"{item_path}.project_id", item.get("project_id"))
         _validate_optional_string(
             diagnostics, f"{item_path}.last_fired_at", item.get("last_fired_at")
         )

@@ -46,6 +46,7 @@ _MUTABLE_FIELDS = frozenset(
         "timezone",
         "session_id",
         "status",
+        "project_id",
     )
 )
 
@@ -70,7 +71,14 @@ class CronStorageError(CronServiceError):
 
 @dataclass(slots=True)
 class CronJob:
-    """Persisted cron job record."""
+    """Persisted cron job record.
+
+    ``project_id`` is the project dimension the job fires into: ``None`` is a
+    global/identity-agent target (today's behavior, byte-identical), a set value
+    scopes the fired Session and Run to that project's anchor. It is the
+    structured half of the outside ``agent@projekt`` address form (parsed once at
+    the RPC edge), never an ``@`` string stored in ``agent_id``.
+    """
 
     id: str
     agent_id: str
@@ -83,6 +91,7 @@ class CronJob:
     status: CronJobStatus
     last_fired_at: str | None
     created_at: str
+    project_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one CronJob to a JSON-compatible payload."""
@@ -98,6 +107,7 @@ class CronJob:
             "status": self.status,
             "last_fired_at": self.last_fired_at,
             "created_at": self.created_at,
+            "project_id": self.project_id,
         }
 
     @classmethod
@@ -115,6 +125,7 @@ class CronJob:
             status=payload["status"],
             last_fired_at=payload.get("last_fired_at"),
             created_at=str(payload["created_at"]),
+            project_id=payload.get("project_id"),
         )
 
 
@@ -143,8 +154,13 @@ class CronService:
         timezone: str | None = None,
         session_id: str | None = None,
         status: CronJobStatus = "active",
+        project_id: str | None = None,
     ) -> CronJob:
-        """Create and persist a new cron job."""
+        """Create and persist a new cron job.
+
+        ``project_id=None`` is a global/identity target (unchanged); a set value
+        scopes the fired Session/Run to that project's anchor.
+        """
         self._ensure_jobs_loaded()
         job = CronJob(
             id=str(uuid4()),
@@ -158,6 +174,7 @@ class CronService:
             status=status,
             last_fired_at=None,
             created_at=_utc_now_iso(),
+            project_id=project_id,
         )
         self._validate_job(job)
         self._jobs[job.id] = job
@@ -496,6 +513,7 @@ class CronService:
                 job.agent_id,
                 job.prompt,
                 job.session_id,
+                project_id=job.project_id,
             )
         except asyncio.CancelledError:
             raise
@@ -584,6 +602,12 @@ class CronService:
 
         if job.session_id is not None and not isinstance(job.session_id, str):
             raise CronJobValidationError("session_id must be a string when provided")
+
+        if job.project_id is not None:
+            if not isinstance(job.project_id, str):
+                raise CronJobValidationError("project_id must be a string when provided")
+            normalized_project_id = job.project_id.strip()
+            job.project_id = normalized_project_id or None
 
         if job.timezone is not None and not isinstance(job.timezone, str):
             raise CronJobValidationError("timezone must be a string when provided")
