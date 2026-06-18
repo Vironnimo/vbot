@@ -1,5 +1,6 @@
 """Tests for system prompt assembly."""
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -801,8 +802,9 @@ def test_config_agent_prompt_inserts_body_and_project_files_in_order(
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
     (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
     manager = _project_manager(fragments, tmp_path)
-    # Config agent has an empty workspace, so {include:SOUL.md}/{memory} collapse.
-    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    # Config agent's real production workspace is "" (no SOUL/memory home), so
+    # {include:SOUL.md}/{memory} collapse — the same value the resolver synthesizes.
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
     context = ProjectPromptContext.from_project(repo, ["CONTEXT.md"])
 
     prompt = manager.build_system_prompt(
@@ -828,7 +830,7 @@ def test_config_agent_body_with_braces_is_not_expanded(
     # verbatim — never treated as a vBot placeholder. Use real vBot placeholder
     # names inside the body to prove they are not substituted.
     manager = _project_manager(fragments, tmp_path)
-    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
     body = "Use {memory} and {include:SOUL.md} and {runtime} literally; also {custom}."
 
     prompt = manager.build_system_prompt(
@@ -838,6 +840,34 @@ def test_config_agent_body_with_braces_is_not_expanded(
     )
 
     assert body in prompt
+
+
+def test_config_agent_empty_workspace_skips_includes_and_ignores_cwd(
+    fragments: dict[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A config agent's production workspace is "". An empty workspace must mean
+    # "no includes" — never Path("") == Path("."), which resolves {include:SOUL.md}
+    # against the server's process CWD. A decoy SOUL.md in the CWD proves it is
+    # never read, and no per-turn "missing include" warning is emitted.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "SOUL.md").write_text("LEAKED SOUL FROM CWD", encoding="utf-8")
+    manager = _project_manager(fragments, tmp_path)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    with caplog.at_level(logging.WARNING):
+        prompt = manager.build_system_prompt(
+            agent,
+            agent_body="You are the orchestrator.",
+            project_context=None,
+        )
+
+    assert "You are the orchestrator." in prompt
+    assert "LEAKED SOUL FROM CWD" not in prompt
+    assert '<file name="SOUL.md">' not in prompt
+    assert "Skipping missing workspace include" not in caplog.text
 
 
 def test_identity_agent_prompt_unchanged_without_body_or_project(
@@ -852,9 +882,7 @@ def test_identity_agent_prompt_unchanged_without_body_or_project(
 
     with_placeholders = manager.build_system_prompt(agent)
 
-    baseline_manager = _project_manager(
-        fragments, tmp_path, root="{include:SOUL.md}\n{memory}"
-    )
+    baseline_manager = _project_manager(fragments, tmp_path, root="{include:SOUL.md}\n{memory}")
     baseline = baseline_manager.build_system_prompt(agent)
 
     # The collapsing placeholders leave only their surrounding blank lines, which
@@ -956,9 +984,7 @@ def test_real_system_md_identity_at_home_is_byte_identical_without_placeholders(
     # Resolve relative to this test file so the read is cwd-independent.
     repo_root = Path(__file__).resolve().parents[3]
     real_root = (repo_root / "resources" / "prompts" / "system.md").read_text(encoding="utf-8")
-    root_without_placeholders = real_root.replace("{agent_body}", "").replace(
-        "{project_files}", ""
-    )
+    root_without_placeholders = real_root.replace("{agent_body}", "").replace("{project_files}", "")
 
     with_placeholders = _project_manager(fragments, tmp_path, root=real_root).build_system_prompt(
         _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
@@ -971,7 +997,7 @@ def test_real_system_md_identity_at_home_is_byte_identical_without_placeholders(
 
 
 def _agent(
-    workspace: Path,
+    workspace: str | Path,
     *,
     agent_id: str = "coder",
     allowed_tools: list[str] | None = None,
