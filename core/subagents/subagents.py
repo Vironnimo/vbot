@@ -143,7 +143,9 @@ async def _handle_subagent(
             "subagent_depth_exceeded",
             f"Sub-agent nesting depth limit exceeded: {settings['max_subagent_depth']}",
         )
-    if not batch_tracker.reserve_slot(parent_key, settings["max_subagents_per_turn"]):
+    if not batch_tracker.reserve_slot(
+        parent_key, settings["max_subagents_per_turn"], context.project_id
+    ):
         return tool_failure(
             "subagent_limit_exceeded",
             f"Sub-agent per-turn limit exceeded: {settings['max_subagents_per_turn']}",

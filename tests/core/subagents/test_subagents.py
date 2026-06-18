@@ -57,6 +57,7 @@ class RecordingTriggerService:
         session_id: str | None = None,
         *,
         internal: bool = False,
+        project_id: str | None = None,
     ) -> Run:
         return Run(run_id="trigger-run", agent_id=agent_id, session_id=session_id or "new")
 
