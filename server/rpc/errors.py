@@ -20,6 +20,10 @@ RPC_ERROR_CHANNEL_NOT_FOUND = "channel_not_found"
 RPC_ERROR_CHANNEL_ALREADY_EXISTS = "channel_already_exists"
 RPC_ERROR_CHANNEL_CONFIG = "channel_config_error"
 RPC_ERROR_QUEUE_ITEM_NOT_FOUND = "queue_item_not_found"
+RPC_ERROR_PROJECT_NOT_FOUND = "project_not_found"
+RPC_ERROR_PROJECT_ALREADY_EXISTS = "project_already_exists"
+RPC_ERROR_PROJECT_BUSY = "project_busy"
+RPC_ERROR_PROJECT_IN_USE = "project_in_use"
 
 
 class RpcError(Exception):
