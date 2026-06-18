@@ -9,25 +9,33 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter  # type: ignore[import-untyped]
 
 from core.automation.cron import CronJobValidationError
+from core.projects import format_agent_address
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.validation import _optional_string, _required_string
+from server.rpc.validation import _optional_string, _required_agent_address, _required_string
 
 JsonObject = dict[str, Any]
 CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
 CRON_JOB_STATUSES = frozenset(("active", "paused", "completed"))
 
 
-def _validate_cron_agent_exists(state: Any, agent_id: str) -> None:
-    agents = getattr(state.runtime, "agents", None)
-    if agents is None:
+def _validate_cron_target_exists(state: Any, agent_id: str, project_id: str | None) -> None:
+    """Validate the cron target through the same resolver every run path uses.
+
+    A project-qualified target (``agent@projekt``) is validated against its
+    project's Team; a bare target stays an identity-agent lookup. ``None``
+    resolver means a minimal runtime (tests) that skips reference validation.
+    """
+    resolver = getattr(state.runtime, "agent_resolver", None)
+    if resolver is None:
         return
     try:
-        agents.get(agent_id)
+        resolver.resolve_agent(project_id, agent_id)
     except Exception as error:
-        raise CronJobValidationError(f"Unknown agent_id: {agent_id}") from error
+        target = format_agent_address(agent_id, project_id)
+        raise CronJobValidationError(f"Unknown cron target: {target}") from error
 
 
 async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
@@ -47,7 +55,10 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
             f"unsupported cron.create fields: {', '.join(unsupported_fields)}",
         )
 
-    agent_id = _required_string(params, "agent_id")
+    # The target rides the outside ``agent@projekt`` address form, parsed once at
+    # the edge into a bare ``agent_id`` plus the optional ``project_id`` stored on
+    # the job — never an ``@`` string kept in ``agent_id``.
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     prompt = _required_string(params, "prompt")
     schedule_type = _required_string(params, "schedule_type")
     if schedule_type not in CRON_SCHEDULE_TYPES:
@@ -79,7 +90,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         async with _agent_reference_lock(state):
-            _validate_cron_agent_exists(state, agent_id)
+            _validate_cron_target_exists(state, agent_id, project_id)
             job = state.runtime.cron_service.create_job(
                 agent_id=agent_id,
                 prompt=prompt,
@@ -88,6 +99,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 run_at=run_at,
                 timezone=timezone,
                 session_id=session_id,
+                project_id=project_id,
             )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -128,7 +140,11 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     updates: JsonObject = {}
 
     if "agent_id" in params:
-        updates["agent_id"] = _required_string(params, "agent_id")
+        # Re-targeting also re-parses the address form, so changing the project of
+        # a cron target is a single ``agent@projekt`` update, not two fields.
+        target_agent_id, target_project_id = _required_agent_address(params, "agent_id")
+        updates["agent_id"] = target_agent_id
+        updates["project_id"] = target_project_id
     if "prompt" in params:
         updates["prompt"] = _required_string(params, "prompt")
     if "schedule_type" in params:
@@ -161,7 +177,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     if "agent_id" in updates:
         try:
             async with _agent_reference_lock(state):
-                _validate_cron_agent_exists(state, updates["agent_id"])
+                _validate_cron_target_exists(state, updates["agent_id"], updates["project_id"])
                 state.runtime.cron_service.update_job(job_id, **updates)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
@@ -226,6 +242,10 @@ def _cron_job_response(job: Any) -> JsonObject:
     return {
         "id": job.id,
         "agent_id": job.agent_id,
+        "project_id": job.project_id,
+        # The address form keeps "builder" unambiguous across projects in
+        # listings: a bare target shows ``builder``, a project target ``builder@projekt``.
+        "target": format_agent_address(job.agent_id, job.project_id),
         "prompt": job.prompt,
         "schedule_type": job.schedule_type,
         "cron_expression": job.cron_expression,

@@ -4286,10 +4286,12 @@ async def test_agent_delete_rejects_agent_with_channel_reference(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_agent_delete_rejects_agent_with_cron_reference(tmp_path: Path) -> None:
+    # A bare cron job (project_id=None) targets the identity agent, so it blocks
+    # the identity-agent delete.
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.create("writer", "Writer")
     state.runtime.cron_service = SimpleNamespace(
-        list_jobs=lambda: [SimpleNamespace(id="job-coder", agent_id="coder")]
+        list_jobs=lambda: [SimpleNamespace(id="job-coder", agent_id="coder", project_id=None)]
     )
 
     response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
@@ -4298,6 +4300,23 @@ async def test_agent_delete_rejects_agent_with_cron_reference(tmp_path: Path) ->
     assert response["error"]["code"] == "agent_in_use"
     assert "cron:job-coder" in response["error"]["message"]
     assert state.runtime.agents.get("coder").id == "coder"
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_ignores_project_qualified_cron_reference(tmp_path: Path) -> None:
+    # A project-qualified cron job (project_id set) targets that project's Team
+    # agent, not the same-named identity agent, so it must not block the identity
+    # delete.
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("writer", "Writer")
+    state.runtime.cron_service = SimpleNamespace(
+        list_jobs=lambda: [SimpleNamespace(id="job-coder", agent_id="coder", project_id="vbot")]
+    )
+
+    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
+
+    assert response["ok"] is True
+    assert response["result"]["agent_id"] == "coder"
 
 
 @pytest.mark.asyncio
