@@ -419,11 +419,12 @@ describe('project.* wrappers', () => {
   });
 
   it('removes a project through project.rm', async () => {
-    const fetchFunction = vi
-      .fn()
-      .mockResolvedValue(
-        jsonResponse({ ok: true, result: { project_id: 'demo', archived: true } }),
-      );
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { project_id: 'demo', archived: true },
+      }),
+    );
 
     await removeProject('demo', { fetch: fetchFunction });
 

@@ -3258,7 +3258,8 @@ function createChatRpcMock({
       // Deterministic session id derived from the address so project-agent
       // session-create tests can assert against it. `builder@vbot` →
       // `created-builder@vbot`.
-      const agentId = typeof params?.agent_id === 'string' ? params.agent_id : '';
+      const agentId =
+        typeof params?.agent_id === 'string' ? params.agent_id : '';
       return { agent_id: agentId, session_id: `created-${agentId}` };
     }
 
