@@ -125,6 +125,7 @@ class FakeRunManager:
             run_id=f"sub-run-{len(self.started) + 1}",
             agent_id=agent_id,
             session_id=session_id,
+            project_id=project_id,
         )
         self.started.append(
             {
@@ -148,17 +149,14 @@ class FakeRunManager:
 class FakeChildLoop:
     def __init__(self, runtime: Any) -> None:
         self._runtime = runtime
-        self.executor_project_ids: list[str | None] = []
 
     def child_loop(self, *, nesting_depth: int) -> FakeChildLoop:
         del nesting_depth
         return self
 
-    def run_executor(self, content: str, *, project_id: str | None = None) -> Any:
-        # Record the project_id baked into the child executor closure so a test
-        # can prove the child run executes project-scoped.
-        self.executor_project_ids.append(project_id)
-
+    def run_executor(self, content: str) -> Any:
+        # The project anchor rides ``run.project_id`` (set by the run manager
+        # from the project_id passed to start/enqueue), not the executor closure.
         async def _execute(run: Run) -> ChatMessage:
             return ChatMessage.assistant(model="openai/gpt-5.2", content=f"handled: {content}")
 
@@ -213,7 +211,7 @@ async def test_project_subagent_session_lives_under_project_anchor(tmp_path: Pat
     assert not identity_session.exists()
 
 
-async def test_project_subagent_run_is_keyed_to_project(tmp_path: Path) -> None:
+async def test_project_subagent_run_carries_project_id(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -228,11 +226,11 @@ async def test_project_subagent_run_is_keyed_to_project(tmp_path: Path) -> None:
         batch_tracker=tracker,
     )
 
-    # Assert: the child run carries the parent project on the run key, and the
-    # child executor closure was built project-scoped.
+    # Assert: the parent project reaches start(), and rides the created child
+    # Run (run.project_id) so its session I/O is project-scoped.
     assert result["ok"] is True
     assert manager.started[0]["project_id"] == "acme"
-    assert runtime.streaming_chat_loop.executor_project_ids == ["acme"]
+    assert manager.started[0]["run"].project_id == "acme"
 
 
 async def test_project_subagent_parent_link_metadata_carries_project_id(
@@ -287,14 +285,14 @@ async def test_identity_subagent_session_unchanged_and_link_project_is_none(
     )
 
     # Assert: the child session keeps the global identity layout, the child run
-    # is keyed to None, and the parent link records project_id None — today's
-    # behavior, exactly unchanged.
+    # carries project_id None, and the parent link records project_id None —
+    # today's behavior, exactly unchanged.
     assert result["ok"] is True
     child_session_id = result["data"]["session_id"]
     identity_session = tmp_path / "agents" / "worker" / "sessions" / f"{child_session_id}.jsonl"
     assert identity_session.exists()
     assert manager.started[0]["project_id"] is None
-    assert runtime.streaming_chat_loop.executor_project_ids == [None]
+    assert manager.started[0]["run"].project_id is None
     metadata = runtime.chat_sessions.get_metadata("worker", child_session_id)
     assert metadata["subagent_parent"]["project_id"] is None
 

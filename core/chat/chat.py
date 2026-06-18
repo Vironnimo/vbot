@@ -255,17 +255,17 @@ class ChatLoop:
         child._nesting_depth = nesting_depth
         return child
 
-    def run_executor(
-        self, content: str | list[ContentBlock], *, project_id: str | None = None
-    ) -> RunExecutor:
+    def run_executor(self, content: str | list[ContentBlock]) -> RunExecutor:
         """Return a run-manager executor that runs *content* through this loop.
 
-        ``project_id=None`` keeps today's identity behavior; a set ``project_id``
-        rides the executor closure so the run executes project-scoped (session
-        under the project anchor, tool cwd = repo). The public way for other
-        domains (sub-agents) to hand the run manager a project-aware executor.
+        The run's project anchor rides ``run.project_id`` (set by the run manager
+        from the ``project_id`` passed to ``start``/``enqueue``), not this
+        closure: an identity run keeps ``run.project_id is None`` and today's
+        behavior; a project run executes project-scoped (session under the
+        project anchor, tool cwd = repo). The public way for other domains
+        (sub-agents) to hand the run manager an executor.
         """
-        return lambda run: self._execute_run(run, content, project_id=project_id)
+        return lambda run: self._execute_run(run, content)
 
     async def send(
         self,
@@ -351,7 +351,6 @@ class ChatLoop:
                 internal=internal,
                 input_origin=input_origin,
                 sender=sender,
-                project_id=project_id,
             ),
             display_content=_display_content_preview(content),
             internal=internal,
@@ -375,9 +374,7 @@ class ChatLoop:
         )
         return (
             session.id,
-            lambda run: self._execute_run(
-                run, content, input_origin=input_origin, project_id=project_id
-            ),
+            lambda run: self._execute_run(run, content, input_origin=input_origin),
             _display_content_preview(content),
         )
 
@@ -397,9 +394,7 @@ class ChatLoop:
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(
-                run, content=None, retry=True, project_id=project_id
-            ),
+            executor=lambda run: self._execute_run(run, content=None, retry=True),
             project_id=project_id,
         )
 
@@ -490,7 +485,6 @@ class ChatLoop:
                 internal=internal,
                 input_origin=input_origin,
                 sender=sender,
-                project_id=project_id,
             ),
             project_id=project_id,
         )
@@ -504,11 +498,12 @@ class ChatLoop:
         retry: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
-        project_id: str | None = None,
     ) -> ChatMessage:
-        # ``project_id`` rides the executor closure, not the Run object: the Run
-        # stays project-agnostic, while the session anchor, run-key, tool cwd, and
-        # the resolved agent profile all derive from the captured value here.
+        # The run's project anchor lives on the Run (``run.project_id``), set by
+        # the run manager at creation, not on a closure: the session anchor, tool
+        # cwd, and the resolved agent profile all derive from it here. An identity
+        # run carries ``run.project_id is None`` and behaves byte-identically.
+        project_id = run.project_id
         agent = self._runtime.agent_resolver.resolve_agent(project_id, run.agent_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
         provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)

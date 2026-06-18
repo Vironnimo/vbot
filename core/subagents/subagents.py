@@ -387,12 +387,14 @@ def _make_subagent_executor(
 ) -> tuple[ChatLoop, RunExecutor]:
     # Child Runs must match normal live Runs: the parent streaming loop
     # carries its attachment resolver and compaction service into the
-    # child; only the nesting depth differs. The parent run's project rides the
-    # executor closure so the child run executes project-scoped (cwd = repo).
+    # child; only the nesting depth differs. The parent run's project rides
+    # ``run.project_id`` (set when the child run is started/enqueued with
+    # ``project_id=context.project_id``), so the child executes project-scoped
+    # (cwd = repo) without the executor closure carrying it.
     sub_loop = runtime.streaming_chat_loop.child_loop(
         nesting_depth=context.nesting_depth + 1,
     )
-    return sub_loop, sub_loop.run_executor(content, project_id=context.project_id)
+    return sub_loop, sub_loop.run_executor(content)
 
 
 def _track_subagent_completion(
