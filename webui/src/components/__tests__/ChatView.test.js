@@ -2761,9 +2761,13 @@ describe('ChatView', () => {
       100,
     );
 
-    const dropdown = document.querySelector('.chat-view__project-dropdown');
+    const dropdown = document.querySelector('.chat-header__project-dropdown');
     expect(dropdown).toBeTruthy();
-    expect(dropdown.value).toBe('');
+    // The shared Dropdown trigger reflects the current selection's label.
+    const dropdownLabel = dropdown.querySelector(
+      '.dropdown-primitive__trigger-label',
+    );
+    expect(dropdownLabel?.textContent?.trim()).toBe('No project');
     // No project chosen → no second bar, no project.show call.
     expect(document.querySelector('.chat-view__project-team')).toBeNull();
     expect(showProjectMock).not.toHaveBeenCalled();
