@@ -275,7 +275,8 @@ async def test_session_list_happy_path_returns_sessions_with_metadata() -> None:
     )
 
     assert response == {"ok": True, "result": {"sessions": sessions}}
-    chat_sessions.list_with_metadata.assert_called_once_with("assistant")
+    # A bare agent id resolves to the identity scope (project_id=None).
+    chat_sessions.list_with_metadata.assert_called_once_with("assistant", None)
 
 
 @pytest.mark.asyncio

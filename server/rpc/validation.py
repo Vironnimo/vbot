@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 from core.chat import ChatError
 from core.chat.content_blocks import ContentBlock, ContentBlockError, content_block_from_dict
 from core.chat.model_resolution import parse_model_with_connection
+from core.projects import InvalidAgentAddressError, parse_agent_address
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
 JsonObject = dict[str, Any]
@@ -41,6 +42,22 @@ def _parse_chat_content(params: JsonObject, key: str) -> str | list[ContentBlock
         RPC_ERROR_INVALID_REQUEST,
         f"params.{key} must be a non-empty string or a list of content blocks",
     )
+
+
+def _required_agent_address(params: JsonObject, key: str) -> tuple[str, str | None]:
+    """Read a required agent-address param and split it into ``(agent_id, project_id)``.
+
+    The outside ``agent@projekt`` form is parsed at the system edge through the
+    single :func:`core.projects.parse_agent_address` seam: a bare value yields a
+    ``None`` project (identity, byte-identical to before), a qualified value
+    yields the project id. A malformed address is a client error, surfaced as
+    ``invalid_request`` rather than leaking a domain error.
+    """
+    raw = _required_string(params, key)
+    try:
+        return parse_agent_address(raw)
+    except InvalidAgentAddressError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
 
 def _optional_chat_input_origin(params: JsonObject) -> ChatInputOrigin | None:
