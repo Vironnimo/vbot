@@ -6,6 +6,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat.content_blocks import ContentBlock, MediaBlock
@@ -252,9 +253,17 @@ class ChatLoop:
         child._nesting_depth = nesting_depth
         return child
 
-    def run_executor(self, content: str | list[ContentBlock]) -> RunExecutor:
-        """Return a run-manager executor that runs *content* through this loop."""
-        return lambda run: self._execute_run(run, content)
+    def run_executor(
+        self, content: str | list[ContentBlock], *, project_id: str | None = None
+    ) -> RunExecutor:
+        """Return a run-manager executor that runs *content* through this loop.
+
+        ``project_id=None`` keeps today's identity behavior; a set ``project_id``
+        rides the executor closure so the run executes project-scoped (session
+        under the project anchor, tool cwd = repo). The public way for other
+        domains (sub-agents) to hand the run manager a project-aware executor.
+        """
+        return lambda run: self._execute_run(run, content, project_id=project_id)
 
     async def send(
         self,
@@ -263,14 +272,21 @@ class ChatLoop:
         *,
         session_id: str | None = None,
         input_origin: InputOrigin | None = None,
+        project_id: str | None = None,
     ) -> ChatMessage:
-        """Run one persisted non-streaming chat turn and return the final assistant message."""
+        """Run one persisted non-streaming chat turn and return the final assistant message.
+
+        ``project_id=None`` is the global identity session (today's behavior,
+        exactly unchanged); a set ``project_id`` opens the session under the
+        project anchor and resolves tool cwd to the project repo.
+        """
         run = await self._start_run(
             agent_id,
             content,
             session_id=session_id,
             create_missing=True,
             input_origin=input_origin,
+            project_id=project_id,
         )
         return cast(ChatMessage, await run.wait())
 
@@ -283,8 +299,13 @@ class ChatLoop:
         internal: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        project_id: str | None = None,
     ) -> Run:
-        """Start one chat run against an existing session for server-facing callers."""
+        """Start one chat run against an existing session for server-facing callers.
+
+        ``project_id=None`` keeps today's identity behavior; a set ``project_id``
+        opens the session under the project anchor and keys the run to it.
+        """
         return await self._start_run(
             agent_id,
             content,
@@ -293,6 +314,7 @@ class ChatLoop:
             internal=internal,
             input_origin=input_origin,
             sender=sender,
+            project_id=project_id,
         )
 
     async def queue_run(
@@ -304,12 +326,19 @@ class ChatLoop:
         internal: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        project_id: str | None = None,
     ) -> QueuedRunItem:
-        """Queue one chat run for a busy session or start it immediately when idle."""
+        """Queue one chat run for a busy session or start it immediately when idle.
+
+        ``project_id`` scopes the session/run to a project anchor; ``None`` keeps
+        today's identity behavior.
+        """
         agent = self._runtime.agents.get(agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
-        session = self._get_session(agent_id, session_id, create_missing=False)
+        session = self._get_session(
+            agent_id, session_id, create_missing=False, project_id=project_id
+        )
         manager = self._runtime.chat_run_manager
         return await manager.enqueue(
             agent_id=agent_id,
@@ -320,9 +349,11 @@ class ChatLoop:
                 internal=internal,
                 input_origin=input_origin,
                 sender=sender,
+                project_id=project_id,
             ),
             display_content=_display_content_preview(content),
             internal=internal,
+            project_id=project_id,
         )
 
     def build_queue_update(
@@ -331,24 +362,32 @@ class ChatLoop:
         session_id: str,
         content: str | list[ContentBlock],
         input_origin: InputOrigin | None = None,
+        project_id: str | None = None,
     ) -> tuple[str, RunExecutor, str]:
         """Build replacement data for a queued run without mutating queue state."""
         agent = self._runtime.agents.get(agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
-        session = self._get_session(agent_id, session_id, create_missing=False)
+        session = self._get_session(
+            agent_id, session_id, create_missing=False, project_id=project_id
+        )
         return (
             session.id,
-            lambda run: self._execute_run(run, content, input_origin=input_origin),
+            lambda run: self._execute_run(
+                run, content, input_origin=input_origin, project_id=project_id
+            ),
             _display_content_preview(content),
         )
 
-    async def retry_run(self, agent_id: str, session_id: str) -> Run:
+    async def retry_run(self, agent_id: str, session_id: str, project_id: str | None = None) -> Run:
         """Retry the last user turn without adding a new user message.
 
         Only valid when the session already contains at least one user message.
+        ``project_id`` scopes the retried session/run to a project anchor.
         """
-        session = self._get_session(agent_id, session_id, create_missing=False)
+        session = self._get_session(
+            agent_id, session_id, create_missing=False, project_id=project_id
+        )
         messages = session.load()
         if not any(message.role == "user" for message in messages):
             raise ChatSessionError("no user message in session to retry")
@@ -356,7 +395,10 @@ class ChatLoop:
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(run, content=None, retry=True),
+            executor=lambda run: self._execute_run(
+                run, content=None, retry=True, project_id=project_id
+            ),
+            project_id=project_id,
         )
 
     async def compact_session(
@@ -425,11 +467,14 @@ class ChatLoop:
         internal: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        project_id: str | None = None,
     ) -> Run:
         agent = self._runtime.agents.get(agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
-        session = self._get_session(agent_id, session_id, create_missing=create_missing)
+        session = self._get_session(
+            agent_id, session_id, create_missing=create_missing, project_id=project_id
+        )
         manager = self._runtime.chat_run_manager
         return await manager.start(
             agent_id=agent_id,
@@ -440,7 +485,9 @@ class ChatLoop:
                 internal=internal,
                 input_origin=input_origin,
                 sender=sender,
+                project_id=project_id,
             ),
+            project_id=project_id,
         )
 
     async def _execute_run(
@@ -452,7 +499,11 @@ class ChatLoop:
         retry: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        project_id: str | None = None,
     ) -> ChatMessage:
+        # ``project_id`` rides the executor closure, not the Run object: the Run
+        # stays project-agnostic, while the session anchor, run-key, and tool cwd
+        # all derive from the captured value here.
         agent = self._runtime.agents.get(run.agent_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
         provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)
@@ -464,7 +515,9 @@ class ChatLoop:
         session = self._runtime.chat_sessions.get(
             run.agent_id,
             run.session_id,
+            project_id,
         )
+        project_cwd = self._resolve_project_cwd(project_id)
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
@@ -546,6 +599,8 @@ class ChatLoop:
                     run,
                     provider_id=provider_id,
                     connection_id=connection_id,
+                    project_id=project_id,
+                    project_cwd=project_cwd,
                 )
             except ProviderError as primary_exc:
                 if _is_model_fallback_trigger(primary_exc):
@@ -586,6 +641,8 @@ class ChatLoop:
                                 run,
                                 provider_id=fb_provider_id,
                                 connection_id=fb_connection_id,
+                                project_id=project_id,
+                                project_cwd=project_cwd,
                             )
                         except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
                             _run_succeeded = False
@@ -647,18 +704,32 @@ class ChatLoop:
         session_id: str | None,
         *,
         create_missing: bool,
+        project_id: str | None = None,
     ) -> ChatSession:
         session_manager = self._runtime.chat_sessions
         if session_id is None:
             if not create_missing:
                 raise ChatSessionError("session id is required")
-            return session_manager.create(agent_id)
+            return session_manager.create(agent_id, project_id=project_id)
         try:
-            return session_manager.get(agent_id, session_id)
+            return session_manager.get(agent_id, session_id, project_id)
         except ChatSessionError:
             if not create_missing:
                 raise
-            return session_manager.create(agent_id, session_id=session_id)
+            return session_manager.create(agent_id, session_id=session_id, project_id=project_id)
+
+    def _resolve_project_cwd(self, project_id: str | None) -> Path | None:
+        """Resolve the repo cwd for a project session, or ``None`` for identity.
+
+        For an identity session (``project_id is None``) tools keep resolving
+        against the agent workspace, so nothing is passed to tool dispatch. For a
+        project session the project's ``cwd`` (a ``str`` field) becomes a ``Path``
+        so file/shell tools resolve relative paths against the repo, not the
+        workspace.
+        """
+        if project_id is None:
+            return None
+        return Path(self._runtime.projects.get(project_id).cwd)
 
     async def _build_request_messages(
         self,
@@ -755,6 +826,8 @@ class ChatLoop:
         run: Run,
         provider_id: str,
         connection_id: str,
+        project_id: str | None = None,
+        project_cwd: Path | None = None,
     ) -> ChatMessage:
         replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
         wire_media_types = _resolve_wire_media_support(adapter, model_id)
@@ -811,7 +884,9 @@ class ChatLoop:
             # message through its tool results so a writer on another accessor
             # (a channel observed note, session.link_channel) cannot land between
             # them and break the tool-cycle ordering invariant.
-            async with self._runtime.chat_sessions.write_lock(run.agent_id, run.session_id):
+            async with self._runtime.chat_sessions.write_lock(
+                run.agent_id, run.session_id, project_id
+            ):
                 session.append(assistant_message)
                 if not self._streaming:
                     _emit_assistant_events(run, assistant_message)
@@ -846,6 +921,8 @@ class ChatLoop:
                         session,
                         run,
                         nesting_depth=self._nesting_depth,
+                        project_cwd=project_cwd,
+                        project_id=project_id,
                     )
                     for tool_message in tool_messages:
                         session.append(tool_message)

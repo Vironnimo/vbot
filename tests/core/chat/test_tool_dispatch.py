@@ -13,7 +13,11 @@ from typing import Any, cast
 import pytest
 
 from core.chat.messages import JsonObject, ToolCall
-from core.chat.tool_dispatch import _dispatch_tool_calls, _sync_skill_context_messages
+from core.chat.tool_dispatch import (
+    _dispatch_tool_calls,
+    _resolve_tool_cwd,
+    _sync_skill_context_messages,
+)
 from core.extensions import Deny, ExtensionRegistry, Modify, Replace
 from core.runs import TOOL_CALL_STARTED_EVENT, Run, RunStatus
 from core.sessions import ChatSessionManager
@@ -595,6 +599,146 @@ class _StubSkillSession:
 
 def _skill_content(name: str) -> str:
     return f'<skill_content name="{name}">…</skill_content>'
+
+
+class TestResolveToolCwd:
+    """The cwd-build rule: project cwd when set, else the workspace fallback."""
+
+    def test_returns_project_cwd_when_set(self) -> None:
+        repo = Path("/repos/acme")
+
+        assert _resolve_tool_cwd(repo, Path("/data/workspace-coder")) == repo
+
+    def test_falls_back_to_workspace_without_project_cwd(self) -> None:
+        workspace = Path("/data/workspace-coder")
+
+        assert _resolve_tool_cwd(None, workspace) == workspace
+
+
+class TestDispatchCwdWiring:
+    """``_dispatch_tool_calls`` builds ``ToolContext.cwd`` from the project cwd."""
+
+    @staticmethod
+    def _register_cwd_probe(tools: ToolRegistry, seen: list[Path]) -> None:
+        def cwd_handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            seen.append(context.effective_cwd)
+            return tool_success({"cwd": str(context.effective_cwd)})
+
+        tools.register(
+            "cwd_probe",
+            "Record the effective working directory for testing.",
+            {"type": "object"},
+            cwd_handler,
+        )
+
+    @pytest.mark.asyncio
+    async def test_project_cwd_reaches_tool_context(self, tmp_path: Path) -> None:
+        # A project session supplies the repo cwd, which must reach the tool so
+        # file/shell tools resolve relative paths against the repo, not workspace.
+        seen: list[Path] = []
+        tools = ToolRegistry()
+        self._register_cwd_probe(tools, seen)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        project_cwd = tmp_path / "repo"
+        project_cwd.mkdir()
+
+        await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [ToolCall(id="call-1", name="cwd_probe", arguments={})],
+            session,
+            run,
+            nesting_depth=0,
+            project_cwd=project_cwd,
+        )
+
+        assert seen == [project_cwd]
+
+    @pytest.mark.asyncio
+    async def test_without_project_cwd_tool_context_uses_workspace(self, tmp_path: Path) -> None:
+        # No project cwd (identity sessions / every current caller): the tool
+        # resolves against the agent workspace, preserving today's behavior.
+        seen: list[Path] = []
+        tools = ToolRegistry()
+        self._register_cwd_probe(tools, seen)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+        await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [ToolCall(id="call-1", name="cwd_probe", arguments={})],
+            session,
+            run,
+            nesting_depth=0,
+        )
+
+        assert seen == [agent.workspace]
+
+
+class TestDispatchProjectIdWiring:
+    """``_dispatch_tool_calls`` threads the owning run's project onto ToolContext."""
+
+    @staticmethod
+    def _register_project_probe(tools: ToolRegistry, seen: list[str | None]) -> None:
+        def project_handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            seen.append(context.project_id)
+            return tool_success({"project_id": context.project_id})
+
+        tools.register(
+            "project_probe",
+            "Record the run's project id for testing.",
+            {"type": "object"},
+            project_handler,
+        )
+
+    @pytest.mark.asyncio
+    async def test_project_id_reaches_tool_context(self, tmp_path: Path) -> None:
+        # A project run threads its project_id onto every ToolContext so the
+        # subagent tool can inherit it for project-scoped child spawns.
+        seen: list[str | None] = []
+        tools = ToolRegistry()
+        self._register_project_probe(tools, seen)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+        await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [ToolCall(id="call-1", name="project_probe", arguments={})],
+            session,
+            run,
+            nesting_depth=0,
+            project_id="acme",
+        )
+
+        assert seen == ["acme"]
+
+    @pytest.mark.asyncio
+    async def test_without_project_id_tool_context_is_none(self, tmp_path: Path) -> None:
+        # An identity run (no project_id) leaves ToolContext.project_id None —
+        # today's behavior, exactly unchanged.
+        seen: list[str | None] = []
+        tools = ToolRegistry()
+        self._register_project_probe(tools, seen)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+        await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [ToolCall(id="call-1", name="project_probe", arguments={})],
+            session,
+            run,
+            nesting_depth=0,
+        )
+
+        assert seen == [None]
 
 
 class TestSyncSkillContextMessages:

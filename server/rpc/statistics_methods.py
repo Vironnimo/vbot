@@ -70,7 +70,11 @@ def _statistics_service(state: Any) -> StatisticsService:
     service = getattr(state, "statistics_service", None)
     if service is not None:
         return cast(StatisticsService, service)
-    service = StatisticsService(state.runtime.chat_sessions, state.runtime.agents)
+    service = StatisticsService(
+        state.runtime.chat_sessions,
+        state.runtime.agents,
+        state.runtime.projects,
+    )
     state.statistics_service = service
     return service
 

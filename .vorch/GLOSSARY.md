@@ -111,11 +111,11 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 **Not:** A system prompt, a real user turn, or a server/UI notification.
 
 ## Tool
-**Definition:** A function with a name, a description, and a parameter schema (JSON Schema) that an agent can call during a chat. The agent decides via the agentic loop whether a tool call is needed; the runtime executes it and returns the result to the model. Tools resolve relative paths against the agent's workspace by default.
+**Definition:** A function with a name, a description, and a parameter schema (JSON Schema) that an agent can call during a chat. The agent decides via the agentic loop whether a tool call is needed; the runtime executes it and returns the result to the model. File tools resolve relative paths against the **cwd** by default (the project repo for a project Session, else the agent's Workspace); the `memory` tool stays on the Workspace.
 
 ## Workspace
-**Definition:** The agent's home directory at `<datadir>/workspace-<agent-id>/`. Contains Markdown files the agent reads and maintains itself, primarily `SOUL.md`, `USER.md`, and `MEMORY.md`. Tools resolve relative paths against the workspace by default; absolute paths bypass it.
-**Not:** The app source directory. Not the sessions directory. The workspace is agent-owned and agent-maintained — sessions are system-owned persisted chat history.
+**Definition:** The agent's identity/memory home directory at `<datadir>/workspace-<agent-id>/`. Contains Markdown files the agent reads and maintains itself, primarily `SOUL.md`, `USER.md`, and `MEMORY.md`. The Workspace is **no longer** where file tools resolve relative paths — that is now the **cwd**, a separate runtime field (the project repo for a project Session, the Workspace otherwise). The Workspace stays the home of the `memory` tool; absolute paths bypass both.
+**Not:** The app source directory. Not the sessions directory. Not the cwd — the cwd is where file tools work, the Workspace is the identity/memory home; they coincide only for an identity agent at home. The workspace is agent-owned and agent-maintained — sessions are system-owned persisted chat history.
 
 ## Project
 **Definition:** A first-class entity (not just a cwd), keyed by a stable `project_id` slug with a changeable display name, that bundles a cwd (the repo directory tools resolve relative paths against), an auto-load file list, a project-default-agent, a default-model, a team scanned live from the repo, and Sessions. The minimal Project is just a cwd — team, `AGENTS.md`, and auto-load files are all optional, so an empty folder is a valid Project.

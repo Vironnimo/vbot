@@ -25,7 +25,9 @@ from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 JsonObject = dict[str, Any]
 
 
-def make_context(data_root: Path, *, agent_id: str = "coder") -> ToolContext:
+def make_context(
+    data_root: Path, *, agent_id: str = "coder", project_id: str | None = None
+) -> ToolContext:
     workspace = data_root / "workspace"
     workspace.mkdir(exist_ok=True)
     return ToolContext(
@@ -38,6 +40,7 @@ def make_context(data_root: Path, *, agent_id: str = "coder") -> ToolContext:
         workspace=workspace,
         app_root=data_root.parent,
         data_root=data_root,
+        project_id=project_id,
     )
 
 
@@ -166,6 +169,38 @@ def test_session_search_finds_all_query_terms_in_newest_sessions(tmp_path: Path)
     assert matches[0]["role"] == "user"
     assert "Release deploy" in matches[0]["snippet"]
     assert "Found 1 match" in data["content"]
+
+
+def test_session_search_scopes_recall_to_context_project(tmp_path: Path) -> None:
+    """A project run's recall searches its project Sessions; a global run the global ones.
+
+    The handler takes the project scope from ``ToolContext.project_id`` (the
+    running run's project), not from a tool argument.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="global-s").append(
+        ChatMessage.user("Release deploy plan global", timestamp=timestamp(1))
+    )
+    sessions.create("coder", session_id="proj-s", project_id="alpha").append(
+        ChatMessage.user("Release deploy plan project", timestamp=timestamp(2))
+    )
+
+    project_result = session_search_handler(
+        make_context(tmp_path, project_id="alpha"),
+        {"query": "release deploy"},
+        sessions,
+    )
+    global_result = session_search_handler(
+        make_context(tmp_path),
+        {"query": "release deploy"},
+        sessions,
+    )
+
+    project_data = assert_success_envelope(project_result)
+    global_data = assert_success_envelope(global_result)
+    assert [m["session_id"] for m in project_data["matches"]] == ["proj-s"]
+    assert [m["session_id"] for m in global_data["matches"]] == ["global-s"]
 
 
 def test_session_search_filters_by_time_range_and_role(tmp_path: Path) -> None:

@@ -15,7 +15,9 @@ from core.tools.write import (
 )
 
 
-def make_context(workspace: Path, tool_name: str = WRITE_TOOL_NAME) -> ToolContext:
+def make_context(
+    workspace: Path, tool_name: str = WRITE_TOOL_NAME, *, cwd: Path | None = None
+) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
@@ -26,6 +28,7 @@ def make_context(workspace: Path, tool_name: str = WRITE_TOOL_NAME) -> ToolConte
         workspace=workspace,
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
+        cwd=cwd,
     )
 
 
@@ -145,6 +148,26 @@ def test_write_writes_relative_workspace_path(tmp_path: Path) -> None:
     assert data["path"] == str(target.resolve())
     assert data["bytes"] == len(b"hello\nworkspace\n")
     assert data["message"] == f"OK: written {data['bytes']} bytes to {target.resolve()}"
+
+
+def test_write_resolves_relative_path_against_cwd_not_workspace(tmp_path: Path) -> None:
+    # A project session sets cwd to the repo; a relative path must land in the
+    # repo (cwd), never in the agent workspace.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = write_handler(
+        make_context(workspace, cwd=repo),
+        {"path": "notes.txt", "content": "in repo\n"},
+    )
+
+    data = assert_success_envelope(result)
+    target = repo / "notes.txt"
+    assert target.read_bytes() == b"in repo\n"
+    assert data["path"] == str(target.resolve())
+    assert not (workspace / "notes.txt").exists()
 
 
 def test_write_writes_absolute_path(tmp_path: Path) -> None:

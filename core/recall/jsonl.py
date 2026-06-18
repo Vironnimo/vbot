@@ -97,7 +97,7 @@ class JsonlSessionRecallBackend:
     def candidate_session_summaries(self, request: RecallRequest) -> list[JsonObject]:
         summaries = [
             summary
-            for summary in self.sessions.list_with_metadata(request.agent_id)
+            for summary in self.sessions.list_with_metadata(request.agent_id, request.project_id)
             if session_matches_request(summary, request)
         ]
         summaries.sort(
@@ -133,7 +133,9 @@ class JsonlSessionRecallBackend:
         if summary is None or request.session_id is None:
             return empty_session_overview(request)
 
-        messages = self.sessions.get(request.agent_id, request.session_id).load()
+        messages = self.sessions.get(
+            request.agent_id, request.session_id, request.project_id
+        ).load()
         eligible_indices = [
             index
             for index, message in enumerate(messages)
@@ -167,7 +169,7 @@ class JsonlSessionRecallBackend:
 
         for summary in summaries:
             session_id = str(summary["id"])
-            messages = self.sessions.get(request.agent_id, session_id).load()
+            messages = self.sessions.get(request.agent_id, session_id, request.project_id).load()
             searched_sessions += 1
             for message_index, message in enumerate(messages):
                 if not message_matches_request(message, request):
@@ -208,7 +210,9 @@ class JsonlSessionRecallBackend:
         if summary is None or request.session_id is None or request.around_message_id is None:
             return empty_anchored_view(request)
 
-        messages = self.sessions.get(request.agent_id, request.session_id).load()
+        messages = self.sessions.get(
+            request.agent_id, request.session_id, request.project_id
+        ).load()
         anchor_index = message_index_by_id(messages, request.around_message_id)
         if anchor_index is None:
             return empty_anchored_view(request)

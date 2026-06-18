@@ -15,6 +15,7 @@ from core.projects.projects import (
     ProjectNotFoundError,
 )
 from core.projects.store import ProjectStore
+from core.sessions import ChatSessionManager
 
 
 @pytest.fixture
@@ -239,3 +240,37 @@ def test_workspace_dir_is_under_agent_anchor(data_dir: Path, repo: Path) -> None
     workspace_dir = store.workspace_dir("vbot", "rooted")
 
     assert workspace_dir == data_dir / "projects" / "vbot" / "agents" / "rooted" / "workspace"
+
+
+def _write_anchor_session(data_dir: Path, project_id: str, agent_id: str) -> None:
+    """Create one session file under a project anchor via the session backbone."""
+    manager = ChatSessionManager(data_dir)
+    manager.create(agent_id, project_id=project_id)
+
+
+def test_session_owning_agents_lists_only_agents_with_sessions(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    _write_anchor_session(data_dir, "vbot", "builder")
+    _write_anchor_session(data_dir, "vbot", "orchestrator")
+    # An agent dir created without any session must not count as an owner.
+    (data_dir / "projects" / "vbot" / "agents" / "empty" / "sessions").mkdir(parents=True)
+
+    owners = store.session_owning_agents("vbot")
+
+    assert owners == ["builder", "orchestrator"]
+
+
+def test_session_owning_agents_empty_for_project_without_sessions(
+    data_dir: Path, repo: Path
+) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    assert store.session_owning_agents("vbot") == []
+
+
+def test_session_owning_agents_empty_for_unknown_project(data_dir: Path) -> None:
+    store = ProjectStore(data_dir)
+
+    assert store.session_owning_agents("missing") == []

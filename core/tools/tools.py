@@ -112,6 +112,18 @@ class ToolContext:
     workspace: Path
     app_root: Path
     data_root: Path
+    # Working directory for relative-path resolution by file/shell tools. ``None``
+    # falls back to ``workspace`` (the identity-agent home) so every existing
+    # caller and identity session keeps today's behavior; a project session
+    # supplies the repo cwd, which is a runtime field separate from workspace
+    # (workspace stays the memory-tool home).
+    cwd: Path | None = None
+    # Project the owning run belongs to, or ``None`` for an identity run. A tool
+    # (the subagent tool especially) reads this to inherit the parent run's
+    # project end-to-end: a child spawned from a project run gets a project-keyed
+    # child session/run and a parent link that records the project. ``None`` means
+    # the global/identity path, exactly unchanged.
+    project_id: str | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
     cancel_registration_hook: ToolCancelRegistrationHook | None = None
@@ -120,6 +132,16 @@ class ToolContext:
     skill_activation_hook: ToolSkillActivationHook | None = None
     allowed_skills: Sequence[str] | None = None
     nesting_depth: int = 0
+
+    @property
+    def effective_cwd(self) -> Path:
+        """Return the working directory for relative-path resolution.
+
+        Falls back to ``workspace`` when no project cwd was supplied, so file and
+        shell tools resolve against the project repo in a project session and
+        against the agent workspace everywhere else.
+        """
+        return self.cwd if self.cwd is not None else self.workspace
 
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""
@@ -185,6 +207,13 @@ class ToolExecutionConfig:
     workspace: Path
     app_root: Path
     data_root: Path
+    # Working directory for relative-path resolution; ``None`` falls back to
+    # ``workspace`` so existing execution groups keep today's behavior. See
+    # ``ToolContext.cwd`` for the contract.
+    cwd: Path | None = None
+    # Project of the owning run, threaded onto every ``ToolContext`` built from
+    # this group. ``None`` is the identity path. See ``ToolContext.project_id``.
+    project_id: str | None = None
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
@@ -504,6 +533,8 @@ class ToolExecutor:
                 workspace=config.workspace,
                 app_root=config.app_root,
                 data_root=config.data_root,
+                cwd=config.cwd,
+                project_id=config.project_id,
                 emit_hook=config.emit_hook,
                 cancellation_hook=config.cancellation_hook,
                 cancel_registration_hook=cancel_registration_hook,

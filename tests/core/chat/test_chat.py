@@ -8,8 +8,9 @@ import pytest
 
 from core.chat import ChatMessage, ChatMessageValidationError
 from core.chat.chat import ChatLoop, _validate_assistant_message
+from core.projects import ProjectStore
 from core.runs import RunCancelledError
-from core.tools import ToolContext, ToolRegistry, tool_success
+from core.tools import ToolContext, ToolRegistry, register_write_tool, tool_success
 
 
 def test_validate_assistant_message_allows_reasoning_only() -> None:
@@ -119,3 +120,226 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
     # Run summary marks the run as cancelled.
     assert persisted[-1].role == "run_summary"
     assert persisted[-1].status == "cancelled"
+
+
+def _project_runtime(tmp_path: Path, *, agent: Any, adapter: Any, tools: Any) -> Any:
+    """Build a StubRuntime with a real ProjectStore wired onto it.
+
+    The chat loop reads ``runtime.projects.get(project_id).cwd`` to resolve a
+    project session's tool cwd, so a real store (not a stub) exercises the full
+    ``str``-cwd → ``Path`` hand-off end-to-end.
+    """
+    from tests.core.chat.test_chat_loop import StubRuntime
+
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.projects = ProjectStore(tmp_path)
+    return runtime
+
+
+@pytest.mark.asyncio
+async def test_project_session_is_created_and_opened_under_project_anchor(
+    tmp_path: Path,
+) -> None:
+    # Arrange: a project whose anchor lives under projects/<pid>/agents/<id>/.
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=ToolRegistry())
+    runtime.projects.create("acme", "Acme", repo_dir)
+
+    # Act: run a turn scoped to the project.
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one", project_id="acme")
+
+    # Assert: the session file was created AND read under the project anchor,
+    # never under the global identity layout.
+    project_session = (
+        tmp_path / "projects" / "acme" / "agents" / "coder" / "sessions" / "session-one.jsonl"
+    )
+    identity_session = tmp_path / "agents" / "coder" / "sessions" / "session-one.jsonl"
+    assert project_session.exists()
+    assert not identity_session.exists()
+    persisted = runtime.chat_sessions.get("coder", "session-one", "acme").load()
+    assert persisted_roles_of(persisted) == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_project_run_is_keyed_by_project_id(tmp_path: Path) -> None:
+    # The run key carries project_id, so a project run and a global run sharing
+    # one (agent_id, session_id) are distinct turn slots. Proof: while a project
+    # run is active, a same-id GLOBAL run starts (no ActiveRunError), but a
+    # same-id PROJECT run is rejected as already active.
+    from core.runs import ActiveRunError
+    from tests.core.chat.test_chat_loop import BlockingStubAdapter, StubAgent
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = BlockingStubAdapter()
+    runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=ToolRegistry())
+    runtime.projects.create("acme", "Acme", repo_dir)
+    runtime.chat_sessions.create("coder", session_id="session-one", project_id="acme")
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    loop = ChatLoop(runtime)
+    project_run = await loop.start_run("coder", "Hi", session_id="session-one", project_id="acme")
+    await adapter.request_started.wait()
+
+    # Same id under the global key is a different slot — it must start.
+    global_run = await loop.start_run("coder", "Hi", session_id="session-one")
+    # Same id under the same project key collides — it must be rejected.
+    with pytest.raises(ActiveRunError):
+        await loop.start_run("coder", "Hi", session_id="session-one", project_id="acme")
+
+    adapter.release.set()
+    await project_run.wait()
+    await global_run.wait()
+
+
+@pytest.mark.asyncio
+async def test_project_session_tool_resolves_relative_path_against_project_cwd(
+    tmp_path: Path,
+) -> None:
+    # The plan risk this addresses: a file tool in a project session must write
+    # into the repo, not the agent workspace. End-to-end through the chat loop:
+    # a write with a relative path lands under the project cwd.
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "write",
+                        "arguments": {"path": "out.txt", "content": "in-repo"},
+                    }
+                ],
+            },
+            {"content": "Wrote the file.", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    register_write_tool(tools)
+    runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
+    project = runtime.projects.create("acme", "Acme", repo_dir)
+
+    await ChatLoop(runtime).send(
+        "coder", "Write a file", session_id="session-one", project_id="acme"
+    )
+
+    # The relative path resolved against the project cwd (the repo), not the
+    # agent workspace.
+    repo_file = Path(project.cwd) / "out.txt"
+    workspace_file = tmp_path / "workspace-coder" / "out.txt"
+    assert repo_file.read_text(encoding="utf-8") == "in-repo"
+    assert not workspace_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path) -> None:
+    # With project_id=None the session keeps the global identity layout and the
+    # tool cwd stays the agent workspace — today's behavior, exactly unchanged.
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "write",
+                        "arguments": {"path": "out.txt", "content": "in-workspace"},
+                    }
+                ],
+            },
+            {"content": "Wrote the file.", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    register_write_tool(tools)
+    runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.projects.create("acme", "Acme", tmp_path / "repo-unused")
+
+    await ChatLoop(runtime).send("coder", "Write a file", session_id="session-one")
+
+    identity_session = tmp_path / "agents" / "coder" / "sessions" / "session-one.jsonl"
+    workspace_file = tmp_path / "workspace-coder" / "out.txt"
+    assert identity_session.exists()
+    assert workspace_file.read_text(encoding="utf-8") == "in-workspace"
+
+
+@pytest.mark.asyncio
+async def test_project_run_threads_project_id_to_tool_context(tmp_path: Path) -> None:
+    # End-to-end: a run scoped to a project must set ToolContext.project_id on
+    # every tool call, so the subagent tool can inherit the parent run's project.
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    seen: list[str | None] = []
+
+    def project_probe(context: ToolContext, _arguments: dict) -> dict:
+        seen.append(context.project_id)
+        return tool_success({"project_id": context.project_id})
+
+    tools = ToolRegistry()
+    tools.register("project_probe", "Probe project id.", {"type": "object"}, project_probe)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "project_probe", "arguments": {}}],
+            },
+            {"content": "Done.", "tool_calls": None},
+        ]
+    )
+    runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.projects.create("acme", "Acme", repo_dir)
+
+    await ChatLoop(runtime).send("coder", "Probe", session_id="session-one", project_id="acme")
+
+    assert seen == ["acme"]
+
+
+@pytest.mark.asyncio
+async def test_identity_run_leaves_tool_context_project_id_none(tmp_path: Path) -> None:
+    # The identity path (project_id=None) keeps ToolContext.project_id None.
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+
+    seen: list[str | None] = []
+
+    def project_probe(context: ToolContext, _arguments: dict) -> dict:
+        seen.append(context.project_id)
+        return tool_success({"project_id": context.project_id})
+
+    tools = ToolRegistry()
+    tools.register("project_probe", "Probe project id.", {"type": "object"}, project_probe)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "project_probe", "arguments": {}}],
+            },
+            {"content": "Done.", "tool_calls": None},
+        ]
+    )
+    runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    await ChatLoop(runtime).send("coder", "Probe", session_id="session-one")
+
+    assert seen == [None]
+
+
+def persisted_roles_of(messages: list[ChatMessage]) -> list[str]:
+    return [message.role for message in messages if message.role != "run_summary"]

@@ -13,7 +13,12 @@ import pytest
 import pytest_asyncio
 
 import core.tools.bash as bash_module
-from core.tools.bash import BASH_TOOL_PARAMETERS, bash_handler, register_bash_tool
+from core.tools.bash import (
+    BASH_TOOL_PARAMETERS,
+    _resolve_workdir,
+    bash_handler,
+    register_bash_tool,
+)
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import ToolContext, ToolRegistry
 
@@ -38,6 +43,7 @@ async def manager() -> AsyncIterator[ProcessManager]:
 def make_context(
     tmp_path: Path,
     *,
+    cwd: Path | None = None,
     emit_hook: Any = None,
     cancellation_hook: Any = None,
     cancel_registration_hook: Any = None,
@@ -53,6 +59,7 @@ def make_context(
         workspace=tmp_path,
         app_root=tmp_path,
         data_root=tmp_path,
+        cwd=cwd,
         emit_hook=emit_hook,
         cancellation_hook=cancellation_hook,
         cancel_registration_hook=cancel_registration_hook,
@@ -404,6 +411,65 @@ async def test_spawn_failure_returns_failure_envelope(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "process_spawn_failed"
+
+
+def test_resolve_workdir_defaults_to_cwd_not_workspace(tmp_path: Path) -> None:
+    # A project session sets cwd to the repo; with no workdir argument, bash
+    # must default its working directory to the cwd, not the agent workspace.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    context = make_context(workspace, cwd=repo)
+
+    assert _resolve_workdir(context, None) == repo.resolve()
+
+
+def test_resolve_workdir_defaults_to_workspace_without_cwd(tmp_path: Path) -> None:
+    # No project cwd: the working directory stays the workspace, today's behavior.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    context = make_context(workspace)
+
+    assert _resolve_workdir(context, None) == workspace.resolve()
+
+
+def test_resolve_workdir_resolves_relative_workdir_against_cwd(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repo = tmp_path / "repo"
+    (repo / "sub").mkdir(parents=True)
+    context = make_context(workspace, cwd=repo)
+
+    assert _resolve_workdir(context, "sub") == (repo / "sub").resolve()
+
+
+@pytest.mark.asyncio
+async def test_bash_runs_in_cwd_when_no_workdir_argument(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # End-to-end: the spawned process runs in the cwd, so a relative-path write
+    # lands in the repo (cwd), not the agent workspace.
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    context = make_context(workspace, cwd=repo)
+
+    result = await bash_handler(
+        context,
+        {"command": "open('marker.txt', 'w').write('here')"},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["exit_code"] == 0
+    assert (repo / "marker.txt").read_text(encoding="utf-8") == "here"
+    assert not (workspace / "marker.txt").exists()
 
 
 @pytest.mark.asyncio

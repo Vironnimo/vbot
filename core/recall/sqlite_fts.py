@@ -28,9 +28,26 @@ _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_index.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 # Bump when the on-disk index schema changes; mismatched indexes are dropped and rebuilt.
-_SCHEMA_VERSION = 1
+# v2 → rows are project-scoped (``project_id`` column in the index keys) so the
+#      same session UUID under a project vs. the global scope never collides.
+_SCHEMA_VERSION = 2
 # FTS5 trigram needs at least three characters; shorter queries fall back to the JSONL scan.
 _TRIGRAM_MIN_CHARS = 3
+# Sentinel stored for the identity/global scope (``project_id is None``). An
+# empty string keeps the PRIMARY KEY/UNIQUE constraints reliable — SQLite treats
+# NULLs as distinct, which would defeat the per-scope uniqueness the column adds.
+_GLOBAL_SCOPE = ""
+
+
+def _scope(project_id: str | None) -> str:
+    """Map a recall project scope to the index's stored scope value.
+
+    ``None`` (identity/global recall) maps to the ``_GLOBAL_SCOPE`` sentinel so
+    the on-disk rows for the global scope never share a key with a project's
+    same-UUID session.
+    """
+
+    return project_id if project_id is not None else _GLOBAL_SCOPE
 
 
 class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
@@ -75,8 +92,8 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
 
         with closing(self._connect()) as connection:
             self._initialize_schema(connection)
-            self._cleanup_missing_sessions(connection, request.agent_id, summaries)
-            self._ensure_indexed(connection, request.agent_id, summaries)
+            self._cleanup_missing_sessions(connection, request, summaries)
+            self._ensure_indexed(connection, request, summaries)
             rows = self._query_matches(connection, request, summaries, expression)
         matches = self._hydrate_matches(request, summaries, rows)
         truncated = len(matches) > request.limit
@@ -115,30 +132,32 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             """
             CREATE TABLE IF NOT EXISTS indexed_sessions (
               agent_id TEXT NOT NULL,
+              project_id TEXT NOT NULL,
               session_id TEXT NOT NULL,
               session_mtime_ns INTEGER NOT NULL,
               session_size_bytes INTEGER NOT NULL,
               indexed_at TEXT NOT NULL,
-              PRIMARY KEY (agent_id, session_id)
+              PRIMARY KEY (agent_id, project_id, session_id)
             );
 
             CREATE TABLE IF NOT EXISTS messages (
               row_id INTEGER PRIMARY KEY,
               agent_id TEXT NOT NULL,
+              project_id TEXT NOT NULL,
               session_id TEXT NOT NULL,
               message_id TEXT NOT NULL,
               message_index INTEGER NOT NULL,
               timestamp TEXT NOT NULL,
               role TEXT NOT NULL,
               search_text TEXT NOT NULL,
-              UNIQUE (agent_id, session_id, message_id)
+              UNIQUE (agent_id, project_id, session_id, message_id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_session
-              ON messages(agent_id, session_id, message_index);
+              ON messages(agent_id, project_id, session_id, message_index);
 
             CREATE INDEX IF NOT EXISTS idx_messages_time
-              ON messages(agent_id, timestamp);
+              ON messages(agent_id, project_id, timestamp);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
             USING fts5(
@@ -155,38 +174,42 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
     def _cleanup_missing_sessions(
         self,
         connection: sqlite3.Connection,
-        agent_id: str,
+        request: RecallRequest,
         summaries: list[JsonObject],
     ) -> None:
+        agent_id = request.agent_id
+        scope = _scope(request.project_id)
         active_session_ids = {str(summary["id"]) for summary in summaries}
         indexed_session_ids = {
             str(row["session_id"])
             for row in connection.execute(
-                "SELECT session_id FROM indexed_sessions WHERE agent_id = ?",
-                (agent_id,),
+                "SELECT session_id FROM indexed_sessions WHERE agent_id = ? AND project_id = ?",
+                (agent_id, scope),
             )
         }
         for session_id in sorted(indexed_session_ids - active_session_ids):
-            self._delete_session_rows(connection, agent_id, session_id)
+            self._delete_session_rows(connection, agent_id, scope, session_id)
         connection.commit()
 
     def _ensure_indexed(
         self,
         connection: sqlite3.Connection,
-        agent_id: str,
+        request: RecallRequest,
         summaries: list[JsonObject],
     ) -> None:
+        agent_id = request.agent_id
+        scope = _scope(request.project_id)
         for summary in summaries:
             session_id = str(summary["id"])
-            session = self.sessions.get(agent_id, session_id)
+            session = self.sessions.get(agent_id, session_id, request.project_id)
             stat = session.path.stat()
             indexed = connection.execute(
                 """
                 SELECT session_mtime_ns, session_size_bytes
                 FROM indexed_sessions
-                WHERE agent_id = ? AND session_id = ?
+                WHERE agent_id = ? AND project_id = ? AND session_id = ?
                 """,
-                (agent_id, session_id),
+                (agent_id, scope, session_id),
             ).fetchone()
             if (
                 indexed is not None
@@ -197,6 +220,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             self._reindex_session(
                 connection,
                 agent_id,
+                scope,
                 session_id,
                 session.load(),
                 mtime_ns=stat.st_mtime_ns,
@@ -207,6 +231,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         self,
         connection: sqlite3.Connection,
         agent_id: str,
+        scope: str,
         session_id: str,
         messages: list[Any],
         *,
@@ -214,7 +239,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         size_bytes: int,
     ) -> None:
         with connection:
-            self._delete_session_rows(connection, agent_id, session_id)
+            self._delete_session_rows(connection, agent_id, scope, session_id)
             for message_index, message in enumerate(messages):
                 if is_skill_context_note(message):
                     continue
@@ -223,6 +248,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                     """
                     INSERT INTO messages (
                       agent_id,
+                      project_id,
                       session_id,
                       message_id,
                       message_index,
@@ -230,10 +256,11 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                       role,
                       search_text
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         agent_id,
+                        scope,
                         session_id,
                         message.id,
                         message_index,
@@ -253,15 +280,17 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                 """
                 INSERT INTO indexed_sessions (
                   agent_id,
+                  project_id,
                   session_id,
                   session_mtime_ns,
                   session_size_bytes,
                   indexed_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     agent_id,
+                    scope,
                     session_id,
                     mtime_ns,
                     size_bytes,
@@ -273,24 +302,26 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
     def _delete_session_rows(
         connection: sqlite3.Connection,
         agent_id: str,
+        scope: str,
         session_id: str,
     ) -> None:
         row_ids = [
             int(row["row_id"])
             for row in connection.execute(
-                "SELECT row_id FROM messages WHERE agent_id = ? AND session_id = ?",
-                (agent_id, session_id),
+                "SELECT row_id FROM messages "
+                "WHERE agent_id = ? AND project_id = ? AND session_id = ?",
+                (agent_id, scope, session_id),
             )
         ]
         for row_id in row_ids:
             connection.execute("DELETE FROM messages_fts WHERE rowid = ?", (row_id,))
         connection.execute(
-            "DELETE FROM messages WHERE agent_id = ? AND session_id = ?",
-            (agent_id, session_id),
+            "DELETE FROM messages WHERE agent_id = ? AND project_id = ? AND session_id = ?",
+            (agent_id, scope, session_id),
         )
         connection.execute(
-            "DELETE FROM indexed_sessions WHERE agent_id = ? AND session_id = ?",
-            (agent_id, session_id),
+            "DELETE FROM indexed_sessions WHERE agent_id = ? AND project_id = ? AND session_id = ?",
+            (agent_id, scope, session_id),
         )
 
     def _query_matches(
@@ -306,10 +337,17 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         conditions = [
             "messages_fts MATCH ?",
             "m.agent_id = ?",
+            "m.project_id = ?",
             f"m.session_id IN ({session_placeholders})",
             f"m.role IN ({role_placeholders})",
         ]
-        parameters: list[Any] = [expression, request.agent_id, *session_ids, *request.roles]
+        parameters: list[Any] = [
+            expression,
+            request.agent_id,
+            _scope(request.project_id),
+            *session_ids,
+            *request.roles,
+        ]
         if request.since is not None:
             conditions.append("m.timestamp >= ?")
             parameters.append(request.since.isoformat())
@@ -352,6 +390,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                 messages_by_session[session_id] = self.sessions.get(
                     request.agent_id,
                     session_id,
+                    request.project_id,
                 ).load()
             messages = messages_by_session[session_id]
             message_index = message_index_by_id(messages, str(row["message_id"]))

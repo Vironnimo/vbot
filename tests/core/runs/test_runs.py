@@ -1280,3 +1280,159 @@ async def test_start_run_payload_omits_queue_item_id() -> None:
     assert len(started_events) == 1
     assert started_events[0].payload == {"status": RunStatus.RUNNING.value}
     assert "queue_item_id" not in started_events[0].payload
+
+
+async def test_global_and_project_session_with_same_id_run_in_parallel() -> None:
+    """A global and a project-scoped session sharing one id are distinct turn slots."""
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        await release.wait()
+        return run.id
+
+    global_run = await manager.start(
+        agent_id="coder",
+        session_id="shared",
+        executor=execute,
+    )
+    project_run = await manager.start(
+        agent_id="coder",
+        session_id="shared",
+        executor=execute,
+        project_id="acme",
+    )
+    await asyncio.sleep(0)
+
+    assert global_run is not project_run
+    assert manager.active_run(agent_id="coder", session_id="shared") is global_run
+    assert (
+        manager.active_run(agent_id="coder", session_id="shared", project_id="acme") is project_run
+    )
+
+    release.set()
+    assert await global_run.wait() == global_run.id
+    assert await project_run.wait() == project_run.id
+
+
+async def test_project_scope_rejects_second_active_run_independently() -> None:
+    """The active-run guard is per (project, agent, session); scopes do not collide."""
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        await release.wait()
+        return run.id
+
+    await manager.start(agent_id="coder", session_id="shared", executor=execute, project_id="acme")
+
+    # Same project scope: a second active run is rejected.
+    with pytest.raises(ActiveRunError, match="active run"):
+        await manager.start(
+            agent_id="coder", session_id="shared", executor=execute, project_id="acme"
+        )
+
+    # Global scope with the same ids is unaffected and may start.
+    global_run = await manager.start(agent_id="coder", session_id="shared", executor=execute)
+    assert global_run.status == RunStatus.RUNNING
+
+    release.set()
+    await global_run.wait()
+
+
+async def test_project_scope_queues_are_isolated_from_global_scope() -> None:
+    """Queueing in one scope does not affect the other scope's queue."""
+    manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def active_execute(_run: Run) -> str:
+        await active_release.wait()
+        return "active"
+
+    async def queued_execute(_run: Run) -> str:
+        return "queued"
+
+    project_active = await manager.start(
+        agent_id="coder",
+        session_id="shared",
+        executor=active_execute,
+        project_id="acme",
+    )
+    project_item = await manager.enqueue(
+        agent_id="coder",
+        session_id="shared",
+        executor=queued_execute,
+        display_content="project-queued",
+        project_id="acme",
+    )
+
+    # The project session is busy, so the item is queued there but the global
+    # scope sees an empty queue and is free to start immediately.
+    assert project_item.future.done() is False
+    assert [item.item_id for item in manager.list_queued("coder", "shared", project_id="acme")] == [
+        project_item.item_id
+    ]
+    assert manager.list_queued("coder", "shared") == []
+
+    global_item = await manager.enqueue(
+        agent_id="coder",
+        session_id="shared",
+        executor=queued_execute,
+        display_content="global-now",
+    )
+    global_run = await global_item.future
+    assert global_run.status == RunStatus.RUNNING
+
+    active_release.set()
+    assert await project_active.wait() == "active"
+    project_run = await asyncio.wait_for(project_item.future, timeout=1)
+    assert await project_run.wait() == "queued"
+    assert await global_run.wait() == "queued"
+
+
+async def test_cancel_by_session_targets_the_requested_project_scope() -> None:
+    """cancel_by_session only cancels the run in the matching (project, agent, session)."""
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        await release.wait()
+        run.raise_if_cancelled()
+        return "done"
+
+    global_run = await manager.start(agent_id="coder", session_id="shared", executor=execute)
+    project_run = await manager.start(
+        agent_id="coder", session_id="shared", executor=execute, project_id="acme"
+    )
+    await asyncio.sleep(0)
+
+    cancelled = manager.cancel_by_session("coder", "shared", project_id="acme")
+    assert cancelled is project_run
+    assert project_run.cancel_requested is True
+    assert global_run.cancel_requested is False
+
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await project_run.wait()
+    assert await global_run.wait() == "done"
+
+
+async def test_has_activity_for_agent_matches_across_project_scopes() -> None:
+    """An agent busy only in a project scope still reports activity."""
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    run = await manager.start(
+        agent_id="coder", session_id="shared", executor=execute, project_id="acme"
+    )
+
+    assert manager.has_activity_for_agent("coder") is True
+    assert manager.has_activity_for_agent("writer") is False
+
+    release.set()
+    await run.wait()
+    assert manager.has_activity_for_agent("coder") is False
