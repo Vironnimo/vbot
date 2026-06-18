@@ -13,6 +13,7 @@ import core.chat as chat_api
 import core.subagents.subagents as subagent_module
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
+from core.projects import AgentResolutionError
 from core.runs import ActiveRunError, Run, RunNotFoundError
 from core.subagents.subagents import (
     SubAgentBatchTracker,
@@ -94,6 +95,23 @@ class FakeAgents:
         if agent_id not in self._agent_ids:
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
         return SimpleNamespace(id=agent_id)
+
+
+class FakeAgentResolver:
+    """Resolver seam used by sub-agent target validation.
+
+    Delegates to ``FakeAgents`` and re-raises an unknown target as
+    :class:`AgentResolutionError`, matching the real resolver's failure surface.
+    """
+
+    def __init__(self, agents: FakeAgents) -> None:
+        self._agents = agents
+
+    def resolve_agent(self, _project_id: str | None, agent_id: str) -> SimpleNamespace:
+        try:
+            return self._agents.get(agent_id)
+        except AgentNotFoundError as error:
+            raise AgentResolutionError(str(error)) from error
 
 
 class FakeRunManager:
@@ -265,8 +283,10 @@ class FakeChatLoop:
 def make_runtime(
     tmp_path: Path, manager: FakeRunManager, settings: JsonObject | None = None
 ) -> Any:
+    agents = FakeAgents()
     return SimpleNamespace(
-        agents=FakeAgents(),
+        agents=agents,
+        agent_resolver=FakeAgentResolver(agents),
         chat_sessions=ChatSessionManager(tmp_path),
         chat_run_manager=manager,
         storage=FakeStorage(settings),
@@ -465,7 +485,11 @@ async def test_subagent_tool_validates_target_agent_before_creating_session(
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
-    runtime.agents = FakeAgents({"parent"})
+    # Restrict the known set so 'missing' fails resolution; the resolver wraps the
+    # same restricted store the tool now validates through.
+    restricted_agents = FakeAgents({"parent"})
+    runtime.agents = restricted_agents
+    runtime.agent_resolver = FakeAgentResolver(restricted_agents)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context()
 

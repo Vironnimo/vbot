@@ -23,7 +23,7 @@ from core.extensions import ExtensionRegistry
 from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.models import Model, ModelRegistry
-from core.projects import ProjectStore
+from core.projects import AgentResolver, ProjectStore, build_agent_resolver
 from core.prompts import SkillPromptRegistry, SystemPromptManager
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -162,6 +162,7 @@ class Runtime:
         self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._projects: ProjectStore | None = None
+        self._agent_resolver: AgentResolver | None = None
         self._recall_backend_registry: RecallBackendRegistry | None = None
         self._recall_backend: RecallBackend | None = None
         self._chat_run_manager: ChatRunManager | None = None
@@ -296,6 +297,14 @@ class Runtime:
             )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._projects = ProjectStore(self._storage.data_dir)
+        self._agent_resolver = build_agent_resolver(
+            self._agents,
+            self._projects,
+            self._models,
+            self._providers,
+            self._provider_credentials,
+            self._global_default_agent_model,
+        )
         self._ensure_bootstrap_agent()
         recall_registry = self._build_recall_backend_registry()
         self._recall_backend_registry = recall_registry
@@ -355,7 +364,7 @@ class Runtime:
         register_subagent_tools(self._tools, self._subagent_coordinator)
         register_status_tool(
             self._tools,
-            self._agents,
+            self._agent_resolver,
             self._chat_sessions,
             self._models,
             self._chat_run_manager,
@@ -455,6 +464,7 @@ class Runtime:
         self._extensions = None
         self._chat_sessions = None
         self._projects = None
+        self._agent_resolver = None
         self._recall_backend_registry = None
         self._recall_backend = None
         self._channel_service = None
@@ -655,6 +665,19 @@ class Runtime:
         if key in os.environ:
             return os.environ[key]
         return self._fallback_environment.get(key, "")
+
+    def _global_default_agent_model(self) -> str:
+        """Return the instance-wide default agent model, or ``""`` when unset.
+
+        Read live from persisted ``defaults.agent`` so the agent resolver's model
+        chain (agent → project default → **global**) always sees the current
+        value without a restart. Mirrors how ``AgentStore`` reads agent defaults.
+        """
+        if self._storage is None:
+            return ""
+        agent_defaults = self._storage.load_defaults().get("agent", {})
+        model = agent_defaults.get("model", "") if isinstance(agent_defaults, dict) else ""
+        return model if isinstance(model, str) else ""
 
     def _skill_environment(self, fallback_environment: dict[str, str]) -> dict[str, str]:
         environment = dict(fallback_environment)
@@ -956,6 +979,18 @@ class Runtime:
         if self._projects is None:
             raise RuntimeError("Project service not available")
         return self._projects
+
+    @property
+    def agent_resolver(self) -> AgentResolver:
+        """Uniform ``(project_id | None, agent_id)`` → runtime-agent resolution.
+
+        The single fork between identity-store agents and project config agents;
+        run paths resolve through here instead of ``runtime.agents.get`` directly.
+        """
+        self._ensure_started()
+        if self._agent_resolver is None:
+            raise RuntimeError("Agent resolver service not available")
+        return self._agent_resolver
 
     @property
     def recall_backend(self) -> RecallBackend:

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from core.chat import ChatLoop
     from core.extensions import ExtensionRegistry
     from core.models.models import ModelRegistry
-    from core.projects import ProjectStore
+    from core.projects import AgentResolver, ProjectStore
     from core.prompts import SystemPromptManager
     from core.providers.adapter import ProviderAdapter
     from core.providers.providers import ProviderRegistry
@@ -250,6 +250,11 @@ class RuntimeServices(Protocol):
     @property
     def projects(self) -> ProjectStore:
         """Persisted project anchor store (cwd, default agent/model, sessions)."""
+        ...
+
+    @property
+    def agent_resolver(self) -> AgentResolver:
+        """Uniform ``(project_id | None, agent_id)`` → runtime-agent resolution."""
         ...
 
     @property

@@ -6,6 +6,7 @@ from core.agents import AgentError
 from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.chat import ChatError, ChatSessionError
 from core.model_tasks import TaskModelError
+from core.projects import AgentResolutionError
 from core.runs import ActiveRunError, RunCancelledError, RunError, RunNotFoundError
 from core.utils.errors import ConfigError, VBotError
 from server.rpc.errors import (
@@ -40,6 +41,7 @@ def _map_expected_error(error: Exception) -> RpcError:
         error,
         (
             AgentError,
+            AgentResolutionError,
             ChatError,
             ChatSessionError,
             ConfigError,

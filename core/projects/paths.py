@@ -23,13 +23,15 @@ import re
 import unicodedata
 from pathlib import Path
 
-from core.settings import PROJECT_ID_PATTERN
+from core.settings import AGENT_ID_PATTERN, PROJECT_ID_PATTERN
 
-# Longest project-id (and slug) length, matching the canonical PROJECT_ID_PATTERN
-# (leading char + up to 63 more).
+# Longest slug length, matching both PROJECT_ID_PATTERN and AGENT_ID_PATTERN
+# (leading char + up to 63 more). The two patterns are identical filesystem-safe
+# rules, so the slug core is shared and only the final validation/error differs.
 MAX_PROJECT_ID_LENGTH = 64
+MAX_AGENT_ID_LENGTH = 64
 # Characters that are not allowed inside a slug get collapsed into this joiner.
-# Letters/digits/underscore/hyphen are kept (matching PROJECT_ID_PATTERN); any
+# Letters/digits/underscore/hyphen are kept (matching the id patterns); any
 # run of other characters collapses to a single hyphen.
 _SLUG_SEPARATOR = "-"
 _SLUG_INVALID_PATTERN = re.compile(r"[^a-z0-9_-]+")
@@ -81,6 +83,28 @@ def cwd_exists(cwd: str | os.PathLike[str]) -> bool:
     return resolved.is_dir()
 
 
+def _slugify(name: str, max_length: int) -> str | None:
+    """Return a filesystem-safe slug, or ``None`` when nothing slug-worthy remains.
+
+    Shared core of the project-id and agent-id slug rules (the two id patterns are
+    identical): lowercase → transliterate/strip Unicode → non-alphanumeric runs
+    become a single hyphen → trim leading/trailing separators → truncate. The
+    caller applies its own pattern check and raises its own flavored error, so the
+    transliteration logic lives in exactly one place.
+    """
+    if not isinstance(name, str):
+        return None
+    # Decompose accents then drop non-ASCII so transliteration is deterministic
+    # across hosts (no locale dependence).
+    decomposed = unicodedata.normalize("NFKD", name)
+    ascii_text = decomposed.encode("ascii", "ignore").decode("ascii").lower()
+    collapsed = _SLUG_INVALID_PATTERN.sub(_SLUG_SEPARATOR, ascii_text)
+    trimmed = _SLUG_EDGE_PATTERN.sub("", collapsed)
+    slug = trimmed[:max_length]
+    slug = _SLUG_EDGE_PATTERN.sub("", slug)
+    return slug or None
+
+
 def slugify_project_id(display_name: str) -> str:
     """Derive a filesystem-safe ``project_id`` slug from a display name.
 
@@ -90,17 +114,21 @@ def slugify_project_id(display_name: str) -> str:
     :class:`ValueError` when nothing slug-worthy remains (caller surfaces it as a
     "not slugifiable" scan/report finding).
     """
-    if not isinstance(display_name, str):
-        raise ValueError("display_name must be a string")
-
-    # Decompose accents then drop non-ASCII so transliteration is deterministic
-    # across hosts (no locale dependence).
-    decomposed = unicodedata.normalize("NFKD", display_name)
-    ascii_text = decomposed.encode("ascii", "ignore").decode("ascii").lower()
-    collapsed = _SLUG_INVALID_PATTERN.sub(_SLUG_SEPARATOR, ascii_text)
-    trimmed = _SLUG_EDGE_PATTERN.sub("", collapsed)
-    slug = trimmed[:MAX_PROJECT_ID_LENGTH]
-    slug = _SLUG_EDGE_PATTERN.sub("", slug)
-    if not slug or PROJECT_ID_PATTERN.fullmatch(slug) is None:
+    slug = _slugify(display_name, MAX_PROJECT_ID_LENGTH)
+    if slug is None or PROJECT_ID_PATTERN.fullmatch(slug) is None:
         raise ValueError(f"display name cannot be slugified into a project id: {display_name!r}")
+    return slug
+
+
+def slugify_agent_id(name: str) -> str:
+    """Derive a filesystem-safe ``agent_id`` slug from an agent name/filename.
+
+    Same rule as :func:`slugify_project_id` (the id patterns are identical), but
+    validated against ``AGENT_ID_PATTERN`` and raising an agent-flavored error so
+    scanners can surface a "not slugifiable" finding for the offending source
+    file. Reuses the shared slug core — one source of the transliteration logic.
+    """
+    slug = _slugify(name, MAX_AGENT_ID_LENGTH)
+    if slug is None or AGENT_ID_PATTERN.fullmatch(slug) is None:
+        raise ValueError(f"name cannot be slugified into an agent id: {name!r}")
     return slug

@@ -333,7 +333,7 @@ class ChatLoop:
         ``project_id`` scopes the session/run to a project anchor; ``None`` keeps
         today's identity behavior.
         """
-        agent = self._runtime.agents.get(agent_id)
+        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
         session = self._get_session(
@@ -365,7 +365,7 @@ class ChatLoop:
         project_id: str | None = None,
     ) -> tuple[str, RunExecutor, str]:
         """Build replacement data for a queued run without mutating queue state."""
-        agent = self._runtime.agents.get(agent_id)
+        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
         session = self._get_session(
@@ -420,7 +420,10 @@ class ChatLoop:
         if manager.active_run(agent_id=agent_id, session_id=session_id) is not None:
             return "Cannot compact while a run is active for this session."
 
-        agent = self._runtime.agents.get(agent_id)
+        # ``/compact`` is not project-scoped yet (Phase 5), so it resolves the
+        # identity agent (``project_id=None``) — byte-identical to the former
+        # ``agents.get`` while still routing through the one resolver seam.
+        agent = self._runtime.agent_resolver.resolve_agent(None, agent_id)
         session = self._get_session(agent_id, session_id, create_missing=False)
         messages = session.load()
         settings = self._load_compaction_settings()
@@ -469,7 +472,7 @@ class ChatLoop:
         sender: MessageSender | None = None,
         project_id: str | None = None,
     ) -> Run:
-        agent = self._runtime.agents.get(agent_id)
+        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
         session = self._get_session(
@@ -502,9 +505,9 @@ class ChatLoop:
         project_id: str | None = None,
     ) -> ChatMessage:
         # ``project_id`` rides the executor closure, not the Run object: the Run
-        # stays project-agnostic, while the session anchor, run-key, and tool cwd
-        # all derive from the captured value here.
-        agent = self._runtime.agents.get(run.agent_id)
+        # stays project-agnostic, while the session anchor, run-key, tool cwd, and
+        # the resolved agent profile all derive from the captured value here.
+        agent = self._runtime.agent_resolver.resolve_agent(project_id, run.agent_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
         provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
