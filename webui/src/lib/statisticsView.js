@@ -4,6 +4,8 @@
 // takes the active UI locale (`activeLocaleTag()` from i18n.js) so dates and
 // numbers follow the app language, never the implicit browser locale.
 
+import { parseAgentAddress } from './agentAddress.js';
+
 export const STATISTICS_SUB_VIEWS = Object.freeze([
   'overview',
   'usage',
@@ -175,6 +177,18 @@ export function tokenSplit(record) {
     hasEstimated: estimated > 0,
     hasMeasured: measured > 0,
   };
+}
+
+// Split a statistics `agent_id` into display parts. The `statistics.report`
+// keys project agents as `agent@projekt` (and identity agents as a bare id), so
+// every agent cell parses the address once and renders the bare name plus, for a
+// project agent, a small project badge — instead of the raw `builder@vbot`
+// string. An identity agent (no `@`) gets `projectId: null`, so the component
+// renders it exactly as before (no badge), keeping the identity display
+// byte-identical.
+export function agentDisplay(agentId) {
+  const { agentId: bareId, projectId } = parseAgentAddress(agentId);
+  return { name: bareId, projectId };
 }
 
 export function topN(list, count) {

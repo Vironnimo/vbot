@@ -7,6 +7,7 @@
   import {
     STATISTICS_SUB_VIEWS,
     DAILY_GRANULARITIES,
+    agentDisplay,
     barFractions,
     clampUsagePercent,
     donutSegments,
@@ -300,6 +301,23 @@
   </span>
 {/snippet}
 
+{#snippet agentName(agentId)}
+  {@const display = agentDisplay(agentId)}
+  <span class="stats-agent">
+    <span class="stats-agent__name">{display.name}</span>
+    {#if display.projectId}
+      <span
+        class="stats-agent__project"
+        title={t('statistics.agent.projectBadgeTitle', 'Project: {project}', {
+          project: display.projectId,
+        })}
+      >
+        {display.projectId}
+      </span>
+    {/if}
+  </span>
+{/snippet}
+
 {#snippet barRows(entries, total)}
   <ul class="stats-bars">
     {#each entries as entry (entry.label)}
@@ -508,7 +526,7 @@
         <tbody>
           {#each overview.agents as agent (agent.agent_id)}
             <tr>
-              <td class="stats-mono">{agent.agent_id}</td>
+              <td class="stats-mono">{@render agentName(agent.agent_id)}</td>
               <td>{formatInteger(agent.sessions, locale)}</td>
               <td>{formatInteger(agent.runs, locale)}</td>
               <td>{formatInteger(agent.errors, locale)}</td>
@@ -699,6 +717,33 @@
   </div>
 {/snippet}
 
+{#snippet agentCountTable(title, entries)}
+  <div class="stats-block stats-block--narrow">
+    <h3 class="stats-block__title">{title}</h3>
+    {#if entries.length === 0}
+      <p class="stats-empty">{t('statistics.none', 'None')}</p>
+    {:else}
+      <ul class="stats-bars">
+        {#each topN(entries, 8) as entry (entry.key)}
+          <li class="stats-bars__row">
+            <span class="stats-bars__label">{@render agentName(entry.key)}</span
+            >
+            <span class="stats-bars__track">
+              <span
+                class="stats-bars__fill"
+                style={`width: ${Math.round((entries[0].count ? entry.count / entries[0].count : 0) * 100)}%`}
+              ></span>
+            </span>
+            <span class="stats-bars__value"
+              >{formatInteger(entry.count, locale)}</span
+            >
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
+{/snippet}
+
 {#snippet runsPanel()}
   <div class="stats-panel">
     <div class="stats-grid">
@@ -767,7 +812,7 @@
           <tbody>
             {#each runs.longest_runs as run (run.run_id)}
               <tr>
-                <td class="stats-mono">{run.agent_id}</td>
+                <td class="stats-mono">{@render agentName(run.agent_id)}</td>
                 <td>{formatDurationMs(run.duration_ms)}</td>
                 <td>{statusLabel(run.status)}</td>
                 <td class="stats-mono">{run.models.join(', ')}</td>
@@ -796,7 +841,7 @@
         t('statistics.errors.byProvider', 'By provider'),
         errors.by_provider,
       )}
-      {@render countTable(
+      {@render agentCountTable(
         t('statistics.errors.byAgent', 'By agent'),
         errors.by_agent,
       )}
@@ -874,7 +919,7 @@
     </div>
 
     <div class="stats-columns">
-      {@render countTable(
+      {@render agentCountTable(
         t('statistics.tools.byAgent', 'Calls per agent'),
         tools.by_agent,
       )}
@@ -896,7 +941,9 @@
             <tbody>
               {#each tools.top_sessions as session (session.session_id)}
                 <tr>
-                  <td class="stats-mono">{session.agent_id}</td>
+                  <td class="stats-mono"
+                    >{@render agentName(session.agent_id)}</td
+                  >
                   <td class="stats-mono stats-truncate">{session.session_id}</td
                   >
                   <td>{formatInteger(session.calls, locale)}</td>
@@ -1223,6 +1270,27 @@
     text-transform: uppercase;
     color: var(--amber);
     border: 1px solid var(--amber);
+    border-radius: 10px;
+    padding: 1px 6px;
+  }
+  .stats-agent {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .stats-agent__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .stats-agent__project {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    border: 1px solid var(--accent);
     border-radius: 10px;
     padding: 1px 6px;
   }
