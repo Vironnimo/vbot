@@ -78,7 +78,11 @@ describe('ProjectsView', () => {
         report: {
           clean: false,
           findings: [
-            { type: 'bad_model', detail: 'model not configured', agent_id: 'builder' },
+            {
+              type: 'bad_model',
+              detail: 'model not configured',
+              agent_id: 'builder',
+            },
           ],
         },
       },
@@ -95,9 +99,7 @@ describe('ProjectsView', () => {
     await waitForCondition(() => addProjectMock.mock.calls.length === 1);
     expect(addProjectMock).toHaveBeenCalledWith({ cwd: 'C:/repos/demo' });
 
-    await waitForCondition(() =>
-      document.body.textContent.includes('Builder'),
-    );
+    await waitForCondition(() => document.body.textContent.includes('Builder'));
     expect(document.body.textContent).toContain('Builder');
     // A non-clean report surfaces its findings (add-then-review surface).
     expect(document.body.textContent).toContain('model not configured');
@@ -220,7 +222,9 @@ describe('ProjectsView', () => {
     buttonByTestId('project-repoint-demo').click();
     flushSync();
 
-    await waitForCondition(() => document.getElementById('projects-repoint-cwd'));
+    await waitForCondition(() =>
+      document.getElementById('projects-repoint-cwd'),
+    );
     setInputValue('projects-repoint-cwd', 'C:/repos/moved');
 
     submitButtonInDialog('Re-point').click();

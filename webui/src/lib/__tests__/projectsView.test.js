@@ -242,7 +242,11 @@ describe('normalizeScanReport', () => {
     const report = normalizeScanReport({
       clean: false,
       findings: [
-        { type: FINDING_TYPE_ORPHAN, detail: 'orphan pointer', agent_id: 'ghost' },
+        {
+          type: FINDING_TYPE_ORPHAN,
+          detail: 'orphan pointer',
+          agent_id: 'ghost',
+        },
         {
           type: FINDING_TYPE_SLUG_COLLISION,
           detail: 'two on one id',

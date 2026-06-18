@@ -9,7 +9,8 @@ vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
 });
 
-const { default: ProjectScanBanner } = await import('../ProjectScanBanner.svelte');
+const { default: ProjectScanBanner } =
+  await import('../ProjectScanBanner.svelte');
 
 describe('ProjectScanBanner', () => {
   let mountedComponent;
