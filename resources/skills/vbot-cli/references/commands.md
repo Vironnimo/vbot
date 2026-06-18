@@ -134,11 +134,38 @@ max
 
 `--model` and `--fallback-model` accept plain `<provider>/<model-id>` values or pinned forms with `::<connection>[:<account>]` (for example `openai/gpt-5.2::api-key:work`) to bind the agent to a specific connection and credential account. `--clear-temperature` and `--clear-thinking-effort` send JSON `null` so the agent inherits current defaults. `--thinking-effort none` is the literal no-reasoning value, not a clear operation. `--allowed-tools` and `--allowed-skills` replace the full allowlist; pass the flag with no values to set an empty list. `--memory-prompt-mode` controls which workspace memory files become prompt-visible; `--custom-system-prompt` toggles the agent's own editable prompt fragments.
 
+## Projects
+
+```bash
+vbot project add <path> [--name <display-name>] [--default-agent <agent-id>] [--default-model <provider/model-id>] [--auto-load <file> ...]
+vbot project list
+vbot project show <project-id>
+vbot project set <project-id> [--cwd <path>] [--name <display-name>] [--default-agent <agent-id>] [--default-model <provider/model-id>] [--auto-load <file> ...]
+vbot project rm <project-id>
+```
+
+Examples:
+
+```bash
+vbot project add ./my-repo --name vbot --default-agent orchestrator --auto-load AGENTS.md docs/guide.md
+vbot project list
+vbot project show vbot
+vbot project set vbot --default-agent builder
+vbot project set vbot --cwd ./moved-repo
+vbot project rm vbot
+```
+
+A project points vBot at a repo directory (`cwd`) and exposes the agents discovered in that repo (its **team**). `project add` needs only the repo path; `--name` sets the display name (and derives the project id), `--default-agent`/`--default-model` set project defaults, and `--auto-load` lists repo files folded into project agent prompts (pass the flag with no values to clear it on `set`).
+
+`project add` and `project show` print the **scan preview**: the team plus a report of anything unclean under what exists (bad or unconfigured model, slug collision, unslugifiable name). An empty folder is a valid project with an empty team and a clean report. `project show` re-scans the repo live, so the team reflects the current repo. `project set --cwd` re-points the repo and re-scans.
+
+`project rm` archives the project's runtime anchor (never the repo) and prints the archive path. It is blocked while a project agent has an active or queued run (`project_busy`) or a cron job points at a project agent (`project_in_use`); clear the run or retarget/delete the cron job first.
+
 ## Sessions
 
 ```bash
-vbot session list <agent-id>
-vbot session create <agent-id> [--id <session-id>] [--make-current]
+vbot session list <agent>
+vbot session create <agent> [--id <session-id>] [--make-current]
 vbot session link-channel <agent-id> <session-id> --channel <channel-id> --conversation <platform-conv-id>
 ```
 
@@ -146,12 +173,13 @@ Examples:
 
 ```bash
 vbot session list assistant
+vbot session list orchestrator@vbot
 vbot session create assistant --make-current
-vbot session create assistant --id research-notes
+vbot session create orchestrator@vbot --id research-notes
 vbot session link-channel assistant research-notes --channel tg-main --conversation 12345
 ```
 
-`session list` shows session ids, created/last-active timestamps, and the linked source channel when one exists. `session create` without `--id` lets the server generate the id; `--make-current` switches the agent's active session. `session link-channel` routes the session's outbound replies to a platform conversation, such as a Telegram chat id.
+The `<agent>` argument of `session list` and `session create` takes a bare identity agent (`assistant`) or a project agent in the address form `agent@projekt` (`orchestrator@vbot`). A bare agent is unchanged identity behavior; `agent@projekt` opens the session under that project, against its scanned team. `session list` shows session ids, created/last-active timestamps, and the linked source channel when one exists. `session create` without `--id` lets the server generate the id; `--make-current` switches the agent's active session. `session link-channel` routes the session's outbound replies to a platform conversation, such as a Telegram chat id.
 
 ## Models
 
@@ -312,8 +340,8 @@ per_account_channel_peer
 
 ```bash
 vbot cron list
-vbot cron create <agent-id> --prompt <text> (--cron <cron-expression> | --at <iso-datetime>) [--timezone <iana-timezone>] [--session <session-id>]
-vbot cron update <job-id> [--agent <agent-id>] [--prompt <text>] [--cron <cron-expression> | --at <iso-datetime>] [--timezone <iana-timezone>] [--session <session-id>] [--status active|paused|completed]
+vbot cron create <agent> --prompt <text> (--cron <cron-expression> | --at <iso-datetime>) [--timezone <iana-timezone>] [--session <session-id>]
+vbot cron update <job-id> [--agent <agent>] [--prompt <text>] [--cron <cron-expression> | --at <iso-datetime>] [--timezone <iana-timezone>] [--session <session-id>] [--status active|paused|completed]
 vbot cron delete <job-id>
 vbot cron enable <job-id>
 vbot cron disable <job-id>
@@ -324,14 +352,16 @@ Examples:
 ```bash
 vbot cron list
 vbot cron create assistant --prompt "Check the news" --cron "0 9 * * *" --timezone Europe/Berlin
+vbot cron create builder@vbot --prompt "Nightly build" --cron "0 2 * * *"
 vbot cron create assistant --prompt "Remind me about the deadline" --at 2026-07-01T09:00:00
 vbot cron update <job-id> --prompt "Check the news and the weather"
+vbot cron update <job-id> --agent builder@vbot
 vbot cron update <job-id> --status paused
 vbot cron disable <job-id>
 vbot cron delete <job-id>
 ```
 
-`cron create` requires exactly one of `--cron` (recurring) or `--at` (one-time); the CLI derives the schedule type from which flag you pass. `--session` pins the job to a fixed session instead of a job-managed one. `cron list` shows id, agent, status, schedule, next fire time, and a prompt preview — read job ids from there.
+`cron create` requires exactly one of `--cron` (recurring) or `--at` (one-time); the CLI derives the schedule type from which flag you pass. The `<agent>` argument (and `cron update --agent`) takes a bare agent or the `agent@projekt` address form to target a project agent; firing such a job runs in that project. `--session` pins the job to a fixed session instead of a job-managed one. `cron list` shows id, target (in `agent@projekt` form for a project target, bare for an identity target), status, schedule, next fire time, and a prompt preview — read job ids from there.
 
 ## Debug
 
@@ -365,7 +395,9 @@ vbot doctor settings
 vbot doctor config
 vbot agent show <agent-id>
 vbot agent list
-vbot session list <agent-id>
+vbot project list
+vbot project show <project-id>
+vbot session list <agent>
 vbot channel status <channel-id>
 vbot channel list
 vbot provider list
