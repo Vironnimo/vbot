@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
@@ -37,6 +37,14 @@
 
   const PROJECT_BUSY_CODE = 'project_busy';
   const PROJECT_IN_USE_CODE = 'project_in_use';
+  // The inline project edit panel is a settings-style surface, so it follows the
+  // shared save model (DESIGN.md → Save model): auto-save after a short idle,
+  // plus the explicit Save button for users who prefer to commit manually.
+  const AUTO_SAVE_DEBOUNCE_MS = 800;
+
+  const noop = () => {};
+
+  let { onToast = noop } = $props();
 
   let projects = $state([]);
   let loadingProjects = $state(false);
@@ -61,7 +69,6 @@
   let editForm = $state(createEditForm());
   let editSaving = $state(false);
   let editError = $state('');
-  let editStatus = $state('');
   let activeTeam = $state([]);
   let activeReport = $state(null);
   let scanLoading = $state(false);
@@ -76,6 +83,7 @@
   let destroyed = false;
   let listRequestId = 0;
   let scanRequestId = 0;
+  let autoSaveTimer = null;
 
   let hasProjects = $derived(projects.length > 0);
   let canSubmitAdd = $derived(addForm.cwd.trim().length > 0 && !addingProject);
@@ -105,12 +113,56 @@
     }),
   );
 
+  // The currently expanded project record (or null). Both the auto-save diff and
+  // the explicit Save target it as the single source of truth.
+  let expandedProject = $derived(
+    projects.find((item) => item.project_id === expandedProjectId) ?? null,
+  );
+  // The sparse project.set changes the open form represents versus the saved
+  // project — empty when the form matches what the server already holds.
+  let pendingChanges = $derived(
+    expandedProject
+      ? buildManageProjectPayload(
+          {
+            display_name: editForm.display_name,
+            default_agent: editForm.default_agent,
+            default_model: editForm.default_model,
+            auto_load: splitLines(editForm.auto_load),
+          },
+          expandedProject,
+        )
+      : {},
+  );
+  let saveDisabled = $derived(editSaving || !hasManageChanges(pendingChanges));
+
   onMount(() => {
     void loadCatalogs();
     void loadProjects();
 
     return () => {
       destroyed = true;
+    };
+  });
+
+  onDestroy(() => {
+    clearAutoSaveTimer();
+  });
+
+  // Auto-save the open edit form once it has been idle for the debounce window.
+  // The effect only schedules while the form is dirty (saveDisabled is false),
+  // so collapsing, switching projects, or saving cancels the pending timer.
+  $effect(() => {
+    if (saveDisabled) {
+      return;
+    }
+
+    autoSaveTimer = setTimeout(() => {
+      autoSaveTimer = null;
+      void saveExpandedProject();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearAutoSaveTimer();
     };
   });
 
@@ -125,6 +177,13 @@
       default_model: project?.default_model ?? '',
       auto_load: (project?.auto_load ?? []).join('\n'),
     };
+  }
+
+  function clearAutoSaveTimer() {
+    if (autoSaveTimer !== null) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
   }
 
   async function loadCatalogs() {
@@ -252,7 +311,6 @@
     expandedProjectId = projectId;
     editForm = createEditForm(project);
     editError = '';
-    editStatus = '';
     activeTeam = [];
     activeReport = null;
 
@@ -270,7 +328,6 @@
     activeTeam = [];
     activeReport = null;
     editError = '';
-    editStatus = '';
   }
 
   async function loadScan(projectId) {
@@ -300,7 +357,6 @@
   function updateEditField(field, value) {
     editForm[field] = value;
     editError = '';
-    editStatus = '';
   }
 
   function updateModelSelection(selectedValue) {
@@ -310,33 +366,43 @@
       selection.connectionLocalId,
     );
     editError = '';
-    editStatus = '';
   }
 
-  async function submitEdit(event, project) {
+  // Explicit Save button / form submit. On a clean form it confirms trust with
+  // the shared "Already saved" toast instead of a no-op request (DESIGN.md →
+  // Save model); otherwise it pre-empts the pending debounce and saves now.
+  function handleManualSave(event) {
     event.preventDefault();
-    if (!project) {
+    if (editSaving) {
+      return;
+    }
+    if (saveDisabled) {
+      onToast({
+        title: t('common.alreadySaved', 'Already saved'),
+        variant: 'success',
+      });
+      return;
+    }
+    clearAutoSaveTimer();
+    void saveExpandedProject();
+  }
+
+  // Persist the open form's pending changes. Shared by the debounced auto-save
+  // and the explicit Save button; both target the expanded project and re-seed
+  // the panel from the saved state so the form reads as clean afterwards.
+  async function saveExpandedProject() {
+    const project = expandedProject;
+    if (!project || editSaving) {
       return;
     }
 
-    const changes = buildManageProjectPayload(
-      {
-        display_name: editForm.display_name,
-        default_agent: editForm.default_agent,
-        default_model: editForm.default_model,
-        auto_load: splitLines(editForm.auto_load),
-      },
-      project,
-    );
-
+    const changes = pendingChanges;
     if (!hasManageChanges(changes)) {
-      editStatus = t('projects.manage.noChanges', 'No changes to save.');
       return;
     }
 
     editSaving = true;
     editError = '';
-    editStatus = '';
     statusMessage = '';
 
     try {
@@ -344,17 +410,18 @@
       if (destroyed) {
         return;
       }
-      statusMessage = t('projects.manage.saveSuccess', 'Project updated.');
       await loadProjects();
       if (destroyed) {
         return;
       }
-      // Re-seed the open panel from the saved state so the form and scan reflect
-      // what the server now holds.
       const saved = normalizeProject(result?.project);
       editForm = createEditForm(saved);
       activeTeam = projectTeam(result?.scan);
       activeReport = normalizeScanReport(result?.scan?.report);
+      onToast({
+        title: t('projects.manage.saveSuccess', 'Project updated.'),
+        variant: 'success',
+      });
     } catch (error) {
       if (destroyed) {
         return;
@@ -623,10 +690,7 @@
                 class="projects-view__panel"
                 data-testid={`project-panel-${project.project_id}`}
               >
-                <form
-                  class="projects-view__edit"
-                  onsubmit={(event) => submitEdit(event, project)}
-                >
+                <form class="projects-view__edit" onsubmit={handleManualSave}>
                   <div class="projects-view__edit-grid">
                     <label class="projects-view__field">
                       <span class="projects-view__label">
@@ -720,11 +784,6 @@
                       role="alert"
                     >
                       {editError}
-                    </p>
-                  {/if}
-                  {#if editStatus}
-                    <p class="projects-view__notice" role="status">
-                      {editStatus}
                     </p>
                   {/if}
 
