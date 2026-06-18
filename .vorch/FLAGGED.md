@@ -203,3 +203,26 @@ out-of-scope-for-Plan-1 gap, deliberately not fixed.
    `agent=None` for a project session (handled, not a crash). Threading `project_id`
    through the dispatcher to resolve the config agent is a broader change, out of M5
    scope.
+
+
+## 2026-06-18 — Projects (Plan 2, WebUI): project-agent run loses the /ws backstop
+
+Found while reviewing the Phase 2 two-bar chat. One out-of-scope (backend) gap,
+deliberately not fixed in the client-only Plan 2.
+
+1. **`/ws` run-lifecycle events carry no `project_id`, so a project-agent run is not
+   re-attached through the WebSocket backstop.** The WebUI keys a project-agent's
+   session state by the full `agent@projekt` address (so chat/session/history address
+   correctly — RPC-contract trap 2), but the server's run lifecycle event
+   (`RunEvent.to_dict()` in `core/runs/runs.py`) serializes only the bare `agent_id`
+   (the project dimension rides the in-memory `Run`, not the event). So
+   `chatRunStream.handleRunServerEvent` (`webui/src/lib/chatRunStream.js`), which keys
+   on the bare `agent_id`, builds `builder::<session>` and never matches the
+   address-keyed `builder@vbot::<session>` displayed session — the `/ws` re-attach /
+   cross-session tracking path is inert for project agents. **Primary SSE foreground
+   streaming is unaffected** (the send attaches directly to the run's `sse_url`), so a
+   project-agent run streams live normally; only the WebSocket reconnect/catch-up
+   backstop and cross-session sub-agent status are missed, and the run still completes
+   server-side and shows on the next history load. Fixing it needs a backend change —
+   add `project_id` to the run lifecycle event payload so the client can rebuild the
+   address key — which is out of scope for the client-only Plan 2.

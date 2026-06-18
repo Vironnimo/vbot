@@ -167,6 +167,18 @@ export const englishCatalog = Object.freeze({
   'chat.errorDetails': 'Details',
   'chat.compacted': 'Context compacted',
   'chat.transientCard.label': 'Command output',
+  'chat.project.label': 'Project',
+  'chat.project.none': 'No project',
+  'chat.project.selectAria': 'Select project',
+  'chat.project.teamLabel': 'Project team',
+  'chat.project.teamEmpty': 'This project has no agents yet.',
+  'chat.project.loadError': 'The project team could not be loaded.',
+  'chat.project.sessionError': 'The project agent session could not be opened.',
+  'chat.project.scanBanner':
+    'This project’s scan found issues. Some agents may not work as expected.',
+  'chat.project.scanBannerCount':
+    'This project’s scan found {count} issues. Some agents may not work as expected.',
+  'chat.project.scanBannerLink': 'Review in Projects',
 
   'sessions.title': 'Sessions',
   'sessions.hide': 'Hide sessions',
