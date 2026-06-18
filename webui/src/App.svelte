@@ -67,7 +67,7 @@
     connect,
     disconnect,
   } from '$lib/connectionState.js';
-  import { rpc, debugStatus } from '$lib/api.js';
+  import { rpc, debugStatus, listProjects } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
   import {
     appearancePrefs,
@@ -96,6 +96,7 @@
       : navigationItems.filter((item) => item.id !== 'debug'),
   );
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
+  const SELECTED_PROJECT_KEY = 'vbot.selectedProjectId';
   const TOAST_AUTO_DISMISS_MS = 3200;
   const MAX_RUN_SERVER_EVENTS = 500;
   const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
@@ -118,6 +119,19 @@
     }
   };
 
+  // The persisted project selection follows the same localStorage pattern as
+  // the selected agent (own key). Empty = "No project" / Personal.
+  const readStoredSelectedProjectId = () => {
+    try {
+      if (typeof localStorage === 'undefined') {
+        return '';
+      }
+      return localStorage.getItem(SELECTED_PROJECT_KEY) || '';
+    } catch {
+      return '';
+    }
+  };
+
   const knownViewIds = navigationItems.map((item) => item.id);
 
   const initialViewId = () => {
@@ -135,6 +149,10 @@
   let debugEnabled = $state(false);
   let agents = $state([]);
   let selectedAgentId = $state(readStoredSelectedAgentId());
+  // Project context for the two-bar chat. `projects` feeds the chat dropdown;
+  // `selectedProjectId` is the chosen project (empty = Personal/identity path).
+  let projects = $state([]);
+  let selectedProjectId = $state(readStoredSelectedProjectId());
   let agentsRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
   let toastState = $state(createToastState());
@@ -171,6 +189,45 @@
       // localStorage unavailable (private browsing, storage quota)
     }
   });
+
+  $effect(() => {
+    try {
+      if (selectedProjectId) {
+        localStorage.setItem(SELECTED_PROJECT_KEY, selectedProjectId);
+      } else {
+        localStorage.removeItem(SELECTED_PROJECT_KEY);
+      }
+    } catch {
+      // localStorage unavailable (private browsing, storage quota)
+    }
+  });
+
+  // ChatView reflects the project dropdown choice back here so the persisted
+  // mirror stays current.
+  const selectProject = (projectId) => {
+    selectedProjectId = typeof projectId === 'string' ? projectId : '';
+  };
+
+  const navigateToProjects = () => {
+    selectView('projects');
+  };
+
+  const loadProjects = async () => {
+    try {
+      const result = await listProjects();
+      projects = Array.isArray(result?.projects) ? result.projects : [];
+      // Drop a stale persisted selection if its project no longer exists.
+      if (
+        selectedProjectId &&
+        !projects.some((project) => project.project_id === selectedProjectId)
+      ) {
+        selectedProjectId = '';
+      }
+    } catch {
+      // Projects RPC unavailable — keep the chat in the identity-only path.
+      projects = [];
+    }
+  };
 
   const pushNavigationState = () => {
     try {
@@ -424,6 +481,10 @@
 
     connect(connectionState, { onEvent: handleServerEvent });
 
+    // Load the project list for the chat dropdown (best-effort; the chat works
+    // identity-only when this fails).
+    loadProjects();
+
     // Detect desktop capabilities and start wakeword status polling
     if (isDesktopAccessor()) {
       waitForDesktopBridge()
@@ -511,6 +572,10 @@
       sharedAgents={agents}
       sharedSelectedAgentId={selectedAgentId}
       chatWidth={appearancePrefs.chatWidth}
+      {projects}
+      {selectedProjectId}
+      onProjectSelected={selectProject}
+      onNavigateToProjects={navigateToProjects}
       {agentsRefreshToken}
       onAgentsChanged={syncAgents}
       onAgentSelected={selectAgent}

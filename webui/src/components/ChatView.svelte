@@ -6,8 +6,10 @@
     cancelRun,
     cancelToolCall,
     listQueue,
+    listSessions,
     removeFromQueue,
     rpc,
+    showProject,
     subscribeRunEvents,
     updateQueueItem,
   } from '$lib/api.js';
@@ -29,12 +31,15 @@
     createChatState,
     currentSessionState,
     ensureSessionState,
+    isProjectSelected,
     isRunActive,
     loadHistory,
     markSessionError,
+    pickProjectAgentSessionId,
     prependHistory,
     removeQueuedMessage,
     resetStaleRun,
+    resolveAgentAddressing,
     selectAgent,
     selectedAgent,
     setAgents,
@@ -43,7 +48,12 @@
     updateQueuedMessageContent,
     visibleTimelineItemsForRender,
   } from '../lib/chatState.js';
+  import {
+    projectTeam as normalizeProjectTeam,
+    normalizeScanReport,
+  } from '../lib/projectsView.js';
   import ChatHeader from './chat/ChatHeader.svelte';
+  import ProjectScanBanner from './chat/ProjectScanBanner.svelte';
   import ChatComposer from './ChatComposer.svelte';
   import SessionListDrawer from './SessionListDrawer.svelte';
   import ChatTimeline from './ChatTimeline.svelte';
@@ -57,6 +67,14 @@
     // Phase 3 seeds the persisted value from App; the default keeps the chat
     // self-contained (centered, capped at the comfortable measure).
     chatWidth = 'comfortable',
+    // Project context (two-bar chat). `projects` feeds the project dropdown;
+    // `selectedProjectId` is the chosen project (empty = Personal). App owns
+    // the persisted selection; ChatView reflects it back through
+    // `onProjectSelected` so the localStorage mirror stays current.
+    projects = [],
+    selectedProjectId = '',
+    onProjectSelected = () => {},
+    onNavigateToProjects = () => {},
     agentsRefreshToken = 0,
     onAgentsChanged,
     onAgentSelected,
@@ -115,6 +133,32 @@
   const SUBAGENT_RESULT_CACHE_LIMIT = 100;
   let commandToastTimeoutId = null;
 
+  // --- Project (second-bar) state -----------------------------------------
+  //
+  // The second bar is a pure projection of `project.show`'s scan team — no
+  // second source of truth. Selecting a project loads its team and report;
+  // selecting a project agent makes it the active agent. A project (config)
+  // agent has NO server `current_session_id` (RPC-contract trap 1), so its
+  // session is chosen locally and held in `projectAgentSessions`, keyed by the
+  // agent's full address (`agent@projekt`).
+  let projectTeam = $state([]);
+  let projectReport = $state(null);
+  let projectScanError = $state('');
+  let loadingProjectTeam = $state(false);
+  // The active project agent's bare id, '' when chatting an identity agent.
+  let selectedProjectAgentId = $state('');
+  // address (`agent@projekt`) -> locally chosen session id (trap 1).
+  let projectAgentSessions = $state({});
+  // Guards repeated project-show side effects for the same chosen project.
+  let lastLoadedProjectId = '';
+
+  // Whether the active agent is a project (config) team agent. When false the
+  // chat is on an identity agent and every RPC payload is byte-identical to
+  // today (the hard no-regression rule).
+  let projectAgentActive = $derived(
+    isProjectSelected(selectedProjectId) && selectedProjectAgentId !== '',
+  );
+
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
   let subAgentSessionActive = $derived(
@@ -129,11 +173,81 @@
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
 
+  // The active project team member (config agent) when a project agent is the
+  // chosen chat target, else null. Looked up by bare id against the projected
+  // team. It is NOT in `chatState.agents` (that holds only identity agents).
+  function activeProjectMember() {
+    if (!projectAgentActive) {
+      return null;
+    }
+    return (
+      projectTeam.find(
+        (member) => member.agent_id === selectedProjectAgentId,
+      ) ?? null
+    );
+  }
+
+  // Resolve the addressing for the active agent (RPC-contract traps 1 & 2).
+  // - identity agent: `agentAddress === bareAgentId`, `projectId: null`,
+  //   session from the identity `current_session_id`/override path. Byte-
+  //   identical to today.
+  // - project agent: full `agent@projekt` address for chat/session/history,
+  //   bare id for queue/cancel-tool; session chosen locally (trap 1).
+  function activeAddressing() {
+    if (projectAgentActive) {
+      const addressing = resolveAgentAddressing(
+        selectedProjectAgentId,
+        selectedProjectId,
+        true,
+      );
+      return {
+        ...addressing,
+        isProjectAgent: true,
+        sessionId: projectAgentSessions[addressing.agentAddress] ?? '',
+      };
+    }
+    const agent = getActiveAgent();
+    const bareAgentId = agent?.id ?? '';
+    const sessionId = viewingSessionId || agent?.current_session_id || '';
+    return {
+      bareAgentId,
+      projectId: null,
+      agentAddress: bareAgentId,
+      isProjectAgent: false,
+      sessionId,
+    };
+  }
+
   function getActiveAgent() {
+    if (projectAgentActive) {
+      return projectAgentAsAgent(activeProjectMember());
+    }
     if (viewingSessionAgentId) {
       return agentById(viewingSessionAgentId);
     }
     return selectedAgent(chatState);
+  }
+
+  // Shape a projected team member into the minimal agent-like object the chat
+  // surface renders (header name, token badge context window). The local
+  // session id stands in for `current_session_id` so the existing session
+  // machinery reads it without a special case.
+  function projectAgentAsAgent(member) {
+    if (!member) {
+      return null;
+    }
+    const addressing = resolveAgentAddressing(
+      member.agent_id,
+      selectedProjectId,
+      true,
+    );
+    return {
+      id: member.agent_id,
+      name: member.display_name || member.agent_id,
+      current_session_id: projectAgentSessions[addressing.agentAddress] ?? '',
+      context_window: null,
+      __projectAddress: addressing.agentAddress,
+    };
   }
 
   function agentById(agentId) {
@@ -141,6 +255,13 @@
   }
 
   function getActiveSessionState() {
+    if (projectAgentActive) {
+      const { agentAddress, sessionId } = activeAddressing();
+      if (!agentAddress || !sessionId) {
+        return null;
+      }
+      return chatState.sessions[`${agentAddress}::${sessionId}`] ?? null;
+    }
     const agent = getActiveAgent();
     if (agent && viewingSessionId) {
       return chatState.sessions[`${agent.id}::${viewingSessionId}`] ?? null;
@@ -149,6 +270,10 @@
   }
 
   function displayedSessionKey() {
+    if (projectAgentActive) {
+      const { agentAddress, sessionId } = activeAddressing();
+      return agentAddress && sessionId ? `${agentAddress}::${sessionId}` : '';
+    }
     const agent = getActiveAgent();
     const sessionId = viewingSessionId || agent?.current_session_id;
     return agent?.id && sessionId ? `${agent.id}::${sessionId}` : '';
@@ -156,6 +281,17 @@
 
   function isDisplayedSession(agentId, sessionId) {
     return displayedSessionKey() === `${agentId}::${sessionId}`;
+  }
+
+  // A session state's `agentId` is the agent's outside spelling: a bare id for
+  // an identity session, `agent@projekt` for a project-agent session. The
+  // queue/cancel-tool RPCs key on the BARE id (trap 2), so strip any `@projekt`
+  // suffix. An identity id has no `@`, so this returns it unchanged — the
+  // identity path is byte-identical.
+  function bareIdFromSessionAgentId(sessionAgentId) {
+    const value = typeof sessionAgentId === 'string' ? sessionAgentId : '';
+    const separatorIndex = value.indexOf('@');
+    return separatorIndex === -1 ? value : value.slice(0, separatorIndex);
   }
 
   $effect(() => {
@@ -175,6 +311,26 @@
       lastSharedSelectedAgentId = sharedSelectedAgentId;
       handleSelectAgent(sharedSelectedAgentId);
     }
+  });
+
+  // React to the project dropdown selection. Choosing a project loads its
+  // scan team + report (second bar) and jumps to the default agent (else the
+  // first team member). Selecting "No project" (Personal) tears the second bar
+  // down and the chat falls back to the identity path — byte-identical to
+  // today. Guarded by `lastLoadedProjectId` so the load runs once per choice.
+  $effect(() => {
+    const projectId = isProjectSelected(selectedProjectId)
+      ? selectedProjectId
+      : '';
+    if (projectId === lastLoadedProjectId) {
+      return;
+    }
+    lastLoadedProjectId = projectId;
+    if (!projectId) {
+      clearProjectContext();
+      return;
+    }
+    loadProjectTeam(projectId);
   });
 
   // App-driven session navigation: sub-agent link clicks routed through
@@ -554,8 +710,10 @@
       return;
     }
     try {
+      // `chat.queue_list` keys the run/queue on the BARE agent id (trap 2), so
+      // strip any `@projekt` from the session's stored address.
       const result = await listQueue(
-        sessionState.agentId,
+        bareIdFromSessionAgentId(sessionState.agentId),
         sessionState.sessionId,
       );
       syncQueueFromServer(sessionState, result?.items ?? []);
@@ -695,7 +853,186 @@
     );
   }
 
+  // Tear the second bar down: back to the identity-only chat (Personal).
+  const clearProjectContext = () => {
+    projectTeam = [];
+    projectReport = null;
+    projectScanError = '';
+    selectedProjectAgentId = '';
+    loadingProjectTeam = false;
+  };
+
+  // Load a project's scan team (second bar) and report (banner) via
+  // `project.show` (live re-scan), then jump to its default agent — or the
+  // first team member if no default is set. An empty team is valid: the second
+  // bar simply renders empty, no error. The report is kept for the banner,
+  // shown only when the scan was not clean.
+  const loadProjectTeam = async (projectId) => {
+    loadingProjectTeam = true;
+    projectScanError = '';
+    selectedProjectAgentId = '';
+    try {
+      const result = await showProject(projectId);
+      // A newer selection may have superseded this one mid-flight.
+      if (selectedProjectId !== projectId) {
+        return;
+      }
+      projectTeam = normalizeProjectTeam(result?.scan);
+      projectReport = normalizeScanReport(result?.scan?.report);
+      const defaultAgentId = defaultProjectAgentId(result?.project);
+      const target =
+        projectTeam.find((member) => member.agent_id === defaultAgentId) ??
+        projectTeam[0] ??
+        null;
+      if (target) {
+        await openProjectAgent(target.agent_id);
+      }
+    } catch (error) {
+      if (selectedProjectId !== projectId) {
+        return;
+      }
+      projectTeam = [];
+      projectReport = null;
+      projectScanError = `${t('chat.project.loadError', 'The project team could not be loaded.')} ${error.message}`;
+    } finally {
+      if (selectedProjectId === projectId) {
+        loadingProjectTeam = false;
+      }
+    }
+  };
+
+  function defaultProjectAgentId(project) {
+    const value = project?.default_agent;
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  // Switch the chat to a project team agent. Clears any identity-side session
+  // override and resolves the project agent's session locally (trap 1): the
+  // most recent from `session.list`, else a fresh `session.create`. The session
+  // is held in `projectAgentSessions` keyed by the agent's full address.
+  const openProjectAgent = async (agentId) => {
+    clearSessionOverride();
+    selectedProjectAgentId = agentId;
+    const addressing = resolveAgentAddressing(agentId, selectedProjectId, true);
+    await ensureProjectAgentSession(addressing);
+  };
+
+  // Choose (and if needed create) the local session for a project agent, then
+  // load its history. `session.list`/`session.create`/`chat.history` all take
+  // the FULL address (`agent@projekt`) — trap 2.
+  const ensureProjectAgentSession = async (addressing) => {
+    const { agentAddress } = addressing;
+    actionError = '';
+    try {
+      let sessionId = projectAgentSessions[agentAddress] ?? '';
+      if (!sessionId) {
+        const listed = await listSessions(agentAddress);
+        // A newer project/agent selection may have superseded this one.
+        if (currentProjectAgentAddress() !== agentAddress) {
+          return;
+        }
+        sessionId = pickProjectAgentSessionId(listed?.sessions);
+        if (!sessionId) {
+          const created = await rpc('session.create', {
+            agent_id: agentAddress,
+          });
+          if (currentProjectAgentAddress() !== agentAddress) {
+            return;
+          }
+          sessionId = created?.session_id ?? '';
+        }
+        if (!sessionId) {
+          return;
+        }
+        projectAgentSessions = {
+          ...projectAgentSessions,
+          [agentAddress]: sessionId,
+        };
+      }
+      await loadProjectAgentHistory(agentAddress, sessionId);
+    } catch (error) {
+      if (currentProjectAgentAddress() !== agentAddress) {
+        return;
+      }
+      actionError = `${t('chat.project.sessionError', 'The project agent session could not be opened.')} ${error.message}`;
+    }
+  };
+
+  // The address of the currently active project agent, '' when none. Used to
+  // drop the results of a superseded async session resolution.
+  function currentProjectAgentAddress() {
+    if (!projectAgentActive) {
+      return '';
+    }
+    return resolveAgentAddressing(
+      selectedProjectAgentId,
+      selectedProjectId,
+      true,
+    ).agentAddress;
+  }
+
+  // Load history for a project-agent session. The session state is keyed by the
+  // full address (so the same bare id in two projects never collides), and the
+  // state's `agentId` carries the address — so older-history loads and queue
+  // syncs send the address to `chat.history`/`session.list` (trap 2). Queue and
+  // cancel-tool paths translate the address back to the bare id (see send/queue
+  // handlers).
+  const loadProjectAgentHistory = async (agentAddress, sessionId) => {
+    loadingHistory = true;
+    historyError = '';
+    const sessionState = ensureSessionState(chatState, agentAddress, sessionId);
+    runStream.closeSubscriptionsExcept(sessionState.key);
+    const staleRunId = sessionState.currentRun?.runId ?? '';
+    try {
+      const history = await rpc('chat.history', {
+        agent_id: agentAddress,
+        session_id: sessionId,
+        limit: HISTORY_INITIAL_LIMIT,
+      });
+      loadHistory(sessionState, history.messages ?? [], {
+        hasMore: history.has_more === true,
+      });
+      if (
+        !history.active_run &&
+        isRunActive(sessionState) &&
+        sessionState.currentRun?.runId === staleRunId
+      ) {
+        resetStaleRun(sessionState);
+        runStream.closeSubscriptionFor(sessionState.key);
+      }
+      runStream.attachRunStream(sessionState, history.active_run);
+      await syncSessionQueue(sessionState);
+    } catch (error) {
+      historyError = error.message;
+      markSessionError(sessionState, error);
+    } finally {
+      loadingHistory = false;
+    }
+  };
+
+  const handleSelectProject = (projectId) => {
+    const next = isProjectSelected(projectId) ? projectId : '';
+    if (
+      next === (isProjectSelected(selectedProjectId) ? selectedProjectId : '')
+    ) {
+      return;
+    }
+    onProjectSelected?.(next);
+  };
+
+  const handleSelectProjectAgent = async (agentId) => {
+    if (!agentId || agentId === selectedProjectAgentId) {
+      return;
+    }
+    await openProjectAgent(agentId);
+  };
+
   const handleSelectAgent = async (agentId) => {
+    // Choosing an identity agent always returns the chat to the identity bar,
+    // tearing down any active project-agent selection (the upper bar wins for
+    // the identity path; the project stays selected in the dropdown so its
+    // team bar remains, but the active chat is the identity agent).
+    selectedProjectAgentId = '';
     if (agentId === chatState.selectedAgentId) {
       if (sessionOverrideActive) {
         clearSessionOverride();
@@ -798,8 +1135,15 @@
   };
 
   const handleNewSession = async () => {
+    if (newSessionBlocked) {
+      return;
+    }
+    if (projectAgentActive) {
+      await createProjectAgentSession();
+      return;
+    }
     const agent = selectedAgent(chatState);
-    if (!agent || newSessionBlocked) {
+    if (!agent) {
       return;
     }
     clearSessionOverride();
@@ -811,6 +1155,34 @@
         make_current: true,
       });
       await switchToCurrentSession(agent.id, session.session_id);
+    } catch (error) {
+      actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
+    } finally {
+      creatingSession = false;
+    }
+  };
+
+  // New session for a project agent: `session.create` with the full address and
+  // NO `make_current` (the backend ignores it for project agents anyway — trap
+  // 1), then point the local session store at it and load it.
+  const createProjectAgentSession = async () => {
+    const { agentAddress } = activeAddressing();
+    if (!agentAddress) {
+      return;
+    }
+    creatingSession = true;
+    actionError = '';
+    try {
+      const created = await rpc('session.create', { agent_id: agentAddress });
+      const sessionId = created?.session_id ?? '';
+      if (!sessionId || currentProjectAgentAddress() !== agentAddress) {
+        return;
+      }
+      projectAgentSessions = {
+        ...projectAgentSessions,
+        [agentAddress]: sessionId,
+      };
+      await loadProjectAgentHistory(agentAddress, sessionId);
     } catch (error) {
       actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
     } finally {
@@ -851,11 +1223,27 @@
     actionError = message;
   };
 
+  // Reload history for whichever session is active, keyed by its stored
+  // `agentId` (a bare id for an identity session, the `agent@projekt` address
+  // for a project-agent session) — both go to `chat.history` as the address it
+  // parses, so one path serves both.
+  const reloadActiveSessionHistory = async (sessionState) => {
+    if (!sessionState?.agentId || !sessionState?.sessionId) {
+      return;
+    }
+    await loadHistoryForSession(sessionState.agentId, sessionState.sessionId);
+  };
+
   const sendStream = async (agent, sessionState, content, options = {}) => {
     actionError = '';
+    // `sessionState.agentId` already carries the right outside spelling: a bare
+    // id for an identity agent (byte-identical to today), the full
+    // `agent@projekt` address for a project agent. `chat.stream` parses an
+    // agent address, so this is exactly what it needs (RPC-contract trap 2).
+    const isProjectAgentSend = projectAgentActive;
     try {
       const params = {
-        agent_id: agent.id,
+        agent_id: sessionState.agentId,
         session_id: sessionState.sessionId,
         content,
       };
@@ -865,12 +1253,14 @@
       const run = await rpc('chat.stream', params);
       if (run?.command_handled) {
         const commandSwitch = commandSwitchFromResponse(run);
-        if (commandSwitch) {
+        if (commandSwitch && !isProjectAgentSend) {
           // `action` channel: a session switch (/new, /handoff). When the switch
           // targets a different agent than the one currently selected, update the
           // agent-selection state first so the shared selection flow observes the
           // new agent before the session switch lands. `switchToCurrentSession`
           // then updates the target agent's `current_session_id` and loads it.
+          // This is an identity-only path (project config agents have no
+          // store-backed current-session pointer to switch).
           const targetAgentId = commandSwitch.targetAgentId || agent.id;
           if (targetAgentId !== chatState.selectedAgentId) {
             selectAgent(chatState, targetAgentId);
@@ -885,7 +1275,7 @@
           // additionally reloads history so the new checkpoint is shown.
           showCommandToast(run.reply);
           if (isCompactCommand(content)) {
-            await loadHistoryForSession(agent.id, sessionState.sessionId);
+            await reloadActiveSessionHistory(sessionState);
           }
         }
         return true;
@@ -986,8 +1376,11 @@
     }
     actionError = '';
     try {
+      // `chat.retry_last_turn` parses an agent address (trap 2): the session's
+      // stored `agentId` is the bare id for an identity agent (unchanged) and
+      // the full `agent@projekt` address for a project agent.
       const run = await rpc('chat.retry_last_turn', {
-        agent_id: agent.id,
+        agent_id: sessionState.agentId,
         session_id: sessionState.sessionId,
       });
       startRun(sessionState, run);
@@ -1020,7 +1413,12 @@
 
     actionError = '';
     try {
-      await removeFromQueue(agent.id, sessionState.sessionId, queuedMessageId);
+      // `chat.queue_remove` keys on the BARE agent id (trap 2).
+      await removeFromQueue(
+        bareIdFromSessionAgentId(sessionState.agentId),
+        sessionState.sessionId,
+        queuedMessageId,
+      );
       removeQueuedMessage(sessionState, queuedMessageId);
     } catch (error) {
       actionError = `${t('queue.removeError', 'Queued message could not be removed.')} ${error.message}`;
@@ -1036,8 +1434,9 @@
 
     actionError = '';
     try {
+      // `chat.queue_update` keys on the BARE agent id (trap 2).
       await updateQueueItem(
-        agent.id,
+        bareIdFromSessionAgentId(sessionState.agentId),
         sessionState.sessionId,
         queuedMessageId,
         newContent,
@@ -1085,6 +1484,72 @@
     onNewSession={handleNewSession}
     {onNavigateToVoiceSettings}
   />
+
+  <!-- Project dropdown: the bridge between the identity bar above and the
+       optional project team bar below. "No project" is Personal (identity
+       path, byte-identical to today). -->
+  <div class="chat-view__project-bar">
+    <div class="chat-view__measure chat-view__project-bar-inner">
+      <label class="chat-view__project-select">
+        <span class="chat-view__project-label">
+          {t('chat.project.label', 'Project')}
+        </span>
+        <select
+          class="s-input chat-view__project-dropdown"
+          aria-label={t('chat.project.selectAria', 'Select project')}
+          value={selectedProjectId}
+          onchange={(event) => handleSelectProject(event.currentTarget.value)}
+        >
+          <option value="">{t('chat.project.none', 'No project')}</option>
+          {#each projects as project (project.project_id)}
+            <option value={project.project_id}>
+              {project.display_name || project.project_id}
+            </option>
+          {/each}
+        </select>
+      </label>
+      {#if projectScanError}
+        <p class="chat-view__error chat-view__project-error">
+          {projectScanError}
+        </p>
+      {/if}
+    </div>
+  </div>
+
+  {#if isProjectSelected(selectedProjectId)}
+    <ProjectScanBanner report={projectReport} {onNavigateToProjects} />
+    <!-- Second bar: the project's scanned team. Empty team renders an empty
+         bar (no error); a config agent is selected and chatted just like an
+         identity agent above. -->
+    <div
+      class="chat-view__project-team"
+      aria-label={t('chat.project.teamLabel', 'Project team')}
+    >
+      <div class="chat-view__measure chat-view__project-team-inner">
+        {#if loadingProjectTeam}
+          <span class="chat-view__project-team-empty">
+            {t('loading.agents', 'Loading agents…')}
+          </span>
+        {:else if projectTeam.length === 0}
+          <span class="chat-view__project-team-empty">
+            {t('chat.project.teamEmpty', 'This project has no agents yet.')}
+          </span>
+        {:else}
+          {#each projectTeam as member (member.agent_id)}
+            <button
+              type="button"
+              class="agent-tab chat-view__project-tab"
+              class:active={member.agent_id === selectedProjectAgentId}
+              onclick={() => handleSelectProjectAgent(member.agent_id)}
+            >
+              <span class="tab-indicator"></span>
+              <span>{member.display_name || member.agent_id}</span>
+            </button>
+          {/each}
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   {#if chatState.loadingAgents}
     <div class="empty-state chat-view__state">
@@ -1282,6 +1747,104 @@
     padding: 10px 20px;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
+  }
+
+  .chat-view__project-bar {
+    flex-shrink: 0;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .chat-view__project-bar-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .chat-view__project-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .chat-view__project-label {
+    color: var(--text-med);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .chat-view__project-dropdown {
+    min-width: 180px;
+    width: auto;
+  }
+
+  .chat-view__project-error {
+    margin: 0;
+  }
+
+  .chat-view__project-team {
+    display: flex;
+    flex-shrink: 0;
+    min-height: 38px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+
+  .chat-view__project-team-inner {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  /* The project team tabs mirror the identity bar's agent tabs (which are
+     scoped to ChatHeader), so the visual styling is restated locally. */
+  .chat-view__project-team .agent-tab {
+    display: flex;
+    height: 38px;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 7px;
+    padding: 0 14px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--text-lo);
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      border-color 150ms ease,
+      color 150ms ease;
+  }
+
+  .chat-view__project-team .agent-tab:hover,
+  .chat-view__project-team .agent-tab:focus-visible {
+    color: var(--text-med);
+    outline: none;
+  }
+
+  .chat-view__project-team .agent-tab.active {
+    border-bottom-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .chat-view__project-team .tab-indicator {
+    width: 5px;
+    height: 5px;
+  }
+
+  .chat-view__project-team-empty {
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    color: var(--text-lo);
+    font-size: 12px;
   }
 
   /* Center inner content on the same axis as the capped message column. Bars
