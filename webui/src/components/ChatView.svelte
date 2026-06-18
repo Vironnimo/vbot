@@ -159,6 +159,14 @@
     isProjectSelected(selectedProjectId) && selectedProjectAgentId !== '',
   );
 
+  // The chosen project's display name, used as the bold prefix on the team bar.
+  let selectedProjectName = $derived(
+    projects.find((project) => project.project_id === selectedProjectId)
+      ?.display_name ||
+      selectedProjectId ||
+      '',
+  );
+
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
   let subAgentSessionActive = $derived(
@@ -1474,6 +1482,9 @@
     {cancellingRun}
     {creatingSession}
     {newSessionBlocked}
+    {projects}
+    {selectedProjectId}
+    onSelectProject={handleSelectProject}
     {wakewordStatus}
     {desktopCapabilities}
     onSelectAgent={handleSelectAgent}
@@ -1485,51 +1496,25 @@
     {onNavigateToVoiceSettings}
   />
 
-  <!-- Project dropdown: the bridge between the identity bar above and the
-       optional project team bar below. "No project" is Personal (identity
-       path, byte-identical to today). -->
-  <div class="chat-view__project-bar">
-    <div class="chat-view__measure chat-view__project-bar-inner">
-      <label class="chat-view__project-select">
-        <span class="chat-view__project-label">
-          {t('chat.project.label', 'Project')}
-        </span>
-        <select
-          class="s-input chat-view__project-dropdown"
-          aria-label={t('chat.project.selectAria', 'Select project')}
-          value={selectedProjectId}
-          onchange={(event) => handleSelectProject(event.currentTarget.value)}
-        >
-          <option value="">{t('chat.project.none', 'No project')}</option>
-          {#each projects as project (project.project_id)}
-            <option value={project.project_id}>
-              {project.display_name || project.project_id}
-            </option>
-          {/each}
-        </select>
-      </label>
-      {#if projectScanError}
-        <p class="chat-view__error chat-view__project-error">
-          {projectScanError}
-        </p>
-      {/if}
-    </div>
-  </div>
-
   {#if isProjectSelected(selectedProjectId)}
     <ProjectScanBanner report={projectReport} {onNavigateToProjects} />
-    <!-- Second bar: the project's scanned team. Empty team renders an empty
-         bar (no error); a config agent is selected and chatted just like an
-         identity agent above. -->
+    <!-- Second bar: the project's scanned team, shown only while a project is
+         chosen in the header picker. Left-aligned like the identity agent bar
+         above and prefixed with the project name so the team's ownership is
+         clear. Empty team renders an empty bar (no error); a config agent is
+         selected and chatted just like an identity agent. -->
     <div
       class="chat-view__project-team"
       aria-label={t('chat.project.teamLabel', 'Project team')}
     >
-      <div class="chat-view__measure chat-view__project-team-inner">
+      <div class="chat-view__project-team-inner">
+        <span class="chat-view__project-team-name">{selectedProjectName}</span>
         {#if loadingProjectTeam}
           <span class="chat-view__project-team-empty">
             {t('loading.agents', 'Loading agents…')}
           </span>
+        {:else if projectScanError}
+          <span class="chat-view__project-team-error">{projectScanError}</span>
         {:else if projectTeam.length === 0}
           <span class="chat-view__project-team-empty">
             {t('chat.project.teamEmpty', 'This project has no agents yet.')}
@@ -1749,41 +1734,6 @@
     background: var(--surface);
   }
 
-  .chat-view__project-bar {
-    flex-shrink: 0;
-    padding: 8px 20px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-  }
-
-  .chat-view__project-bar-inner {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .chat-view__project-select {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .chat-view__project-label {
-    color: var(--text-med);
-    font-size: 12px;
-    font-weight: 500;
-  }
-
-  .chat-view__project-dropdown {
-    min-width: 180px;
-    width: auto;
-  }
-
-  .chat-view__project-error {
-    margin: 0;
-  }
-
   .chat-view__project-team {
     display: flex;
     flex-shrink: 0;
@@ -1793,12 +1743,38 @@
     background: var(--surface-2);
   }
 
+  /* Left-aligned (no measure cap) so the team bar starts at the same left edge
+     as the identity agent tabs above. */
   .chat-view__project-team-inner {
     display: flex;
     align-items: stretch;
     gap: 2px;
     min-width: 0;
     overflow-x: auto;
+  }
+
+  /* Bold project-name label before the team tabs, marking the agents as that
+     project's team. The trailing divider separates it from the first tab. */
+  .chat-view__project-team-name {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    margin-right: 6px;
+    padding-right: 12px;
+    border-right: 1px solid var(--border);
+    color: var(--text-hi);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .chat-view__project-team-error {
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    color: var(--red);
+    font-size: 12px;
   }
 
   /* The project team tabs mirror the identity bar's agent tabs (which are

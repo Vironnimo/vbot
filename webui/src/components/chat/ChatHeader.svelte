@@ -2,6 +2,7 @@
   import { isRunActive } from '$lib/chatState.js';
   import { t } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
+  import Dropdown from '../Dropdown.svelte';
 
   let {
     agents = [],
@@ -13,6 +14,11 @@
     cancellingRun = false,
     creatingSession = false,
     newSessionBlocked = false,
+    // Project context for the compact project picker that lives in the header
+    // (left of the Sessions button). "No project" is Personal/identity chat.
+    projects = [],
+    selectedProjectId = '',
+    onSelectProject = () => {},
     wakewordStatus = { enabled: false, state: 'off' },
     desktopCapabilities = null,
     onSelectAgent = () => {},
@@ -31,6 +37,15 @@
   let micDotClass = $derived(computeMicDotClass(wakewordStatus));
   let micTooltip = $derived(computeMicTooltip(wakewordStatus));
   let micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
+  // "No project" (Personal) plus one option per project, mirroring the chosen
+  // project's display name back into the trigger label.
+  let projectOptions = $derived([
+    { value: '', label: t('chat.project.none', 'No project') },
+    ...projects.map((project) => ({
+      value: project.project_id,
+      label: project.display_name || project.project_id,
+    })),
+  ]);
 
   function formatTokenBadge(usage, contextWindow) {
     const numberFormat = new Intl.NumberFormat();
@@ -198,6 +213,13 @@
       <span class="token-badge" title={tokenBadgeTooltip}>{tokenBadgeText}</span
       >
     {/if}
+    <Dropdown
+      value={selectedProjectId}
+      options={projectOptions}
+      ariaLabel={t('chat.project.selectAria', 'Select project')}
+      triggerClass="chat-header__project-dropdown"
+      onValueChange={(next) => onSelectProject(next)}
+    />
     <Button
       variant="secondary"
       class={`chat-sessions-toggle${
@@ -378,6 +400,14 @@
     border-color: var(--accent);
     color: var(--accent);
     background: rgba(232, 135, 10, 0.08);
+  }
+
+  /* Compact project picker in the header: shares the shared Dropdown chrome
+     (same control as the Agents thinking-effort selector), only width-capped so
+     it reads as a single header chip rather than stretching the bar. */
+  :global(.chat-header__project-dropdown) {
+    min-width: 150px;
+    max-width: 220px;
   }
 
   @keyframes mic-pulse {

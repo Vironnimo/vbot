@@ -167,7 +167,6 @@ export const englishCatalog = Object.freeze({
   'chat.errorDetails': 'Details',
   'chat.compacted': 'Context compacted',
   'chat.transientCard.label': 'Command output',
-  'chat.project.label': 'Project',
   'chat.project.none': 'No project',
   'chat.project.selectAria': 'Select project',
   'chat.project.teamLabel': 'Project team',
