@@ -157,7 +157,9 @@ describe('buildCronAgentOptions', () => {
 
   it('tolerates missing/empty inputs', () => {
     expect(buildCronAgentOptions(null, null)).toEqual([]);
-    expect(buildCronAgentOptions([{ id: '' }], [{ projectId: '' }])).toEqual([]);
+    expect(buildCronAgentOptions([{ id: '' }], [{ projectId: '' }])).toEqual(
+      [],
+    );
   });
 });
 
@@ -181,10 +183,14 @@ describe('buildCronAgentDropdownOptions', () => {
   });
 
   it('separates the two kinds with disabled group headers', () => {
-    const options = buildCronAgentDropdownOptions(identityAgents, projectTeams, {
-      identityGroupLabel: 'Identity agents',
-      projectGroupLabel: 'Project agents',
-    });
+    const options = buildCronAgentDropdownOptions(
+      identityAgents,
+      projectTeams,
+      {
+        identityGroupLabel: 'Identity agents',
+        projectGroupLabel: 'Project agents',
+      },
+    );
     expect(options.map((option) => option.label)).toEqual([
       'Identity agents',
       'Researcher',
