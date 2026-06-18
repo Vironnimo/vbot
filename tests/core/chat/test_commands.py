@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.agents.agents import Agent, AgentStore
+from core.agents.agents import Agent
 from core.chat import (
     ChatMessage,
     CommandAction,
@@ -23,8 +23,10 @@ from core.chat.commands import (
     parse_handoff_argument,
     resolve_actual_thinking_effort,
     resolve_status_model_details,
+    resolve_status_project_label,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.projects import AgentResolver, ProjectStore
 from core.providers.providers import ProviderConfig
 from core.runs import ChatRunManager, Run, RunCancelledError
 from core.sessions import ChatSessionManager
@@ -67,29 +69,41 @@ def _make_model(*, model_id: str = "gpt-5.2", name: str = "GPT-5.2") -> Model:
     )
 
 
-class _StubAgents:
-    def __init__(
-        self,
-        agent: Agent,
-        *,
-        get_error: Exception | None = None,
-        update_error: Exception | None = None,
-    ) -> None:
+class _StubResolver:
+    """Resolver stub returning a fixed agent, recording the resolve target.
+
+    Mirrors the run-path seam ``/status`` now uses, so a test can assert the
+    dispatcher threads the session's ``project_id`` through to the resolver.
+    """
+
+    def __init__(self, agent: Agent, *, resolve_error: Exception | None = None) -> None:
         self._agent = agent
-        self._get_error = get_error
-        self._update_error = update_error
-        self.update_calls: list[tuple[str, dict[str, object]]] = []
+        self._resolve_error = resolve_error
+        self.calls: list[tuple[str | None, str]] = []
 
-    def get(self, _agent_id: str) -> Agent:
-        if self._get_error is not None:
-            raise self._get_error
+    def resolve_agent(self, project_id: str | None, agent_id: str) -> Agent:
+        self.calls.append((project_id, agent_id))
+        if self._resolve_error is not None:
+            raise self._resolve_error
         return self._agent
 
-    def update(self, agent_id: str, **changes: object) -> Agent:
-        self.update_calls.append((agent_id, dict(changes)))
-        if self._update_error is not None:
-            raise self._update_error
-        return self._agent
+
+class _StubProject:
+    def __init__(self, project_id: str, display_name: str) -> None:
+        self.project_id = project_id
+        self.display_name = display_name
+
+
+class _StubProjects:
+    """Project store stub resolving a single project by id."""
+
+    def __init__(self, project: _StubProject) -> None:
+        self._project = project
+
+    def get(self, project_id: str) -> _StubProject:
+        if project_id != self._project.project_id:
+            raise KeyError(project_id)
+        return self._project
 
 
 class _StubSession:
@@ -115,7 +129,9 @@ class _StubSessions:
         self._created_session_id = created_session_id
         self.create_calls: list[str] = []
 
-    def get(self, _agent_id: str, _session_id: str) -> _StubSession:
+    def get(
+        self, _agent_id: str, _session_id: str, _project_id: str | None = None
+    ) -> _StubSession:
         return self._session
 
     def create(self, agent_id: str) -> _StubCreatedSession:
@@ -469,7 +485,7 @@ def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> 
     ]
     dispatcher = CommandDispatcher(
         ChatRunManager(),
-        agents=cast(AgentStore, _StubAgents(_make_agent())),
+        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent())),
         sessions=cast(ChatSessionManager, _StubSessions(messages)),
         models=cast(ModelRegistry, _StubModels(_make_model())),
         started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
@@ -503,7 +519,7 @@ async def test_dispatch_status_reports_active_run_timestamps() -> None:
     await started.wait()
     dispatcher = CommandDispatcher(
         manager,
-        agents=cast(AgentStore, _StubAgents(_make_agent())),
+        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent())),
         sessions=cast(ChatSessionManager, _StubSessions([])),
         models=cast(ModelRegistry, _StubModels(_make_model())),
     )
@@ -528,7 +544,9 @@ def test_dispatch_status_strips_pinned_suffix_before_registry_lookup() -> None:
     models = _RecordingModels(_make_model(name="GPT-5.2 Registry"))
     dispatcher = CommandDispatcher(
         ChatRunManager(),
-        agents=cast(AgentStore, _StubAgents(_make_agent(model="openai/gpt-5.2::primary"))),
+        agent_resolver=cast(
+            AgentResolver, _StubResolver(_make_agent(model="openai/gpt-5.2::primary"))
+        ),
         sessions=cast(ChatSessionManager, _StubSessions(messages)),
         models=cast(ModelRegistry, models),
         started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
@@ -542,10 +560,72 @@ def test_dispatch_status_strips_pinned_suffix_before_registry_lookup() -> None:
     assert models.calls == [("openai", "gpt-5.2")]
 
 
+def test_dispatch_status_in_project_session_resolves_config_agent() -> None:
+    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+    messages = [ChatMessage.user("Status check", timestamp=session_started)]
+    resolver = _StubResolver(_make_agent(model="openai/gpt-5.2"))
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agent_resolver=cast(AgentResolver, resolver),
+        sessions=cast(ChatSessionManager, _StubSessions(messages)),
+        models=cast(ModelRegistry, _StubModels(_make_model())),
+        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+    )
+
+    result = dispatcher.dispatch("builder", "session-one", "/status", "vbot")
+
+    assert isinstance(result, CommandHandled)
+    assert result.reply is not None
+    # The project session resolves through the run-path seam instead of degrading
+    # to an empty reply, and the resolver sees the session's project id.
+    assert resolver.calls == [("vbot", "builder")]
+    assert "Agent: Coder (openai/gpt-5.2)" in result.reply
+    assert "Project: vBot (vbot)" in result.reply
+
+
+def test_dispatch_status_identity_session_shows_project_placeholder() -> None:
+    resolver = _StubResolver(_make_agent())
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agent_resolver=cast(AgentResolver, resolver),
+        sessions=cast(ChatSessionManager, _StubSessions([])),
+        models=cast(ModelRegistry, _StubModels(_make_model())),
+        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+    )
+
+    result = dispatcher.dispatch("coder", "session-one", "/status")
+
+    assert isinstance(result, CommandHandled)
+    assert result.reply is not None
+    assert resolver.calls == [(None, "coder")]
+    assert f"Project: {STATUS_PLACEHOLDER}" in result.reply
+
+
+def test_resolve_status_project_label_renders_name_and_id() -> None:
+    projects = cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot")))
+
+    assert resolve_status_project_label(projects, "vbot") == "vBot (vbot)"
+
+
+def test_resolve_status_project_label_identity_session_is_none() -> None:
+    projects = cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot")))
+
+    assert resolve_status_project_label(projects, None) is None
+
+
+def test_resolve_status_project_label_degrades_to_id_when_unresolvable() -> None:
+    # Missing store, or a project that can't be loaded, still names the stable id.
+    assert resolve_status_project_label(None, "vbot") == "vbot"
+    projects = cast(ProjectStore, _StubProjects(_StubProject("other", "Other")))
+    assert resolve_status_project_label(projects, "vbot") == "vbot"
+
+
 def test_build_status_text_degraded_with_no_data() -> None:
     text = build_status_text(None, [], None, None)
 
     assert f"Agent: {STATUS_PLACEHOLDER}" in text
+    assert f"Project: {STATUS_PLACEHOLDER}" in text
     assert f"Model display name: {STATUS_PLACEHOLDER}" in text
     assert f"Fallback model: {STATUS_PLACEHOLDER}" in text
     assert f"Selected thinking effort: {STATUS_PLACEHOLDER}" in text

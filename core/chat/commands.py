@@ -20,18 +20,17 @@ from core.runs import ChatRunManager, RunNotFoundError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from core.agents.agents import Agent, AgentStore
     from core.chat.chat import ChatMessage
     from core.models.models import ModelRegistry
-    from core.projects import RuntimeAgent
+    from core.projects import AgentResolver, ProjectStore, RuntimeAgent
     from core.providers.providers import ProviderRegistry
     from core.sessions import ChatSessionManager
 else:
-    Agent = Any
-    AgentStore = Any
+    AgentResolver = Any
     ChatMessage = Any
     ChatSessionManager = Any
     ModelRegistry = Any
+    ProjectStore = Any
     ProviderRegistry = Any
     RuntimeAgent = Any
 
@@ -47,7 +46,7 @@ StatusActivityName = Literal["idle", "running"]
 CommandArgumentMode = Literal["none", "optional", "required"]
 CommandOutputChannel = Literal["toast", "transient", "action"]
 
-CommandHandler = Callable[[str, str, "str | None"], "CommandHandled | CommandAction"]
+CommandHandler = Callable[[str, str, "str | None", "str | None"], "CommandHandled | CommandAction"]
 
 _LOGGER = get_logger("chat.commands")
 
@@ -202,18 +201,20 @@ class CommandDispatcher:
     def __init__(
         self,
         chat_runs: ChatRunManager,
-        agents: AgentStore | None = None,
+        agent_resolver: AgentResolver | None = None,
         sessions: ChatSessionManager | None = None,
         models: ModelRegistry | None = None,
         started_at: datetime | None = None,
         providers: ProviderRegistry | None = None,
+        projects: ProjectStore | None = None,
     ) -> None:
         self._chat_runs = chat_runs
-        self._agents = agents
+        self._agent_resolver = agent_resolver
         self._sessions = sessions
         self._models = models
         self._started_at = started_at
         self._providers = providers
+        self._projects = projects
         self._commands: dict[str, CommandHandler] = {
             "compact": self._handle_compact,
             "handoff": self._handle_handoff,
@@ -224,13 +225,24 @@ class CommandDispatcher:
             "stop": self._handle_stop,
         }
 
-    def dispatch(self, agent_id: str, session_id: str, message_text: str) -> DispatchResult:
-        """Dispatch one message as a built-in slash command when recognized."""
+    def dispatch(
+        self,
+        agent_id: str,
+        session_id: str,
+        message_text: str,
+        project_id: str | None = None,
+    ) -> DispatchResult:
+        """Dispatch one message as a built-in slash command when recognized.
+
+        ``project_id`` is the session's project (``None`` for an identity session).
+        It flows to the handlers so ``/status`` resolves a project agent through
+        the same seam the run path uses, instead of degrading to an empty reply.
+        """
         matched = self._match_command(message_text)
         if matched is None:
             return NotACommand()
         spec, argument = matched
-        return self._commands[spec.name](agent_id, session_id, argument)
+        return self._commands[spec.name](agent_id, session_id, argument, project_id)
 
     def recognizes(self, message_text: str) -> bool:
         """Return whether dispatching this message would handle it as a command.
@@ -265,16 +277,18 @@ class CommandDispatcher:
         return spec, (argument or None)
 
     def _handle_compact(
-        self, agent_id: str, session_id: str, argument: str | None
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandAction:
         return CommandAction(name="compact", argument=argument)
 
     def _handle_handoff(
-        self, agent_id: str, session_id: str, argument: str | None
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandAction:
         return CommandAction(name="handoff", argument=argument)
 
-    def _handle_help(self, agent_id: str, session_id: str, argument: str | None) -> CommandHandled:
+    def _handle_help(
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
+    ) -> CommandHandled:
         lines = ["Built-in slash commands:"]
         lines.extend(
             f"/{spec.name} - {spec.description}"
@@ -289,36 +303,42 @@ class CommandDispatcher:
         )
         return CommandHandled(reply="\n".join(lines), output="transient")
 
-    def _handle_stop(self, agent_id: str, session_id: str, argument: str | None) -> CommandHandled:
+    def _handle_stop(
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
+    ) -> CommandHandled:
         try:
             self._chat_runs.cancel_by_session(agent_id, session_id)
         except RunNotFoundError:
             return CommandHandled(reply="No active run to cancel.", output="toast")
         return CommandHandled(reply="Run cancelled.", output="toast")
 
-    def _handle_new(self, agent_id: str, session_id: str, argument: str | None) -> CommandAction:
+    def _handle_new(
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
+    ) -> CommandAction:
         return CommandAction(name="new_session")
 
-    def _handle_retry(self, agent_id: str, session_id: str, argument: str | None) -> CommandAction:
+    def _handle_retry(
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
+    ) -> CommandAction:
         return CommandAction(name="retry_last_turn")
 
     def _handle_status(
-        self, agent_id: str, session_id: str, argument: str | None
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandHandled:
-        agent: Agent | None = None
+        agent: RuntimeAgent | None = None
         messages: list[ChatMessage] = []
 
         try:
-            if self._agents is not None:
-                agent = self._agents.get(agent_id)
+            if self._agent_resolver is not None:
+                agent = self._agent_resolver.resolve_agent(project_id, agent_id)
         except Exception as error:
             log = (
                 _LOGGER.warning
-                if _has_exception_name(error, "AgentNotFoundError")
+                if _has_exception_name(error, "AgentResolutionError")
                 else _LOGGER.error
             )
             log(
-                "Failed to load agent %r while building /status reply",
+                "Failed to resolve agent %r while building /status reply",
                 agent_id,
                 exc_info=True,
             )
@@ -326,7 +346,7 @@ class CommandDispatcher:
 
         try:
             if self._sessions is not None:
-                messages = self._sessions.get(agent_id, session_id).load()
+                messages = self._sessions.get(agent_id, session_id, project_id).load()
         except Exception as error:
             log = (
                 _LOGGER.warning if _has_exception_name(error, "ChatSessionError") else _LOGGER.error
@@ -354,6 +374,7 @@ class CommandDispatcher:
                 model_details.reasoning_control,
                 model_details.reasoning_budget_max,
             ),
+            project_label=resolve_status_project_label(self._projects, project_id),
         )
         return CommandHandled(reply=text, output="transient")
 
@@ -442,6 +463,33 @@ def _status_provider_config(providers: ProviderRegistry | None, provider_id: str
         return None
 
 
+def resolve_status_project_label(
+    projects: ProjectStore | None,
+    project_id: str | None,
+) -> str | None:
+    """Return a display label for the session's project, or ``None`` for identity.
+
+    An identity session (``project_id is None``) has no project, so status renders
+    the placeholder. A project session resolves the project's display name as
+    ``"<display name> (<id>)"``; it degrades to the bare id when the store is
+    absent or the project can't be loaded — the stable id is still informative.
+    """
+    if project_id is None:
+        return None
+    if projects is None:
+        return project_id
+    try:
+        project = projects.get(project_id)
+    except Exception:
+        _LOGGER.warning(
+            "Failed to load project %r while building status reply",
+            project_id,
+            exc_info=True,
+        )
+        return project_id
+    return f"{project.display_name} ({project_id})"
+
+
 def resolve_actual_thinking_effort(
     selected_effort: str | None,
     reasoning_levels: tuple[str, ...],
@@ -487,6 +535,7 @@ def build_status_reply(
     model_display_name: str | None,
     activity: StatusActivity | None = None,
     actual_thinking_effort: str | None = None,
+    project_label: str | None = None,
 ) -> str:
     """Build status text while applying an optional model-display override."""
     token = _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name)
@@ -498,6 +547,7 @@ def build_status_reply(
             started_at,
             activity,
             actual_thinking_effort=actual_thinking_effort,
+            project_label=project_label,
         )
     finally:
         _STATUS_MODEL_DISPLAY_OVERRIDE.reset(token)
@@ -510,12 +560,15 @@ def build_status_text(
     started_at: datetime | None,
     activity: StatusActivity | None = None,
     actual_thinking_effort: str | None = None,
+    project_label: str | None = None,
 ) -> str:
     """Build human-readable status text for the current session and runtime state.
 
     ``actual_thinking_effort`` is what reaches the wire after the model's ladder
     snaps the agent's selection (see :func:`resolve_actual_thinking_effort`); it
     is rendered alongside the selected effort so the two can differ visibly.
+    ``project_label`` names the session's project (``None`` for an identity
+    session, rendered as the placeholder).
     """
     now_utc = datetime.now(UTC)
     now_local = now_utc.astimezone()
@@ -545,6 +598,7 @@ def build_status_text(
 
     lines = [
         f"Agent: {agent_summary}",
+        f"Project: {project_label or STATUS_PLACEHOLDER}",
         f"Model display name: {model_display}",
         f"Fallback model: {fallback_model}",
         f"Selected thinking effort: {selected_thinking_effort}",

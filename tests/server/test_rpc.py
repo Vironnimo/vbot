@@ -1043,7 +1043,7 @@ class StubRuntime:
         self.streaming_chat_loop = ChatLoop(cast(Any, self), streaming=True)
         self.command_dispatcher = CommandDispatcher(
             self.chat_run_manager,
-            agents=cast(Any, self.agents),
+            agent_resolver=cast(Any, self.agent_resolver),
             sessions=self.chat_sessions,
             models=cast(Any, self._models),
         )
@@ -1183,7 +1183,7 @@ def make_state(
         streaming_chat_loop=streaming_chat_loop,
         command_dispatcher=CommandDispatcher(
             chat_runs,
-            agents=cast(Any, runtime.agents),
+            agent_resolver=cast(Any, runtime.agent_resolver),
             sessions=runtime.chat_sessions,
             models=cast(Any, runtime.models),
         ),

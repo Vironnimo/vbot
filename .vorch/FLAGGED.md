@@ -203,6 +203,11 @@ out-of-scope-for-Plan-1 gap, deliberately not fixed.
    `agent=None` for a project session (handled, not a crash). Threading `project_id`
    through the dispatcher to resolve the config agent is a broader change, out of M5
    scope.
+   - **RESOLVED 2026-06-19.** `CommandDispatcher.dispatch` now takes `project_id` and
+     `/status` resolves through `AgentResolver` (same seam as the run path / status tool)
+     instead of `self._agents.get`. The dispatcher also gained a `ProjectStore`, and both
+     `/status` and the `status` tool now render a `Project:` line (display name + id, or
+     placeholder for an identity session).
 
 
 ## 2026-06-18 — Projects (Plan 2, WebUI): project-agent run loses the /ws backstop
