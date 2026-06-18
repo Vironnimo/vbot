@@ -134,6 +134,11 @@ class StubModelRegistry:
     def list_for_provider(self, _provider_id: str) -> list[Any]:
         return []
 
+    def reload(self, _resources_dir: Any) -> None:
+        # refresh_db reloads the registry in place after writing layer files; the
+        # stub has nothing to re-assemble, so this is a no-op.
+        pass
+
 
 def oauth_config() -> OAuthConfig:
     return OAuthConfig(

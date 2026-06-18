@@ -15,9 +15,8 @@ from typing import Any
 import httpx
 import pytest
 
-from cli import cron_management
+from cli import cron_management, project_management, session_management
 from cli import main as cli_main
-from cli import project_management, session_management
 from cli.server_management import CommandResult, ServerInstance
 from core.utils.logging import resolve_daily_log_path
 
@@ -247,9 +246,7 @@ def test_project_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     ]
 
 
-def test_project_list_reports_empty_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_project_list_reports_empty_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Arrange
     instance = make_instance(tmp_path)
 
@@ -262,9 +259,7 @@ def test_project_list_reports_empty_state(
     result = project_management.project_list(instance)
 
     # Assert
-    assert result == CommandResult(
-        ok=True, message="no projects configured", instance=instance
-    )
+    assert result == CommandResult(ok=True, message="no projects configured", instance=instance)
 
 
 def test_project_show_posts_rpc_and_renders_team(
@@ -341,9 +336,7 @@ def test_project_set_posts_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     result = project_management.project_set(instance, "vbot", {"default_agent": "builder"})
 
     # Assert
-    assert result == CommandResult(
-        ok=True, message="updated project vbot", instance=instance
-    )
+    assert result == CommandResult(ok=True, message="updated project vbot", instance=instance)
     assert calls == [
         {
             "method": "project.set",
@@ -373,9 +366,7 @@ def test_project_set_rejects_empty_changes(tmp_path: Path) -> None:
 # --- project rm --------------------------------------------------------------
 
 
-def test_project_rm_reports_archive_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_project_rm_reports_archive_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Arrange
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
@@ -408,9 +399,7 @@ def test_project_rm_reports_archive_path(
     assert calls == [{"method": "project.rm", "params": {"project_id": "vbot"}}]
 
 
-def test_project_rm_surfaces_busy_block(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_project_rm_surfaces_busy_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Arrange
     instance = make_instance(tmp_path)
 
@@ -434,16 +423,12 @@ def test_project_rm_surfaces_busy_block(
     # Assert
     assert result == CommandResult(
         ok=False,
-        message=(
-            "project_busy: cannot remove project with active or queued runs: agent builder"
-        ),
+        message=("project_busy: cannot remove project with active or queued runs: agent builder"),
         instance=instance,
     )
 
 
-def test_project_rm_surfaces_in_use_block(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_project_rm_surfaces_in_use_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Arrange
     instance = make_instance(tmp_path)
 
@@ -535,9 +520,7 @@ def test_session_list_forwards_project_qualified_address(
 
     # Assert
     assert result.ok is True
-    assert calls == [
-        {"method": "session.list", "params": {"agent_id": "orchestrator@vbot"}}
-    ]
+    assert calls == [{"method": "session.list", "params": {"agent_id": "orchestrator@vbot"}}]
 
 
 def test_session_list_bare_agent_unchanged(

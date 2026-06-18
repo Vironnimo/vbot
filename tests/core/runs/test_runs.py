@@ -1375,7 +1375,9 @@ async def test_queued_project_run_carries_project_id_when_drained() -> None:
 
     # The session is busy, so the item is queued (found by the 2-arg lookup).
     assert item.future.done() is False
-    assert [queued.item_id for queued in manager.list_queued("coder", "sess-uuid")] == [item.item_id]
+    assert [queued.item_id for queued in manager.list_queued("coder", "sess-uuid")] == [
+        item.item_id
+    ]
 
     active_release.set()
     assert await active_run.wait() == "active"

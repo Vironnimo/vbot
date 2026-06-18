@@ -295,7 +295,10 @@ def test_current_turn_pdf_degrades_to_path_note_without_pdf_modality(tmp_path: P
     )
 
     assert resolved[0]["content"] == [
-        {"type": "text", "text": f"[File: report.pdf (application/pdf) — Path: {record.file_path}]"},
+        {
+            "type": "text",
+            "text": f"[File: report.pdf (application/pdf) — Path: {record.file_path}]",
+        },
     ]
 
 

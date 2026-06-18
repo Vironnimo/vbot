@@ -126,17 +126,13 @@ class _StubSessions:
         self._session = _StubSession(messages)
         self.calls: list[tuple[str, str, str | None]] = []
 
-    def get(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> _StubSession:
+    def get(self, agent_id: str, session_id: str, project_id: str | None = None) -> _StubSession:
         self.calls.append((agent_id, session_id, project_id))
         return self._session
 
 
 class _NotFoundSessions:
-    def get(
-        self, _agent_id: str, session_id: str, _project_id: str | None = None
-    ) -> _StubSession:
+    def get(self, _agent_id: str, session_id: str, _project_id: str | None = None) -> _StubSession:
         raise ChatSessionError(f"session does not exist: {session_id}")
 
 

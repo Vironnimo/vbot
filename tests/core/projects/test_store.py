@@ -107,7 +107,7 @@ def test_get_raises_for_unknown_project(data_dir: Path) -> None:
 
 def test_list_returns_projects_sorted_by_id(data_dir: Path, tmp_path: Path) -> None:
     store = ProjectStore(data_dir)
-    for index, name in enumerate(["zeta", "alpha", "mid"]):
+    for name in ["zeta", "alpha", "mid"]:
         repo_dir = tmp_path / "repos" / name
         repo_dir.mkdir(parents=True)
         store.create(name, name.title(), repo_dir)

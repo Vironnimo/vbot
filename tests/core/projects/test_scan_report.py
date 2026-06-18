@@ -166,9 +166,7 @@ def test_with_pointer_findings_appends_orphan_seam() -> None:
 def test_report_immutability_keeps_originals_clean() -> None:
     report = ScanReport()
 
-    enriched = report.with_model_findings(
-        [ScanFinding(type=FindingType.BAD_MODEL, detail="x")]
-    )
+    enriched = report.with_model_findings([ScanFinding(type=FindingType.BAD_MODEL, detail="x")])
 
     assert report.is_clean
     assert not enriched.is_clean
