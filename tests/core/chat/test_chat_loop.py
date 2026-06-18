@@ -96,6 +96,25 @@ class StubAgents:
         return self._agent
 
 
+@dataclass(frozen=True)
+class StubProject:
+    """Minimal project shape the chat loop reads for prompt/cwd context."""
+
+    project_id: str
+    cwd: str
+    auto_load: list[str]
+
+
+class StubProjects:
+    """Project-store stub returning ``StubProject`` by id for prompt context."""
+
+    def __init__(self, projects: dict[str, StubProject]) -> None:
+        self._projects = dict(projects)
+
+    def get(self, project_id: str) -> StubProject:
+        return self._projects[project_id]
+
+
 class StubAgentResolver:
     """Resolver stub mirroring the runtime seam the chat loop now calls.
 
@@ -160,9 +179,36 @@ class StubPrompts:
     def __init__(self) -> None:
         self.agent_for_tools: StubAgent | None = None
         self.app_dir = Path("app")
+        self.build_calls: list[tuple[str, str, Any]] = []
+        self.render_project_files_calls: list[Any] = []
 
-    def build_system_prompt(self, agent: StubAgent) -> str:
-        return f"System for {agent.id}"
+    def build_system_prompt(
+        self,
+        agent: StubAgent,
+        scope: Any = None,
+        *,
+        agent_body: str = "",
+        project_context: Any = None,
+    ) -> str:
+        self.build_calls.append((agent.id, agent_body, project_context))
+        # Echo the body and rendered project files so chat tests can assert what
+        # actually reaches the system message, mirroring the real builder's slots
+        # (body in the identity slot, project files after it).
+        parts = [agent_body, f"System for {agent.id}", self.render_project_files(project_context)]
+        return "\n".join(part for part in parts if part)
+
+    def render_project_files(self, project_context: Any) -> str:
+        self.render_project_files_calls.append(project_context)
+        if project_context is None:
+            return ""
+        # Wrap each existing project file exactly like the real renderer so chat
+        # tests see the same <file>-framed content (AGENTS.md first, then auto_load).
+        blocks: list[str] = []
+        for name in ["AGENTS.md", *project_context.auto_load]:
+            file_path = Path(project_context.cwd) / name
+            if file_path.exists():
+                blocks.append(f'<file name="{name}">\n{file_path.read_text()}\n</file>')
+        return "\n".join(blocks)
 
     def provider_tool_definitions(self, agent: StubAgent) -> list[JsonObject]:
         self.agent_for_tools = agent
@@ -397,11 +443,13 @@ class StubRuntime:
         models: Any | None = None,
         project_agents: dict[tuple[str, str], StubAgent] | None = None,
         unresolvable_agents: set[tuple[str, str]] | None = None,
+        projects: Any | None = None,
     ) -> None:
         self.agents = StubAgents(agent)
         self.agent_resolver = StubAgentResolver(
             self.agents, project_agents, unresolvable_agents
         )
+        self.projects = projects if projects is not None else StubProjects({})
         self.chat_sessions = ChatSessionManager(data_dir)
         self.system_prompts = StubPrompts()
         self.tools = tools or ToolRegistry()
@@ -580,7 +628,14 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
     class EmptySystemPrompts(StubPrompts):
-        def build_system_prompt(self, agent: StubAgent) -> str:
+        def build_system_prompt(
+            self,
+            agent: StubAgent,
+            scope: Any = None,
+            *,
+            agent_body: str = "",
+            project_context: Any = None,
+        ) -> str:
             return "\n"
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
