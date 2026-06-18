@@ -33,6 +33,7 @@ from server.rpc.validation import (
     _ensure_model_connection_supported,
     _optional_bool,
     _optional_string,
+    _required_agent_address,
     _required_string,
 )
 
@@ -133,13 +134,21 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _create_session(state: Any, params: JsonObject) -> JsonObject:
-    agent_id = _required_string(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     make_current = _optional_bool(params, "make_current", default=False)
     try:
-        state.runtime.agents.get(agent_id)
-        session = state.runtime.chat_sessions.create(agent_id, session_id=session_id)
-        if make_current:
+        # One resolver seam validates both sources: identity agents through the
+        # store, project agents through the team scan. The session is then created
+        # under the matching anchor (identity dir vs. project anchor).
+        state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        session = state.runtime.chat_sessions.create(
+            agent_id, session_id=session_id, project_id=project_id
+        )
+        # ``current_session_id`` lives on the identity ``agent.json``; a project
+        # config agent has no such pointer (the anchor owns project-session
+        # selection), so the make-current update is identity-only.
+        if make_current and project_id is None:
             state.runtime.agents.update(agent_id, current_session_id=session.id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -154,9 +163,9 @@ def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
             f"unsupported session.list fields: {', '.join(unsupported_fields)}",
         )
 
-    agent_id = _required_string(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     try:
-        sessions = state.runtime.chat_sessions.list_with_metadata(agent_id)
+        sessions = state.runtime.chat_sessions.list_with_metadata(agent_id, project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"sessions": sessions}
