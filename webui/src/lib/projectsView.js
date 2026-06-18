@@ -111,6 +111,42 @@ export function hasManageChanges(changes) {
   return isPlainObject(changes) && Object.keys(changes).length > 0;
 }
 
+// Build the option list for a project's default-agent dropdown from the scanned
+// team. The leading empty option (value '') is "no project default — fall
+// through the resolution chain". A stored default_agent that is no longer in the
+// team is kept as a trailing option so the current value stays visible and
+// selectable rather than silently dropping when the team changes.
+export function buildDefaultAgentOptions({
+  team = [],
+  currentValue = '',
+  emptyLabel = '',
+  unavailableLabel = (agentId) => agentId,
+} = {}) {
+  const current = asText(currentValue).trim();
+  const options = [{ value: '', label: emptyLabel }];
+  const seen = new Set();
+
+  for (const member of Array.isArray(team) ? team : []) {
+    const agentId = asText(member?.agent_id).trim();
+    if (!agentId || seen.has(agentId)) {
+      continue;
+    }
+    seen.add(agentId);
+    const displayName = asText(member?.display_name).trim() || agentId;
+    options.push({
+      value: agentId,
+      label: displayName,
+      secondaryLabel: displayName === agentId ? '' : agentId,
+    });
+  }
+
+  if (current && !seen.has(current)) {
+    options.push({ value: current, label: unavailableLabel(current) });
+  }
+
+  return options;
+}
+
 // A project's cwd no longer resolves to a directory → offer Re-Point. The flag
 // is server-computed (`cwd_exists`); only an explicit `false` triggers it, so a
 // missing/undefined flag never forces the re-point UI.
