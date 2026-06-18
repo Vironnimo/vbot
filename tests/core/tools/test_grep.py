@@ -17,7 +17,9 @@ from core.tools.grep import (
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
 
-def make_context(workspace: Path, tool_name: str = GREP_TOOL_NAME) -> ToolContext:
+def make_context(
+    workspace: Path, tool_name: str = GREP_TOOL_NAME, *, cwd: Path | None = None
+) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
@@ -28,11 +30,40 @@ def make_context(workspace: Path, tool_name: str = GREP_TOOL_NAME) -> ToolContex
         workspace=workspace,
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
+        cwd=cwd,
     )
 
 
 def force_python_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(grep_module.shutil, "which", lambda _name: None)
+
+
+def get_success_content(result: dict[str, object]) -> str:
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    return content
+
+
+def test_grep_default_search_root_is_cwd_not_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With no path argument, grep searches the working directory; a project
+    # session points that at the repo (cwd), not the agent workspace.
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("ws.txt").write_text("needle in workspace\n", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    repo.joinpath("repo.txt").write_text("needle in repo\n", encoding="utf-8")
+
+    content = get_success_content(
+        grep_handler(make_context(workspace, cwd=repo), {"pattern": "needle"})
+    )
+
+    assert "repo.txt" in content
+    assert "ws.txt" not in content
 
 
 def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:

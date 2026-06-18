@@ -20,7 +20,7 @@ from core.projects.projects import (
     build_project,
     project_from_dict,
 )
-from core.projects.store import ProjectStore
+from core.projects.store import ProjectStore, project_sessions_dir
 
 __all__ = [
     "InvalidProjectIdError",
@@ -34,5 +34,6 @@ __all__ = [
     "cwd_identity_key",
     "normalize_cwd",
     "project_from_dict",
+    "project_sessions_dir",
     "slugify_project_id",
 ]

@@ -116,7 +116,7 @@ def _resolve_edit_path(context: ToolContext, path: str) -> Path:
     candidate = Path(path).expanduser()
     if candidate.is_absolute():
         return candidate.resolve()
-    return (context.workspace / candidate).resolve()
+    return (context.effective_cwd / candidate).resolve()
 
 
 def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool] | JsonObject:

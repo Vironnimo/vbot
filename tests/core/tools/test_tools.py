@@ -116,6 +116,30 @@ class TestToolContext:
 
         assert context.nesting_depth == 0
 
+    def test_effective_cwd_falls_back_to_workspace_without_project_cwd(self) -> None:
+        # Default identity behavior: no project cwd means tools resolve against
+        # the workspace exactly as before this field existed.
+        context = make_context()
+
+        assert context.cwd is None
+        assert context.effective_cwd == Path("workspace")
+
+    def test_effective_cwd_uses_project_cwd_when_set(self) -> None:
+        context = ToolContext(
+            agent_id="agent-1",
+            session_id="session-1",
+            run_id="run-1",
+            tool_call_id="call-1",
+            tool_name="read_file",
+            tool_call_index=0,
+            workspace=Path("workspace"),
+            app_root=Path("app"),
+            data_root=Path("data"),
+            cwd=Path("repo"),
+        )
+
+        assert context.effective_cwd == Path("repo")
+
     @pytest.mark.asyncio
     async def test_emit_uses_async_hook(self) -> None:
         events: list[tuple[str, JsonObject]] = []
@@ -732,6 +756,66 @@ class TestToolExecutor:
 
         assert seen_depths == [3]
         assert results == [tool_success({"nesting_depth": 3})]
+
+    @pytest.mark.asyncio
+    async def test_cwd_flows_from_config_to_context(self) -> None:
+        registry = ToolRegistry()
+        seen_cwds: list[Path] = []
+
+        def cwd_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            seen_cwds.append(context.effective_cwd)
+            return tool_success({"cwd": str(context.effective_cwd)})
+
+        registry.register(
+            "cwd",
+            "Return the effective working directory for testing.",
+            {"type": "object"},
+            cwd_handler,
+        )
+        executor = ToolExecutor(registry)
+
+        results = await executor.execute_many(
+            [ToolCall(id="call-1", name="cwd", arguments={})],
+            ToolExecutionConfig(
+                agent_id="agent-1",
+                session_id="session-1",
+                run_id="run-1",
+                workspace=Path("workspace"),
+                app_root=Path("app"),
+                data_root=Path("data"),
+                cwd=Path("repo"),
+                allowed_tools=["*"],
+            ),
+        )
+
+        assert seen_cwds == [Path("repo")]
+        assert results == [tool_success({"cwd": str(Path("repo"))})]
+
+    @pytest.mark.asyncio
+    async def test_cwd_defaults_to_workspace_when_config_has_none(self) -> None:
+        registry = ToolRegistry()
+        seen_cwds: list[Path] = []
+
+        def cwd_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            seen_cwds.append(context.effective_cwd)
+            return tool_success({"cwd": str(context.effective_cwd)})
+
+        registry.register(
+            "cwd_default",
+            "Return the effective working directory for testing the fallback.",
+            {"type": "object"},
+            cwd_handler,
+        )
+        executor = ToolExecutor(registry)
+
+        await executor.execute_many(
+            [ToolCall(id="call-1", name="cwd_default", arguments={})],
+            make_execution_config(allowed_tools=["*"], workspace=Path("workspace")),
+        )
+
+        # No project cwd in the config: tools resolve against the workspace,
+        # preserving today's identity-agent behavior.
+        assert seen_cwds == [Path("workspace")]
 
     @pytest.mark.asyncio
     async def test_cancel_hooks_flow_from_config_to_context_through_execute_one(self) -> None:

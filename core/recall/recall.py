@@ -43,6 +43,12 @@ class RecallRequest:
     context_messages: int
     bookend_messages: int
     sort: RecallSortMode
+    # Project the recall is scoped to, or ``None`` for the identity/global scope.
+    # A recall run searches and indexes the Sessions of *its* scope: ``None``
+    # reaches the identity Sessions under ``agents/<id>/sessions/`` exactly as
+    # before; a project id reaches that project's anchored Sessions. Additive
+    # with a ``None`` default so every existing caller keeps today's behavior.
+    project_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -54,7 +54,7 @@ GREP_TOOL_PARAMETERS: JsonObject = {
         },
         "path": {
             "type": "string",
-            "description": "Directory or file to search in (default: agent workspace).",
+            "description": "Directory or file to search in (default: working directory).",
         },
         "glob": {
             "type": "string",
