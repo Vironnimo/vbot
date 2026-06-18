@@ -9,7 +9,7 @@ Run lifecycle, cancellation, replayable timeline events, and in-memory busy-sess
 ## Data Model
 
 - `RunStatus` — `running`, `completed`, `failed`, or `cancelled`.
-- `RunEvent` — replayable timeline event with Run-local `sequence`, ids, `type`, JSON `payload`, and UTC ISO `timestamp`.
+- `RunEvent` — replayable timeline event with Run-local `sequence`, ids, `type`, JSON `payload`, and UTC ISO `timestamp`. It also carries `project_id` (the emitting Run's anchor, `None` for an identity run): `agent_id` stays bare, so a consumer that keys by the outside `agent@projekt` address rebuilds it from this field. Mirrored into `to_dict()` and the `/ws` bridge payload.
 - `Run` — active execution state: bounded replay buffer, bounded live subscriber queues, cancellation callbacks, terminal status/result/error, and the executor task used for best-effort cancellation.
 - `QueuedRunItem` — pending request with display preview, executor, `internal` flag, created timestamp, and `future`; the future resolves to the started `Run` or is cancelled if the queued item is removed before start.
 - `ChatRunManager` — in-memory owner of active Runs, completed-Run lookup retention, per-session FIFO queues, cancellation, and Run-start callbacks.
