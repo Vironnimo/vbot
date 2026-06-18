@@ -6,7 +6,12 @@ from core.agents import AgentError
 from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.chat import ChatError, ChatSessionError
 from core.model_tasks import TaskModelError
-from core.projects import AgentResolutionError
+from core.projects import (
+    AgentResolutionError,
+    ProjectAlreadyExistsError,
+    ProjectError,
+    ProjectNotFoundError,
+)
 from core.runs import ActiveRunError, RunCancelledError, RunError, RunNotFoundError
 from core.utils.errors import ConfigError, VBotError
 from server.rpc.errors import (
@@ -16,6 +21,8 @@ from server.rpc.errors import (
     RPC_ERROR_CHANNEL_CONFIG,
     RPC_ERROR_CHANNEL_NOT_FOUND,
     RPC_ERROR_DOMAIN,
+    RPC_ERROR_PROJECT_ALREADY_EXISTS,
+    RPC_ERROR_PROJECT_NOT_FOUND,
     RPC_ERROR_RUN_NOT_FOUND,
     RpcError,
 )
@@ -37,6 +44,12 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_RUN_NOT_FOUND, str(error))
     if isinstance(error, RunCancelledError):
         return RpcError(RPC_ERROR_CANCELLED, str(error))
+    if isinstance(error, ProjectNotFoundError):
+        return RpcError(RPC_ERROR_PROJECT_NOT_FOUND, str(error))
+    if isinstance(error, ProjectAlreadyExistsError):
+        return RpcError(RPC_ERROR_PROJECT_ALREADY_EXISTS, str(error))
+    if isinstance(error, ProjectError):
+        return RpcError(RPC_ERROR_DOMAIN, str(error))
     if isinstance(
         error,
         (
