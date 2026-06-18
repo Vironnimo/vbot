@@ -313,11 +313,12 @@ class Runtime:
         self._chat_run_manager = ChatRunManager()
         self._command_dispatcher = CommandDispatcher(
             self._chat_run_manager,
-            agents=self._agents,
+            agent_resolver=self._agent_resolver,
             sessions=self._chat_sessions,
             models=self._models,
             started_at=self._started_at,
             providers=self._providers,
+            projects=self._projects,
         )
         self.chat_runs = self._chat_run_manager
         if self._attachment_store is None:
@@ -370,6 +371,7 @@ class Runtime:
             self._chat_run_manager,
             self._started_at,
             self._providers,
+            self._projects,
         )
         # Built-ins are all registered now; apply extension tools last so a
         # collision with any built-in name is skipped (built-in wins), right

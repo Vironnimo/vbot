@@ -10,12 +10,12 @@ from typing import Any, cast
 import pytest
 
 import core.tools.status as status_tool_module
-from core.agents.agents import Agent, AgentStore
+from core.agents.agents import Agent
 from core.chat import ChatSessionError, CommandDispatcher, CommandHandled
 from core.chat.chat import ChatMessage
 from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
-from core.projects import AgentResolutionError, AgentResolver, ConfigAgent
+from core.projects import AgentResolutionError, AgentResolver, ConfigAgent, ProjectStore
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry
@@ -103,16 +103,6 @@ class _NotFoundResolver:
         raise AgentResolutionError("Agent not found")
 
 
-class _StubCommandAgents:
-    """Bare AgentStore stub for the /status command path (no resolver seam)."""
-
-    def __init__(self, agent: Agent) -> None:
-        self._agent = agent
-
-    def get(self, _agent_id: str) -> Agent:
-        return self._agent
-
-
 class _StubSession:
     def __init__(self, messages: list[ChatMessage]) -> None:
         self._messages = messages
@@ -154,6 +144,22 @@ class _RecordingModels:
         if provider_id != "openai" or model_id != "gpt-5.2":
             raise KeyError(model_id)
         return self._model
+
+
+class _StubProject:
+    def __init__(self, project_id: str, display_name: str) -> None:
+        self.project_id = project_id
+        self.display_name = display_name
+
+
+class _StubProjects:
+    def __init__(self, project: _StubProject) -> None:
+        self._project = project
+
+    def get(self, project_id: str) -> _StubProject:
+        if project_id != self._project.project_id:
+            raise KeyError(project_id)
+        return self._project
 
 
 def test_status_tool_registered_with_correct_name() -> None:
@@ -332,17 +338,16 @@ def test_status_tool_matches_status_command_for_registry_display(tmp_path: Path)
         ),
     ]
     agent = _make_agent()
-    # The /status command path keeps the bare AgentStore (its resolution is not
-    # part of the run-path resolver switch); the status tool now takes the
-    # resolver. Both wrap the same agent so the two renderings stay comparable.
-    command_agents = cast(AgentStore, _StubCommandAgents(agent))
+    # Both the /status command and the status tool now resolve through the same
+    # run-path resolver seam, wrapping the same agent so the two renderings stay
+    # comparable.
     resolver = cast(AgentResolver, _StubResolver(agent))
     sessions = cast(ChatSessionManager, _StubSessions(messages))
     models = cast(ModelRegistry, _StubModels(_make_model(name="GPT-5.2 Registry")))
 
     dispatcher = CommandDispatcher(
         ChatRunManager(),
-        agents=command_agents,
+        agent_resolver=resolver,
         sessions=sessions,
         models=models,
         started_at=started_at,
@@ -390,6 +395,44 @@ def test_status_tool_strips_pinned_suffix_before_registry_lookup(tmp_path: Path)
     text = cast(str, data["text"])
     assert "Model display name: GPT-5.2 Registry" in text
     assert recording_models.calls == [("openai", "gpt-5.2")]
+
+
+def test_status_tool_reports_project_for_project_session(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _StubResolver(_make_agent())),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path, project_id="vbot"))
+
+    assert result["ok"] is True
+    data = cast(dict[str, Any], result["data"])
+    assert "Project: vBot (vbot)" in cast(str, data["text"])
+
+
+def test_status_tool_reports_no_project_for_identity_session(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _StubResolver(_make_agent())),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path))
+
+    assert result["ok"] is True
+    data = cast(dict[str, Any], result["data"])
+    assert f"Project: {STATUS_PLACEHOLDER}" in cast(str, data["text"])
 
 
 def test_status_tool_splits_selected_and_actual_thinking_effort(tmp_path: Path) -> None:
