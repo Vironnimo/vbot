@@ -109,6 +109,10 @@ class RunEvent:
     agent_id: str
     session_id: str
     type: str
+    # The project anchor the emitting run executes under (``None`` for an
+    # identity run). ``agent_id`` stays bare; the project rides as a sibling
+    # field so a consumer can rebuild the outside ``agent@projekt`` address.
+    project_id: str | None = None
     payload: JsonObject = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -119,6 +123,7 @@ class RunEvent:
             "run_id": self.run_id,
             "agent_id": self.agent_id,
             "session_id": self.session_id,
+            "project_id": self.project_id,
             "type": self.type,
             "payload": dict(self.payload),
             "timestamp": self.timestamp,
@@ -254,6 +259,7 @@ class Run:
             run_id=self.id,
             agent_id=self.agent_id,
             session_id=self.session_id,
+            project_id=self.project_id,
             type=event_type,
             payload=dict(payload or {}),
         )

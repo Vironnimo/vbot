@@ -641,6 +641,9 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
             {
                 "run_id": run.id,
                 "agent_id": run.agent_id,
+                # Bare ``agent_id`` plus project so a reconnecting client can
+                # rebuild the address-keyed session and re-attach the run.
+                "project_id": run.project_id,
                 "session_id": run.session_id,
                 "status": RunStatus.RUNNING.value,
                 "sse_url": f"/api/runs/{run.id}/events",

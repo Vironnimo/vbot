@@ -158,6 +158,9 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
     payload: JsonObject = {
         "run_id": event.run_id,
         "agent_id": event.agent_id,
+        # ``agent_id`` is bare; the project rides alongside so the client can
+        # rebuild the ``agent@projekt`` address it keys session state by.
+        "project_id": event.project_id,
         "session_id": event.session_id,
         "run_event_type": event.type,
         "run_event_sequence": event.sequence,

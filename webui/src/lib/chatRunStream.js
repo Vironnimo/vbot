@@ -6,6 +6,7 @@ import {
   appendCompactionCheckpoint,
   appendRunEvent,
   ensureSessionState,
+  formatAgentAddress,
   highestContiguousRunEventSequence,
   removeQueuedMessage,
   startRun,
@@ -423,7 +424,11 @@ export function createChatRunStream({
     return {
       type: runEventType,
       run_id: payload.run_id,
-      agent_id: payload.agent_id,
+      // The server sends a bare agent id plus the run's project. Session state
+      // is keyed by the outside `agent@projekt` address, so rebuild it here at
+      // the single ingestion seam; an identity run (no project) yields the bare
+      // id unchanged, keeping the identity path byte-identical.
+      agent_id: formatAgentAddress(payload.agent_id, payload.project_id),
       session_id: payload.session_id,
       sequence: payload.run_event_sequence,
       timestamp: payload.run_event_timestamp,
@@ -523,9 +528,12 @@ export function createChatRunStream({
       }
       subAgentUpdates[`run:${activeRun.run_id}`] = 'running';
       if (activeRun.agent_id && activeRun.session_id) {
-        subAgentUpdates[
-          `session:${activeRun.agent_id}::${activeRun.session_id}`
-        ] = 'running';
+        const agentAddress = formatAgentAddress(
+          activeRun.agent_id,
+          activeRun.project_id,
+        );
+        subAgentUpdates[`session:${agentAddress}::${activeRun.session_id}`] =
+          'running';
       }
     }
     if (Object.keys(subAgentUpdates).length > 0) {
@@ -536,12 +544,16 @@ export function createChatRunStream({
       if (!activeRun?.run_id || !activeRun.agent_id || !activeRun.session_id) {
         continue;
       }
-      if (!isDisplayedSession(activeRun.agent_id, activeRun.session_id)) {
+      const agentAddress = formatAgentAddress(
+        activeRun.agent_id,
+        activeRun.project_id,
+      );
+      if (!isDisplayedSession(agentAddress, activeRun.session_id)) {
         continue;
       }
       const sessionState = ensureSessionState(
         chatState,
-        activeRun.agent_id,
+        agentAddress,
         activeRun.session_id,
       );
       attachRunStream(sessionState, {

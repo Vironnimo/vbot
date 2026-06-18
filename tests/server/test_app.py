@@ -300,6 +300,7 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
             {
                 "id": "run-running",
                 "agent_id": "coder",
+                "project_id": "acme",
                 "session_id": "session-running",
                 "status": RunStatus.RUNNING,
             },
@@ -313,6 +314,7 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
             {
                 "id": "run-terminal",
                 "agent_id": "coder",
+                "project_id": "acme",
                 "session_id": "session-terminal",
                 "status": RunStatus.COMPLETED,
             },
@@ -323,15 +325,47 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
     state = type("State", (), {"chat_runs": chat_runs})()
     result = _active_runs_snapshot(state)
 
+    # The project rides alongside the bare agent id so a reconnecting client can
+    # rebuild the address-keyed session and re-attach the run.
     assert result == [
         {
             "run_id": "run-running",
             "agent_id": "coder",
+            "project_id": "acme",
             "session_id": "session-running",
             "status": "running",
             "sse_url": "/api/runs/run-running/events",
         }
     ]
+
+
+def test_active_runs_snapshot_keeps_project_id_none_for_identity_run(
+    tmp_path: Path,
+) -> None:
+    chat_runs = ChatRunManager()
+    snapshot: list[Any] = []
+    chat_runs.active_runs = lambda: list(snapshot)  # type: ignore[method-assign]
+
+    identity_run = cast(
+        Any,
+        type(
+            "StubRun",
+            (),
+            {
+                "id": "run-identity",
+                "agent_id": "coder",
+                "project_id": None,
+                "session_id": "session-identity",
+                "status": RunStatus.RUNNING,
+            },
+        )(),
+    )
+    snapshot.append(identity_run)
+
+    state = type("State", (), {"chat_runs": chat_runs})()
+    result = _active_runs_snapshot(state)
+
+    assert result[0]["project_id"] is None
 
 
 def test_active_runs_snapshot_returns_empty_list_when_run_manager_missing() -> None:
