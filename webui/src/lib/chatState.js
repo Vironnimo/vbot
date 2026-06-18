@@ -699,3 +699,115 @@ function advanceStreamingPhase(sessionState, event) {
     sessionState.streamingPhase += 1;
   }
 }
+
+// --- Two-bar project chat helpers -----------------------------------------
+//
+// The chat has two agent bars: the always-present identity bar (today's
+// behavior, unchanged) and a second project team bar that appears when a
+// project is chosen from the dropdown. These pure helpers own the project
+// addressing and project-agent session selection so the component stays thin.
+//
+// The single hard rule: with NO project chosen (Personal, `projectId` empty),
+// an identity agent's outside address equals its bare id (no `@projekt`), so
+// every RPC payload is byte-identical to today. The trap discipline only kicks
+// in once a project agent is in play.
+
+// The separator between agent id and project id in the outside address form.
+// Mirrors `core/projects/address.py` `_ADDRESS_SEPARATOR` (the one server-side
+// parse/format seam) — kept in sync, never re-derived per call site.
+const AGENT_ADDRESS_SEPARATOR = '@';
+
+// Build the outside `agent@projekt` address. A null/empty project id yields the
+// bare agent id (identity spelling — what every identity-agent RPC sends today,
+// unchanged); a set project id yields `agent@projekt`. Inverse of the server's
+// `parse_agent_address`. This is the address sent to the RPCs that parse an
+// agent address: session.create / session.list / chat.history / chat.send /
+// chat.stream / chat.retry_last_turn (RPC-contract trap 2).
+export function formatAgentAddress(agentId, projectId) {
+  const bareId = typeof agentId === 'string' ? agentId : '';
+  const project = typeof projectId === 'string' ? projectId.trim() : '';
+  if (!project) {
+    return bareId;
+  }
+  return `${bareId}${AGENT_ADDRESS_SEPARATOR}${project}`;
+}
+
+// The empty/Personal project selection (no project chosen → `project_id=None`
+// on the backend, identity path). Kept as a named constant so the "no project"
+// sentinel is not a bare literal scattered across the component.
+export const NO_PROJECT_ID = '';
+
+// Whether a selected project id means "a real project" (vs. Personal/empty).
+export function isProjectSelected(projectId) {
+  return typeof projectId === 'string' && projectId.trim().length > 0;
+}
+
+// Resolve the addressing for an active agent in either bar.
+//
+// - identity agent (no project): `{ agentAddress: id, bareAgentId: id,
+//   projectId: null }` — `agentAddress === bareAgentId`, so the byte-identical
+//   regression holds.
+// - project agent: `{ agentAddress: 'agent@projekt', bareAgentId: 'agent',
+//   projectId }` — the full address goes to chat/session/history, the bare id
+//   to queue/cancel-tool (trap 2).
+//
+// `projectId` empty → identity, regardless of `isProjectAgent` (defensive: a
+// Personal selection never produces a project address).
+export function resolveAgentAddressing(agentId, projectId, isProjectAgent) {
+  const bareAgentId = typeof agentId === 'string' ? agentId : '';
+  const project =
+    isProjectAgent && isProjectSelected(projectId) ? projectId.trim() : null;
+  return {
+    bareAgentId,
+    projectId: project,
+    agentAddress: formatAgentAddress(bareAgentId, project),
+  };
+}
+
+// Pick the project-agent session to open from a `session.list` result.
+//
+// A project (config) agent has NO server-tracked `current_session_id` (trap 1):
+// `session.create` only sets make-current for identity. So the accessor chooses
+// the session itself — the most recently active one from `session.list`, by
+// `last_active_at` (falling back to `created_at`, then list order). Returns the
+// session id string, or '' when there are no sessions (the caller then creates
+// one via `session.create`).
+export function pickProjectAgentSessionId(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  let best = null;
+  let bestTime = -Infinity;
+  for (const session of list) {
+    const sessionId = typeof session?.id === 'string' ? session.id.trim() : '';
+    if (!sessionId) {
+      continue;
+    }
+    const time = sessionSortTime(session);
+    // `>=` so a later equal-or-newer entry wins, keeping list order as the
+    // final tiebreak (the server lists newest-relevant deterministically).
+    if (best === null || time >= bestTime) {
+      best = sessionId;
+      bestTime = time;
+    }
+  }
+  return best ?? '';
+}
+
+function sessionSortTime(session) {
+  const lastActive = parseSessionTimestamp(session?.last_active_at);
+  if (lastActive !== null) {
+    return lastActive;
+  }
+  const created = parseSessionTimestamp(session?.created_at);
+  if (created !== null) {
+    return created;
+  }
+  return -Infinity;
+}
+
+function parseSessionTimestamp(value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}

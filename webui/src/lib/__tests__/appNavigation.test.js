@@ -8,6 +8,7 @@ describe('app navigation surface', () => {
     expect(NAVIGATION_ITEMS.map((item) => item.id)).toEqual([
       'chat',
       'agents',
+      'projects',
       'cron',
       'system-prompt',
       'settings',

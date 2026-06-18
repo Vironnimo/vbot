@@ -12,6 +12,7 @@ const linkSessionToChannelMock = vi.fn(async () => ({ ok: true }));
 const listQueueMock = vi.fn(async () => ({ items: [] }));
 const removeFromQueueMock = vi.fn(async () => ({ ok: true }));
 const updateQueueItemMock = vi.fn(async () => ({ ok: true }));
+const showProjectMock = vi.fn(async () => ({ project: {}, scan: {} }));
 const applyConnectionSnapshotMock = vi.fn();
 const closeSubscriptionForMock = vi.fn();
 // Per-mount references to the real chatState and runStream created inside
@@ -38,6 +39,7 @@ vi.mock('$lib/api.js', () => ({
   listQueue: (...args) => listQueueMock(...args),
   removeFromQueue: (...args) => removeFromQueueMock(...args),
   updateQueueItem: (...args) => updateQueueItemMock(...args),
+  showProject: (...args) => showProjectMock(...args),
 }));
 
 // Wrap the real run-stream factory so the wiring test can observe calls to
@@ -92,6 +94,8 @@ describe('ChatView', () => {
     removeFromQueueMock.mockResolvedValue({ ok: true });
     updateQueueItemMock.mockReset();
     updateQueueItemMock.mockResolvedValue({ ok: true });
+    showProjectMock.mockReset();
+    showProjectMock.mockResolvedValue({ project: {}, scan: {} });
     applyConnectionSnapshotMock.mockReset();
     closeSubscriptionForMock.mockReset();
     testChatStateRefs.length = 0;
@@ -2735,6 +2739,417 @@ describe('ChatView', () => {
     expect(finalRow?.querySelector('.te-dot.running')).not.toBeNull();
     expect(finalRow?.querySelector('.te-dot.done')).toBeNull();
   });
+
+  // --- Two-bar project chat (Phase 2) -------------------------------------
+
+  it('renders the project dropdown with No project default and identity chat unchanged', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: '',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    const dropdown = document.querySelector('.chat-view__project-dropdown');
+    expect(dropdown).toBeTruthy();
+    expect(dropdown.value).toBe('');
+    // No project chosen → no second bar, no project.show call.
+    expect(document.querySelector('.chat-view__project-team')).toBeNull();
+    expect(showProjectMock).not.toHaveBeenCalled();
+    // Identity history call is byte-identical to today (bare agent id).
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      limit: 100,
+    });
+  });
+
+  it('REGRESSION: a Personal identity send is byte-identical to today (bare agent id, no @projekt)', async () => {
+    const streamCalls = [];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamHandler: (params) => {
+          streamCalls.push(params);
+          return {
+            run_id: 'run-personal',
+            sse_url: '/api/runs/run-personal/events',
+            status: 'running',
+            events: [],
+          };
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        // A project exists in the dropdown but is NOT selected.
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: '',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Personal hello');
+
+    await waitForCondition(() => streamCalls.length === 1, 100);
+
+    // The chat.stream payload carries the bare id — no `@projekt`, exactly
+    // today's identity behavior.
+    expect(streamCalls[0]).toEqual({
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      content: 'Personal hello',
+    });
+    expect(streamCalls[0].agent_id).not.toContain('@');
+  });
+
+  it('choosing a project loads its team and jumps to the default agent', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [
+          { agent_id: 'reviewer', display_name: 'Reviewer', model: 'm' },
+          { agent_id: 'builder', display_name: 'Builder', model: 'm' },
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    // Project agent has an existing session listed (trap 1: newest wins).
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'builder-session',
+          created_at: '2026-06-01T00:00:00+00:00',
+          last_active_at: '2026-06-10T00:00:00+00:00',
+        },
+      ],
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'builder-session': [
+            {
+              id: 'builder-assistant-one',
+              role: 'assistant',
+              content: 'Builder project reply',
+            },
+          ],
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Builder project reply'),
+      100,
+    );
+
+    // Second bar shows the scanned team.
+    const teamBar = document.querySelector('.chat-view__project-team');
+    expect(teamBar).toBeTruthy();
+    expect(teamBar.textContent).toContain('Builder');
+    expect(teamBar.textContent).toContain('Reviewer');
+
+    // Jumped to the default agent (builder), not the first team member.
+    const activeProjectTab = teamBar.querySelector('.agent-tab.active');
+    expect(activeProjectTab?.textContent).toContain('Builder');
+
+    // session.list and chat.history for the project agent use the FULL
+    // address (trap 2).
+    expect(listSessionsMock).toHaveBeenCalledWith('builder@vbot');
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'builder@vbot',
+      session_id: 'builder-session',
+      limit: 100,
+    });
+  });
+
+  it('jumps to the first team member when the project has no default agent', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: '' },
+      scan: {
+        team: [
+          { agent_id: 'first', display_name: 'First', model: 'm' },
+          { agent_id: 'second', display_name: 'Second', model: 'm' },
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    listSessionsMock.mockResolvedValue({ sessions: [] });
+    // No sessions → session.create (default mock) returns
+    // `created-first@vbot`, whose history is the new empty session.
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'created-first@vbot': [],
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-view__project-team .agent-tab.active')
+          ?.textContent?.includes('First'),
+      100,
+    );
+
+    // Trap 1: no current_session_id, no listed session → session.create with
+    // the full address and NO make_current.
+    expect(rpcMock).toHaveBeenCalledWith('session.create', {
+      agent_id: 'first@vbot',
+    });
+    const createCall = rpcMock.mock.calls.find(
+      ([method]) => method === 'session.create',
+    );
+    expect(createCall[1]).not.toHaveProperty('make_current');
+  });
+
+  it('renders an empty second bar without error for an empty project team', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'empty', default_agent: '' },
+      scan: { team: [], report: { clean: true, findings: [] } },
+    });
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'empty', display_name: 'Empty' }],
+        selectedProjectId: 'empty',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => Boolean(document.querySelector('.chat-view__project-team')),
+      100,
+    );
+
+    const teamBar = document.querySelector('.chat-view__project-team');
+    expect(teamBar.querySelector('.agent-tab')).toBeNull();
+    expect(teamBar.textContent).toContain('no agents');
+    // No project agent selected, no error notice.
+    expect(document.querySelector('.chat-view__error')).toBeNull();
+    // The identity agent above stays active and chattable.
+    expect(activeAgentTab()?.textContent).toContain('Alpha');
+  });
+
+  it('sends a project-agent message with the full address and syncs the queue with the bare id (trap 2)', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [{ agent_id: 'builder', display_name: 'Builder', model: 'm' }],
+        report: { clean: true, findings: [] },
+      },
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'builder-session',
+          created_at: '2026-06-01T00:00:00+00:00',
+          last_active_at: '2026-06-10T00:00:00+00:00',
+        },
+      ],
+    });
+    const streamCalls = [];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'builder-session': [
+            {
+              id: 'builder-assistant-one',
+              role: 'assistant',
+              content: 'Builder project reply',
+            },
+          ],
+        },
+        streamHandler: (params) => {
+          streamCalls.push(params);
+          return {
+            run_id: 'run-proj',
+            sse_url: '/api/runs/run-proj/events',
+            status: 'running',
+            events: [],
+          };
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Builder project reply'),
+      100,
+    );
+
+    // The queue sync that ran during history load used the BARE id (trap 2).
+    expect(listQueueMock).toHaveBeenCalledWith('builder', 'builder-session');
+    // It must NEVER be called with the full address.
+    expect(listQueueMock).not.toHaveBeenCalledWith(
+      'builder@vbot',
+      'builder-session',
+    );
+
+    sendComposerMessage('Hello project agent');
+
+    await waitForCondition(() => streamCalls.length === 1, 100);
+
+    // chat.stream parses an address → FULL address (trap 2).
+    expect(streamCalls[0]).toEqual({
+      agent_id: 'builder@vbot',
+      session_id: 'builder-session',
+      content: 'Hello project agent',
+    });
+  });
+
+  it('shows the scan banner for an unclean project and links into the Projects tab', async () => {
+    const onNavigateToProjects = vi.fn();
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [{ agent_id: 'builder', display_name: 'Builder', model: 'm' }],
+        report: {
+          clean: false,
+          findings: [
+            {
+              type: 'bad_model',
+              detail: 'unknown model',
+              agent_id: 'builder',
+            },
+          ],
+        },
+      },
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'builder-session',
+          created_at: '2026-06-01T00:00:00+00:00',
+          last_active_at: '2026-06-10T00:00:00+00:00',
+        },
+      ],
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: { 'builder-session': [] },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+        onNavigateToProjects,
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => Boolean(document.querySelector('.project-scan-banner')),
+      100,
+    );
+
+    const link = document.querySelector('.project-scan-banner__link');
+    expect(link).toBeTruthy();
+    link.click();
+    flushSync();
+    expect(onNavigateToProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show the scan banner for a clean project', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [{ agent_id: 'builder', display_name: 'Builder', model: 'm' }],
+        report: { clean: true, findings: [] },
+      },
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'builder-session',
+          created_at: '2026-06-01T00:00:00+00:00',
+          last_active_at: '2026-06-10T00:00:00+00:00',
+        },
+      ],
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({ sessionMessages: { 'builder-session': [] } }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => Boolean(document.querySelector('.chat-view__project-team')),
+      100,
+    );
+
+    expect(document.querySelector('.project-scan-banner')).toBeNull();
+  });
 });
 function createChatRpcMock({
   usage,
@@ -2837,6 +3252,15 @@ function createChatRpcMock({
         return retryRunResponse;
       }
       throw new Error('Unexpected retry call');
+    }
+
+    if (method === 'session.create') {
+      // Deterministic session id derived from the address so project-agent
+      // session-create tests can assert against it. `builder@vbot` →
+      // `created-builder@vbot`.
+      const agentId =
+        typeof params?.agent_id === 'string' ? params.agent_id : '';
+      return { agent_id: agentId, session_id: `created-${agentId}` };
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);
