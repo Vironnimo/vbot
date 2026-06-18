@@ -25,7 +25,8 @@ from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
-from core.projects.resolver import AgentResolutionError
+from core.projects import ProjectNotFoundError
+from core.projects.resolver import AgentResolutionError, ConfigAgent
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
     ProviderAccount,
@@ -169,23 +170,61 @@ class StubAgents:
         return Path("archive") / agent_id
 
 
+@dataclass(frozen=True)
+class StubProject:
+    """Minimal project entity for the prompt-preview project path."""
+
+    project_id: str
+    cwd: str
+    auto_load: tuple[str, ...] = ()
+
+
+class StubProjects:
+    """``runtime.projects`` slice the prompt-preview path reads (cwd + auto-load)."""
+
+    def __init__(self, *projects: StubProject) -> None:
+        self._projects = {project.project_id: project for project in projects}
+
+    def add(self, project: StubProject) -> None:
+        self._projects[project.project_id] = project
+
+    def get(self, project_id: str) -> StubProject:
+        try:
+            return self._projects[project_id]
+        except KeyError as error:
+            raise ProjectNotFoundError(f"project not found: {project_id}") from error
+
+
 class StubAgentResolver:
     """Resolver seam the chat loop calls; identity path delegates to ``StubAgents``.
 
     ``project_id=None`` returns the same agent ``StubAgents.get`` would (byte-for-byte
     today's identity path); an unknown agent surfaces as :class:`AgentResolutionError`,
-    matching the real resolver's failure surface. These server tests never exercise the
-    config/project path.
+    matching the real resolver's failure surface. A set ``project_id`` returns a
+    :class:`ConfigAgent` registered via :meth:`register_project_agent`, mirroring the
+    real resolver's config path; an unknown project/agent raises
+    :class:`AgentResolutionError`.
     """
 
     def __init__(self, agents: StubAgents) -> None:
         self._agents = agents
+        self._project_agents: dict[tuple[str, str], ConfigAgent] = {}
 
-    def resolve_agent(self, _project_id: str | None, agent_id: str) -> StubAgent:
+    def register_project_agent(self, project_id: str, agent: ConfigAgent) -> None:
+        self._project_agents[(project_id, agent.id)] = agent
+
+    def resolve_agent(self, project_id: str | None, agent_id: str) -> StubAgent | ConfigAgent:
+        if project_id is None:
+            try:
+                return self._agents.get(agent_id)
+            except KeyError as error:
+                raise AgentResolutionError(str(error)) from error
         try:
-            return self._agents.get(agent_id)
+            return self._project_agents[(project_id, agent_id)]
         except KeyError as error:
-            raise AgentResolutionError(str(error)) from error
+            raise AgentResolutionError(
+                f"agent '{agent_id}' is not on project '{project_id}' team"
+            ) from error
 
 
 class InstrumentedAgentDeleteLock:
@@ -889,8 +928,18 @@ class StubPrompts:
             scope_agent_id = getattr(scope, "agent_id", None)
             return f"Custom system for {scope_agent_id}"
         if scope is None and agent.custom_system_prompt_enabled:
-            return f"Effective custom system for {agent.id}"
-        return f"System for {agent.id}"
+            base = f"Effective custom system for {agent.id}"
+        else:
+            base = f"System for {agent.id}"
+        # Echo the two project-preview inputs so wiring tests can assert they
+        # reached the builder; both empty for an identity preview, leaving the
+        # identity-path output byte-identical.
+        extras = []
+        if agent_body:
+            extras.append(f"body={agent_body}")
+        if project_context is not None:
+            extras.append(f"project_cwd={getattr(project_context, 'cwd', '')}")
+        return " ".join([base, *extras])
 
     def provider_tool_definitions(self, _agent: StubAgent) -> list[JsonObject]:
         return []
@@ -1027,6 +1076,7 @@ class StubRuntime:
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
         )
         self.agent_resolver = StubAgentResolver(self.agents)
+        self.projects = StubProjects()
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.system_prompts = StubPrompts()
         self.tools = ToolRegistry()
@@ -6116,6 +6166,79 @@ async def test_prompt_preview_rejects_missing_agent_id(tmp_path: Path) -> None:
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
+
+
+def _register_project_agent(state: SimpleNamespace) -> None:
+    """Wire one project agent + its project anchor into the stub runtime."""
+    state.runtime.projects.add(
+        StubProject(project_id="vbot", cwd="/repo/vbot", auto_load=("CONTEXT.md",))
+    )
+    state.runtime.agent_resolver.register_project_agent(
+        "vbot",
+        ConfigAgent(
+            id="builder",
+            name="Builder",
+            model="openai/gpt-5",
+            temperature=None,
+            allowed_tools=["*"],
+            allowed_skills=["*"],
+            body="Imported builder body",
+            source_path=Path("/repo/vbot/.opencode/agents/builder.md"),
+            source_format="opencode",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_project_agent_renders_body_and_project_context(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _register_project_agent(state)
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.preview", "params": {"agent_id": "builder@vbot"}},
+    )
+
+    assert response["ok"] is True
+    text = response["result"]["text"]
+    # The config-agent body and the project's cwd both reached the builder — the
+    # project-qualified preview now matches a real project-born run.
+    assert "body=Imported builder body" in text
+    assert "project_cwd=" in text
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_identity_agent_carries_no_project_context(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.preview", "params": {"agent_id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    # A bare (identity) address renders no body and no project files, so the
+    # output stays byte-identical to before project addressing existed.
+    assert response["result"]["text"] == "System for coder"
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_rejects_unknown_project_agent(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _register_project_agent(state)
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.preview", "params": {"agent_id": "ghost@vbot"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert "ghost" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
