@@ -625,9 +625,9 @@ describe('i18n t()', () => {
 
     expectCatalogKeys(requiredKeys);
     expect(t('chat.project.none')).toBe('No project');
-    expect(t('chat.project.scanBannerCount', undefined, { count: 2 })).toContain(
-      '2',
-    );
+    expect(
+      t('chat.project.scanBannerCount', undefined, { count: 2 }),
+    ).toContain('2');
     expect(t('chat.project.scanBannerLink').toLowerCase()).toContain('project');
   });
 
