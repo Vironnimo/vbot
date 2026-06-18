@@ -771,6 +771,7 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
             {
                 "id": "run-running",
                 "agent_id": "coder",
+                "project_id": None,
                 "session_id": "session-running",
                 "status": RunStatus.RUNNING,
             },
@@ -805,6 +806,7 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
         {
             "run_id": "run-running",
             "agent_id": "coder",
+            "project_id": None,
             "session_id": "session-running",
             "status": "running",
             "sse_url": "/api/runs/run-running/events",

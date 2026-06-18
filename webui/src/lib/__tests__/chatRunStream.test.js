@@ -672,7 +672,9 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
     expect(
       chatState.sessions[`${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`],
     ).toBeTruthy();
-    expect(chatState.sessions[`${BARE_AGENT_ID}::${SESSION_ID}`]).toBeUndefined();
+    expect(
+      chatState.sessions[`${BARE_AGENT_ID}::${SESSION_ID}`],
+    ).toBeUndefined();
     expect(
       harness.subAgentRunStatuses[
         `session:${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`

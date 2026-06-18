@@ -79,11 +79,9 @@ describe('ProjectsView', () => {
 
   it('adds a project from the modal and reviews its team and report', async () => {
     // After add the list reload returns the new project so its panel can render.
-    listProjectsMock
-      .mockResolvedValueOnce({ projects: [] })
-      .mockResolvedValue({
-        projects: [project({ project_id: 'demo', display_name: 'Demo' })],
-      });
+    listProjectsMock.mockResolvedValueOnce({ projects: [] }).mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
     addProjectMock.mockResolvedValue({
       project: project({ project_id: 'demo', display_name: 'Demo' }),
       scan: {
@@ -244,7 +242,9 @@ describe('ProjectsView', () => {
     buttonByTestId('project-repoint-demo').click();
     flushSync();
 
-    await waitForCondition(() => document.getElementById('projects-repoint-cwd'));
+    await waitForCondition(() =>
+      document.getElementById('projects-repoint-cwd'),
+    );
     setInputValue('projects-repoint-cwd', 'C:/repos/moved');
 
     submitButtonInDialog('Re-point').click();
