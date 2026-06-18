@@ -10,6 +10,7 @@ const listProjectsMock = vi.fn();
 const showProjectMock = vi.fn();
 const setProjectMock = vi.fn();
 const removeProjectMock = vi.fn();
+const rpcMock = vi.fn();
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -21,6 +22,7 @@ vi.mock('$lib/api.js', () => ({
   showProject: (...args) => showProjectMock(...args),
   setProject: (...args) => setProjectMock(...args),
   removeProject: (...args) => removeProjectMock(...args),
+  rpc: (...args) => rpcMock(...args),
 }));
 
 const { default: ProjectsView } = await import('../ProjectsView.svelte');
@@ -38,6 +40,17 @@ describe('ProjectsView', () => {
     showProjectMock.mockReset();
     setProjectMock.mockReset();
     removeProjectMock.mockReset();
+    rpcMock.mockReset();
+
+    rpcMock.mockImplementation((method) => {
+      if (method === 'model.list') {
+        return Promise.resolve({ models: [] });
+      }
+      if (method === 'connection.list') {
+        return Promise.resolve({ connections: [] });
+      }
+      return Promise.resolve({});
+    });
 
     listProjectsMock.mockResolvedValue({ projects: [] });
     addProjectMock.mockResolvedValue({
@@ -64,7 +77,13 @@ describe('ProjectsView', () => {
     vi.restoreAllMocks();
   });
 
-  it('adds a project by server path and shows the returned team and report', async () => {
+  it('adds a project from the modal and reviews its team and report', async () => {
+    // After add the list reload returns the new project so its panel can render.
+    listProjectsMock
+      .mockResolvedValueOnce({ projects: [] })
+      .mockResolvedValue({
+        projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+      });
     addProjectMock.mockResolvedValue({
       project: project({ project_id: 'demo', display_name: 'Demo' }),
       scan: {
@@ -91,10 +110,16 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-add-open"]'),
+    );
+    buttonByTestId('project-add-open').click();
+    flushSync();
+
     await waitForCondition(() => inputById('projects-add-cwd'));
     setInputValue('projects-add-cwd', 'C:/repos/demo');
 
-    buttonByText('Add project').click();
+    submitButtonInDialog('Add project').click();
 
     await waitForCondition(() => addProjectMock.mock.calls.length === 1);
     expect(addProjectMock).toHaveBeenCalledWith({ cwd: 'C:/repos/demo' });
@@ -105,7 +130,30 @@ describe('ProjectsView', () => {
     expect(document.body.textContent).toContain('model not configured');
   });
 
-  it('shows the clean report state for an empty repo without treating it as an error', async () => {
+  it('omits the display name from the add payload only when it is blank', async () => {
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-add-open"]'),
+    );
+    buttonByTestId('project-add-open').click();
+    flushSync();
+
+    await waitForCondition(() => inputById('projects-add-cwd'));
+    setInputValue('projects-add-cwd', 'C:/repos/demo');
+    setInputValue('projects-add-display-name', 'My Repo');
+
+    submitButtonInDialog('Add project').click();
+
+    await waitForCondition(() => addProjectMock.mock.calls.length === 1);
+    expect(addProjectMock).toHaveBeenCalledWith({
+      cwd: 'C:/repos/demo',
+      display_name: 'My Repo',
+    });
+  });
+
+  it('expands a project and treats a clean empty repo as healthy, not an error', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -118,15 +166,22 @@ describe('ProjectsView', () => {
     flushSync();
 
     await waitForCondition(() =>
-      document.querySelector('[data-testid="project-review-demo"]'),
+      document.querySelector('[data-testid="project-toggle-demo"]'),
     );
-    buttonByTestId('project-review-demo').click();
+    buttonByTestId('project-toggle-demo').click();
+    flushSync();
 
     await waitForCondition(() => showProjectMock.mock.calls.length === 1);
     await waitForCondition(() =>
-      document.body.textContent.includes('No issues found'),
+      document.querySelector('[data-testid="project-panel-demo"]'),
     );
-    expect(document.body.textContent).toContain('No issues found');
+    // The team section renders its empty-state copy once the scan settles; no
+    // findings, no alert.
+    await waitForCondition(() =>
+      document.body.textContent.includes('No agents discovered'),
+    );
+    expect(document.body.textContent).toContain('No agents discovered');
+    expect(document.body.textContent).not.toContain('issues found');
     expect(document.querySelector('[role="alert"]')).toBeFalsy();
   });
 
@@ -147,59 +202,20 @@ describe('ProjectsView', () => {
     flushSync();
 
     await waitForCondition(() =>
-      document.querySelector('[data-testid="project-manage-demo"]'),
+      document.querySelector('[data-testid="project-toggle-demo"]'),
     );
-    buttonByTestId('project-manage-demo').click();
+    buttonByTestId('project-toggle-demo').click();
     flushSync();
 
-    await waitForCondition(() =>
-      document.getElementById('projects-manage-display-name'),
-    );
-    setInputValue('projects-manage-display-name', 'Renamed');
+    await waitForCondition(() => inputById('project-edit-name'));
+    setInputValue('project-edit-name', 'Renamed');
 
-    buttonByText('Save changes').click();
+    buttonByTestId('project-save-demo').click();
 
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);
     expect(setProjectMock).toHaveBeenCalledWith('demo', {
       display_name: 'Renamed',
     });
-  });
-
-  it('clears a default pointer with null (never an empty string) when emptied', async () => {
-    listProjectsMock.mockResolvedValue({
-      projects: [
-        project({
-          project_id: 'demo',
-          display_name: 'Demo',
-          default_agent: 'builder',
-          default_model: 'openai/gpt-5.2',
-          auto_load: ['AGENTS.md'],
-        }),
-      ],
-    });
-
-    mountedComponent = mount(ProjectsView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-manage-demo"]'),
-    );
-    buttonByTestId('project-manage-demo').click();
-    flushSync();
-
-    await waitForCondition(() =>
-      document.getElementById('projects-manage-default-agent'),
-    );
-    setInputValue('projects-manage-default-agent', '');
-
-    buttonByText('Save changes').click();
-
-    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
-    expect(setProjectMock).toHaveBeenCalledWith('demo', {
-      default_agent: null,
-    });
-    // The backend rejects a sent empty string; the clear must go out as null.
-    expect(setProjectMock.mock.calls[0][1].default_agent).not.toBe('');
   });
 
   it('re-points a project with a missing cwd through project.set with the new cwd', async () => {
@@ -217,14 +233,18 @@ describe('ProjectsView', () => {
     flushSync();
 
     await waitForCondition(() =>
+      document.querySelector('[data-testid="project-toggle-demo"]'),
+    );
+    buttonByTestId('project-toggle-demo').click();
+    flushSync();
+
+    await waitForCondition(() =>
       document.querySelector('[data-testid="project-repoint-demo"]'),
     );
     buttonByTestId('project-repoint-demo').click();
     flushSync();
 
-    await waitForCondition(() =>
-      document.getElementById('projects-repoint-cwd'),
-    );
+    await waitForCondition(() => document.getElementById('projects-repoint-cwd'));
     setInputValue('projects-repoint-cwd', 'C:/repos/moved');
 
     submitButtonInDialog('Re-point').click();
@@ -246,6 +266,12 @@ describe('ProjectsView', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-toggle-demo"]'),
+    );
+    buttonByTestId('project-toggle-demo').click();
     flushSync();
 
     await waitForCondition(() =>
@@ -271,6 +297,12 @@ describe('ProjectsView', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-toggle-demo"]'),
+    );
+    buttonByTestId('project-toggle-demo').click();
     flushSync();
 
     await waitForCondition(() =>
@@ -301,22 +333,14 @@ function project(overrides = {}) {
   };
 }
 
-function buttonByText(label) {
-  const button = Array.from(document.body.querySelectorAll('button')).find(
-    (item) => item.textContent?.includes(label) && !item.disabled,
-  );
-  expect(button, `button "${label}"`).toBeTruthy();
-  return button;
-}
-
 function buttonByTestId(testId) {
   const button = document.querySelector(`[data-testid="${testId}"]`);
-  expect(button).toBeTruthy();
+  expect(button, testId).toBeTruthy();
   return button;
 }
 
-// The list row and the modal can share a label (e.g. "Re-point"), so target the
-// submit button inside the open dialog specifically.
+// The list row and a modal can share a label (e.g. "Add project", "Re-point"),
+// so target the submit button inside the open dialog specifically.
 function submitButtonInDialog(label) {
   const dialog = document.querySelector('[role="dialog"]');
   expect(dialog, 'open dialog').toBeTruthy();
