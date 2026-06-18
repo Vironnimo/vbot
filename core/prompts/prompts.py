@@ -507,7 +507,7 @@ class SystemPromptManager:
         if "{skills}" in prompt:
             prompt = prompt.replace("{skills}", self._build_skills_block(agent, prompt_scope))
 
-        prompt = self._replace_workspace_includes(prompt, Path(agent.workspace))
+        prompt = self._replace_workspace_includes(prompt, agent.workspace)
 
         # The agent body is substituted LAST and literally — like an {include},
         # never as a template. Because every vBot placeholder and {include} is
@@ -686,7 +686,17 @@ class SystemPromptManager:
             active_channels.append(channel)
         return active_channels
 
-    def _replace_workspace_includes(self, prompt: str, workspace_path: Path) -> str:
+    def _replace_workspace_includes(self, prompt: str, workspace: str) -> str:
+        # An empty workspace means "no includes". A config agent has no
+        # identity/memory home (workspace == ""), so {include:…} placeholders
+        # have nothing to resolve against and are dropped. Resolving them anyway
+        # would turn Path("") into Path("."), reading SOUL.md/USER.md relative to
+        # the server's process CWD — log noise every turn and a latent leak.
+        if not workspace:
+            return INCLUDE_PATTERN.sub("", prompt)
+
+        workspace_path = Path(workspace)
+
         def replace_include(match: re.Match[str]) -> str:
             filename = match.group(1).strip()
             _validate_workspace_include(filename)
