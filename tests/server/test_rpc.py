@@ -4657,7 +4657,9 @@ async def test_chat_methods_handle_retry_command_as_run_response(
     )
     captured: JsonObject = {}
 
-    async def fake_retry_run(agent_id: str, session_id: str) -> StubDelegateRun:
+    async def fake_retry_run(
+        agent_id: str, session_id: str, project_id: str | None = None
+    ) -> StubDelegateRun:
         captured["agent_id"] = agent_id
         captured["session_id"] = session_id
         return run
@@ -4843,6 +4845,7 @@ async def test_chat_send_accepts_content_block_list(
         content: str | list[Any],
         *,
         session_id: str,
+        project_id: str | None = None,
     ) -> StubDelegateRun:
         captured["agent_id"] = agent_id
         captured["content"] = content
@@ -4912,6 +4915,7 @@ async def test_chat_methods_forward_speech_transcription_input_origin(
         *,
         session_id: str,
         input_origin: str | None = None,
+        project_id: str | None = None,
     ) -> StubDelegateRun:
         captured["agent_id"] = agent_id
         captured["content"] = content
@@ -4927,6 +4931,7 @@ async def test_chat_methods_forward_speech_transcription_input_origin(
             *,
             session_id: str,
             input_origin: str | None = None,
+            project_id: str | None = None,
         ) -> StubDelegateRun:
             return await fake_start_run(
                 agent_id,
@@ -4982,6 +4987,7 @@ async def test_chat_stream_accepts_content_block_list(
             content: str | list[Any],
             *,
             session_id: str,
+            project_id: str | None = None,
         ) -> StubDelegateRun:
             captured["agent_id"] = agent_id
             captured["content"] = content
@@ -5387,6 +5393,7 @@ async def test_chat_stream_uses_state_streaming_chat_loop(
             content: str | list[Any],
             *,
             session_id: str,
+            project_id: str | None = None,
         ) -> StubDelegateRun:
             captured["agent_id"] = agent_id
             captured["content"] = content
