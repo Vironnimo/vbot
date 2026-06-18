@@ -646,9 +646,13 @@ async def test_enqueue_race_condition_session_becomes_idle_between_error_and_enq
 async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_path: Path) -> None:
     session_id = "session-one"
     active_release = asyncio.Event()
+    agents = SimpleNamespace(
+        get=lambda agent_id: SimpleNamespace(id=agent_id, model="openai/gpt-5.2")
+    )
     runtime = SimpleNamespace(
-        agents=SimpleNamespace(
-            get=lambda agent_id: SimpleNamespace(id=agent_id, model="openai/gpt-5.2")
+        agents=agents,
+        agent_resolver=SimpleNamespace(
+            resolve_agent=lambda _project_id, agent_id: agents.get(agent_id)
         ),
         providers=SimpleNamespace(
             get=lambda provider_id: SimpleNamespace(connections=[SimpleNamespace(id="api-key")])

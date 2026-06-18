@@ -862,7 +862,14 @@ class _StubCredentials:
 
 
 class _StubPrompts:
-    def build_system_prompt(self, _agent: object) -> str:
+    def build_system_prompt(
+        self,
+        _agent: object,
+        _scope: object = None,
+        *,
+        agent_body: str = "",
+        project_context: object = None,
+    ) -> str:
         return "System prompt"
 
     def provider_tool_definitions(self, _agent: object) -> list[dict[str, object]]:
