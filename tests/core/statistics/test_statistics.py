@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -54,10 +55,13 @@ class _FakeProjects:
     def __init__(self, owners_by_project: dict[str, list[str]]) -> None:
         self._owners = {pid: list(agents) for pid, agents in owners_by_project.items()}
 
-    def list(self) -> list[_FakeProject]:
+    # ``session_owning_agents`` references ``list[str]`` in its annotation; with a
+    # method named ``list`` in this class, ``builtins.list`` keeps that resolving
+    # to the builtin (mirrors the ProjectDirectory protocol in core/statistics).
+    def list(self) -> builtins.list[_FakeProject]:
         return [_FakeProject(pid) for pid in sorted(self._owners)]
 
-    def session_owning_agents(self, project_id: str) -> list[str]:
+    def session_owning_agents(self, project_id: str) -> builtins.list[str]:
         return sorted(self._owners.get(project_id, []))
 
 

@@ -52,19 +52,25 @@ class FakeTransport:
         self._response = response
         self.calls: list[tuple[str, dict[str, str]]] = []
 
-    async def get(self, url: str, *, headers: Any, timeout: float, params: Any = None) -> FakeResponse:
+    async def get(
+        self, url: str, *, headers: Any, timeout: float, params: Any = None
+    ) -> FakeResponse:
         self.calls.append((url, dict(headers)))
         return self._response
 
 
 class HangingTransport:
-    async def get(self, url: str, *, headers: Any, timeout: float, params: Any = None) -> FakeResponse:
+    async def get(
+        self, url: str, *, headers: Any, timeout: float, params: Any = None
+    ) -> FakeResponse:
         await asyncio.sleep(10)
         return FakeResponse()  # pragma: no cover
 
 
 class RaisingTransport:
-    async def get(self, url: str, *, headers: Any, timeout: float, params: Any = None) -> FakeResponse:
+    async def get(
+        self, url: str, *, headers: Any, timeout: float, params: Any = None
+    ) -> FakeResponse:
         raise RuntimeError("boom")
 
 
@@ -282,9 +288,7 @@ async def test_report_skips_unusable_connections() -> None:
 
 @pytest.mark.asyncio
 async def test_report_times_out_into_error_snapshot() -> None:
-    service = ProviderUsageService(
-        _openai_runtime(), transport=HangingTransport(), timeout=0.01
-    )
+    service = ProviderUsageService(_openai_runtime(), transport=HangingTransport(), timeout=0.01)
 
     report = await service.report()
 
@@ -317,9 +321,7 @@ async def test_report_fails_open_on_unexpected_error() -> None:
 async def test_report_uses_ttl_cache_on_repeated_calls() -> None:
     transport = FakeTransport(FakeResponse(payload=_OPENAI_BODY))
     # A constant clock keeps every cache entry fresh.
-    service = ProviderUsageService(
-        _openai_runtime(), transport=transport, monotonic=lambda: 1000.0
-    )
+    service = ProviderUsageService(_openai_runtime(), transport=transport, monotonic=lambda: 1000.0)
 
     first = await service.report()
     second = await service.report()
@@ -439,7 +441,9 @@ class RoutingTransport:
     def __init__(self, responses: dict[str, FakeResponse]) -> None:
         self._responses = responses
 
-    async def get(self, url: str, *, headers: Any, timeout: float, params: Any = None) -> FakeResponse:
+    async def get(
+        self, url: str, *, headers: Any, timeout: float, params: Any = None
+    ) -> FakeResponse:
         for marker, response in self._responses.items():
             if marker in url:
                 return response

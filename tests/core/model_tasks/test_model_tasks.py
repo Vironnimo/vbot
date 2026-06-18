@@ -1106,9 +1106,7 @@ def _model(
         context_window=128000,
         connections=connections,
         # Mirror Model.allows_connection so target expansion sees the real rule.
-        allows_connection=lambda connection_id: (
-            not connections or connection_id in connections
-        ),
+        allows_connection=lambda connection_id: not connections or connection_id in connections,
         capabilities=SimpleNamespace(
             task_types=task_types,
             input_modalities=("text",),
