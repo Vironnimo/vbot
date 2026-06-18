@@ -120,3 +120,27 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 ## Project
 **Definition:** A first-class entity (not just a cwd), keyed by a stable `project_id` slug with a changeable display name, that bundles a cwd (the repo directory tools resolve relative paths against), an auto-load file list, a project-default-agent, a default-model, a team scanned live from the repo, and Sessions. The minimal Project is just a cwd — team, `AGENTS.md`, and auto-load files are all optional, so an empty folder is a valid Project.
 **Not:** A bare cwd, a Workspace, or an Agent. The cwd is one field of a Project; a Workspace is an Agent's identity home in the data-dir, never the project repo. vBot reads the repo (to discover the Team) but never writes it — runtime data (the project anchor, Sessions) lives in the data-dir.
+
+## Project Anchor
+**Definition:** A project's runtime home in the **data-dir**: `<datadir>/projects/<project-id>/`, holding `project.json` plus a thin per-agent anchor (`agents/<agent-id>/` with `sessions/` and, only for a rooted identity agent, `workspace/`). The anchor holds **no run config** — only Sessions ownership and the local agent id; an agent's config comes live from the repo scan. The key is the stable `project_id` slug; the cwd path lives in `project.json`, so the repo folder can move without breaking the anchor or its Sessions.
+**Not:** The repo (cwd). The anchor is what vBot *creates* in the data-dir; the repo is what the user/team *writes* and vBot never touches. Removing a project archives the anchor, never the repo.
+
+## Team
+**Definition:** The set of agents discovered in a Project by the **scan** of the repo (each format's known location, non-recursive — OpenCode reads only `.opencode/agents/`). The team is the project's roster of callable agents; it is re-derived from the repo on open / explicit re-scan (the repo is the source of truth, no copy drift). A bare/empty project has an empty team — that is normal, not an error.
+**Not:** The global Agent store. Team membership is project-scoped and lives in the repo, not in the data-dir agent store. A visiting identity agent is **not** a team member.
+
+## Config Agent
+**Definition:** An Agent that is *only* a profile — model, tools, prompt body, temperature — with **no Workspace and no identity** (and, in v1, **no memory tool**). The typical Project Agent: a scanned OpenCode agent. At runtime it is a `ConfigAgent` synthesized from the scan (`workspace=""`, `memory_prompt_mode="off"`, `tools/skills=["*"]`, plus a verbatim prompt `body`). If it wants durable notes it writes a normal file in its cwd (the repo), via the file tools — agent work, not vBot runtime state.
+**Not:** An Identity Agent. A Config Agent has no SOUL/USER/MEMORY home and no memory tool; it is interchangeable run-config, not a persistent identity.
+
+## Identity Agent
+**Definition:** An Agent with a Workspace (`SOUL.md`/`USER.md`/`MEMORY.md`) and a memory tool — the existing store-backed agent under `<datadir>/agents/<id>/`. It carries durable identity/memory across sessions and brings its own model (model → global default). Both Config and Identity agents resolve through the same `resolve_agent` seam into the uniform `RuntimeAgent`.
+**Not:** A Config Agent. The Identity Agent is the persistent self with a memory home; a Config Agent is a bare profile.
+
+## Project Agent
+**Definition:** A member of a Project's Team — an agent discovered by the scan of that project's repo. In v1 a Project Agent is always a Config Agent (OpenCode); identity-bearing formats will later contribute Identity Agents as team members. Inside a project an agent is called by its bare id (against *that* project's team); from outside it is addressed project-qualified as `agent@projekt` (e.g. `orchestrator@vbot`), so a bare `builder` stays unambiguous across projects.
+**Not:** A visiting identity agent. A Project Agent belongs to (is born in) the project; a visitor only reaches in.
+
+## Visiting (Visit)
+**Definition:** An identity agent (e.g. your main agent) reaching into a Project it is **not** homed in — told "work on the project at <path>". Its **cwd stays its own home** (unchanged), and the project files arrive as a `<system-reminder>` in context rather than in the system prompt; it uses the path absolutely. The visited project lives only in the session meta + reminder, never in the session path.
+**Not:** A Project Agent, nor a rooted identity agent (whose home *is* the project, cwd = repo, project files in the system prompt). A visit is a reach-in from a home elsewhere.

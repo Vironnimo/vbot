@@ -31,6 +31,20 @@ Persisted agent configuration and workspace lifecycle management.
 - Field schema rules live in `core/settings` (single authority): the agent-id format is `is_valid_agent_id` / `AGENT_ID_PATTERN` (shared by `AgentStore`, file-schema validation, and prompt-fragment storage — no local copies); value rules are `validate_temperature` / `validate_thinking_effort` plus the constants `ALLOWED_THINKING_EFFORTS`, `MIN_TEMPERATURE`, `MAX_TEMPERATURE`. `AgentStore` create/update and the server's `agent.*` RPC param validation both delegate to the value validators, wrapping `SettingsValidationError` into `AgentError` / `invalid_request` respectively.
 - `update(agent_id, **changes) -> Agent` — updates mutable fields only; `id` is immutable. Raw values are written unchanged and the returned Agent is resolved after write.
 - `delete(agent_id) -> Path` — moves active data under `<data_dir>/archive/<agent-id>/`.
+
+## Uniform Agent Resolution
+
+Run paths no longer call `runtime.agents.get(...)` directly. They go through one seam, `AgentResolver.resolve_agent(project_id, agent_id) -> RuntimeAgent` (owned by `core/projects/`, see `projects.md`), so identity and project agents load through the same call. The fork is at exactly one place:
+
+- `project_id is None` → the identity `AgentStore` (this domain), **byte-identical** to the old `agents.get`: the `defaults.agent` model→global→empty injection and the workspace are exactly as before.
+- `project_id` set → a **config agent** synthesized from that project's team scan (no `agent.json`, no workspace, `memory_prompt_mode="off"`, `allowed_tools/skills=["*"]`).
+
+`RuntimeAgent` is a `Protocol` that the store `Agent` already satisfies, so consumers read the same attribute surface (`id`, `model`, `fallback_model`, `workspace`, `temperature`, `thinking_effort`, `allowed_tools`, `allowed_skills`, `memory_prompt_mode`, …) regardless of source; a config agent is a `ConfigAgent` carrying that surface plus its verbatim prompt `body`.
+
+**Two freshness levels:** team membership (which agents exist) comes from the **scan**, cached per project and refreshed at open / explicit re-scan — not per turn. A single agent's **config** (model/body) is read **fresh from the repo file on every resolve**, mirroring how identity agents re-read `agent.json` each turn.
+
+**Model chain.** Identity agents keep model→global→empty (the store). Config agents resolve model→project-default→global→**error**: a model counts only if it is *configured in this instance* (provider registered, model in catalog, a usable credential); an unconfigured model falls through the chain and is surfaced as a `BAD_MODEL` scan-report finding at scan time, not at first run. If the chain falls all the way through, resolution raises `AgentResolutionError`. The run paths map that to a clean failure (chat → domain error at the RPC edge via `error_mapping.py`; `subagent` → `agent_not_found` tool failure; `status` → `agent_not_found`). The identity-CRUD and server-RPC paths (`agent_methods`, `chat_methods`, `channel_methods`, automation) deliberately stay on `AgentStore` until project RPC lands.
+
 ## Conventions
 
 - Agent IDs must be conservative filesystem-safe slugs: start with a letter or number, then use only letters, numbers, hyphen, or underscore, max 64 characters.

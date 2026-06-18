@@ -807,6 +807,7 @@ class _ChatRuntimeStub:
         process_manager: _RecordingProcessManager,
     ) -> None:
         self.agents = _StubAgents()
+        self.agent_resolver = _StubAgentResolver(self.agents)
         self.providers = _StubProviders()
         self.provider_credentials = _StubCredentials()
         self.chat_sessions = ChatSessionManager(tmp_path)
@@ -838,6 +839,16 @@ class _StubAgents:
             allowed_skills=["*"],
             workspace="",
         )
+
+
+class _StubAgentResolver:
+    """Identity-only resolver seam for the chat-cancellation runtime stub."""
+
+    def __init__(self, agents: _StubAgents) -> None:
+        self._agents = agents
+
+    def resolve_agent(self, _project_id: str | None, agent_id: str) -> object:
+        return self._agents.get(agent_id)
 
 
 class _StubProviders:

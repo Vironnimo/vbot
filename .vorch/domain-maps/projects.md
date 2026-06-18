@@ -7,10 +7,11 @@ Owns the Project entity, its `project.json` schema, and the data-dir **anchor** 
 `core/projects/` is one deep module. It owns:
 
 - The **Project entity** and `project.json` shape (`projects.py`).
-- **cwd normalization, the duplicate-cwd identity key, and slug derivation** (`paths.py`).
+- **cwd normalization, the duplicate-cwd identity key, and slug derivation** for both project and agent ids (`paths.py`).
 - The **anchor lifecycle** in the data-dir: layout, CRUD, archive-on-remove (`store.py`).
+- The **pluggable scanner** (`scanners/`), the **scan report** (`scan_report.py`), and **uniform agent resolution + the model chain** (`resolver.py`) — see Scanning & Resolution below.
 
-It does **not** own field validation — that lives in the central settings validator (`core/settings/validation.py`), the same way Agents and Channels validate. It does not own scanning, team discovery, agent resolution, or the model chain (Phase 3, future `scanners/` subpackage + `resolver.py`), nor the `project_id` backbone through sessions/runs/tools (Phase 2).
+It does **not** own field validation — that lives in the central settings validator (`core/settings/validation.py`), the same way Agents and Channels validate. The `project_id` backbone through sessions/runs/tools/chat is owned by those domains (see their maps); this module only feeds the project anchor path and cwd into them. The project RPC/CLI surface is not here yet (Phase 5).
 
 The anchor holds **no run config** — only Sessions ownership and the local agent id. An agent's config comes live from the scan/repo, never from the anchor (design decision #4).
 
@@ -63,6 +64,14 @@ The anchor holds **no run config** — only Sessions ownership and the local age
 - **The cwd folder is not validated for existence at create/validate time** — a project key is the slug, not the path, so a moved/missing repo is detected later (`cwd_exists`) and offered a re-point, without losing the project.
 - **`project_id` is immutable.** It is the anchor directory name; `update` rejects it as an unknown field rather than silently moving the anchor.
 
+## Scanning & Resolution
+
+**Scanner** (`scanners/`) — pluggable, one detector per format, the same seam shape as provider adapters (a new format is a new detector, not a rewrite). `AgentDetector` (`Protocol`) exposes `format_key` + `detect(project_root) -> list[DetectedFile]`; the registry carries an explicit format **rank** (OpenCode = 0). `scan_project(project_root, *, registry=None) -> ScanResult(team, report)` runs each detector at its known location — **non-recursive** (OpenCode reads only `.opencode/agents/` at the project root, never a tree walk), so nested repos are not swept in. The detector parses its format into one internal **`ScannedAgent`** profile (`agent_id` slug, `display_name`, `description`, raw `model` 1:1, `temperature`, verbatim `body`, `tools=("*",)`, `skills=("*",)`, `source_format`, `source_path`); the resolver maps that to the runtime agent. This is the seam for *all* agent formats — a future identity-bearing format adds a detector that also produces a workspace.
+
+**Scan report** (`scan_report.py`) — collects only what is *unclean under what exists* (an empty folder / no team / no AGENTS.md is normal → clean empty report). `FindingType`: `SLUG_COLLISION`, `UNSLUGIFIABLE_NAME`, `BAD_MODEL`, `ORPHAN`. **Collision is deterministic:** two files on one `agent_id` are resolved by `(rank, filename)` — format precedence first, then stable by filename, **never filesystem order** (Windows ≠ Linux); the loser becomes a `SLUG_COLLISION` finding. `BAD_MODEL` findings are fed in by the resolver (`with_model_findings`) and pointer/orphan findings by the anchor (`with_pointer_findings`) — the structural findings (collision, unslugifiable) the scan produces itself.
+
+**Resolver** (`resolver.py`) — `AgentResolver.resolve_agent(project_id, agent_id) -> RuntimeAgent` is the single run-path seam (details and the model chain in `agent.md` → Uniform Agent Resolution). It holds a per-project team-scan cache (`rescan_project` / `invalidate_team_cache`), reads each agent's config fresh per resolve, and runs the model chain with `ModelConfigurationChecker` (provider registered + model in catalog + usable credential). `scan_project_report(project)` returns team + the full report including `BAD_MODEL` findings. Wired into the runtime as `runtime.agent_resolver` (built from `agents`, `projects`, `models`, providers, credentials); the resolver imports `core.runtime` not at all — it depends on small local `Protocol`s.
+
 ## Scope boundary (what is *not* here yet)
 
-Phase 1 only. The `project_id` backbone through Sessions/Runs/Tool-Context (Phase 2), the pluggable scanner + OpenCode detector + scan report (Phase 3, `core/projects/scanners/`), uniform agent resolution + the model chain (Phase 3, `resolver.py`), and the RPC/CLI surface (Phase 5) are not in this module yet. Update this map as each lands.
+The project RPC surface (`project.*`) and the CLI `project` area are Phase 5 and live in `server/` and `cli/`, not here. Channels on project agents and a project-local memory tool are deferred.

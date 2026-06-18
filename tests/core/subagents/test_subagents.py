@@ -17,6 +17,7 @@ import pytest
 
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
+from core.projects import AgentResolutionError
 from core.runs import ActiveRunError, Run, RunNotFoundError
 from core.subagents.subagents import SubAgentBatchTracker, _handle_subagent
 from core.tools.tools import ToolContext
@@ -76,6 +77,29 @@ class FakeAgents:
         if agent_id not in self._agent_ids:
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
         return SimpleNamespace(id=agent_id)
+
+
+class FakeAgentResolver:
+    """Resolver seam for the subagent target validation.
+
+    Resolves the target under the parent run's project — identity or project,
+    both delegate to the same known-id set here — and raises
+    :class:`AgentResolutionError` for an unknown target, matching how the real
+    resolver fails an off-Team / unknown-agent spawn. Records the
+    ``(project_id, agent_id)`` it was asked to resolve so a test can prove the
+    child inherits the parent's project.
+    """
+
+    def __init__(self, agents: FakeAgents) -> None:
+        self._agents = agents
+        self.calls: list[tuple[str | None, str]] = []
+
+    def resolve_agent(self, project_id: str | None, agent_id: str) -> SimpleNamespace:
+        self.calls.append((project_id, agent_id))
+        try:
+            return self._agents.get(agent_id)
+        except AgentNotFoundError as error:
+            raise AgentResolutionError(str(error)) from error
 
 
 class FakeRunManager:
@@ -141,10 +165,14 @@ class FakeChildLoop:
         return _execute
 
 
-def make_runtime(tmp_path: Path, manager: FakeRunManager) -> Any:
+def make_runtime(
+    tmp_path: Path, manager: FakeRunManager, *, agent_ids: set[str] | None = None
+) -> Any:
     child_loop = FakeChildLoop(None)
+    agents = FakeAgents(agent_ids)
     return SimpleNamespace(
-        agents=FakeAgents(),
+        agents=agents,
+        agent_resolver=FakeAgentResolver(agents),
         chat_sessions=ChatSessionManager(tmp_path),
         chat_run_manager=manager,
         storage=FakeStorage(),
@@ -353,3 +381,62 @@ async def test_subagent_self_spawn_inherits_parent_project(tmp_path: Path) -> No
     started_run = manager.started[0]["run"]
     started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
     await asyncio.sleep(0)
+
+
+async def test_subagent_target_validation_resolves_under_parent_project(
+    tmp_path: Path,
+) -> None:
+    # The target is validated through the resolver with the parent run's project,
+    # so the child inherits the project end-to-end at the resolution seam too.
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id="acme")
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "worker"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert ("acme", "worker") in runtime.agent_resolver.calls
+    started_run = manager.started[0]["run"]
+    started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
+    await asyncio.sleep(0)
+
+
+async def test_subagent_unresolvable_target_returns_failure_envelope(tmp_path: Path) -> None:
+    # A target the resolver cannot resolve (off-Team / unknown agent) must return
+    # a clean agent_not_found failure envelope, not let the error escape the tool.
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id="acme")
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "ghost"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "agent_not_found"
+    assert manager.started == []
+
+
+async def test_resolver_failure_maps_to_tool_failure_not_raised() -> None:
+    # Guard the contract directly: a resolver raise becomes a failure envelope.
+    from core.subagents.subagents import _validate_target_agent
+
+    class _RaisingResolver:
+        def resolve_agent(self, _project_id: str | None, _agent_id: str) -> Any:
+            raise AgentResolutionError("off team")
+
+    runtime = SimpleNamespace(agent_resolver=_RaisingResolver())
+    failure = _validate_target_agent(runtime, "ghost", "acme")
+
+    assert failure is not None
+    assert failure["error"]["code"] == "agent_not_found"

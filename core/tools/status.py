@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from core.agents.agents import AgentNotFoundError, AgentStore
 from core.chat.commands import (
     build_status_reply,
     resolve_actual_thinking_effort,
@@ -13,6 +12,7 @@ from core.chat.commands import (
 )
 from core.chat.errors import ChatSessionError
 from core.models.models import ModelRegistry
+from core.projects import AgentResolutionError, AgentResolver
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
@@ -53,7 +53,7 @@ STATUS_TOOL_PARAMETERS: JsonObject = {
 
 
 def make_status_handler(
-    agents: AgentStore,
+    agent_resolver: AgentResolver,
     sessions: ChatSessionManager,
     models: ModelRegistry,
     chat_runs: ChatRunManager,
@@ -78,13 +78,18 @@ def make_status_handler(
         agent_id = requested_agent_id or context.agent_id
         session_id = requested_session_id or context.session_id
 
+        # Resolve through the one seam so ``/status`` shows the agent profile the
+        # run actually uses: a project run (``context.project_id`` set) reports the
+        # resolved config-agent profile, an identity run resolves the store agent
+        # exactly as before. A resolver "not found" is the same clean failure the
+        # former ``AgentNotFoundError`` produced.
         try:
-            agent = agents.get(agent_id)
-        except AgentNotFoundError:
+            agent = agent_resolver.resolve_agent(context.project_id, agent_id)
+        except AgentResolutionError:
             return tool_failure("agent_not_found", f"agent does not exist: {agent_id}")
 
         try:
-            messages = sessions.get(agent_id, session_id).load()
+            messages = sessions.get(agent_id, session_id, context.project_id).load()
         except ChatSessionError:
             return tool_failure(
                 "session_not_found",
@@ -130,7 +135,7 @@ def make_status_handler(
 
 def register_status_tool(
     registry: ToolRegistry,
-    agents: AgentStore,
+    agent_resolver: AgentResolver,
     sessions: ChatSessionManager,
     models: ModelRegistry,
     chat_runs: ChatRunManager,
@@ -142,7 +147,7 @@ def register_status_tool(
         STATUS_TOOL_NAME,
         STATUS_TOOL_DESCRIPTION,
         STATUS_TOOL_PARAMETERS,
-        make_status_handler(agents, sessions, models, chat_runs, started_at, providers),
+        make_status_handler(agent_resolver, sessions, models, chat_runs, started_at, providers),
         display=ToolDisplay(),
     )
 

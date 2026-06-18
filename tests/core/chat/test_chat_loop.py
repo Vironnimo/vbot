@@ -23,6 +23,7 @@ from core.chat import (
     ToolCall,
 )
 from core.chat.streaming import StreamingChunkTimeoutError, StreamingDeltaError
+from core.projects import AgentResolutionError
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -93,6 +94,40 @@ class StubAgents:
     def get(self, agent_id: str) -> StubAgent:
         assert agent_id == self._agent.id
         return self._agent
+
+
+class StubAgentResolver:
+    """Resolver stub mirroring the runtime seam the chat loop now calls.
+
+    ``project_id=None`` delegates to the identity ``StubAgents`` (byte-for-byte
+    today's path). A set ``project_id`` returns the config agent registered for
+    ``(project_id, agent_id)`` when one is given, otherwise falls back to the
+    identity agent so a project run still resolves something runnable; an
+    ``(project_id, agent_id)`` in ``unresolvable`` raises
+    :class:`AgentResolutionError`, modelling an off-Team target or a model chain
+    that fell through.
+    """
+
+    def __init__(
+        self,
+        agents: StubAgents,
+        project_agents: dict[tuple[str, str], StubAgent] | None = None,
+        unresolvable: set[tuple[str, str]] | None = None,
+    ) -> None:
+        self._agents = agents
+        self._project_agents = dict(project_agents or {})
+        self._unresolvable = set(unresolvable or set())
+        self.calls: list[tuple[str | None, str]] = []
+
+    def resolve_agent(self, project_id: str | None, agent_id: str) -> StubAgent:
+        self.calls.append((project_id, agent_id))
+        if project_id is None:
+            return self._agents.get(agent_id)
+        if (project_id, agent_id) in self._unresolvable:
+            raise AgentResolutionError(
+                f"agent '{agent_id}' is not on project '{project_id}' team"
+            )
+        return self._project_agents.get((project_id, agent_id)) or self._agents.get(agent_id)
 
 
 class StubProviders:
@@ -360,8 +395,13 @@ class StubRuntime:
         tools: ToolRegistry | None = None,
         storage: Any | None = None,
         models: Any | None = None,
+        project_agents: dict[tuple[str, str], StubAgent] | None = None,
+        unresolvable_agents: set[tuple[str, str]] | None = None,
     ) -> None:
         self.agents = StubAgents(agent)
+        self.agent_resolver = StubAgentResolver(
+            self.agents, project_agents, unresolvable_agents
+        )
         self.chat_sessions = ChatSessionManager(data_dir)
         self.system_prompts = StubPrompts()
         self.tools = tools or ToolRegistry()
