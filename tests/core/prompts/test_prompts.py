@@ -982,6 +982,54 @@ def test_project_files_allow_absolute_paths_outside_cwd(
     assert f'<file name="{outside}">' in prompt
 
 
+def test_project_files_never_abort_run_on_unreadable_file(
+    fragments: dict[str, str],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A run must never die because an auto-load file is unreadable, for ANY reason.
+    # A directory standing where a file is expected (read fails on every OS) and a
+    # binary/non-UTF-8 file are both skipped with a warning; a good file alongside
+    # them still renders.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "GOOD.md").write_text("Good doc", encoding="utf-8")
+    (repo / "ADIR").mkdir()  # a directory standing where a file is expected
+    (repo / "BINARY.md").write_bytes(b"\xff\xfe\x00\x01 not utf-8")
+    manager = _project_manager(fragments, tmp_path)
+    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project(repo, ["ADIR", "BINARY.md", "GOOD.md"])
+
+    with caplog.at_level(logging.WARNING):
+        prompt = manager.build_system_prompt(agent, project_context=context)
+
+    assert '<file name="GOOD.md">\nGood doc\n</file>' in prompt
+    assert '<file name="ADIR">' not in prompt
+    assert '<file name="BINARY.md">' not in prompt
+    assert "Skipping unreadable project file" in caplog.text
+
+
+def test_workspace_include_never_aborts_run_on_unreadable_file(
+    fragments: dict[str, str],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A workspace {include:…} whose target is present but unreadable (here a
+    # directory standing where SOUL.md is expected) must not abort the run — it is
+    # dropped like a missing include.
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "SOUL.md").mkdir()  # directory where the SOUL.md file is expected
+    manager = _project_manager(fragments, tmp_path, root="{include:SOUL.md}")
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    with caplog.at_level(logging.WARNING):
+        prompt = manager.build_system_prompt(agent)
+
+    assert '<file name="SOUL.md">' not in prompt
+    assert "Skipping unreadable workspace include" in caplog.text
+
+
 def test_render_project_files_collapses_to_empty_without_files(
     fragments: dict[str, str],
     tmp_path: Path,

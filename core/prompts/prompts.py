@@ -559,9 +559,17 @@ class SystemPromptManager:
         try:
             content = file_path.read_text(encoding="utf-8")
         except FileNotFoundError:
+            # Lazy: a configured-but-absent file (and the always-tried AGENTS.md) is
+            # normal — skip quietly so it does not warn every turn.
             return None
-        except OSError as exc:
-            raise PromptError(f"Cannot read project file {filename}: {exc}") from exc
+        except (OSError, ValueError) as exc:
+            # Present but unreadable for ANY reason — locked, no permission, a
+            # directory, binary/non-UTF-8, a malformed path. A prompt-load file must
+            # never abort the run (user decision): log and skip, so one bad auto-load
+            # entry can never take the whole turn down. OSError covers the filesystem
+            # failures, ValueError the decode/bad-path ones.
+            _LOGGER.warning("Skipping unreadable project file %s: %s", file_path, exc)
+            return None
         return _wrap_include_file(filename, content)
 
     def provider_tool_definitions(self, agent: PromptAgent) -> list[dict[str, Any]]:
@@ -711,8 +719,12 @@ class SystemPromptManager:
             except FileNotFoundError:
                 _LOGGER.warning("Skipping missing workspace include: %s", include_path)
                 return ""
-            except OSError as exc:
-                raise PromptError(f"Cannot read workspace include {filename}: {exc}") from exc
+            except (OSError, ValueError) as exc:
+                # Present but unreadable for ANY reason (locked, no permission, a
+                # directory, binary/non-UTF-8, …). A prompt file must never abort the
+                # run (user decision): log and drop the block, like a missing include.
+                _LOGGER.warning("Skipping unreadable workspace include %s: %s", include_path, exc)
+                return ""
             return _wrap_include_file(filename, content)
 
         return INCLUDE_PATTERN.sub(replace_include, prompt)
