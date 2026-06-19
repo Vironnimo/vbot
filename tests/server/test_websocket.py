@@ -248,6 +248,7 @@ def test_log_websocket_streams_append_events_for_selected_file(tmp_path: Path) -
                 "logger_name": "vbot.server.app",
                 "message": "Failed",
                 "continuation": "",
+                "raw": "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
             }
         ],
     }
@@ -297,6 +298,7 @@ def test_log_websocket_replays_handoff_entries_appended_after_log_read(tmp_path:
                 "logger_name": "vbot.server.app",
                 "message": "Failed",
                 "continuation": "",
+                "raw": "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
             }
         ],
     }
@@ -342,6 +344,7 @@ def test_log_websocket_streams_reset_events_when_file_is_truncated(tmp_path: Pat
                 "logger_name": "vbot.server.app",
                 "message": "Reset",
                 "continuation": "",
+                "raw": "2026-05-11 09:00:02 [WARN] vbot.server.app - Reset",
             }
         ],
     }
@@ -390,6 +393,7 @@ def test_log_websocket_filters_routine_websocket_noise_from_append_events(tmp_pa
                 "logger_name": "vbot.server.uvicorn",
                 "message": "keepalive ping timeout",
                 "continuation": "",
+                "raw": "2026-05-11 09:00:03 [WARN] vbot.server.uvicorn - keepalive ping timeout",
             }
         ],
     }
@@ -444,6 +448,7 @@ def test_log_websocket_filters_routine_websocket_noise_from_reset_events(tmp_pat
                 "logger_name": "vbot.server.uvicorn",
                 "message": "opening handshake failed",
                 "continuation": "",
+                "raw": "2026-05-11 09:00:04 [ERROR] vbot.server.uvicorn - opening handshake failed",
             }
         ],
     }

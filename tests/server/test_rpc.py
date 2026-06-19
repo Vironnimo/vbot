@@ -1668,6 +1668,7 @@ async def test_log_read_returns_structured_entries(tmp_path: Path) -> None:
                     "logger_name": "vbot.server.app",
                     "message": "Ready",
                     "continuation": "trace line",
+                    "raw": "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\ntrace line",
                 },
                 {
                     "timestamp": "2026-05-11 09:00:01",
@@ -1675,6 +1676,7 @@ async def test_log_read_returns_structured_entries(tmp_path: Path) -> None:
                     "logger_name": "vbot.server.app",
                     "message": "Failed",
                     "continuation": "",
+                    "raw": "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
                 },
             ],
             "cursor": response["result"]["cursor"],
@@ -1719,6 +1721,7 @@ async def test_log_read_filters_persisted_routine_websocket_noise(tmp_path: Path
             "logger_name": "vbot.server.uvicorn",
             "message": "keepalive ping timeout",
             "continuation": "",
+            "raw": "2026-05-11 09:00:04 [WARN] vbot.server.uvicorn - keepalive ping timeout",
         },
         {
             "timestamp": "2026-05-11 09:00:05",
@@ -1726,6 +1729,7 @@ async def test_log_read_filters_persisted_routine_websocket_noise(tmp_path: Path
             "logger_name": "vbot.server.uvicorn",
             "message": "opening handshake failed",
             "continuation": "",
+            "raw": "2026-05-11 09:00:05 [ERROR] vbot.server.uvicorn - opening handshake failed",
         },
         {
             "timestamp": "2026-05-11 09:00:06",
@@ -1733,6 +1737,7 @@ async def test_log_read_filters_persisted_routine_websocket_noise(tmp_path: Path
             "logger_name": "vbot.server.app",
             "message": "Ready",
             "continuation": "",
+            "raw": "2026-05-11 09:00:06 [INFO] vbot.server.app - Ready",
         },
     ]
 
