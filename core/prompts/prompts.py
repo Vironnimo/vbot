@@ -522,10 +522,11 @@ class SystemPromptManager:
 
         AGENTS.md first (when present), then the ``auto_load`` files in list order;
         each existing file wrapped exactly like ``{include}`` (one source of wrap
-        logic). Only the project root is read, never subfolders. Lazy: returns
-        ``""`` when there is no project context or no readable file, so the
-        placeholder collapses. No size limit, truncation, or warning on large
-        files — the technical user gets the file 1:1.
+        logic). Auto-load paths are taken verbatim — relative to the project cwd at
+        any subfolder depth, or absolute, with no location restriction (see
+        ``_read_project_file_block``). Lazy: returns ``""`` when there is no project
+        context or no readable file, so the placeholder collapses. No size limit,
+        truncation, or warning on large files — the technical user gets the file 1:1.
 
         This is the single render used both for ``{project_files}`` in the system
         prompt (project-born sessions) and for the visiting main agent's
@@ -543,13 +544,17 @@ class SystemPromptManager:
         return "\n".join(blocks)
 
     def _read_project_file_block(self, cwd: Path, filename: str) -> str | None:
-        """Read one project-root file and wrap it, or ``None`` when absent.
+        """Read one project auto-load file and wrap it, or ``None`` when absent.
 
-        Reuses the same flat-filename safety check and ``<file>`` wrap as
-        ``{include}`` so the two paths cannot drift. A missing file is skipped
-        silently (lazy rendering); an unreadable file raises, matching includes.
+        The path is used **as the user wrote it** in the project's auto-load list:
+        a relative path resolves against the project ``cwd`` at any subfolder depth,
+        an absolute path is read as-is. There is deliberately **no location
+        restriction** — the auto-load list is the user's own config naming the
+        user's own files, so where a file lives is not vBot's business (project
+        philosophy: maximum agency, minimal restrictions). A missing file is skipped
+        silently (lazy rendering); an unreadable file raises, matching ``{include}``.
+        The ``<file>`` wrap is shared with ``{include}`` so framing cannot drift.
         """
-        _validate_workspace_include(filename)
         file_path = cwd / filename
         try:
             content = file_path.read_text(encoding="utf-8")
