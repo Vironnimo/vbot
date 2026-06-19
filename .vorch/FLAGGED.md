@@ -180,9 +180,6 @@ unverified pieces (no credentials in this environment — the Phase-0 gate could
 
 ## 2026-06-18 — Projects (Plan 1, kern+cli): consciously deferred edges
 
-Found during a plan-vs-code audit of the project feature. Each is a small,
-out-of-scope-for-Plan-1 gap, deliberately not fixed.
-
 1. **`channel` tool still resolves a path against `workspace`, not `effective_cwd`.**
    The workspace→cwd switch covered `read`/`write`/`edit`/`search`/`grep`/`glob`/`bash`
    (and `memory` deliberately stays on workspace). The `channel` tool
@@ -190,18 +187,3 @@ out-of-scope-for-Plan-1 gap, deliberately not fixed.
    channels-on-project is deferred, so a channel session never carries a project cwd and
    `effective_cwd` would fall back to `workspace` anyway. Switch it to `effective_cwd`
    when channels learn projects, for consistency.
-
-
-## 2026-06-19 — Unfinished "project-visiting" scaffolding
-
-Found during a dead-code audit of `core/`. **Unfertiges Feature „Project-Visiting":**
-`ChatLoop.inject_visiting_project_files` (`core/chat/chat.py`) is fully-built but never
-wired-up scaffolding — its own docstring says "a later phase calls this from that entry
-point", but nothing in product code ever invokes it (tests only). Either connect it to the
-visiting-project entry point or remove it. Kept for now pending a decision on whether the
-project-visiting feature is still coming.
-
-**Resolved 2026-06-19:** connected (feature is coming). The chat loop now wires the trigger
-(`_inject_visiting_projects`): on an identity session, a file tool reaching into a registered
-project's repo by absolute path injects that project's files once per project per session.
-See `chat.md` → Project scoping and the GLOSSARY "Visiting" entry.
