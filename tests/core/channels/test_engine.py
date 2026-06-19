@@ -132,6 +132,20 @@ def make_command_dispatcher(*, result: object | None = None) -> SimpleNamespace:
     )
 
 
+def make_new_only_dispatcher() -> SimpleNamespace:
+    """Dispatcher mapping /new to the new_session action and other text to a run."""
+
+    def dispatch_for(_agent_id: str, _session_id: str, text: str) -> object:
+        if text.strip() == "/new":
+            return CommandAction(name="new_session")
+        return NotACommand()
+
+    return SimpleNamespace(
+        dispatch=Mock(side_effect=dispatch_for),
+        recognizes=Mock(side_effect=lambda text: text.strip().startswith("/")),
+    )
+
+
 def make_completed_run(*, output_text: str, session_id: str = SESSION_ID) -> Run:
     run = Run(run_id="run-completed", agent_id="assistant", session_id=session_id)
     run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": output_text}})
@@ -168,6 +182,7 @@ def make_engine(
     trigger_run: AsyncMock | None = None,
     retry_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
+    has_active_run: Mock | None = None,
     command_dispatcher: object | None = None,
     transport: FakeTransport | None = None,
 ) -> tuple[ChannelConversationEngine, ChatSessionManager, AsyncMock, FakeTransport]:
@@ -177,6 +192,9 @@ def make_engine(
         trigger_run=trigger_mock,
         retry_run=retry_run or AsyncMock(),
         compact_session=compact_session or AsyncMock(return_value="Context compacted."),
+        # Synchronous on purpose: the real has_active_run returns a bool, not a
+        # coroutine. An AsyncMock would return a truthy coroutine -> always "busy".
+        has_active_run=has_active_run or Mock(return_value=False),
     )
     resolved_transport = transport or FakeTransport()
     engine = ChannelConversationEngine(
@@ -398,19 +416,147 @@ async def test_compact_command_action_forwards_instruction(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_new_session_command_action_reports_channel_limitation(tmp_path: Path) -> None:
+async def test_new_session_command_starts_fresh_session_and_redirects_followups(
+    tmp_path: Path,
+) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, chat_sessions, _trigger, transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, command_dispatcher=make_new_only_dispatcher()
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/new")
+    await drain(engine, 12345)
+
+    new_session_id = chat_sessions.get_metadata("assistant", SESSION_ID)[
+        engine_module.ACTIVE_SESSION_METADATA_KEY
+    ]
+    # A distinct session, anchored to the conversation for grouping, was created.
+    assert new_session_id != SESSION_ID
+    assert new_session_id.startswith(f"{SESSION_ID}-")
+    assert chat_sessions.exists("assistant", new_session_id)
+    # The previous (anchor) session is left intact and still loadable.
+    assert chat_sessions.get("assistant", SESSION_ID).load()
+    # /new confirms without triggering a run.
+    assert transport.sent_texts == [engine_module._NEW_SESSION_STARTED_REPLY]
+    trigger_mock.assert_not_awaited()
+
+    # A later message follows the pointer into the new session.
+    await engine.handle_inbound_text(make_conversation(), "after new")
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once()
+    assert trigger_mock.await_args is not None
+    assert trigger_mock.await_args.args[2] == new_session_id
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_new_session_tags_fresh_session_with_reminder_and_metadata(tmp_path: Path) -> None:
     command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
-    engine, _sessions, trigger_mock, transport = make_engine(
+    engine, chat_sessions, _trigger, _transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher
     )
 
     await engine.handle_inbound_text(make_conversation(), "/new")
     await drain(engine, 12345)
 
-    trigger_mock.assert_not_awaited()
-    assert transport.sent == [
-        ("12345", "Starting a new session is not available from Telegram channels yet.")
+    new_session_id = chat_sessions.get_metadata("assistant", SESSION_ID)[
+        engine_module.ACTIVE_SESSION_METADATA_KEY
     ]
+    notes = [
+        message
+        for message in chat_sessions.get("assistant", new_session_id).load()
+        if message.role == "note"
+    ]
+    assert len(notes) == 1
+    assert "Telegram" in (notes[0].content or "")
+    metadata = chat_sessions.get_metadata("assistant", new_session_id)
+    assert metadata["source_channel_id"] == "tg-assistant"
+    assert metadata["platform"] == "telegram"
+    assert metadata["platform_conv_id"] == "12345"
+    assert metadata["last_reply_target"] == {
+        "channel_id": "tg-assistant",
+        "platform_target": "12345",
+    }
+    # The fresh session is not itself a pointer anchor, and tracks no participant.
+    assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata
+    assert "participants" not in metadata
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_new_session_command_refused_while_run_active(tmp_path: Path) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
+    engine, chat_sessions, trigger_mock, transport = make_engine(
+        tmp_path,
+        command_dispatcher=command_dispatcher,
+        has_active_run=Mock(return_value=True),
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/new")
+    await drain(engine, 12345)
+
+    assert transport.sent_texts == [engine_module._NEW_SESSION_BUSY_REPLY]
+    trigger_mock.assert_not_awaited()
+    # No new session and no pointer: the anchor is unchanged.
+    metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_channel_without_new_routes_to_derived_anchor(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, chat_sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    await engine.handle_inbound_text(make_conversation(), "hello")
+    await drain(engine, 12345)
+
+    # Byte-for-byte the pre-pointer behavior: route straight to the derived id.
+    trigger_mock.assert_awaited_once_with("assistant", "hello", SESSION_ID, sender=None)
+    metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_ensure_channel_session_follows_pointer_after_new(tmp_path: Path) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path, command_dispatcher=command_dispatcher
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/new")
+    await drain(engine, 12345)
+
+    new_session_id = chat_sessions.get_metadata("assistant", SESSION_ID)[
+        engine_module.ACTIVE_SESSION_METADATA_KEY
+    ]
+    # Proactive channel_send resolves to the active (pointer) session, not the anchor.
+    route = engine.ensure_channel_session(make_conversation())
+    assert route == RouteFacts(agent_id="assistant", session_id=new_session_id)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_new_session_in_one_chat_leaves_other_chat_untouched(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, command_dispatcher=make_new_only_dispatcher()
+    )
+
+    await engine.handle_inbound_text(make_conversation(chat_id=12345), "/new")
+    await drain(engine, 12345)
+
+    await engine.handle_inbound_text(make_conversation(chat_id=67890), "hello B")
+    await drain(engine, 67890)
+
+    # Chat B is unaffected: it routes to its own derived anchor and has no pointer.
+    trigger_mock.assert_awaited_once_with(
+        "assistant", "hello B", "ch-tg-assistant-67890", sender=None
+    )
+    metadata_b = chat_sessions.get_metadata("assistant", "ch-tg-assistant-67890")
+    assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata_b
     await engine.stop()
 
 

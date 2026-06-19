@@ -343,6 +343,35 @@ async def test_trigger_run_forwards_sender_when_queued() -> None:
     )
 
 
+async def test_has_active_run_reports_active_run_presence() -> None:
+    # Arrange
+    active = make_run("active-run", "coder", "session-one")
+    chat_run_manager = Mock()
+    chat_run_manager.active_run = Mock(return_value=active)
+    trigger_service = TriggerService(
+        cast(Any, SimpleNamespace()), cast(Any, chat_run_manager), cast(Any, Mock())
+    )
+
+    # Act
+    result = trigger_service.has_active_run("coder", "session-one")
+
+    # Assert
+    assert result is True
+    chat_run_manager.active_run.assert_called_once_with(agent_id="coder", session_id="session-one")
+
+
+async def test_has_active_run_reports_idle_session() -> None:
+    # Arrange
+    chat_run_manager = Mock()
+    chat_run_manager.active_run = Mock(return_value=None)
+    trigger_service = TriggerService(
+        cast(Any, SimpleNamespace()), cast(Any, chat_run_manager), cast(Any, Mock())
+    )
+
+    # Act / Assert
+    assert trigger_service.has_active_run("coder", "session-one") is False
+
+
 async def test_compact_session_delegates_to_command_chat_loop() -> None:
     # Arrange
     chat_loop = SimpleNamespace(compact_session=AsyncMock(return_value="Context compacted."))

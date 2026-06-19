@@ -175,6 +175,8 @@ def make_adapter(
         trigger_run=trigger_mock,
         retry_run=retry_run or AsyncMock(),
         compact_session=compact_session or AsyncMock(return_value="Context compacted."),
+        # Synchronous like the real one (a bool, not a coroutine); idle by default.
+        has_active_run=Mock(return_value=False),
     )
     resolved_command_dispatcher = command_dispatcher or make_command_dispatcher()
 
@@ -613,12 +615,12 @@ async def test_compact_command_action_replies_without_trigger_run(
 
 
 @pytest.mark.asyncio
-async def test_new_command_action_reports_channel_limitation(
+async def test_new_command_starts_fresh_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
-    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+    adapter, chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[12345],
@@ -631,10 +633,14 @@ async def test_new_command_action_reports_channel_limitation(
     )
     await drain_chat_queue(adapter, 12345)
 
+    anchor_metadata = chat_sessions.get_metadata("assistant", "ch-tg-assistant-12345")
+    new_session_id = anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY]
+    assert new_session_id.startswith("ch-tg-assistant-12345-")
+    assert chat_sessions.exists("assistant", new_session_id)
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(
         chat_id=12345,
-        text="Starting a new session is not available from Telegram channels yet.",
+        text=engine_module._NEW_SESSION_STARTED_REPLY,
     )
     await adapter.stop()
 

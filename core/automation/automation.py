@@ -89,6 +89,18 @@ class TriggerService:
         """Retry the last user turn for a channel or automation entry point."""
         return await self._trigger_chat_loop.retry_run(agent_id, session_id)
 
+    def has_active_run(self, agent_id: str, session_id: str) -> bool:
+        """Return whether one session currently has an active run.
+
+        A thin delegate to the run manager's active-run guard, so command
+        producers (channels) can refuse run-conflicting actions such as starting
+        a new session mid-run without taking their own dependency on the run
+        manager.
+        """
+        return (
+            self._chat_run_manager.active_run(agent_id=agent_id, session_id=session_id) is not None
+        )
+
     async def compact_session(
         self, agent_id: str, session_id: str, instruction: str | None = None
     ) -> str:

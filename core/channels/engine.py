@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
+from uuid import uuid4
 
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
 from core.channels.adapter import (
@@ -28,6 +29,7 @@ from core.channels.adapter import (
 )
 from core.chat.commands import CommandAction, CommandDispatcher, CommandHandled
 from core.chat.content_blocks import ContentBlock
+from core.chat.errors import ChatSessionError
 from core.chat.messages import MessageSender
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
@@ -35,6 +37,7 @@ from core.runs import (
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
 )
+from core.sessions.sessions import SESSION_ID_PATTERN
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -53,6 +56,15 @@ _FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
 _MEDIA_FAILED_REPLY = "Sorry, I couldn't process the attached file. Please try again."
 _OBSERVED_MESSAGE_PREFIX = "[channel-message]"
 _SENDER_TAG_UNSAFE_CHARACTERS = str.maketrans("", "", "[]|\r\n")
+
+# Metadata-sidecar key on a conversation anchor that points at the chat's currently
+# active session (the "Wegweiser" pointer). Absent = the anchor itself is the session.
+ACTIVE_SESSION_METADATA_KEY = "active_session_id"
+_NEW_SESSION_STARTED_REPLY = (
+    "Started a new session. Your previous conversation has been saved and is still available."
+)
+# Mirrors the WebUI /new refusal so the behavior reads the same across accessors.
+_NEW_SESSION_BUSY_REPLY = "A new session can be started after the current run finishes."
 
 
 class ConversationTransport(Protocol):
@@ -101,6 +113,10 @@ class _QueuedCommandAction:
     route: RouteFacts
     reply_plan: ReplyPlanFacts
     action: CommandAction
+    # The stable conversation anchor captured when the command was received, so a
+    # deferred /new sets its pointer on the anchor and not on the resolved active
+    # session (route.session_id may already be a pointer target).
+    conversation_key: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -200,6 +216,7 @@ class ChannelConversationEngine:
             route,
             reply_plan,
             defer_actions=True,
+            conversation_key=self._derive_session_id(conversation),
         ):
             return
 
@@ -373,10 +390,35 @@ class ChannelConversationEngine:
         return route, session
 
     def _route_facts(self, conversation: ConversationFacts) -> RouteFacts:
+        # _derive_session_id yields the stable conversation anchor. The active
+        # session may have been moved off that anchor by /new (the "Wegweiser"
+        # pointer), so route through the pointer instead of straight to the anchor.
+        conversation_key = self._derive_session_id(conversation)
         return RouteFacts(
             agent_id=self._config.agent_id,
-            session_id=self._derive_session_id(conversation),
+            session_id=self._resolve_active_session_id(self._config.agent_id, conversation_key),
         )
+
+    def _resolve_active_session_id(self, agent_id: str, conversation_key: str) -> str:
+        """Follow a conversation anchor's pointer to its currently active session.
+
+        ``/new`` stores an ``active_session_id`` pointer in the anchor's metadata
+        sidecar and creates a fresh session as the live one. With no pointer the
+        anchor *is* the session, so a channel that never ran ``/new`` routes
+        exactly as before (no migration, no legacy branch — the default state).
+        """
+        try:
+            metadata = self._chat_sessions.get_metadata(agent_id, conversation_key)
+        except ChatSessionError:
+            # Anchor session does not exist yet -> nothing has moved off it.
+            return conversation_key
+        active = metadata.get(ACTIVE_SESSION_METADATA_KEY)
+        # Single hop: the pointer always names the newest session directly. A
+        # deleted target is fine -- get_or_create re-creates it empty downstream,
+        # keeping the current conversation fresh rather than reviving old history.
+        if isinstance(active, str) and active:
+            return active
+        return conversation_key
 
     def _derive_session_id(self, conversation: ConversationFacts) -> str:
         # Group conversations share one session keyed by chat id and ignore dm_scope.
@@ -482,7 +524,12 @@ class ChannelConversationEngine:
             await self._process_queued_observed_message(queued)
             return
         if isinstance(queued, _QueuedCommandAction):
-            await self._handle_command_action(queued.action, queued.route, queued.reply_plan)
+            await self._handle_command_action(
+                queued.action,
+                queued.route,
+                queued.reply_plan,
+                queued.conversation_key,
+            )
             return
         if isinstance(queued, _QueuedInboundMedia):
             await self._process_queued_media(queued)
@@ -514,6 +561,11 @@ class ChannelConversationEngine:
                 queued.route,
                 queued.reply_plan,
                 defer_actions=False,
+                # Block content never command-dispatches and text commands are
+                # eagerly checked, so this path produces no new_session action
+                # today; the route.session_id fallback in _start_new_session stays
+                # correct if it ever does.
+                conversation_key=None,
             ):
                 return
 
@@ -630,6 +682,7 @@ class ChannelConversationEngine:
         reply_plan: ReplyPlanFacts,
         *,
         defer_actions: bool,
+        conversation_key: str | None = None,
     ) -> bool:
         if isinstance(dispatch_result, CommandHandled):
             reply = dispatch_result.reply
@@ -645,11 +698,16 @@ class ChannelConversationEngine:
                 self._enqueue_chat_work(
                     reply_plan.platform_target,
                     _QueuedCommandAction(
-                        route=route, reply_plan=reply_plan, action=dispatch_result
+                        route=route,
+                        reply_plan=reply_plan,
+                        action=dispatch_result,
+                        conversation_key=conversation_key,
                     ),
                 )
             else:
-                await self._handle_command_action(dispatch_result, route, reply_plan)
+                await self._handle_command_action(
+                    dispatch_result, route, reply_plan, conversation_key
+                )
             return True
 
         return False
@@ -659,6 +717,7 @@ class ChannelConversationEngine:
         command_action: CommandAction,
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
+        conversation_key: str | None = None,
     ) -> None:
         platform = self._transport.platform_display_name
         match command_action.name:
@@ -675,10 +734,7 @@ class ChannelConversationEngine:
                     reply = _FAILED_REPLY
                 await self._send_reply(reply_plan, reply)
             case "new_session":
-                await self._send_reply(
-                    reply_plan,
-                    f"Starting a new session is not available from {platform} channels yet.",
-                )
+                await self._start_new_session(route, reply_plan, conversation_key)
             case "retry_last_turn":
                 try:
                     run = await self._trigger_service.retry_run(
@@ -697,6 +753,86 @@ class ChannelConversationEngine:
                     reply_plan,
                     f"This command is not available from {platform} channels yet.",
                 )
+
+    async def _start_new_session(
+        self,
+        route: RouteFacts,
+        reply_plan: ReplyPlanFacts,
+        conversation_key: str | None,
+    ) -> None:
+        """Start a fresh channel session and point this chat's anchor at it.
+
+        The previous session is left untouched (saved, still searchable); only the
+        anchor's ``active_session_id`` pointer moves, so all later traffic for this
+        chat routes into the new session. Mirrors the WebUI ``/new``, including the
+        refusal while a run is active.
+        """
+        if self._trigger_service.has_active_run(route.agent_id, route.session_id):
+            await self._send_reply(reply_plan, _NEW_SESSION_BUSY_REPLY)
+            return
+
+        # conversation_key is the stable anchor; route.session_id is only the
+        # currently-active session (used for the run guard above). Falling back to
+        # route.session_id is correct before the first /new, when they are equal.
+        anchor = conversation_key or route.session_id
+        new_session_id = self._create_fresh_channel_session(route.agent_id, anchor, reply_plan)
+        self._set_active_session_pointer(route.agent_id, anchor, new_session_id)
+        await self._send_reply(reply_plan, _NEW_SESSION_STARTED_REPLY)
+
+    def _create_fresh_channel_session(
+        self,
+        agent_id: str,
+        anchor: str,
+        reply_plan: ReplyPlanFacts,
+    ) -> str:
+        """Create and tag a brand-new channel session, returning its id.
+
+        The id is anchored to the conversation for readability/grouping in the
+        sessions list, falling back to a bare uuid when the anchored form would
+        exceed the session-id length contract. The fresh session gets the one-time
+        channel reminder note and the base channel sidecar metadata (no
+        participants), so it is recognizable as a channel session immediately.
+        """
+        candidate = f"{anchor}-{uuid4().hex}"
+        new_session_id = candidate if SESSION_ID_PATTERN.fullmatch(candidate) else uuid4().hex
+        session = self._chat_sessions.get_or_create(agent_id, new_session_id)
+        session.add_note(
+            channel_system_reminder(
+                platform_display_name=self._transport.platform_display_name,
+                channel_id=self._config.id,
+                chat_id=reply_plan.platform_target,
+            )
+        )
+        self._chat_sessions.set_metadata(
+            agent_id,
+            new_session_id,
+            {
+                "source_channel_id": self._config.id,
+                "platform": self._config.platform,
+                "platform_conv_id": reply_plan.platform_target,
+                "last_reply_target": {
+                    "channel_id": reply_plan.channel_id,
+                    "platform_target": reply_plan.platform_target,
+                },
+            },
+        )
+        return new_session_id
+
+    def _set_active_session_pointer(self, agent_id: str, anchor: str, new_session_id: str) -> None:
+        """Point the conversation anchor at the newest session (single hop).
+
+        Read-modify-write on the anchor's sidecar so the anchor's other channel
+        metadata is preserved. The anchor normally already exists (it was the
+        active session); the get_or_create is a defensive floor for the rare case
+        where it does not.
+        """
+        try:
+            metadata = self._chat_sessions.get_metadata(agent_id, anchor)
+        except ChatSessionError:
+            self._chat_sessions.get_or_create(agent_id, anchor)
+            metadata = {}
+        metadata[ACTIVE_SESSION_METADATA_KEY] = new_session_id
+        self._chat_sessions.set_metadata(agent_id, anchor, metadata)
 
     def _log_command_action_failure(
         self,
