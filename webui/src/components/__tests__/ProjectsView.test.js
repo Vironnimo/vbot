@@ -220,6 +220,48 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('adds and removes auto-load files through the list and saves them', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({
+          project_id: 'demo',
+          display_name: 'Demo',
+          auto_load: ['AGENTS.md'],
+        }),
+      ],
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-toggle-demo"]'),
+    );
+    buttonByTestId('project-toggle-demo').click();
+    flushSync();
+
+    // Add a file through the text input + Add button.
+    await waitForCondition(() => inputById('project-edit-auto-load'));
+    setInputValue('project-edit-auto-load', 'docs/guide.md');
+    buttonByTestId('project-auto-load-add').click();
+    flushSync();
+
+    // The list now shows both entries; remove the seeded AGENTS.md (row 0) so only
+    // the added file survives, proving per-row removal and order are preserved.
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-auto-load-remove-1"]'),
+    );
+    buttonByTestId('project-auto-load-remove-0').click();
+    flushSync();
+
+    buttonByTestId('project-save-demo').click();
+
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      auto_load: ['docs/guide.md'],
+    });
+  });
+
   it('auto-saves edited fields after the debounce without a Save click', async () => {
     // The reload after the auto-save returns the renamed project so the form
     // reads clean again and the debounce does not re-fire.
