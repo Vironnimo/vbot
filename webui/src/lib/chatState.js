@@ -220,7 +220,7 @@ export function appendRunEvent(sessionState, event) {
   return normalizedEvent;
 }
 
-export function appendRunEvents(sessionState, events) {
+function appendRunEvents(sessionState, events) {
   for (const event of events) {
     appendRunEvent(sessionState, event);
   }
@@ -479,7 +479,7 @@ export function resetStaleRun(sessionState) {
   return sessionState;
 }
 
-export function normalizeRunEvent(event) {
+function normalizeRunEvent(event) {
   if (!event || typeof event !== 'object') {
     return null;
   }

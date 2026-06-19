@@ -23,9 +23,9 @@ export function describeCronExpression(expression) {
 }
 
 export const CRON_STATUS_ACTIVE = 'active';
-export const CRON_STATUS_PAUSED = 'paused';
-export const CRON_STATUS_COMPLETED = 'completed';
-export const CRON_STATUS_FAILED = 'failed';
+const CRON_STATUS_PAUSED = 'paused';
+const CRON_STATUS_COMPLETED = 'completed';
+const CRON_STATUS_FAILED = 'failed';
 
 // A successfully fired once job (`completed`) drops off the list, but a job
 // that gave up after repeated failures (`failed`) stays visible so the user
@@ -95,7 +95,7 @@ export function applyCronListResponse(state, result) {
   return state.jobs;
 }
 
-export function normalizeCronJobs(jobs) {
+function normalizeCronJobs(jobs) {
   const rawJobs = Array.isArray(jobs) ? jobs : [];
   return rawJobs.map((job) => normalizeCronJob(job));
 }

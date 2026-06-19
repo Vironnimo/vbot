@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_FORM_MODE_EDIT,
   createAgentFormValues,
-  listToText,
   normalizeAgentForm,
   textToList,
 } from '../agentForm.js';
@@ -406,6 +405,5 @@ describe('agent form helpers', () => {
 
   it('converts list text using one item per line', () => {
     expect(textToList('alpha\n\n beta \n')).toEqual(['alpha', 'beta']);
-    expect(listToText(['alpha', 'beta'])).toBe('alpha\nbeta');
   });
 });

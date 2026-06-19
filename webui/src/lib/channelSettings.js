@@ -3,9 +3,8 @@ export const CHANNEL_PLATFORMS = Object.freeze([CHANNEL_PLATFORM_TELEGRAM]);
 
 export const CHANNEL_DM_SCOPE_PER_CONVERSATION = 'per_conversation';
 export const CHANNEL_DM_SCOPE_MAIN = 'main';
-export const CHANNEL_DM_SCOPE_PER_PEER = 'per_peer';
-export const CHANNEL_DM_SCOPE_PER_ACCOUNT_CHANNEL_PEER =
-  'per_account_channel_peer';
+const CHANNEL_DM_SCOPE_PER_PEER = 'per_peer';
+const CHANNEL_DM_SCOPE_PER_ACCOUNT_CHANNEL_PEER = 'per_account_channel_peer';
 export const CHANNEL_DM_SCOPES = Object.freeze([
   CHANNEL_DM_SCOPE_PER_CONVERSATION,
   CHANNEL_DM_SCOPE_MAIN,

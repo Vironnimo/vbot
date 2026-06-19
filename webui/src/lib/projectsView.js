@@ -17,7 +17,7 @@ export const FINDING_TYPE_ORPHAN = 'orphan';
 
 // Stable display order for grouped findings, so the report always lists the
 // same finding kinds in the same order regardless of server ordering.
-export const FINDING_TYPES = Object.freeze([
+const FINDING_TYPES = Object.freeze([
   FINDING_TYPE_SLUG_COLLISION,
   FINDING_TYPE_UNSLUGIFIABLE_NAME,
   FINDING_TYPE_BAD_MODEL,

@@ -17,7 +17,7 @@ export const STATISTICS_SUB_VIEWS = Object.freeze([
 export const DAILY_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
 
 // Percent-used thresholds at which a provider usage window turns warn / critical.
-export const USAGE_SEVERITY_THRESHOLDS = Object.freeze({
+const USAGE_SEVERITY_THRESHOLDS = Object.freeze({
   warn: 75,
   critical: 90,
 });

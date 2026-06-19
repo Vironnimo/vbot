@@ -1,15 +1,13 @@
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
 
-export const DEFAULT_AGENT_TEMPERATURE = '';
-export const DEFAULT_AGENT_ALLOWED_LIST = '*';
-export const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([
+const DEFAULT_AGENT_TEMPERATURE = '';
+const DEFAULT_AGENT_ALLOWED_LIST = '*';
+const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([DEFAULT_AGENT_ALLOWED_LIST]);
+const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
-export const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
-  DEFAULT_AGENT_ALLOWED_LIST,
-]);
-export const DEFAULT_AGENT_MEMORY_PROMPT_MODE = 'agent_user';
+const DEFAULT_AGENT_MEMORY_PROMPT_MODE = 'agent_user';
 export const MEMORY_TOOL_NAME = 'memory';
 export const AGENT_MEMORY_PROMPT_MODES = Object.freeze([
   'off',
@@ -119,14 +117,6 @@ export function textToList(text) {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
-}
-
-export function listToText(items, fallback = EMPTY_TEXT) {
-  if (!Array.isArray(items) || items.length === 0) {
-    return fallback;
-  }
-
-  return items.join('\n');
 }
 
 function normalizeValues(values = {}) {

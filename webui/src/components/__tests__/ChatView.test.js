@@ -8,7 +8,6 @@ import { init } from '../../lib/i18n.js';
 const rpcMock = vi.fn();
 const subscribeRunEventsMock = vi.fn(() => ({ close: vi.fn(), source: null }));
 const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
-const linkSessionToChannelMock = vi.fn(async () => ({ ok: true }));
 const listQueueMock = vi.fn(async () => ({ items: [] }));
 const removeFromQueueMock = vi.fn(async () => ({ ok: true }));
 const updateQueueItemMock = vi.fn(async () => ({ ok: true }));
@@ -35,7 +34,6 @@ vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
   subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
   listSessions: (...args) => listSessionsMock(...args),
-  linkSessionToChannel: (...args) => linkSessionToChannelMock(...args),
   listQueue: (...args) => listQueueMock(...args),
   removeFromQueue: (...args) => removeFromQueueMock(...args),
   updateQueueItem: (...args) => updateQueueItemMock(...args),
@@ -86,8 +84,6 @@ describe('ChatView', () => {
     subscribeRunEventsMock.mockClear();
     listSessionsMock.mockReset();
     listSessionsMock.mockResolvedValue({ sessions: [] });
-    linkSessionToChannelMock.mockReset();
-    linkSessionToChannelMock.mockResolvedValue({ ok: true });
     listQueueMock.mockReset();
     listQueueMock.mockResolvedValue({ items: [] });
     removeFromQueueMock.mockReset();
@@ -2120,7 +2116,6 @@ describe('ChatView', () => {
     expect(findButtonByText('session-legacy')).toBeTruthy();
     expect(findButtonByText('Link to channel')).toBeFalsy();
     expect(document.querySelector('input[name="channel-id"]')).toBeNull();
-    expect(linkSessionToChannelMock).not.toHaveBeenCalled();
   });
 
   it('renders sub-agent session metadata in the sessions drawer', async () => {

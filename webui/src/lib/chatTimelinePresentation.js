@@ -423,7 +423,7 @@ export const isStartingBlockingSubAgent = (tool) => {
   return subAgentArguments(tool).blocking !== false;
 };
 
-export const subAgentSessionId = (tool) => {
+const subAgentSessionId = (tool) => {
   const args = subAgentArguments(tool);
   const data = subAgentResultData(tool);
   return trimmedString(data.session_id) || trimmedString(args.session_id);
@@ -439,7 +439,7 @@ export const subAgentAgentId = (tool) => {
   );
 };
 
-export const subAgentRunId = (tool) => {
+const subAgentRunId = (tool) => {
   const args = subAgentArguments(tool);
   const data = subAgentResultData(tool);
   return trimmedString(data.run_id) || trimmedString(args.run_id);
