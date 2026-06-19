@@ -39,8 +39,6 @@ export const englishCatalog = Object.freeze({
   'loading.history': 'Loading chat history…',
 
   'errors.generic': 'Something went wrong. Try again.',
-  'errors.network':
-    'Network request failed. Check that the vBot server is running.',
   'errors.validation': 'Check the highlighted fields and try again.',
   'errors.streamClosed': 'The live stream closed before the run finished.',
   'errors.minimumAgents': 'At least one agent must remain.',
@@ -103,8 +101,6 @@ export const englishCatalog = Object.freeze({
   'chat.runStatus.cancelled': 'Cancelled',
   'chat.today': 'Today',
   'chat.historyEmptyTitle': 'No messages yet',
-  'chat.toolSucceeded': 'succeeded',
-  'chat.toolFailed': 'failed',
   'chat.toolArgs': 'Args',
   'chat.toolPendingName': 'tool',
   'chat.toolCancelled': 'cancelled',
@@ -177,7 +173,6 @@ export const englishCatalog = Object.freeze({
   'queue.removeError': 'Queued message could not be removed.',
   'queue.syncError': 'Queued messages could not be synced.',
 
-  'cancel.confirm': 'Cancel run',
   'cancel.cancelling': 'Cancelling run…',
 
   'agents.title': 'Agents',
@@ -186,7 +181,6 @@ export const englishCatalog = Object.freeze({
   'agents.create': 'Create agent',
   'agents.delete': 'Delete agent',
   'agents.deleteDisabledMinimum': 'The last remaining agent cannot be deleted.',
-  'agents.deleteConfirmTitle': 'Delete {name}?',
   'agents.created': 'Agent created.',
   'agents.updated': 'Agent updated.',
   'agents.deleted': 'Agent deleted.',
@@ -330,9 +324,6 @@ export const englishCatalog = Object.freeze({
   'projects.add.displayName': 'Display name',
   'projects.add.displayNamePlaceholder':
     'Optional — defaults to the folder name',
-  'projects.add.defaultAgent': 'Default agent',
-  'projects.add.defaultModel': 'Default model',
-  'projects.add.autoLoad': 'Auto-load files',
   'projects.add.open': 'Add project',
   'projects.add.submit': 'Add project',
   'projects.add.submitting': 'Adding project…',
@@ -340,11 +331,6 @@ export const englishCatalog = Object.freeze({
   'projects.add.error': 'Project could not be added.',
   'projects.add.success': 'Project added.',
   'projects.list.title': 'Your projects',
-  'projects.list.defaultAgent': 'Default agent',
-  'projects.list.defaultModel': 'Default model',
-  'projects.list.none': '—',
-  'projects.manage': 'Manage',
-  'projects.manage.title': 'Manage {name}',
   'projects.manage.displayName': 'Display name',
   'projects.manage.defaultAgent': 'Default agent',
   'projects.manage.defaultAgentEmpty': 'No project default',
@@ -357,7 +343,6 @@ export const englishCatalog = Object.freeze({
   'projects.manage.autoLoadPlaceholder': 'One path per line',
   'projects.manage.save': 'Save changes',
   'projects.manage.saving': 'Saving…',
-  'projects.manage.noChanges': 'No changes to save.',
   'projects.manage.saveError': 'Project changes could not be saved.',
   'projects.manage.saveSuccess': 'Project updated.',
   'projects.remove': 'Remove',
@@ -374,7 +359,6 @@ export const englishCatalog = Object.freeze({
     'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
   'projects.team.noModel': 'No model',
   'projects.report.title': 'Scan report',
-  'projects.report.clean': 'No issues found in this repository.',
   'projects.report.findingCount': '{count} issues found',
   'projects.report.group.slug_collision': 'Name collisions',
   'projects.report.group.unslugifiable_name': 'Unusable agent names',
@@ -394,7 +378,6 @@ export const englishCatalog = Object.freeze({
   'projects.rePoint.success': 'Project re-pointed.',
 
   'systemPrompt.title': 'System Prompt',
-  'systemPrompt.comingSoon': 'Editable prompt pieces are coming soon.',
   'systemPrompt.scope.label': 'Prompt scope',
   'systemPrompt.scope.default': 'Default',
   'systemPrompt.fragmentEditor.save': 'Save',
@@ -419,24 +402,18 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.error.copyFailed': 'Failed to copy',
 
   'settings.title': 'Settings',
-  'settings.comingSoon': 'Settings controls are coming soon.',
   'settings.loading': 'Loading settings…',
   'settings.loadError': 'Settings could not be loaded.',
   'settings.saveError': 'Settings could not be saved.',
   'settings.sections': 'Settings sections',
-  'settings.placeholder': 'Placeholder',
   'settings.general.title': 'General',
   'settings.general.subtitle': 'Bind address and application data directory.',
   'settings.general.serverHost': 'Server host',
   'settings.general.serverHostDescription':
     'Address and port the vBot server listens on.',
-  'settings.general.serverHostPlaceholder':
-    'Server host placeholder, not a detected runtime value',
   'settings.general.dataDirectory': 'Data directory',
   'settings.general.dataDirectoryDescription':
     'Root path for agents, sessions, and workspace files.',
-  'settings.general.dataDirectoryPlaceholder':
-    'Data directory placeholder, not a detected runtime value',
   'settings.defaults.title': 'Defaults',
   'settings.defaults.subtitle':
     'Fallback values for agent fields that are not explicitly set.',
@@ -802,11 +779,7 @@ export const englishCatalog = Object.freeze({
   'debug.expandRow': 'Expand row',
   'debug.collapseRow': 'Collapse row',
 
-  'app.serverStatus': 'Local UI placeholder',
-  'app.statusPlaceholder': 'Local UI placeholder',
-
   'status.connected': 'Connected',
-  'status.activeRun': 'active run',
   'status.notReachable': 'Not reachable',
   'status.reconnecting': 'Reconnecting…',
 
