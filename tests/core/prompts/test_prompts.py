@@ -795,8 +795,8 @@ def test_config_agent_prompt_inserts_body_and_project_files_in_order(
     workspace: Path,
     tmp_path: Path,
 ) -> None:
-    # Config agent: no SOUL/memory home, a verbatim body, AGENTS.md + one
-    # auto-load file in the repo cwd.
+    # Config agent: no SOUL/memory home, a verbatim body, and two auto-load files
+    # in the repo cwd (AGENTS.md is the seeded first entry, CONTEXT.md follows).
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
@@ -805,7 +805,7 @@ def test_config_agent_prompt_inserts_body_and_project_files_in_order(
     # Config agent's real production workspace is "" (no SOUL/memory home), so
     # {include:SOUL.md}/{memory} collapse — the same value the resolver synthesizes.
     agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, ["CONTEXT.md"])
+    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "CONTEXT.md"])
 
     prompt = manager.build_system_prompt(
         agent,
@@ -906,7 +906,7 @@ def test_rooted_identity_agent_prompt_puts_identity_before_project(
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
     manager = _project_manager(fragments, tmp_path)
     agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
-    context = ProjectPromptContext.from_project(repo, [])
+    context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
 
     prompt = manager.build_system_prompt(agent, project_context=context)
 
@@ -922,14 +922,14 @@ def test_project_files_render_only_existing_files(
     fragments: dict[str, str],
     tmp_path: Path,
 ) -> None:
-    # Lazy rendering: a missing AGENTS.md is skipped silently, a missing auto-load
-    # entry is skipped, no warning/placeholder leakage.
+    # Lazy rendering: a listed-but-absent file — including the seeded AGENTS.md
+    # before the repo has one — is skipped silently, no warning/placeholder leakage.
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "CONTEXT.md").write_text("Context only", encoding="utf-8")
     manager = _project_manager(fragments, tmp_path)
     agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, ["CONTEXT.md", "MISSING.md"])
+    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "CONTEXT.md", "MISSING.md"])
 
     prompt = manager.build_system_prompt(agent, agent_body="", project_context=context)
 
@@ -1056,7 +1056,7 @@ def test_render_project_files_one_source_for_reminder_and_prompt(
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
     manager = _project_manager(fragments, tmp_path)
     agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, [])
+    context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
 
     rendered = manager.render_project_files(context)
     in_prompt = manager.build_system_prompt(agent, project_context=context)

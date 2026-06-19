@@ -39,6 +39,7 @@ from core.projects.projects import (
     ProjectNotFoundError,
     build_project,
     project_from_dict,
+    seed_default_auto_load,
 )
 from core.settings import SettingsValidationError, load_validated_project_json
 from core.utils.logging import get_logger
@@ -105,13 +106,16 @@ class ProjectStore:
         have to exist yet — a bare/missing repo is detected at open time, not
         here — but it is normalized (symlinks, ``.``/``..``) before storage.
         """
+        # A new project starts with AGENTS.md seeded as its first auto-load entry
+        # (the project-instruction convention). Seeded here, in create only — never
+        # in build_project, which update shares — so removing it later sticks.
         project = build_project(
             project_id,
             display_name,
             cwd,
             default_agent=default_agent,
             default_model=default_model,
-            auto_load=auto_load,
+            auto_load=seed_default_auto_load(auto_load),
         )
 
         project_dir = self._project_dir(project.project_id)

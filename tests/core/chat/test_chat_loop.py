@@ -203,9 +203,10 @@ class StubPrompts:
         if project_context is None:
             return ""
         # Wrap each existing project file exactly like the real renderer so chat
-        # tests see the same <file>-framed content (AGENTS.md first, then auto_load).
+        # tests see the same <file>-framed content — the auto_load list in order
+        # (AGENTS.md is just its seeded first entry, no longer special-cased).
         blocks: list[str] = []
-        for name in ["AGENTS.md", *project_context.auto_load]:
+        for name in project_context.auto_load:
             file_path = Path(project_context.cwd) / name
             if file_path.exists():
                 blocks.append(f'<file name="{name}">\n{file_path.read_text()}\n</file>')
