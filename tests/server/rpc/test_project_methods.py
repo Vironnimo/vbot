@@ -149,6 +149,17 @@ def test_add_creates_project_and_returns_scan_preview(tmp_path: Path) -> None:
     assert state.runtime.projects.exists("vbot")
 
 
+def test_add_seeds_agents_file_into_auto_load(tmp_path: Path) -> None:
+    # project.add seeds AGENTS.md as the first auto-load entry, so a freshly added
+    # project loads the convention file with no extra configuration.
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+
+    result = _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    assert result["project"]["auto_load"] == ["AGENTS.md"]
+
+
 def test_add_derives_project_id_from_cwd_when_no_display_name(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "my-repo")

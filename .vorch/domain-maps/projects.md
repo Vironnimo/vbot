@@ -17,7 +17,7 @@ The anchor holds **no run config** — only Sessions ownership and the local age
 
 ## Data Model
 
-**Project** (frozen dataclass, `projects.py`): `project_id` (stable slug key), `display_name` (changeable), `cwd` (the repo dir tools resolve against — stored in the file, *not* the directory name, so the repo can move without breaking the key or Sessions), `default_agent`, `default_model` (optional pointers; empty string = fall through the resolution chain), `auto_load` (ordered file list), `created_at`/`updated_at` (UTC ISO 8601, `Z` suffix). The minimal valid Project is just a cwd — team, AGENTS.md, and auto-load are all optional.
+**Project** (frozen dataclass, `projects.py`): `project_id` (stable slug key), `display_name` (changeable), `cwd` (the repo dir tools resolve against — stored in the file, *not* the directory name, so the repo can move without breaking the key or Sessions), `default_agent`, `default_model` (optional pointers; empty string = fall through the resolution chain), `auto_load` (ordered file list; `AGENTS.md` is seeded as its first entry at creation — see Interfaces), `created_at`/`updated_at` (UTC ISO 8601, `Z` suffix). The minimal valid Project is just a cwd — team and auto-load are all optional (`AGENTS.md` is seeded into `auto_load` at creation but stays a normal removable entry).
 
 **Anchor layout** in the data-dir (never in the repo):
 
@@ -35,7 +35,7 @@ The anchor holds **no run config** — only Sessions ownership and the local age
 
 `ProjectStore(data_dir)` — CRUD over anchors:
 
-- `create(project_id, display_name, cwd, *, default_agent, default_model, auto_load)` → `Project`. Rejects a duplicate id and a cwd already claimed by another project. The cwd folder need not exist yet (a bare/missing repo is an open-time concern, not a create-time one).
+- `create(project_id, display_name, cwd, *, default_agent, default_model, auto_load)` → `Project`. Rejects a duplicate id and a cwd already claimed by another project. The cwd folder need not exist yet (a bare/missing repo is an open-time concern, not a create-time one). **Seeds `AGENTS.md` as the first `auto_load` entry** (`seed_default_auto_load` in `projects.py` — case-insensitive, idempotent): creation-only, so `update` never re-seeds and a user's removal sticks. Unconditional (seeded even when no `AGENTS.md` exists on disk yet) — rendering is lazy, so a not-yet-present entry costs nothing and loads the moment the file appears.
 - `get(project_id)` → `Project` (raises `ProjectNotFoundError`); `exists(project_id)` → bool.
 - `list()` → `list[Project]` sorted by id; a single corrupt `project.json` is skipped with a logged warning rather than aborting the listing.
 - `update(project_id, **changes)` → `Project`. `project_id` is immutable (passing it is an "unknown field" error). Changing `cwd` re-normalizes and re-checks the duplicate guard. Rebuilds through `build_project` so there is one validation path.

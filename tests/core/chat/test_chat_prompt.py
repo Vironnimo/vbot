@@ -80,7 +80,7 @@ async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Pa
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
     (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
     runtime, adapter = _project_runtime(
-        tmp_path, repo, ["CONTEXT.md"], body="You are the orchestrator."
+        tmp_path, repo, ["AGENTS.md", "CONTEXT.md"], body="You are the orchestrator."
     )
     runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
 
@@ -96,7 +96,7 @@ async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Pa
     assert agent_body == "You are the orchestrator."
     assert isinstance(project_context, ProjectPromptContext)
     assert project_context.cwd == repo
-    assert project_context.auto_load == ("CONTEXT.md",)
+    assert project_context.auto_load == ("AGENTS.md", "CONTEXT.md")
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_visiting_injects_project_files_as_system_reminder(tmp_path: Path)
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="s1")
-    context = ProjectPromptContext.from_project(repo, [])
+    context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
 
     loop = ChatLoop(runtime)
     injected = loop.inject_visiting_project_files(session, context)

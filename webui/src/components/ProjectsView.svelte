@@ -69,6 +69,9 @@
   let editForm = $state(createEditForm());
   let editSaving = $state(false);
   let editError = $state('');
+  // The draft text for the auto-load "add a file" input, kept apart from editForm
+  // so typing a candidate path does not mark the form dirty until it is added.
+  let autoLoadDraft = $state('');
   let activeTeam = $state([]);
   let activeReport = $state(null);
   let scanLoading = $state(false);
@@ -127,7 +130,7 @@
             display_name: editForm.display_name,
             default_agent: editForm.default_agent,
             default_model: editForm.default_model,
-            auto_load: splitLines(editForm.auto_load),
+            auto_load: editForm.auto_load,
           },
           expandedProject,
         )
@@ -175,7 +178,7 @@
       display_name: project?.display_name ?? '',
       default_agent: project?.default_agent ?? '',
       default_model: project?.default_model ?? '',
-      auto_load: (project?.auto_load ?? []).join('\n'),
+      auto_load: [...(project?.auto_load ?? [])],
     };
   }
 
@@ -310,6 +313,7 @@
       projects.find((item) => item.project_id === projectId) ?? null;
     expandedProjectId = projectId;
     editForm = createEditForm(project);
+    autoLoadDraft = '';
     editError = '';
     activeTeam = [];
     activeReport = null;
@@ -570,11 +574,32 @@
     return t('common.unknown', 'Unknown');
   }
 
-  function splitLines(value) {
-    return String(value ?? '')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+  function addAutoLoadEntry() {
+    const entry = autoLoadDraft.trim();
+    if (entry === '') {
+      return;
+    }
+    // Skip a duplicate so the same file can never be listed (and rendered) twice.
+    if (!editForm.auto_load.includes(entry)) {
+      editForm.auto_load = [...editForm.auto_load, entry];
+    }
+    autoLoadDraft = '';
+    editError = '';
+  }
+
+  function removeAutoLoadEntry(index) {
+    editForm.auto_load = editForm.auto_load.filter(
+      (_, position) => position !== index,
+    );
+    editError = '';
+  }
+
+  function handleAutoLoadKeydown(event) {
+    // Enter adds the entry instead of submitting the surrounding edit form.
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      addAutoLoadEntry();
+    }
   }
 </script>
 
@@ -760,23 +785,75 @@
                     </label>
                   </div>
 
-                  <label class="projects-view__field">
-                    <span class="projects-view__label">
+                  <div class="projects-view__field">
+                    <label
+                      class="projects-view__label"
+                      for="project-edit-auto-load"
+                    >
                       {t('projects.manage.autoLoad', 'Auto-load files')}
-                    </span>
-                    <textarea
-                      id="project-edit-auto-load"
-                      class="s-input projects-view__textarea"
-                      value={editForm.auto_load}
-                      placeholder={t(
-                        'projects.manage.autoLoadPlaceholder',
-                        'One path per line',
-                      )}
-                      disabled={editSaving}
-                      oninput={(event) =>
-                        updateEditField('auto_load', event.currentTarget.value)}
-                    ></textarea>
-                  </label>
+                    </label>
+                    {#if editForm.auto_load.length > 0}
+                      <ul class="projects-view__file-list">
+                        {#each editForm.auto_load as filePath, index (index)}
+                          <li class="projects-view__file-row">
+                            <span class="projects-view__file-name">
+                              {filePath}
+                            </span>
+                            <button
+                              type="button"
+                              class="projects-view__file-remove"
+                              data-testid={`project-auto-load-remove-${index}`}
+                              disabled={editSaving}
+                              aria-label={t(
+                                'projects.manage.autoLoadRemove',
+                                'Remove {file}',
+                                { file: filePath },
+                              )}
+                              onclick={() => removeAutoLoadEntry(index)}
+                            >
+                              ×
+                            </button>
+                          </li>
+                        {/each}
+                      </ul>
+                    {:else}
+                      <p class="projects-view__file-empty">
+                        {t(
+                          'projects.manage.autoLoadEmpty',
+                          'No auto-load files',
+                        )}
+                      </p>
+                    {/if}
+                    <div class="projects-view__file-add">
+                      <TextField
+                        id="project-edit-auto-load"
+                        class="projects-view__file-input"
+                        value={autoLoadDraft}
+                        placeholder={t(
+                          'projects.manage.autoLoadPlaceholder',
+                          'Add a file path…',
+                        )}
+                        disabled={editSaving}
+                        ariaLabel={t(
+                          'projects.manage.autoLoad',
+                          'Auto-load files',
+                        )}
+                        onInput={(next) => {
+                          autoLoadDraft = next;
+                        }}
+                        onkeydown={handleAutoLoadKeydown}
+                      />
+                      <Button
+                        variant="secondary"
+                        data-testid="project-auto-load-add"
+                        disabled={editSaving ||
+                          autoLoadDraft.trim().length === 0}
+                        onClick={addAutoLoadEntry}
+                      >
+                        {t('projects.manage.autoLoadAdd', 'Add')}
+                      </Button>
+                    </div>
+                  </div>
 
                   {#if editError}
                     <p
@@ -1186,9 +1263,76 @@
     line-height: 1.4;
   }
 
-  .projects-view__textarea {
-    min-height: 64px;
-    resize: vertical;
+  .projects-view__file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .projects-view__file-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 6px 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .projects-view__file-name {
+    overflow: hidden;
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .projects-view__file-remove {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text-med);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .projects-view__file-remove:hover:not(:disabled) {
+    background: rgba(252, 129, 129, 0.12);
+    color: var(--red);
+  }
+
+  .projects-view__file-remove:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  .projects-view__file-empty {
+    margin: 0;
+    color: var(--text-med);
+    font-size: 12px;
+  }
+
+  .projects-view__file-add {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  /* The input is rendered inside the TextField child, so reach it through the
+     scoped parent + :global (the project's pattern for styling a primitive). */
+  .projects-view__file-add :global(.projects-view__file-input) {
+    flex: 1;
+    min-width: 0;
   }
 
   .projects-view__empty {

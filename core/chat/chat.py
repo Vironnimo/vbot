@@ -755,7 +755,8 @@ class ChatLoop:
         ``None`` for an identity session (``project_id is None``) → the
         ``{project_files}`` placeholder collapses and the prompt is unchanged. For
         a project session it carries the repo cwd + the project's auto-load list,
-        so the system prompt renders AGENTS.md and the configured files.
+        so the system prompt renders the project's auto-load files (AGENTS.md is the
+        seeded first entry, not special-cased).
         """
         if project_id is None:
             return None
@@ -799,7 +800,7 @@ class ChatLoop:
 
         The structural visit trigger: when this identity session's file tools
         point at an absolute path inside a registered project's repo, that
-        project's files (AGENTS.md + auto-load) are injected **once** as a
+        project's auto-load files (AGENTS.md seeded first) are injected **once** as a
         ``<system-reminder>`` — the same render a project-born session puts in
         ``{project_files}``, delivered as a note instead because the agent stays
         home (cwd unchanged). It runs during the tool-use turn, so the note rides

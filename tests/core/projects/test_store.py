@@ -51,6 +51,45 @@ def test_create_persists_validatable_config(data_dir: Path, repo: Path) -> None:
     assert payload["auto_load"] == ["AGENTS.md"]
 
 
+def test_create_seeds_agents_file_into_empty_auto_load(data_dir: Path, repo: Path) -> None:
+    # A new project starts with AGENTS.md seeded as its first (and only) auto-load
+    # entry — the convention loads with zero config, yet stays a removable entry.
+    store = ProjectStore(data_dir)
+
+    project = store.create("vbot", "vBot", repo)
+
+    assert project.auto_load == ["AGENTS.md"]
+
+
+def test_create_prepends_agents_file_before_user_auto_load(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+
+    project = store.create("vbot", "vBot", repo, auto_load=["docs/guide.md", "CONTEXT.md"])
+
+    assert project.auto_load == ["AGENTS.md", "docs/guide.md", "CONTEXT.md"]
+
+
+def test_create_does_not_duplicate_agents_file(data_dir: Path, repo: Path) -> None:
+    # Idempotent: a caller that already named AGENTS.md (any case) is not seeded a
+    # second copy, so the file never renders twice.
+    store = ProjectStore(data_dir)
+
+    project = store.create("vbot", "vBot", repo, auto_load=["agents.md", "CONTEXT.md"])
+
+    assert project.auto_load == ["agents.md", "CONTEXT.md"]
+
+
+def test_update_does_not_reseed_agents_file(data_dir: Path, repo: Path) -> None:
+    # Seeding is creation-only: clearing the list through update keeps it cleared,
+    # so a user who removes AGENTS.md is not fought by a re-seed.
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    updated = store.update("vbot", auto_load=[])
+
+    assert updated.auto_load == []
+
+
 def test_create_rejects_duplicate_id(data_dir: Path, repo: Path, tmp_path: Path) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
