@@ -365,6 +365,49 @@ describe('LogsView', () => {
     expect(connection.close).toHaveBeenCalledWith(1000, 'logs-view-close');
   });
 
+  it('copies the verbatim log line to the clipboard from the per-row copy button', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    const rawLine = '2026-05-11 09:00:00 [INFO] vbot.core - Ready - with - dashes';
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11'],
+      default_file: '2026-05-11',
+    });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11',
+      entries: [
+        entry({
+          logger_name: 'vbot.core',
+          message: 'Ready - with - dashes',
+          raw: rawLine,
+        }),
+      ],
+      cursor: 'cursor-copy',
+    });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() =>
+      document.body.textContent.includes('Ready - with - dashes'),
+    );
+
+    const copyButton = document.querySelector('.logs-entry .logs-entry__copy');
+    expect(copyButton).toBeTruthy();
+    expect(copyButton.getAttribute('title')).toBe('Copy log line');
+
+    copyButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await waitForCondition(() => writeText.mock.calls.length === 1);
+
+    // The full source line is copied verbatim, not the reconstructed/truncated
+    // preview shown in the row.
+    expect(writeText).toHaveBeenCalledWith(rawLine);
+    await waitForCondition(() => copyButton.getAttribute('title') === 'Copied');
+  });
+
   it('reconnects after the live stream closes unexpectedly', async () => {
     vi.useFakeTimers();
     // Pin reconnect jitter to its midpoint so attempt 0 fires at exactly the
@@ -438,6 +481,7 @@ function entry(overrides = {}) {
     logger_name: 'vbot.server.app',
     message: 'Ready',
     continuation: '',
+    raw: '2026-05-11 09:00:00 [INFO] vbot.server.app - Ready',
     ...overrides,
   };
 }

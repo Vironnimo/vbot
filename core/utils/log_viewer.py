@@ -75,6 +75,7 @@ def parse_log_entries(text: str) -> list[JsonObject]:
                 "logger_name": match.group("logger_name"),
                 "message": match.group("message"),
                 "continuation": "",
+                "raw": line,
             }
             if _should_include_entry(current_entry):
                 entries.append(current_entry)
@@ -87,14 +88,19 @@ def parse_log_entries(text: str) -> list[JsonObject]:
                 "logger_name": UNKNOWN_LOGGER_NAME,
                 "message": line,
                 "continuation": "",
+                "raw": line,
             }
             entries.append(current_entry)
             continue
 
+        # Keep the verbatim source line(s) so the UI can copy an entry exactly as
+        # it appears in the file; continuation rows extend both the display tail
+        # and the raw block.
         current_entry["continuation"] = _append_continuation(
             str(current_entry["continuation"]),
             line,
         )
+        current_entry["raw"] = _append_continuation(str(current_entry["raw"]), line)
 
     return entries
 

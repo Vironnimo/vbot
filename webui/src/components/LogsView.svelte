@@ -29,9 +29,11 @@
 
   const RECONNECT_INITIAL_DELAY_MS = 1000;
   const RECONNECT_MAX_DELAY_MS = 10000;
+  const COPIED_FEEDBACK_MS = 1500;
 
   let viewState = $state(createLogsViewState());
   let reconnectAttempt = $state(0);
+  let copiedEntryKey = $state('');
 
   let filteredEntries = $derived(visibleLogEntries(viewState));
   let levelOptions = $derived(deriveLevelOptions(viewState.entries));
@@ -67,6 +69,7 @@
 
   let currentStream = null;
   let reconnectTimer = null;
+  let copiedResetTimer = null;
   let destroyed = false;
   let activeReadRequest = 0;
 
@@ -76,6 +79,7 @@
     return () => {
       destroyed = true;
       clearReconnectTimer();
+      clearCopiedFeedbackTimer();
       closeCurrentStream();
     };
   });
@@ -339,6 +343,40 @@
     return entryBody(entry).replace(/\s+/g, ' ').trim();
   }
 
+  function entryKey(entry, index) {
+    return `${entry.timestamp}-${entry.logger_name}-${index}`;
+  }
+
+  async function copyEntry(entry, key) {
+    // Prefer the verbatim source line(s) the backend captured so the clipboard
+    // gets the entry exactly as written to the file; fall back to the visible
+    // body only if an entry somehow lacks it.
+    const text =
+      typeof entry?.raw === 'string' && entry.raw
+        ? entry.raw
+        : entryBody(entry);
+
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedEntryKey = key;
+      clearCopiedFeedbackTimer();
+      copiedResetTimer = setTimeout(() => {
+        copiedEntryKey = '';
+        copiedResetTimer = null;
+      }, COPIED_FEEDBACK_MS);
+    } catch {
+      // Clipboard access can be blocked; copying is best-effort and must not
+      // disrupt the log view.
+    }
+  }
+
+  function clearCopiedFeedbackTimer() {
+    if (copiedResetTimer) {
+      clearTimeout(copiedResetTimer);
+      copiedResetTimer = null;
+    }
+  }
+
   function errorMessageText(error, fallback) {
     if (typeof error?.message === 'string' && error.message.trim()) {
       return error.message.trim();
@@ -543,7 +581,8 @@
       role="list"
       aria-label={t('logs.entries', 'Log entries')}
     >
-      {#each filteredEntries as entry, index (`${entry.timestamp}-${entry.logger_name}-${index}`)}
+      {#each filteredEntries as entry, index (entryKey(entry, index))}
+        {@const rowKey = entryKey(entry, index)}
         <article
           class={`logs-entry ${levelTone(entry.level)}`}
           role="listitem"
@@ -555,6 +594,48 @@
             >{entry.logger_name || t('common.unknown', 'Unknown')}</span
           >
           <span class="logs-entry__message">{entryPreview(entry)}</span>
+          <Button
+            variant="tertiary"
+            class="logs-entry__copy"
+            ariaLabel={t('logs.copyEntry', 'Copy log line')}
+            title={copiedEntryKey === rowKey
+              ? t('logs.copied', 'Copied')
+              : t('logs.copyEntry', 'Copy log line')}
+            onClick={() => copyEntry(entry, rowKey)}
+          >
+            {#if copiedEntryKey === rowKey}
+              <svg
+                class="logs-entry__copy-icon"
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            {:else}
+              <svg
+                class="logs-entry__copy-icon"
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="9" y="9" width="11" height="11" rx="2" />
+                <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+              </svg>
+            {/if}
+          </Button>
         </article>
       {/each}
     </div>
@@ -563,6 +644,11 @@
 
 <style>
   .logs-view {
+    /* Fixed width for the logger/domain column so horizontal growth flows into
+       the message column instead of widening the gap before each message. Sized
+       to fit the longest real `vbot.<domain>` logger names; rarer longer names
+       truncate (full text stays available via the row tooltip and copy). */
+    --logs-logger-width: 180px;
     display: flex;
     min-width: 0;
     min-height: 0;
@@ -793,8 +879,8 @@
   .logs-entry {
     display: grid;
     grid-template-columns:
-      minmax(154px, auto) minmax(60px, auto) minmax(180px, 0.7fr)
-      minmax(0, 1fr);
+      minmax(154px, auto) minmax(60px, auto) var(--logs-logger-width)
+      minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
     min-width: 0;
@@ -864,12 +950,31 @@
     line-height: 1.4;
   }
 
+  /* Per-row copy control. The class rides on the shared Button instance, so it
+     is targeted through :global; borderless and muted by default, lighting up to
+     the accent on hover/focus like other tertiary icon actions. */
+  .logs-entry :global(.logs-entry__copy) {
+    justify-self: end;
+    padding: 2px;
+    border-color: transparent;
+    color: var(--text-lo);
+  }
+
+  .logs-entry :global(.logs-entry__copy:hover),
+  .logs-entry :global(.logs-entry__copy:focus-visible) {
+    border-color: rgba(232, 135, 10, 0.45);
+    color: var(--accent);
+  }
+
+  .logs-entry__copy-icon {
+    display: block;
+  }
+
   @media (max-width: 1080px) {
     .logs-entry {
-      grid-template-columns: minmax(140px, auto) minmax(64px, auto) minmax(
-          0,
-          1fr
-        );
+      grid-template-columns:
+        minmax(140px, auto) minmax(64px, auto) minmax(0, 1fr)
+        auto;
     }
 
     .logs-entry__logger {
@@ -880,6 +985,12 @@
 
     .logs-entry__message {
       grid-column: 3;
+      grid-row: 1 / span 2;
+      align-self: center;
+    }
+
+    .logs-entry :global(.logs-entry__copy) {
+      grid-column: 4;
       grid-row: 1 / span 2;
       align-self: center;
     }
@@ -914,6 +1025,12 @@
     .logs-entry__logger {
       grid-column: auto;
       grid-row: auto;
+    }
+
+    .logs-entry :global(.logs-entry__copy) {
+      grid-column: auto;
+      grid-row: auto;
+      justify-self: start;
     }
 
     .logs-entry__timestamp,
