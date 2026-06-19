@@ -119,7 +119,9 @@ from core.chat.streaming import (
 from core.chat.tool_dispatch import (
     _activate_triggered_skills,
     _dispatch_tool_calls,
+    _project_containing_path,
     _sync_skill_context_messages,
+    _visiting_candidate_paths,
 )
 from core.debug import DebugContext
 from core.extensions import HookContext
@@ -148,6 +150,13 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("chat")
 
 MAX_TOOL_ITERATIONS = 1000
+
+# Session-meta key recording which registered projects an identity session has
+# already visited (file tools reached into their repo). It makes the project's
+# house-rules show once per project per session instead of on every file touch,
+# and survives across runs — the visited project lives in the session meta, not
+# the session path.
+VISITED_PROJECTS_META_KEY = "visited_projects"
 
 # How often a streaming attempt may be restarted from scratch after a transient
 # drop that occurred before any visible output. Each restart re-issues the whole
@@ -768,15 +777,68 @@ class ChatLoop:
         in ``<system-reminder>`` tags). Returns whether a reminder was added (no
         files → no empty reminder).
 
-        This wires the reminder **mechanism**. The structural visit *trigger*
-        (where the main agent is handed "work on <path>") is not part of this
-        phase; a later phase calls this from that entry point.
+        This is the reminder **mechanism**; the structural visit *trigger* is
+        ``_inject_visiting_projects``, which calls this when an identity session's
+        file tools reach into a registered project's repo.
         """
         rendered = self._runtime.system_prompts.render_project_files(project_context)
         if not rendered.strip():
             return False
         session.add_note(rendered)
         return True
+
+    def _inject_visiting_projects(
+        self,
+        session: ChatSession,
+        run: Run,
+        candidate_paths: list[Path],
+        projects: list[Any],
+        visited_this_run: set[str],
+    ) -> None:
+        """Show a visiting identity agent the house-rules of a project it reaches into.
+
+        The structural visit trigger: when this identity session's file tools
+        point at an absolute path inside a registered project's repo, that
+        project's files (AGENTS.md + auto-load) are injected **once** as a
+        ``<system-reminder>`` — the same render a project-born session puts in
+        ``{project_files}``, delivered as a note instead because the agent stays
+        home (cwd unchanged). It runs during the tool-use turn, so the note rides
+        the deferred-note path: persisted after the tool results and embedded in
+        the model's next turn (assistant↔tool adjacency preserved).
+
+        Shown once per project per session: ``visited_this_run`` skips the durable
+        check for projects already handled in this run, and the session meta
+        (:data:`VISITED_PROJECTS_META_KEY`) carries it across runs. ``candidate_paths``
+        are the absolute file-tool targets of this batch and ``projects`` the
+        registered-project list the caller resolved once per run, so this never
+        re-scans the project store mid-run.
+        """
+        metadata: JsonObject | None = None
+        visited_persisted: set[str] = set()
+        changed = False
+        for path in candidate_paths:
+            project = _project_containing_path(path, projects)
+            if project is None or project.project_id in visited_this_run:
+                continue
+            # First time this run reaches the project: consult the durable session
+            # meta so the rules are not re-shown on a later run for the same visit.
+            if metadata is None:
+                metadata = self._runtime.chat_sessions.get_metadata(run.agent_id, run.session_id)
+                raw_visited = metadata.get(VISITED_PROJECTS_META_KEY)
+                visited_persisted = set(raw_visited) if isinstance(raw_visited, list) else set()
+            visited_this_run.add(project.project_id)
+            if project.project_id in visited_persisted:
+                continue
+            self.inject_visiting_project_files(
+                session,
+                ProjectPromptContext.from_project(project.cwd, project.auto_load),
+            )
+            visited_persisted.add(project.project_id)
+            changed = True
+
+        if changed and metadata is not None:
+            metadata[VISITED_PROJECTS_META_KEY] = sorted(visited_persisted)
+            self._runtime.chat_sessions.set_metadata(run.agent_id, run.session_id, metadata)
 
     async def _build_request_messages(
         self,
@@ -890,6 +952,13 @@ class ChatLoop:
         chunk_timeout_seconds = self._resolve_chunk_timeout(provider_id, connection_id)
         tool_iteration_count = 0
         iteration_number = 1
+        # Project-visit detection (identity sessions only — a project-born session
+        # already has the files in its system prompt). The registered-project list
+        # is resolved lazily on the first tool batch that targets an absolute path
+        # and cached for the run, so an ordinary identity run never touches the
+        # project store and a busy visiting one scans it at most once.
+        visiting_projects: list[Any] | None = None
+        visited_projects_this_run: set[str] = set()
         for _ in range(self._max_tool_iterations + 1):
             run.raise_if_cancelled()
             pending_notes = session.drain_pending_notes()
@@ -992,6 +1061,25 @@ class ChatLoop:
                         await self._inject_read_media(
                             agent, session, messages, injection, wire_media_types
                         )
+                    # A file tool that just reached into a registered project's
+                    # repo makes this a visit: inject that project's house-rules as
+                    # a reminder. Added inside the defer window so it lands after
+                    # the tool results and shows up on the model's next turn. The
+                    # project store is consulted only when the batch actually
+                    # targets an absolute path, and at most once per run.
+                    if project_id is None:
+                        candidate_paths = _visiting_candidate_paths(assistant_message.tool_calls)
+                        if candidate_paths:
+                            if visiting_projects is None:
+                                visiting_projects = self._runtime.projects.list()
+                            if visiting_projects:
+                                self._inject_visiting_projects(
+                                    session,
+                                    run,
+                                    candidate_paths,
+                                    visiting_projects,
+                                    visited_projects_this_run,
+                                )
                     # Honor cancellation only after every sibling tool result has
                     # been persisted, so a mid-cycle cancel never leaves an
                     # assistant turn with dangling tool_calls in JSONL history.

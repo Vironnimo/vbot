@@ -114,6 +114,9 @@ class StubProjects:
     def get(self, project_id: str) -> StubProject:
         return self._projects[project_id]
 
+    def list(self) -> list[StubProject]:
+        return [self._projects[project_id] for project_id in sorted(self._projects)]
+
 
 class StubAgentResolver:
     """Resolver stub mirroring the runtime seam the chat loop now calls.
