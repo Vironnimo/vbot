@@ -324,6 +324,10 @@ Primary save buttons inside long editor panels stay enabled even when the form i
 
 **Save model for settings/config surfaces:** every settings-style panel auto-saves changes with a short debounce (800ms) *and* keeps an explicit Save button at the bottom of the panel for users who do not trust auto-save. Clicking Save on a clean form shows an "Already saved" success toast. This is the general scheme for all settings/config surfaces in the app; only entity create/edit forms (agents, channels, cron jobs) stay explicit-save-only, because half-typed entities must not persist.
 
+### Copy button
+
+**Copy-to-clipboard actions use the shared `CopyButton` component (`webui/src/components/ui/CopyButton.svelte`).** It wraps the tertiary icon `Button` and owns the clipboard write plus the transient confirmation: the clipboard icon swaps to a check and the label flips to "Copied" for ~1.5s, then reverts. Callers pass `text` (the exact string to copy) and may override `label`/`copiedLabel` (default to `common.copy`/`common.copied`), `variant`, `class`, and `onCopied`. The copy is best-effort — a blocked clipboard fails silently without disrupting the view. Placement and any reveal-on-hover are the caller's concern (e.g. log rows reveal it on row hover via a passed-in class and shrink it from the default 30px icon footprint); the component itself stays visibility-agnostic so it fits a dense table row or a chat message equally.
+
 ### Inputs
 
 **Every text field is the shared `TextField` component (`webui/src/components/ui/TextField.svelte`).** It uses the callback-prop pattern (`value` in, `onInput(next, event)` out — never `bind:`) and takes `type`, `variant`, `readonly`, `invalid`, `disabled`, `inputmode`, `placeholder`, `ariaLabel`. The guard scan fails the build if a raw `<input class="s-input">`/`modal-input` or a raw `s-value-box` appears outside the component. (Multi-line textareas — the chat composer, cron prompt, JSON option editors — are a separate concern and keep their own `<textarea>` markup.)
