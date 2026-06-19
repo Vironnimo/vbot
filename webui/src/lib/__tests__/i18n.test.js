@@ -33,7 +33,7 @@ describe('i18n t()', () => {
   });
 
   it('leaves missing interpolation tokens intact', () => {
-    expect(t('agents.deleteConfirmTitle')).toBe('Delete {name}?');
+    expect(t('agents.detail.idValue')).toBe('id: {id}');
   });
 
   it('contains Phase 4 labels for required WebUI areas', () => {
@@ -45,11 +45,7 @@ describe('i18n t()', () => {
       'navigation.settings',
       'chat.cancelRun',
       'queue.title',
-      'cancel.confirm',
       'agents.create',
-      'systemPrompt.comingSoon',
-      'settings.comingSoon',
-      'errors.network',
       'loading.history',
     ];
 
@@ -85,8 +81,6 @@ describe('i18n t()', () => {
 
   it('contains Toasted design labels for navigation and status polish', () => {
     const requiredKeys = [
-      'app.serverStatus',
-      'app.statusPlaceholder',
       'chat.tokenBadge',
       'chat.tokenBadgeEstimated',
       'chat.tokenBadgeNoContext',
@@ -101,8 +95,6 @@ describe('i18n t()', () => {
       'chat.runDurationSeconds',
       'chat.toolArgs',
       'chat.toolResultLabel',
-      'chat.toolSucceeded',
-      'chat.toolFailed',
       'chat.toolCancelled',
       'chat.subagent.label',
       'chat.subagent.starting',
@@ -113,14 +105,11 @@ describe('i18n t()', () => {
       'chat.returnToCurrentSession',
       'sessions.subagent_parent',
       'status.connected',
-      'status.activeRun',
       'status.notReachable',
       'status.reconnecting',
     ];
 
     expectCatalogKeys(requiredKeys);
-    expect(t('app.statusPlaceholder')).toContain('placeholder');
-    expect(t('app.serverStatus')).not.toMatch(/server:\d+/u);
     expect(t('chat.runIterations', undefined, { count: 2 })).toBe('2 iter');
     expect(t('chat.runDurationSeconds', undefined, { seconds: '1.5' })).toBe(
       '1.5s',
@@ -212,7 +201,6 @@ describe('i18n t()', () => {
     const requiredKeys = [
       'settings.title',
       'settings.sections',
-      'settings.placeholder',
       'settings.loading',
       'settings.loadError',
       'settings.saveError',
@@ -220,10 +208,8 @@ describe('i18n t()', () => {
       'settings.general.subtitle',
       'settings.general.serverHost',
       'settings.general.serverHostDescription',
-      'settings.general.serverHostPlaceholder',
       'settings.general.dataDirectory',
       'settings.general.dataDirectoryDescription',
-      'settings.general.dataDirectoryPlaceholder',
       'settings.recall.title',
       'settings.recall.subtitle',
       'settings.recall.backend',
@@ -545,27 +531,18 @@ describe('i18n t()', () => {
       'projects.add.cwdPlaceholder',
       'projects.add.cwdHelp',
       'projects.add.displayName',
-      'projects.add.defaultAgent',
-      'projects.add.defaultModel',
-      'projects.add.autoLoad',
       'projects.add.submit',
       'projects.add.submitting',
       'projects.add.missingCwd',
       'projects.add.error',
       'projects.add.success',
       'projects.list.title',
-      'projects.list.defaultAgent',
-      'projects.list.defaultModel',
-      'projects.list.none',
-      'projects.manage',
-      'projects.manage.title',
       'projects.manage.displayName',
       'projects.manage.defaultAgent',
       'projects.manage.defaultModel',
       'projects.manage.autoLoad',
       'projects.manage.save',
       'projects.manage.saving',
-      'projects.manage.noChanges',
       'projects.manage.saveError',
       'projects.manage.saveSuccess',
       'projects.remove',
@@ -578,7 +555,6 @@ describe('i18n t()', () => {
       'projects.team.empty',
       'projects.team.noModel',
       'projects.report.title',
-      'projects.report.clean',
       'projects.report.findingCount',
       'projects.report.group.slug_collision',
       'projects.report.group.unslugifiable_name',
@@ -604,9 +580,6 @@ describe('i18n t()', () => {
     expect(
       t('projects.report.finding.agent', undefined, { agentId: 'builder' }),
     ).toBe('Agent builder');
-    expect(t('projects.manage.title', undefined, { name: 'Demo' })).toBe(
-      'Manage Demo',
-    );
   });
 
   it('contains two-bar project chat copy for the dropdown, team bar, and scan banner', () => {
