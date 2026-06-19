@@ -938,6 +938,50 @@ def test_project_files_render_only_existing_files(
     assert '<file name="CONTEXT.md">\nContext only\n</file>' in prompt
 
 
+def test_project_files_allow_subfolders_at_any_depth(
+    fragments: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    # Auto-load points at files inside subfolders (this project keeps its context
+    # under .vorch/). Subfolders at any depth load — no "unsafe" rejection. The
+    # path is the user's own config; where the file lives is not restricted.
+    repo = tmp_path / "repo"
+    (repo / ".vorch").mkdir(parents=True)
+    (repo / ".vorch" / "PROJECT.md").write_text("Project doc", encoding="utf-8")
+    deep = repo / "a" / "b" / "c" / "d"
+    deep.mkdir(parents=True)
+    (deep / "DEEP.md").write_text("Deep doc", encoding="utf-8")
+    manager = _project_manager(fragments, tmp_path)
+    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project(repo, [".vorch/PROJECT.md", "a/b/c/d/DEEP.md"])
+
+    prompt = manager.build_system_prompt(agent, project_context=context)
+
+    assert '<file name=".vorch/PROJECT.md">\nProject doc\n</file>' in prompt
+    assert '<file name="a/b/c/d/DEEP.md">\nDeep doc\n</file>' in prompt
+
+
+def test_project_files_allow_absolute_paths_outside_cwd(
+    fragments: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    # An absolute path is read as-is, even outside the project cwd — the auto-load
+    # list may name any file the user wants, anywhere on the host.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "elsewhere" / "EXTERNAL.md"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("External doc", encoding="utf-8")
+    manager = _project_manager(fragments, tmp_path)
+    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project(repo, [str(outside)])
+
+    prompt = manager.build_system_prompt(agent, project_context=context)
+
+    assert "External doc" in prompt
+    assert f'<file name="{outside}">' in prompt
+
+
 def test_render_project_files_collapses_to_empty_without_files(
     fragments: dict[str, str],
     tmp_path: Path,
