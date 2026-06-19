@@ -542,7 +542,7 @@ def _create_wakeword_bridge(
 ) -> Any:
     """Create the DesktopBridge with engine and worker for the wakeword pipeline.
 
-    Uses MockWakewordEngine when --mock-wakeword is set or when openWakeWord
+    Uses MockWakewordWorker when --mock-wakeword is set or when openWakeWord
     cannot be imported. Returns the bridge instance (never None — the bridge
     always exists so the WebUI can query capabilities).
     """

@@ -1052,15 +1052,6 @@ def _validate_string_list(diagnostics: list[JsonDiagnostic], path: str, value: A
             _error(diagnostics, f"{path}[{index}]", "must be a string")
 
 
-def _validate_integer_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
-    if not isinstance(value, list):
-        _error(diagnostics, path, "must be a list of integers")
-        return
-    for index, item in enumerate(value):
-        if isinstance(item, bool) or not isinstance(item, int):
-            _error(diagnostics, f"{path}[{index}]", "must be an integer")
-
-
 def _validate_regex_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
     if not isinstance(value, list):
         _error(diagnostics, path, "must be a list of regex strings")

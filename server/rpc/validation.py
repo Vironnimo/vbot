@@ -87,28 +87,6 @@ def _required_bool(params: JsonObject, key: str) -> bool:
     return value
 
 
-def _required_integer_list(params: JsonObject, key: str) -> list[int]:
-    value = params.get(key)
-    if not isinstance(value, list):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a list of integers")
-
-    parsed: list[int] = []
-    for item in value:
-        if not isinstance(item, int) or isinstance(item, bool):
-            raise RpcError(
-                RPC_ERROR_INVALID_REQUEST,
-                f"params.{key} must be a list of integers",
-            )
-        parsed.append(item)
-    return parsed
-
-
-def _optional_integer_list(params: JsonObject, key: str, *, default: list[int]) -> list[int]:
-    if key not in params:
-        return list(default)
-    return _required_integer_list(params, key)
-
-
 def _required_string_list(params: JsonObject, key: str) -> list[str]:
     value = params.get(key)
     if not isinstance(value, list):

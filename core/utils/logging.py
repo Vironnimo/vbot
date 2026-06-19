@@ -236,12 +236,6 @@ class DailyFileHandler(logging.FileHandler):
         self._active_date = self._current_date_provider()
         super().__init__(self._build_path(self._active_date), encoding=encoding)
 
-    @property
-    def current_path(self) -> Path:
-        """Return the currently open daily log file path."""
-
-        return Path(self.baseFilename)
-
     def emit(self, record: logging.LogRecord) -> None:
         """Write *record*, reopening the file if the date rolled over."""
 
