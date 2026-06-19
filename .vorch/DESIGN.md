@@ -349,10 +349,10 @@ Both: `surface-3` off-state, full `accent` on-state. White knob. Smooth 0.2s `le
 ### Dropdowns
 
 Two shared components, both **flat in `webui/src/components/`** — there is **no** `ui/Dropdown.svelte`, so don't go looking in `components/ui/` for them:
-- **Simple — `Dropdown.svelte`** — Absolute-positioned list below trigger. Uses `surface-2` + `border-2`. No filter; use for short option sets.
+- **Simple — `Dropdown.svelte`** — Portaled, fixed-positioned list anchored to the trigger. Uses `surface-2` + `border-2`. No filter; use for short option sets.
 - **Searchable — `SearchableDropdown.svelte`** — Fixed-positioned panel (escapes any `overflow: hidden` ancestor). Has a filter input header with a search icon; use for long lists (e.g. the model picker). Panel border uses accent tint `rgba(accent, 0.3)` to signal "elevated and interactive".
 
-Both share the same callback-prop contract (`value` in, `onValueChange(value, option)` out; `options` as strings or `{ value, label, disabled, secondaryLabel }`, plus `id`/`placeholder`/`disabled`/`ariaLabel`/`triggerClass`) and position through `lib/dropdownPanel.js`. Model dropdowns build their `options` from `lib/modelSelection.js` (`buildModelSelectOptions`), so a model picker is `SearchableDropdown` + that helper, not a bespoke control.
+Both share the same callback-prop contract (`value` in, `onValueChange(value, option)` out; `options` as strings or `{ value, label, disabled, secondaryLabel }`, plus `id`/`placeholder`/`disabled`/`ariaLabel`/`triggerClass`) and position through `lib/dropdownPanel.js`. **Both fit the viewport**: `computePanelPosition` flips the panel above the trigger when it would not fit below (and there is more room above), and caps its height to the room actually available on the chosen side (`optionsMaxHeight`, list scrolls internally) — so a picker near the bottom edge opens upward instead of spilling off-screen. This is a primitive-level behavior, not a per-call-site fix; the simple `Dropdown` additionally feeds its measured content height in so the flip triggers on actual fit. Model dropdowns build their `options` from `lib/modelSelection.js` (`buildModelSelectOptions`), so a model picker is `SearchableDropdown` + that helper, not a bespoke control.
 
 ### Modals
 

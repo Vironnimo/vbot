@@ -89,17 +89,26 @@
   }
 
   function updateListPosition() {
-    if (!isOpen || !triggerElement) {
+    if (!isOpen || !triggerElement || !listElement) {
       return;
     }
 
-    const { placement, left, width, verticalRule } =
-      computePanelPosition(triggerElement);
+    // Pass the natural content height so the panel flips above when it would
+    // not fit below, and cap it to the room actually available on the chosen
+    // side (with the list's own `overflow-y: auto`) so a trigger near the
+    // viewport edge never renders half its options off-screen.
+    const { placement, left, width, verticalRule, optionsMaxHeight } =
+      computePanelPosition(triggerElement, {
+        contentHeight: listElement.scrollHeight,
+      });
 
     listPlacement = placement;
-    listStyle = [`left: ${left}px`, verticalRule, `width: ${width}px`].join(
-      '; ',
-    );
+    listStyle = [
+      `left: ${left}px`,
+      verticalRule,
+      `width: ${width}px`,
+      `max-height: ${optionsMaxHeight}px`,
+    ].join('; ');
   }
 
   function handleDocumentMouseDown(event) {
