@@ -51,7 +51,7 @@ export function portal(node, target = document.body) {
  */
 export function computePanelPosition(
   triggerElement,
-  { reservedHeight = 0 } = {},
+  { reservedHeight = 0, contentHeight = null } = {},
 ) {
   const rect = triggerElement.getBoundingClientRect();
   const width = rect.width;
@@ -59,8 +59,17 @@ export function computePanelPosition(
   const availableBelow =
     window.innerHeight - rect.bottom - OFFSET - EDGE_PADDING;
   const availableAbove = rect.top - OFFSET - EDGE_PADDING;
+  // How tall the panel wants to be: the measured content (plus any reserved
+  // chrome such as a search header), capped to MAX_HEIGHT, when the caller can
+  // measure it; otherwise a fixed threshold. Flip above only when the panel
+  // does not fit below AND there is more room above — so a trigger near the
+  // viewport bottom opens upward instead of spilling off-screen.
+  const desiredHeight =
+    contentHeight != null
+      ? Math.min(contentHeight + reservedHeight, MAX_HEIGHT)
+      : FLIP_THRESHOLD;
   const useAbove =
-    availableBelow < FLIP_THRESHOLD && availableAbove > availableBelow;
+    availableBelow < desiredHeight && availableAbove > availableBelow;
 
   const available = useAbove ? availableAbove : availableBelow;
   const optionsMaxHeight = Math.max(
