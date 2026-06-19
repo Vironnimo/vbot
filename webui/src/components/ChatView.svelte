@@ -1474,7 +1474,7 @@
 >
   <ChatHeader
     agents={chatState.agents}
-    selectedAgentId={chatState.selectedAgentId}
+    selectedAgentId={projectAgentActive ? '' : chatState.selectedAgentId}
     loadingAgents={chatState.loadingAgents}
     {activeAgent}
     {activeSessionState}

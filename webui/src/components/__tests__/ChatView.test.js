@@ -2892,6 +2892,82 @@ describe('ChatView', () => {
     });
   });
 
+  it('keeps only one agent selected across both bars when switching between identity and project agents', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [{ agent_id: 'builder', display_name: 'Builder', model: 'm' }],
+        report: { clean: true, findings: [] },
+      },
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'builder-session',
+          created_at: '2026-06-01T00:00:00+00:00',
+          last_active_at: '2026-06-10T00:00:00+00:00',
+        },
+      ],
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'builder-session': [
+            {
+              id: 'builder-assistant-one',
+              role: 'assistant',
+              content: 'Builder project reply',
+            },
+          ],
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-view__project-team .agent-tab.active')
+          ?.textContent?.includes('Builder'),
+      100,
+    );
+
+    // Selecting the project agent must deselect the identity tab: exactly one
+    // active tab across both bars (regression — the identity tab used to stay
+    // highlighted because chatState.selectedAgentId is untouched).
+    let activeTabs = document.querySelectorAll('.agent-tab.active');
+    expect(activeTabs).toHaveLength(1);
+    expect(activeTabs[0].textContent).toContain('Builder');
+    expect(document.querySelector('.chat-header .agent-tab.active')).toBeNull();
+
+    // Switching back to the identity agent moves the single selection up to the
+    // header bar (the project team bar stays rendered but with no active tab).
+    document.querySelector('.chat-header .agent-tab').click();
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-header .agent-tab.active')
+          ?.textContent?.includes('Alpha'),
+      100,
+    );
+    activeTabs = document.querySelectorAll('.agent-tab.active');
+    expect(activeTabs).toHaveLength(1);
+    expect(activeTabs[0].textContent).toContain('Alpha');
+    expect(
+      document.querySelector('.chat-view__project-team .agent-tab.active'),
+    ).toBeNull();
+  });
+
   it('jumps to the first team member when the project has no default agent', async () => {
     showProjectMock.mockResolvedValue({
       project: { project_id: 'vbot', default_agent: '' },
