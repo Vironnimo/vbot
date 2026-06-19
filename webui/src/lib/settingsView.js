@@ -895,23 +895,6 @@ export function describeProvider(provider, translate) {
   );
 }
 
-export function normalizeSettingsForDisplay(settings, translate) {
-  return {
-    serverHostValue: formatServerHost(settings?.general?.server, translate),
-    dataDirectoryValue: getDataDirectoryValue(settings, translate),
-    defaultSkillDirectoryValue: getDefaultSkillDirectoryValue(
-      settings,
-      translate,
-    ),
-    skillDirectories: getSkillDirectories(settings),
-    subAgentSettings: normalizeSubAgentSettings(settings),
-    webSearchSettings: normalizeWebSearchSettings(settings),
-    providerItems: getProviderItems(settings),
-    availableLanguageOptions: buildLanguageOptions(settings?.appearance),
-    persistedLanguageId: getPersistedLanguageId(settings),
-  };
-}
-
 function textOrEmpty(value) {
   if (value === null || value === undefined) {
     return '';
