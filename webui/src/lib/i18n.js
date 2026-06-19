@@ -2,11 +2,6 @@ const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
   'app.title': 'vBot',
-  'app.eyebrow': 'Local agent harness',
-  'app.subtitle': 'Chat with local-first agents through the vBot server.',
-  'app.loading': 'Loading vBot…',
-  'app.ready': 'Ready',
-  'app.offline': 'Server connection unavailable',
 
   'navigation.primary': 'Primary navigation',
   'navigation.sections': 'Sections',
@@ -20,7 +15,6 @@ export const englishCatalog = Object.freeze({
   'navigation.statistics': 'Statistics',
   'navigation.debug': 'Debug',
 
-  'common.archive': 'Archive',
   'common.alreadySaved': 'Already saved',
   'common.back': 'Back',
   'common.cancel': 'Cancel',
@@ -30,40 +24,28 @@ export const englishCatalog = Object.freeze({
   'common.copy': 'Copy',
   'common.create': 'Create',
   'common.delete': 'Delete',
-  'common.dismiss': 'Dismiss',
   'common.edit': 'Edit',
   'common.loading': 'Loading…',
   'common.new': 'New',
-  'common.optional': 'Optional',
   'common.refresh': 'Refresh',
   'common.remove': 'Remove',
   'common.retry': 'Retry',
   'common.save': 'Save',
   'common.saved': 'Saved',
   'common.saving': 'Saving…',
-  'common.send': 'Send',
   'common.unknown': 'Unknown',
 
-  'loading.initial': 'Preparing the WebUI…',
   'loading.agents': 'Loading agents…',
   'loading.history': 'Loading chat history…',
-  'loading.sending': 'Sending message…',
-  'loading.cancelling': 'Cancelling run…',
-  'loading.reconnecting': 'Reconnecting…',
 
   'errors.generic': 'Something went wrong. Try again.',
   'errors.network':
     'Network request failed. Check that the vBot server is running.',
-  'errors.rpc': 'The server rejected the request.',
-  'errors.notFound': 'The requested item was not found.',
   'errors.validation': 'Check the highlighted fields and try again.',
   'errors.streamClosed': 'The live stream closed before the run finished.',
-  'errors.activeRun': 'That chat already has an active run.',
   'errors.minimumAgents': 'At least one agent must remain.',
-  'errors.unknownMethod': 'The requested server method is not available.',
 
   'chat.title': 'Chat',
-  'chat.subtitle': 'Select an agent and continue its active session.',
   'chat.selectAgent': 'Select agent',
   'chat.noAgentSelected': 'Choose an agent to start chatting.',
   'chat.noAgents': 'No agents are available yet.',
@@ -73,9 +55,7 @@ export const englishCatalog = Object.freeze({
   'chat.historyEmpty': 'No messages yet. Send the first message to this agent.',
   'chat.composerLabel': 'Message',
   'chat.composerPlaceholder': 'Ask this agent to do something…',
-  'chat.composer.placeholder': 'Enter message…',
   'chat.sendMessage': 'Send message',
-  'chat.send': 'Send',
   'chat.queueMessage': 'Queue message',
   'chat.attachment.addFile': 'Add file',
   'chat.attachment.uploading': 'Uploading…',
@@ -90,16 +70,11 @@ export const englishCatalog = Object.freeze({
   'chat.voice.stopRecording': 'Stop recording',
   'chat.voice.startFailed': 'Microphone recording could not start.',
   'chat.voice.transcriptionFailed': 'Speech transcription failed.',
-  'chat.messageQueued': 'Message queued for the next run.',
   'chat.cancelRun': 'Cancel run',
-  'chat.cancelRunDescription': 'Stop the active run as soon as possible.',
   'chat.cancelToolCall': 'Cancel',
   'chat.cancelToolCallAria': 'Cancel running tool call',
   'chat.cancelSubAgent': 'Cancel',
   'chat.cancelSubAgentAria': 'Cancel running sub-agent',
-  'chat.streamConnecting': 'Connecting to live run…',
-  'chat.streamConnected': 'Live run connected',
-  'chat.streamDisconnected': 'Live run disconnected',
   'chat.historyLoadError': 'Chat history could not be loaded.',
   'chat.sendError': 'Message could not be sent.',
   'chat.skillsLoadError': 'Skill suggestions could not be loaded.',
@@ -114,7 +89,6 @@ export const englishCatalog = Object.freeze({
   'chat.event.thinking': 'Thinking',
   'chat.event.toolStarted': 'Tool started',
   'chat.event.toolResult': 'Tool result',
-  'chat.event.assistantOutput': 'Assistant output',
   'chat.modelFallbackActivated': 'Switched to {model}',
   'chat.interrupted': 'Response interrupted — the next turn continues it.',
   'chat.event.completed': 'Run completed',
@@ -129,9 +103,6 @@ export const englishCatalog = Object.freeze({
   'chat.runStatus.cancelled': 'Cancelled',
   'chat.today': 'Today',
   'chat.historyEmptyTitle': 'No messages yet',
-  'chat.empty.title': 'No messages yet',
-  'chat.empty.subtitle': 'Send a message to start the conversation.',
-  'chat.toolDone': 'done',
   'chat.toolSucceeded': 'succeeded',
   'chat.toolFailed': 'failed',
   'chat.toolArgs': 'Args',
@@ -185,11 +156,7 @@ export const englishCatalog = Object.freeze({
   'sessions.no_sessions': 'No sessions found for this agent.',
   'sessions.current': 'Current',
   'sessions.last_active': 'Last active',
-  'sessions.link_to_channel': 'Link to channel',
   'sessions.link_channel_id': 'Channel ID',
-  'sessions.link_platform_conv_id': 'Platform conversation ID',
-  'sessions.link_confirm': 'Link session',
-  'sessions.link_success': 'Session linked to channel.',
   'sessions.platform_telegram': 'Telegram',
   'sessions.source_channel': 'Source channel',
   'sessions.subagent_parent': 'Parent',
@@ -200,10 +167,8 @@ export const englishCatalog = Object.freeze({
   'skillAutocomplete.noDescription': 'No description available',
 
   'queue.title': 'Queued messages',
-  'queue.empty': 'No queued messages.',
   'queue.pending': 'Waiting for the active run to finish.',
   'queue.removeMessage': 'Remove queued message',
-  'queue.nextMessage': 'Next queued message',
   'queue.count': '{count} queued',
   'queue.editMessage': 'Edit queued message',
   'queue.saveEdit': 'Save',
@@ -212,26 +177,16 @@ export const englishCatalog = Object.freeze({
   'queue.removeError': 'Queued message could not be removed.',
   'queue.syncError': 'Queued messages could not be synced.',
 
-  'cancel.title': 'Cancel active run?',
-  'cancel.description':
-    'Cancellation is best-effort. Output already shown will remain visible.',
   'cancel.confirm': 'Cancel run',
   'cancel.cancelling': 'Cancelling run…',
-  'cancel.cancelled': 'Run cancelled',
 
   'agents.title': 'Agents',
-  'agents.subtitle':
-    'Create and maintain the agent configurations used by chat.',
-  'agents.listTitle': 'Available agents',
   'agents.loading': 'Loading agents…',
   'agents.empty': 'No agents found.',
   'agents.create': 'Create agent',
-  'agents.edit': 'Edit agent',
   'agents.delete': 'Delete agent',
   'agents.deleteDisabledMinimum': 'The last remaining agent cannot be deleted.',
   'agents.deleteConfirmTitle': 'Delete {name}?',
-  'agents.deleteConfirmMessage':
-    'The agent will be archived and its sessions will remain on disk.',
   'agents.created': 'Agent created.',
   'agents.updated': 'Agent updated.',
   'agents.deleted': 'Agent deleted.',
@@ -250,7 +205,6 @@ export const englishCatalog = Object.freeze({
   'agents.form.customSystemPrompt': 'Custom system prompt',
   'agents.form.memoryPromptMode': 'Memory',
   'agents.form.idHelp': 'Agent IDs are immutable after creation.',
-  'agents.form.listHelp': 'Enter one item per line.',
   'agents.form.modelPlaceholder': 'Default (no model selected)',
   'agents.form.fallbackModelPlaceholder': 'None',
   'agents.form.modelUnavailableOption': 'Unavailable / custom: {model}',
@@ -271,7 +225,6 @@ export const englishCatalog = Object.freeze({
   'agents.form.memoryPromptModeOption.agent_user': 'MEMORY.md + USER.md',
   'agents.form.workspaceAssignedByServer':
     'Workspace is assigned by the server when the agent is created.',
-  'agents.form.workspaceReadOnly': 'Workspace is read-only in this WebUI.',
   'agents.form.submitCreate': 'Create agent',
   'agents.form.submitUpdate': 'Save changes',
   'agents.form.required': 'This field is required.',
@@ -279,8 +232,6 @@ export const englishCatalog = Object.freeze({
   'agents.detail.idValue': 'id: {id}',
   'agents.detail.identity': 'Identity',
   'agents.detail.model': 'Model',
-  'agents.detail.fallbackStatus': 'Fallback',
-  'agents.detail.thinkingStatus': 'Thinking',
   'agents.detail.systemPrompt': 'System Prompt',
   'agents.detail.access': 'Access',
   'agents.detail.metadata': 'Metadata',
@@ -323,8 +274,6 @@ export const englishCatalog = Object.freeze({
   'cron.status.failed': 'Failed',
   'cron.notAvailable': '—',
   'cron.systemDefault': 'System default',
-  'cron.actions.enable': 'Enable',
-  'cron.actions.disable': 'Disable',
   'cron.actions.enableJob': 'Enable job {id}',
   'cron.actions.disableJob': 'Disable job {id}',
   'cron.actions.editJob': 'Edit job {id}',
@@ -382,13 +331,8 @@ export const englishCatalog = Object.freeze({
   'projects.add.displayNamePlaceholder':
     'Optional — defaults to the folder name',
   'projects.add.defaultAgent': 'Default agent',
-  'projects.add.defaultAgentPlaceholder': 'Optional',
   'projects.add.defaultModel': 'Default model',
-  'projects.add.defaultModelPlaceholder': 'Optional',
   'projects.add.autoLoad': 'Auto-load files',
-  'projects.add.autoLoadPlaceholder': 'One path per line',
-  'projects.add.autoLoadHelp':
-    'Files loaded into context when a project session opens. One path per line.',
   'projects.add.open': 'Add project',
   'projects.add.submit': 'Add project',
   'projects.add.submitting': 'Adding project…',
@@ -396,11 +340,8 @@ export const englishCatalog = Object.freeze({
   'projects.add.error': 'Project could not be added.',
   'projects.add.success': 'Project added.',
   'projects.list.title': 'Your projects',
-  'projects.list.cwd': 'Path',
   'projects.list.defaultAgent': 'Default agent',
   'projects.list.defaultModel': 'Default model',
-  'projects.list.team': 'Team',
-  'projects.list.teamCount': '{count} agents',
   'projects.list.none': '—',
   'projects.manage': 'Manage',
   'projects.manage.title': 'Manage {name}',
@@ -431,8 +372,6 @@ export const englishCatalog = Object.freeze({
   'projects.team.title': 'Team',
   'projects.team.empty':
     'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
-  'projects.team.model': 'Model',
-  'projects.team.source': 'Source',
   'projects.team.noModel': 'No model',
   'projects.report.title': 'Scan report',
   'projects.report.clean': 'No issues found in this repository.',
@@ -455,12 +394,7 @@ export const englishCatalog = Object.freeze({
   'projects.rePoint.success': 'Project re-pointed.',
 
   'systemPrompt.title': 'System Prompt',
-  'systemPrompt.subtitle':
-    'Review how prompt pieces will be managed in a later phase.',
   'systemPrompt.comingSoon': 'Editable prompt pieces are coming soon.',
-  'systemPrompt.description':
-    'The current minimal WebUI uses the server-managed system prompt.',
-  'systemPrompt.pieces': 'Prompt pieces',
   'systemPrompt.scope.label': 'Prompt scope',
   'systemPrompt.scope.default': 'Default',
   'systemPrompt.fragmentEditor.save': 'Save',
@@ -485,14 +419,10 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.error.copyFailed': 'Failed to copy',
 
   'settings.title': 'Settings',
-  'settings.subtitle': 'Runtime and WebUI settings will live here.',
   'settings.comingSoon': 'Settings controls are coming soon.',
   'settings.loading': 'Loading settings…',
   'settings.loadError': 'Settings could not be loaded.',
   'settings.saveError': 'Settings could not be saved.',
-  'settings.serverStatus': 'Server status',
-  'settings.modelDefaults': 'Model defaults',
-  'settings.preferences': 'Preferences',
   'settings.sections': 'Settings sections',
   'settings.placeholder': 'Placeholder',
   'settings.general.title': 'General',
@@ -518,7 +448,6 @@ export const englishCatalog = Object.freeze({
   'settings.defaults.temperature': 'Temperature',
   'settings.defaults.temperatureDescription':
     'Used when an agent temperature is unset.',
-  'settings.defaults.clearTemperature': 'Clear default temperature',
   'settings.defaults.thinkingEffort': 'Thinking effort',
   'settings.defaults.thinkingEffortDescription':
     'Used when an agent thinking effort is unset.',
@@ -655,7 +584,6 @@ export const englishCatalog = Object.freeze({
     'OAuth device authorization managed by the provider.',
   'settings.providers.oauthTokenDescription':
     'OAuth token configured from environment or data directory.',
-  'settings.providers.device_flow.eyebrow': 'OAuth',
   'settings.providers.device_flow.title': 'Connect {provider}',
   'settings.providers.device_flow.instructions':
     'Enter this code at the link below:',
@@ -666,7 +594,6 @@ export const englishCatalog = Object.freeze({
     'Device code could not be copied.',
   'settings.providers.device_flow.waiting':
     'Waiting for {provider} authorization…',
-  'settings.providers.device_flow.cancel': 'Cancel',
   'settings.providers.device_flow.success_toast':
     '{provider} connected successfully',
   'settings.providers.device_flow.error_toast':
@@ -831,7 +758,6 @@ export const englishCatalog = Object.freeze({
   'debug.status': 'Status',
   'debug.statusCount': 'Traces: {count} / {limit}',
   'debug.traceList': 'Traces',
-  'debug.traceDetail': 'Trace Detail',
   'debug.modelProbe': 'Model Probe',
 
   'debug.settings': 'Debug',
@@ -840,8 +766,6 @@ export const englishCatalog = Object.freeze({
   'debug.traceLimit': 'Trace limit',
   'debug.localWarning':
     'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
-
-  'debug.clearing': 'Clearing\u2026',
 
   'debug.request': 'Request',
   'debug.requestMethod': 'Method',
@@ -854,7 +778,6 @@ export const englishCatalog = Object.freeze({
   'debug.responseBody': 'Body',
   'debug.streamRaw': 'Raw',
   'debug.streamParsed': 'Parsed',
-  'debug.normalizedData': 'Normalized Data',
 
   'debug.metadata': 'Metadata',
 
@@ -884,10 +807,8 @@ export const englishCatalog = Object.freeze({
 
   'status.connected': 'Connected',
   'status.activeRun': 'active run',
-  'status.medium': 'medium',
   'status.notReachable': 'Not reachable',
   'status.reconnecting': 'Reconnecting…',
-  'status.inactive': 'Inactive',
 
   'settings.voice.title': 'Voice',
   'settings.voice.subtitle': 'Wakeword detection and voice command settings.',
@@ -1028,7 +949,6 @@ export const englishCatalog = Object.freeze({
   'statistics.limits.loadError': 'Usage limits could not be loaded.',
   'statistics.limits.empty': 'No subscription providers connected.',
   'statistics.limits.unavailable': 'Usage unavailable',
-  'statistics.limits.plan': 'Plan',
   'statistics.limits.usedPercent': '{percent}% used',
   'statistics.limits.resetsIn': 'Resets in {duration}',
 });

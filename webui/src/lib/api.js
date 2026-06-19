@@ -7,7 +7,6 @@ const RPC_ENDPOINT = '/api/rpc';
 const ATTACHMENT_UPLOAD_ENDPOINT = '/api/upload';
 const ATTACHMENT_BASE_ENDPOINT = '/api/attachments';
 const SPEECH_TRANSCRIBE_ENDPOINT = '/api/speech/transcribe';
-const SPEECH_SYNTHESIZE_ENDPOINT = '/api/speech/synthesize';
 const WEBSOCKET_ENDPOINT = '/ws';
 const LOGS_WEBSOCKET_ENDPOINT = '/ws/logs';
 
@@ -247,10 +246,6 @@ export async function uploadAttachment(file, options = {}) {
   };
 }
 
-export function getTaskModelSettings(options = {}) {
-  return rpc('task_model.settings', {}, options);
-}
-
 export function updateTaskModelSettings(modelTasks, options = {}) {
   if (!isPlainObject(modelTasks)) {
     throw new ApiClientError(
@@ -364,69 +359,6 @@ export async function transcribeSpeech(audioBlob, options = {}) {
     );
   }
   return payload;
-}
-
-export async function synthesizeSpeech(text, options = {}) {
-  if (!isNonEmptyString(text)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Text must be a non-empty string',
-      {
-        method: 'speech.synthesize',
-      },
-    );
-  }
-
-  const fetchFunction = options.fetch ?? globalThis.fetch;
-  if (typeof fetchFunction !== 'function') {
-    throw new ApiClientError(RPC_ERROR_NETWORK, 'fetch is not available', {
-      method: 'speech.synthesize',
-    });
-  }
-
-  let response;
-  try {
-    response = await fetchFunction(
-      buildHttpUrl(
-        options.synthesizePath ?? SPEECH_SYNTHESIZE_ENDPOINT,
-        options.baseUrl,
-      ),
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(options.headers ?? {}),
-        },
-        body: JSON.stringify({ text }),
-        signal: options.signal,
-      },
-    );
-  } catch (error) {
-    throw new ApiClientError(
-      RPC_ERROR_NETWORK,
-      'Speech synthesis failed before a response arrived',
-      {
-        method: 'speech.synthesize',
-        cause: error,
-      },
-    );
-  }
-
-  if (!response.ok) {
-    const payload = await readOptionalJsonHttpPayload(response);
-    throw new ApiClientError(
-      RPC_ERROR_HTTP,
-      isNonEmptyString(payload?.detail)
-        ? payload.detail
-        : `Speech synthesis failed with HTTP ${response.status}`,
-      {
-        method: 'speech.synthesize',
-        status: response.status,
-        details: isPlainObject(payload) ? payload : null,
-      },
-    );
-  }
-  return response.blob();
 }
 
 export function getAttachmentUrl(attachmentId) {
@@ -841,48 +773,6 @@ export function linkSessionToChannel(
   );
 }
 
-export function listChannels(options = {}) {
-  return rpc('channel.list', {}, options);
-}
-
-export function createChannel(payload = {}, options = {}) {
-  if (!isPlainObject(payload)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Channel payload must be an object',
-      {
-        method: 'channel.create',
-      },
-    );
-  }
-
-  return rpc('channel.create', payload, options);
-}
-
-export function updateChannel(channelId, payload = {}, options = {}) {
-  if (!isNonEmptyString(channelId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Channel id must be a non-empty string',
-      {
-        method: 'channel.update',
-      },
-    );
-  }
-
-  if (!isPlainObject(payload)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Channel payload must be an object',
-      {
-        method: 'channel.update',
-      },
-    );
-  }
-
-  return rpc('channel.update', { ...payload, id: channelId }, options);
-}
-
 export function deleteChannel(channelId, options = {}) {
   if (!isNonEmptyString(channelId)) {
     throw new ApiClientError(
@@ -895,48 +785,6 @@ export function deleteChannel(channelId, options = {}) {
   }
 
   return rpc('channel.delete', { id: channelId }, options);
-}
-
-export function enableChannel(channelId, options = {}) {
-  if (!isNonEmptyString(channelId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Channel id must be a non-empty string',
-      {
-        method: 'channel.enable',
-      },
-    );
-  }
-
-  return rpc('channel.enable', { id: channelId }, options);
-}
-
-export function disableChannel(channelId, options = {}) {
-  if (!isNonEmptyString(channelId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Channel id must be a non-empty string',
-      {
-        method: 'channel.disable',
-      },
-    );
-  }
-
-  return rpc('channel.disable', { id: channelId }, options);
-}
-
-export function getChannelStatus(channelId, options = {}) {
-  if (!isNonEmptyString(channelId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Channel id must be a non-empty string',
-      {
-        method: 'channel.status',
-      },
-    );
-  }
-
-  return rpc('channel.status', { id: channelId }, options);
 }
 
 export async function connectProvider(
@@ -960,18 +808,6 @@ export async function disconnectProvider(
   return (options.rpc ?? rpc)(
     'provider.disconnect',
     buildProviderDisconnectPayload(providerId, connectionId, account),
-  );
-}
-
-export async function getProviderConnectionStatus(
-  providerId,
-  connectionId,
-  account = undefined,
-  options = {},
-) {
-  return (options.rpc ?? rpc)(
-    'provider.connection_status',
-    buildProviderConnectPayload(providerId, connectionId, account),
   );
 }
 
@@ -1248,14 +1084,6 @@ async function readJsonHttpPayload(response, method) {
         cause: error,
       },
     );
-  }
-}
-
-async function readOptionalJsonHttpPayload(response) {
-  try {
-    return await response.json();
-  } catch {
-    return null;
   }
 }
 

@@ -97,12 +97,6 @@ export async function getDesktopCapabilities() {
   }
 }
 
-/** True when the bridge reports wakeword capability. */
-export async function hasWakeword() {
-  const caps = await getDesktopCapabilities();
-  return Boolean(caps?.wakeword);
-}
-
 /** Fetch the current wakeword status from the bridge. */
 export async function getWakewordStatus() {
   try {
