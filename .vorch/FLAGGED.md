@@ -200,3 +200,8 @@ wired-up scaffolding — its own docstring says "a later phase calls this from t
 point", but nothing in product code ever invokes it (tests only). Either connect it to the
 visiting-project entry point or remove it. Kept for now pending a decision on whether the
 project-visiting feature is still coming.
+
+**Resolved 2026-06-19:** connected (feature is coming). The chat loop now wires the trigger
+(`_inject_visiting_projects`): on an identity session, a file tool reaching into a registered
+project's repo by absolute path injects that project's files once per project per session.
+See `chat.md` → Project scoping and the GLOSSARY "Visiting" entry.
