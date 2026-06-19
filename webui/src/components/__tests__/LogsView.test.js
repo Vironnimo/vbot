@@ -372,7 +372,8 @@ describe('LogsView', () => {
       configurable: true,
     });
 
-    const rawLine = '2026-05-11 09:00:00 [INFO] vbot.core - Ready - with - dashes';
+    const rawLine =
+      '2026-05-11 09:00:00 [INFO] vbot.core - Ready - with - dashes';
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11'],
       default_file: '2026-05-11',

@@ -131,10 +131,14 @@ describe('cron agent option re-exports', () => {
   });
 
   it('still inserts group headers under the cron names', () => {
-    const options = buildCronAgentDropdownOptions(identityAgents, projectTeams, {
-      identityGroupLabel: 'Identity agents',
-      projectGroupLabel: 'Project agents',
-    });
+    const options = buildCronAgentDropdownOptions(
+      identityAgents,
+      projectTeams,
+      {
+        identityGroupLabel: 'Identity agents',
+        projectGroupLabel: 'Project agents',
+      },
+    );
     expect(options.filter((o) => o.isGroupHeader).map((o) => o.label)).toEqual([
       'Identity agents',
       'Project agents',
