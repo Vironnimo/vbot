@@ -4,11 +4,11 @@ Bootstrap entry point. Wires services and manages start/stop lifecycle.
 
 ## Interfaces
 
-`core/runtime/interfaces.py` — `typing.Protocol` DI contracts. Only `ConfigProtocol` is constructor-injected; the rest are structural typings used for DI/testing. `core/runtime/__init__.py` re-exports the protocol set plus the `Runtime` class — all protocols except `ProviderCredentialResolverProtocol`.
+`core/runtime/interfaces.py` — `typing.Protocol` DI contracts. Only `ConfigProtocol` is constructor-injected; the rest are structural typings used for DI/testing. `core/runtime/__init__.py` re-exports `ConfigProtocol`, `LoggerProtocol`, and `RuntimeServices` plus the `Runtime` class; `ProviderCredentialResolverProtocol` is imported directly from `interfaces.py` where needed, not re-exported.
 
 - `ConfigProtocol` — `get(key: str, default: Any = None) -> Any` (the one injected dependency).
 - `LoggerProtocol` — `debug/info/warning/error(msg, *args)`; types the public `logger` attribute.
-- Registry/store protocols: `ProviderRegistryProtocol`, `ModelRegistryProtocol`, `ProviderCredentialResolverProtocol`, `StorageManagerProtocol`, `AgentStoreProtocol`, `ToolRegistryProtocol`, `SkillRegistryProtocol`, `ChatSessionManagerProtocol`.
+- `ProviderCredentialResolverProtocol` — `has_credentials` / `get_credentials` / `list_accounts` / `resolve_account_id`; the central provider-credential access contract (`RuntimeServices.provider_credentials`).
 - `RuntimeServices` — the service surface of a *started* runtime as consumed by core modules that genuinely need the whole runtime handle (chat loop, tool dispatch, sub-agent coordination). Read-only properties `agents`, `providers`, `models`, `provider_credentials`, `storage`, `chat_sessions`, `chat_run_manager`, `tools`, `skills`, `extensions` (`ExtensionRegistry | None`), `system_prompts`, `process_manager`, `streaming_chat_loop`, plus `get_adapter(provider_id, connection_id)`. A missing attribute is a wiring bug, not a silently disabled feature — consumers access services directly, never via `getattr` probes. The heavy service types are imported under `TYPE_CHECKING` only, and consumers must likewise import `RuntimeServices` under `TYPE_CHECKING` (a runtime import of `core.runtime` loads `Runtime` and everything behind it — import cycle).
 
 ## Runtime class
