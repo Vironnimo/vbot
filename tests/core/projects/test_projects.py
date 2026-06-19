@@ -14,6 +14,7 @@ from core.projects.projects import (
     ProjectError,
     build_project,
     project_from_dict,
+    seed_default_auto_load,
 )
 
 
@@ -54,6 +55,24 @@ def test_build_project_rejects_empty_cwd() -> None:
 def test_build_project_rejects_non_string_auto_load_entry(tmp_path: Path) -> None:
     with pytest.raises(ProjectError):
         build_project("vbot", "vBot", tmp_path, auto_load=["AGENTS.md", 7])  # type: ignore[list-item]
+
+
+def test_seed_default_auto_load_seeds_agents_file_into_empty() -> None:
+    assert seed_default_auto_load(None) == ["AGENTS.md"]
+    assert seed_default_auto_load([]) == ["AGENTS.md"]
+
+
+def test_seed_default_auto_load_prepends_before_user_files() -> None:
+    assert seed_default_auto_load(["CONTEXT.md"]) == ["AGENTS.md", "CONTEXT.md"]
+
+
+def test_seed_default_auto_load_is_idempotent_case_insensitive() -> None:
+    # An already-named AGENTS.md (any case) is not duplicated; the user's spelling
+    # and ordering survive untouched. A path-qualified agents.md is a different file,
+    # so the root convention is still seeded ahead of it.
+    assert seed_default_auto_load(["AGENTS.md", "CONTEXT.md"]) == ["AGENTS.md", "CONTEXT.md"]
+    assert seed_default_auto_load(["agents.md"]) == ["agents.md"]
+    assert seed_default_auto_load(["docs/agents.md"]) == ["AGENTS.md", "docs/agents.md"]
 
 
 def test_build_project_preserves_explicit_timestamps(tmp_path: Path) -> None:

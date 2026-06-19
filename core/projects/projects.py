@@ -4,8 +4,10 @@ This is the public/main file of the ``core/projects`` deep module. A Project is
 a first-class entity (see GLOSSARY → Project): a stable ``project_id`` slug, a
 changeable ``display_name``, the repo ``cwd`` that tools resolve relative paths
 against, optional project-default agent/model pointers, and an ordered
-``auto_load`` file list. The minimal valid Project is just a cwd — team,
-AGENTS.md, and auto-load files are all optional.
+``auto_load`` file list. The minimal valid Project is just a cwd — team and
+auto-load files are optional. ``AGENTS.md`` (the tool-neutral project-instruction
+convention) is seeded as the first ``auto_load`` entry at creation, then a normal
+removable entry — vBot does not special-case it at render time.
 
 Field rules are enforced once by ``core.settings.validate_project_data`` at load
 time (the central validator), the same way Agents validate through the settings
@@ -25,6 +27,29 @@ from core.settings import is_valid_project_id
 
 DEFAULT_DEFAULT_AGENT = ""
 DEFAULT_DEFAULT_MODEL = ""
+
+# The tool-neutral project-instruction convention (the agents.md standard). Seeded
+# as the first ``auto_load`` entry when a project is created
+# (:func:`seed_default_auto_load`, used by ``ProjectStore.create``), then treated
+# like any other list entry — removable, reorderable, rendered only through the
+# list. CLAUDE.md and other tool-specific files are deliberately not seeded; the
+# user adds those explicitly.
+PROJECT_AGENTS_FILE = "AGENTS.md"
+
+
+def seed_default_auto_load(auto_load: list[str] | None) -> list[str]:
+    """Return the ``auto_load`` list a brand-new project starts with.
+
+    Seeds :data:`PROJECT_AGENTS_FILE` as the first entry unless the caller already
+    named it (case-insensitive — the file may live on a case-insensitive
+    filesystem). **Creation-only:** editing a project must never re-seed, so a user
+    who removes AGENTS.md keeps it removed; only ``ProjectStore.create`` calls this.
+    """
+    existing = list(auto_load or [])
+    target = PROJECT_AGENTS_FILE.casefold()
+    if any(entry.strip().casefold() == target for entry in existing):
+        return existing
+    return [PROJECT_AGENTS_FILE, *existing]
 
 
 class ProjectError(ValueError):

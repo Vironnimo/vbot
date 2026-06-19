@@ -2,7 +2,7 @@
 
 A *visiting* identity agent stays home (cwd unchanged) but reaches into a
 registered project's repo by absolute path. When a file tool does so, the chat
-loop injects that project's house-rules (AGENTS.md + auto-load) as a
+loop injects that project's auto-load house-rules (AGENTS.md seeded first) as a
 ``<system-reminder>`` — once per project per session, recorded in the session
 meta. These tests cover the pure detection helpers plus the end-to-end loop
 wiring; the reminder *mechanism* itself lives in ``test_chat_prompt``.
@@ -61,7 +61,7 @@ def _visiting_runtime(tmp_path: Path, repo: Path, adapter: StubAdapter) -> Any:
         adapter=adapter,
         tools=_read_tool_registry(),
         projects=StubProjects(
-            {"vbot": StubProject(project_id="vbot", cwd=str(repo), auto_load=[])}
+            {"vbot": StubProject(project_id="vbot", cwd=str(repo), auto_load=["AGENTS.md"])}
         ),
     )
 

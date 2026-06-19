@@ -19,11 +19,6 @@ from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 
-# Auto-loaded before any user-configured project file: the open, tool-neutral
-# project-instruction standard. CLAUDE.md is deliberately ignored (Claude-Code
-# specific); only AGENTS.md is implicit, the rest the user adds explicitly.
-PROJECT_AGENTS_FILE = "AGENTS.md"
-
 EDITABLE_PROMPT_FRAGMENT_NAMES = (
     "system.md",
     "runtime.md",
@@ -106,8 +101,8 @@ class ProjectPromptContext:
     Passed explicitly into ``build_system_prompt`` (and ``render_project_files``)
     so the prompt domain never imports project or agent classes — the caller (the
     chat loop) owns where ``cwd`` / ``auto_load`` come from. ``cwd`` is the project
-    repo root; ``auto_load`` is the user-ordered extra-file list (AGENTS.md is
-    prepended automatically, not part of this list).
+    repo root; ``auto_load`` is the project's ordered file list (AGENTS.md is seeded
+    into it as the first entry at project creation, not special-cased here).
     """
 
     cwd: Path
@@ -520,13 +515,15 @@ class SystemPromptManager:
     def render_project_files(self, project_context: ProjectPromptContext | None) -> str:
         """Render the project's auto-loaded files as ``<file>``-wrapped blocks.
 
-        AGENTS.md first (when present), then the ``auto_load`` files in list order;
-        each existing file wrapped exactly like ``{include}`` (one source of wrap
-        logic). Auto-load paths are taken verbatim — relative to the project cwd at
-        any subfolder depth, or absolute, with no location restriction (see
-        ``_read_project_file_block``). Lazy: returns ``""`` when there is no project
-        context or no readable file, so the placeholder collapses. No size limit,
-        truncation, or warning on large files — the technical user gets the file 1:1.
+        The ``auto_load`` files in list order. AGENTS.md is no longer special — it
+        is seeded as the first entry at project creation, so the list is the single
+        source of what loads. Each existing file wrapped exactly like ``{include}``
+        (one source of wrap logic). Auto-load paths are taken verbatim — relative to
+        the project cwd at any subfolder depth, or absolute, with no location
+        restriction (see ``_read_project_file_block``). Lazy: returns ``""`` when
+        there is no project context or no readable file, so the placeholder
+        collapses. No size limit, truncation, or warning on large files — the
+        technical user gets the file 1:1.
 
         This is the single render used both for ``{project_files}`` in the system
         prompt (project-born sessions) and for the visiting main agent's
@@ -535,9 +532,8 @@ class SystemPromptManager:
         if project_context is None:
             return ""
 
-        ordered_names: list[str] = [PROJECT_AGENTS_FILE, *project_context.auto_load]
         blocks: list[str] = []
-        for name in ordered_names:
+        for name in project_context.auto_load:
             block = self._read_project_file_block(project_context.cwd, name)
             if block is not None:
                 blocks.append(block)
@@ -559,8 +555,9 @@ class SystemPromptManager:
         try:
             content = file_path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            # Lazy: a configured-but-absent file (and the always-tried AGENTS.md) is
-            # normal — skip quietly so it does not warn every turn.
+            # Lazy: a configured-but-absent file is normal — including the seeded
+            # AGENTS.md before the repo actually has one — so skip quietly here
+            # rather than warn every turn.
             return None
         except (OSError, ValueError) as exc:
             # Present but unreadable for ANY reason — locked, no permission, a
