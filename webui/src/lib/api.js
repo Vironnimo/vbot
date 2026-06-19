@@ -714,65 +714,6 @@ export function updateQueueItem(
   );
 }
 
-export function linkSessionToChannel(
-  agentId,
-  sessionId,
-  channelId,
-  platformConvId,
-  options = {},
-) {
-  if (!isNonEmptyString(agentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent id must be a non-empty string',
-      {
-        method: 'session.link_channel',
-      },
-    );
-  }
-
-  if (!isNonEmptyString(sessionId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Session id must be a non-empty string',
-      {
-        method: 'session.link_channel',
-      },
-    );
-  }
-
-  if (!isNonEmptyString(channelId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Channel id must be a non-empty string',
-      {
-        method: 'session.link_channel',
-      },
-    );
-  }
-
-  if (!isNonEmptyString(platformConvId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Platform conversation id must be a non-empty string',
-      {
-        method: 'session.link_channel',
-      },
-    );
-  }
-
-  return rpc(
-    'session.link_channel',
-    {
-      agent_id: agentId,
-      session_id: sessionId,
-      channel_id: channelId,
-      platform_conv_id: platformConvId,
-    },
-    options,
-  );
-}
-
 export function deleteChannel(channelId, options = {}) {
   if (!isNonEmptyString(channelId)) {
     throw new ApiClientError(
