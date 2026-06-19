@@ -263,141 +263,19 @@ function cronJobTarget(job) {
   return formatAgentAddress(agentId, projectId);
 }
 
-// Build the combined cron agent dropdown: identity agents (bare ids, unchanged)
-// followed by project agents addressed as `agent@projekt`. The OPTION VALUE is
-// the address itself, so selecting a project member and saving sends that
-// address as the `agent_id` param of `cron.create/update` with no extra wiring;
-// an identity option's value stays the bare id, byte-identical to today.
-//
-// `identityAgents` is the `agent.list` projection (`{ id, name }`); `projectTeams`
-// is a list of `{ projectId, displayName, team: [{ agent_id, display_name }] }`
-// gathered lazily from `project.list` → `project.show`. The result is a flat
-// option list whose `group` discriminates identity vs. project for an optgroup-
-// style UI.
-export const CRON_AGENT_GROUP_IDENTITY = 'identity';
-export const CRON_AGENT_GROUP_PROJECT = 'project';
-
-export function buildCronAgentOptions(identityAgents, projectTeams) {
-  const options = [];
-
-  const identities = Array.isArray(identityAgents) ? identityAgents : [];
-  for (const agent of identities) {
-    const id = asText(agent?.id);
-    if (!id) {
-      continue;
-    }
-    options.push({
-      value: id,
-      label: asText(agent?.name) || id,
-      secondaryLabel: id,
-      group: CRON_AGENT_GROUP_IDENTITY,
-      projectId: null,
-    });
-  }
-
-  const teams = Array.isArray(projectTeams) ? projectTeams : [];
-  for (const project of teams) {
-    const projectId = asText(project?.projectId);
-    if (!projectId) {
-      continue;
-    }
-    const members = Array.isArray(project?.team) ? project.team : [];
-    for (const member of members) {
-      const bareId = asText(member?.agent_id);
-      if (!bareId) {
-        continue;
-      }
-      const address = formatAgentAddress(bareId, projectId);
-      options.push({
-        value: address,
-        label: address,
-        secondaryLabel:
-          asText(member?.display_name) ||
-          asText(project?.displayName) ||
-          bareId,
-        group: CRON_AGENT_GROUP_PROJECT,
-        projectId,
-      });
-    }
-  }
-
-  return options;
-}
-
-// Wrap `buildCronAgentOptions` for the Dropdown primitive: when BOTH identity and
-// project agents are present, insert non-selectable group-header rows ("Identity
-// agents" / "Project agents") so the two kinds are visually separated. With only
-// identity agents present (the common case, and the byte-identical-to-today
-// case) NO header is inserted, so the dropdown looks exactly as it did before
-// projects existed. Header labels are passed in already-translated (the lib
-// stays i18n-free).
-export function buildCronAgentDropdownOptions(
-  identityAgents,
-  projectTeams,
-  { identityGroupLabel = '', projectGroupLabel = '' } = {},
-) {
-  const options = buildCronAgentOptions(identityAgents, projectTeams);
-  const hasProjectOptions = options.some(
-    (option) => option.group === CRON_AGENT_GROUP_PROJECT,
-  );
-  if (!hasProjectOptions) {
-    return options;
-  }
-
-  const result = [];
-  let lastGroup = null;
-  for (const option of options) {
-    if (option.group !== lastGroup) {
-      const label =
-        option.group === CRON_AGENT_GROUP_PROJECT
-          ? projectGroupLabel
-          : identityGroupLabel;
-      result.push({
-        value: `__cron_group_${option.group}`,
-        label,
-        disabled: true,
-        isGroupHeader: true,
-      });
-      lastGroup = option.group;
-    }
-    result.push(option);
-  }
-  return result;
-}
-
-// Project a `project.show` response (`{ project, scan }`) plus the project id
-// into the `{ projectId, displayName, team }` entry `buildCronAgentOptions`
-// consumes. The team is read straight from `scan.team` (the repo is the source
-// of truth); only the bare `agent_id`/`display_name` the dropdown needs are
-// kept. An empty/bare project yields an empty team, which is normal.
-export function projectTeamEntry(projectId, showResponse) {
-  const id = asText(projectId);
-  const rawTeam = Array.isArray(showResponse?.scan?.team)
-    ? showResponse.scan.team
-    : [];
-  return {
-    projectId: id,
-    displayName: asText(showResponse?.project?.display_name) || id,
-    team: rawTeam
-      .map((member) => ({
-        agent_id: asText(member?.agent_id),
-        display_name: asText(member?.display_name) || asText(member?.agent_id),
-      }))
-      .filter((member) => member.agent_id.length > 0),
-  };
-}
-
-// The project ids to scan for teams, read from a `project.list` response. Lazy
-// scanning (one `project.show` per id on cron-modal open) avoids the N+1 scan on
-// every render flagged as a plan risk.
-export function projectIdsFromList(listResponse) {
-  const raw = Array.isArray(listResponse?.projects)
-    ? listResponse.projects
-    : [];
-  return raw
-    .map((project) => asText(project?.project_id))
-    .filter((projectId) => projectId.length > 0);
-}
+// The combined identity + project agent dropdown lives in the shared
+// `agentTargetOptions` module now that System Prompt previews reuse it. Cron
+// keeps its historical export names so callers and tests are unchanged: the
+// option VALUE is still the `agent@projekt` address (bare id for identity), so
+// saving sends it straight through as the `cron.create/update` `agent_id`.
+export {
+  buildAgentTargetOptions as buildCronAgentOptions,
+  buildAgentTargetDropdownOptions as buildCronAgentDropdownOptions,
+  projectTeamEntry,
+  projectIdsFromList,
+  AGENT_TARGET_GROUP_IDENTITY as CRON_AGENT_GROUP_IDENTITY,
+  AGENT_TARGET_GROUP_PROJECT as CRON_AGENT_GROUP_PROJECT,
+} from './agentTargetOptions.js';
 
 function normalizeScheduleType(value) {
   return value === CRON_SCHEDULE_TYPE_ONCE
