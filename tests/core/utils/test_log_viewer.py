@@ -42,6 +42,11 @@ def test_parse_log_entries_groups_multiline_continuations() -> None:
             "continuation": (
                 'Traceback (most recent call last):\n  File "server/app.py", line 10, in create_app'
             ),
+            "raw": (
+                "2026-05-11 09:00:00 [INFO] vbot.server.app - Server started\n"
+                "Traceback (most recent call last):\n"
+                '  File "server/app.py", line 10, in create_app'
+            ),
         },
         {
             "timestamp": "2026-05-11 09:00:01",
@@ -49,6 +54,7 @@ def test_parse_log_entries_groups_multiline_continuations() -> None:
             "logger_name": "vbot.server.app",
             "message": "Slow request",
             "continuation": "",
+            "raw": "2026-05-11 09:00:01 [WARN] vbot.server.app - Slow request",
         },
     ]
 
@@ -63,6 +69,7 @@ def test_parse_log_entries_keeps_orphan_lines_visible() -> None:
             "logger_name": "",
             "message": "orphan line",
             "continuation": "",
+            "raw": "orphan line",
         },
         {
             "timestamp": "2026-05-11 09:00:00",
@@ -70,8 +77,22 @@ def test_parse_log_entries_keeps_orphan_lines_visible() -> None:
             "logger_name": "vbot.core",
             "message": "Boom",
             "continuation": "",
+            "raw": "2026-05-11 09:00:00 [ERROR] vbot.core - Boom",
         },
     ]
+
+
+def test_parse_log_entries_captures_verbatim_raw_line() -> None:
+    source = "2026-05-11 09:00:00 [INFO] vbot.core - hello - world  "
+
+    entries = parse_log_entries(source)
+
+    # ``raw`` is the source line byte-for-byte (trailing spaces and the in-message
+    # " - " kept), so the UI can copy an entry 1:1 even though ``message`` is only
+    # the post-separator remainder and ``level`` is lower-cased for display.
+    assert entries[0]["raw"] == source
+    assert entries[0]["message"] == "hello - world  "
+    assert entries[0]["level"] == "info"
 
 
 def test_parse_log_entries_filters_routine_websocket_noise_but_keeps_real_transport_logs() -> None:
@@ -98,6 +119,7 @@ def test_parse_log_entries_filters_routine_websocket_noise_but_keeps_real_transp
             "logger_name": "vbot.server.uvicorn",
             "message": "keepalive ping timeout",
             "continuation": "",
+            "raw": "2026-05-11 09:00:04 [WARN] vbot.server.uvicorn - keepalive ping timeout",
         },
         {
             "timestamp": "2026-05-11 09:00:05",
@@ -105,6 +127,7 @@ def test_parse_log_entries_filters_routine_websocket_noise_but_keeps_real_transp
             "logger_name": "vbot.server.uvicorn",
             "message": "opening handshake failed",
             "continuation": "",
+            "raw": "2026-05-11 09:00:05 [ERROR] vbot.server.uvicorn - opening handshake failed",
         },
         {
             "timestamp": "2026-05-11 09:00:06",
@@ -112,6 +135,7 @@ def test_parse_log_entries_filters_routine_websocket_noise_but_keeps_real_transp
             "logger_name": "vbot.server.app",
             "message": "Ready",
             "continuation": "",
+            "raw": "2026-05-11 09:00:06 [INFO] vbot.server.app - Ready",
         },
     ]
 
@@ -158,6 +182,7 @@ def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
             "logger_name": "vbot.server.app",
             "message": "Server started",
             "continuation": "details line",
+            "raw": "2026-05-11 09:00:00 [INFO] vbot.server.app - Server started\ndetails line",
         },
         {
             "timestamp": "2026-05-11 09:00:01",
@@ -165,6 +190,7 @@ def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
             "logger_name": "vbot.core",
             "message": "Boom",
             "continuation": "",
+            "raw": "2026-05-11 09:00:01 [ERROR] vbot.core - Boom",
         },
     ]
     assert isinstance(result["cursor"], str)
@@ -201,6 +227,7 @@ def test_read_file_filters_persisted_websocket_noise(tmp_path: Path) -> None:
             "logger_name": "vbot.server.uvicorn",
             "message": "keepalive ping timeout",
             "continuation": "",
+            "raw": "2026-05-11 09:00:04 [WARN] vbot.server.uvicorn - keepalive ping timeout",
         },
         {
             "timestamp": "2026-05-11 09:00:05",
@@ -208,6 +235,7 @@ def test_read_file_filters_persisted_websocket_noise(tmp_path: Path) -> None:
             "logger_name": "vbot.server.app",
             "message": "Ready",
             "continuation": "",
+            "raw": "2026-05-11 09:00:05 [INFO] vbot.server.app - Ready",
         },
     ]
 
@@ -278,6 +306,7 @@ async def test_subscribe_replays_entries_appended_after_read_handoff(tmp_path: P
                 "logger_name": "vbot.server.app",
                 "message": "Failed",
                 "continuation": "",
+                "raw": "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
             }
         ],
     }
@@ -326,6 +355,7 @@ async def test_subscribe_filters_routine_websocket_noise_from_handoff_append(
                 "logger_name": "vbot.server.uvicorn",
                 "message": "keepalive ping timeout",
                 "continuation": "",
+                "raw": "2026-05-11 09:00:03 [WARN] vbot.server.uvicorn - keepalive ping timeout",
             }
         ],
     }
