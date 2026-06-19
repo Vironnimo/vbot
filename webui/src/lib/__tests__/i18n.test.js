@@ -329,6 +329,8 @@ describe('i18n t()', () => {
       'logs.resultsCount',
       'logs.currentFile',
       'logs.entries',
+      'logs.copyEntry',
+      'logs.copied',
       'logs.loadingCatalog',
       'logs.loadingFile',
       'logs.emptyTitle',
@@ -363,6 +365,8 @@ describe('i18n t()', () => {
     expect(t('logs.searchPlaceholder')).toContain('logger');
     expect(t('logs.stream.connected')).toBe('Live');
     expect(t('logs.stream.error')).toBe('Live update error');
+    expect(t('logs.copyEntry')).toBe('Copy log line');
+    expect(t('logs.copied')).toBe('Copied');
   });
 
   it('contains Debug i18n copy with a meaningful empty heading and matching interpolation tokens', () => {

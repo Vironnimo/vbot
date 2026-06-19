@@ -711,6 +711,8 @@ export const englishCatalog = Object.freeze({
   'logs.resultsCount': '{count} visible entries',
   'logs.currentFile': 'Current file: {file}',
   'logs.entries': 'Log entries',
+  'logs.copyEntry': 'Copy log line',
+  'logs.copied': 'Copied',
   'logs.loadingCatalog': 'Loading log files…',
   'logs.loadingFile': 'Loading log file…',
   'logs.emptyTitle': 'No log files yet',

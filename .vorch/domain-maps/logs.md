@@ -16,6 +16,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
   - `logger_name: string`
   - `message: string`
   - `continuation: string` — multiline tail such as stack traces
+  - `raw: string` — the source line(s) verbatim (continuation rows joined with `\n`), so an accessor can copy an entry exactly as written to the file; `message`/`level` are derived/normalized, `raw` is not
 - Live stream event:
   - `type: "append" | "reset"`
   - `file: string`
