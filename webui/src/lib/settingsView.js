@@ -16,7 +16,7 @@ export const CHANNEL_FORM_MODE_EDIT = 'edit';
 
 export { CHANNEL_DM_SCOPES, CHANNEL_PLATFORM_TELEGRAM, CHANNEL_PLATFORMS };
 
-export const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
+const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
   max_subagent_depth: 4,
   max_subagents_per_turn: 8,
   subagent_timeout_minutes: 60,
@@ -30,10 +30,10 @@ export const AGENT_DEFAULTS_FIELDS = Object.freeze([
 ]);
 export const AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT =
   '__thinking_effort_no_default__';
-export const RECALL_BACKEND_JSONL_SCAN = 'jsonl_scan';
-export const RECALL_BACKEND_SQLITE_FTS = 'sqlite_fts';
-export const WEB_SEARCH_PROVIDER_BRAVE = 'brave';
-export const WEB_SEARCH_PROVIDER_SEARXNG = 'searxng';
+const RECALL_BACKEND_JSONL_SCAN = 'jsonl_scan';
+const RECALL_BACKEND_SQLITE_FTS = 'sqlite_fts';
+const WEB_SEARCH_PROVIDER_BRAVE = 'brave';
+const WEB_SEARCH_PROVIDER_SEARXNG = 'searxng';
 
 const RECALL_BACKEND_DEFAULTS = Object.freeze([
   RECALL_BACKEND_JSONL_SCAN,
@@ -120,7 +120,7 @@ export function getSkillDirectories(settings) {
     : [];
 }
 
-export function normalizeSkillDirectories(directories) {
+function normalizeSkillDirectories(directories) {
   if (!Array.isArray(directories)) {
     return [];
   }
@@ -516,7 +516,7 @@ export function getCompactionSettings(settings) {
   return normalizeCompactionSettings(settings);
 }
 
-export function normalizeRecallSettings(rawSettings) {
+function normalizeRecallSettings(rawSettings) {
   const recall = rawSettings?.recall ?? {};
   const availableBackends = normalizeRecallBackends(recall.available_backends);
   const backend =
@@ -552,7 +552,7 @@ export function buildRecallBackendOptions(recallSettings, translate) {
   );
 }
 
-export function normalizeWebSearchSettings(rawSettings) {
+function normalizeWebSearchSettings(rawSettings) {
   const webSearch = rawSettings?.web_search ?? {};
   const availableProviders = normalizeWebSearchProviders(
     webSearch.available_providers,
@@ -620,9 +620,9 @@ export const DEFAULT_ACCOUNT_ID = 'default';
 
 const ACCOUNT_ID_PATTERN = /^[a-z0-9][a-z0-9_]{0,31}$/;
 
-export const ACCOUNT_SOURCE_PROCESS_ENV = 'process_env';
-export const ACCOUNT_SOURCE_DATA_DIR = 'data_dir';
-export const ACCOUNT_SOURCE_OAUTH = 'oauth';
+const ACCOUNT_SOURCE_PROCESS_ENV = 'process_env';
+const ACCOUNT_SOURCE_DATA_DIR = 'data_dir';
+const ACCOUNT_SOURCE_OAUTH = 'oauth';
 
 export function isValidAccountId(value) {
   return typeof value === 'string' && ACCOUNT_ID_PATTERN.test(value);
@@ -648,7 +648,7 @@ export function isAccountUsable(account) {
   return account?.usable === true;
 }
 
-export function connectionHasUsableAccount(connection) {
+function connectionHasUsableAccount(connection) {
   return getConnectionAccounts(connection).some(isAccountUsable);
 }
 
@@ -715,7 +715,7 @@ export function isConnectionConfigured(connection) {
   );
 }
 
-export function providerHasConfiguredConnection(provider) {
+function providerHasConfiguredConnection(provider) {
   return (
     Array.isArray(provider?.connections) &&
     provider.connections.some(isConnectionConfigured)
@@ -732,7 +732,7 @@ export function getConfiguredConnections(provider) {
     : [];
 }
 
-export function isConnectionAddable(connection) {
+function isConnectionAddable(connection) {
   if (isConnectionConfigured(connection)) {
     return false;
   }
