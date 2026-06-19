@@ -9,6 +9,8 @@ import { join, dirname } from 'node:path';
 import { init } from '../../lib/i18n.js';
 
 const rpcMock = vi.fn();
+const listProjectsMock = vi.fn();
+const showProjectMock = vi.fn();
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -16,6 +18,8 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
+  listProjects: (...args) => listProjectsMock(...args),
+  showProject: (...args) => showProjectMock(...args),
 }));
 
 const { default: SystemPromptView } =
@@ -37,6 +41,10 @@ describe('SystemPromptView', () => {
     document.body.innerHTML = '';
     init('en');
     rpcMock.mockReset();
+    listProjectsMock.mockReset();
+    showProjectMock.mockReset();
+    listProjectsMock.mockResolvedValue({ projects: [] });
+    showProjectMock.mockResolvedValue({ project: {}, scan: { team: [] } });
     mountedComponent = null;
     window.confirm = vi.fn(() => true);
   });
@@ -86,8 +94,7 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () =>
-        document.body.querySelector('#sp-scope-select')?.options.length === 2,
+      () => scopeTrigger()?.textContent.includes('Default'),
       100,
     );
 
@@ -111,12 +118,11 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () =>
-        document.body.querySelector('#sp-scope-select')?.options.length === 2,
+      () => scopeTrigger()?.textContent.includes('Default'),
       100,
     );
 
-    selectPromptScope('agent:agent-1');
+    selectPromptScope('Alpha');
     await waitForCondition(
       () =>
         rpcMock.mock.calls.some(
@@ -174,16 +180,13 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () =>
-        document.body.querySelector('#sp-scope-select')?.options.length === 2,
+      () => scopeTrigger()?.textContent.includes('Default'),
       100,
     );
 
-    selectPromptScope('agent:agent-1');
+    selectPromptScope('Alpha');
     await waitForCondition(
-      () =>
-        document.body.querySelector('#sp-scope-select')?.value ===
-        'agent:agent-1',
+      () => scopeTrigger()?.textContent.includes('Alpha'),
       100,
     );
 
@@ -225,14 +228,16 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () =>
-        document.body.querySelector('#sp-scope-select')?.options.length === 2,
+      () => scopeTrigger()?.textContent.includes('Default'),
       100,
     );
 
-    selectPromptScope('agent:agent-1');
+    selectPromptScope('Alpha');
     await waitForCondition(
-      () => document.body.textContent.includes('Alpha'),
+      () =>
+        document.body
+          .querySelector('.sp-scope-chip')
+          ?.textContent.includes('Alpha'),
       100,
     );
 
@@ -625,6 +630,62 @@ describe('SystemPromptView', () => {
     expect(document.body.textContent).toContain('You are an agent named Alpha');
   });
 
+  it('offers project agents in the preview picker and previews by address', async () => {
+    listProjectsMock.mockResolvedValue({ projects: [{ project_id: 'vbot' }] });
+    showProjectMock.mockResolvedValue({
+      project: { display_name: 'vBot' },
+      scan: { team: [{ agent_id: 'builder', display_name: 'Builder' }] },
+    });
+    rpcMock.mockImplementation(
+      createRpcMock({
+        promptPreview: {
+          text: 'Project agent preview',
+          tokens: 88,
+          estimated: true,
+        },
+      }),
+    );
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => agentTrigger(), 100);
+
+    // The lazy project-team scan adds the `agent@projekt` address to the preview
+    // picker; poll by opening the dropdown until the scanned member appears.
+    await waitForCondition(
+      () => agentOptionLabels().some((label) => label.includes('builder@vbot')),
+      100,
+    );
+
+    openDropdown(agentTrigger());
+    expect(document.body.textContent).toContain('Project agents');
+    const projectOption = dropdownOptionButtons().find((button) =>
+      button.textContent.includes('builder@vbot'),
+    );
+    expect(projectOption).toBeTruthy();
+
+    projectOption.click();
+    flushSync();
+
+    const refreshButton = Array.from(
+      document.body.querySelectorAll('button'),
+    ).find((button) => button.textContent.trim() === 'Refresh');
+    refreshButton.click();
+    flushSync();
+
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
+      100,
+    );
+
+    const previewCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'prompt.preview',
+    );
+    expect(previewCall[1]).toEqual({ agent_id: 'builder@vbot' });
+    expect(document.body.textContent).toContain('Project agent preview');
+  });
+
   it('shows modified badge when fragment is_modified is true', async () => {
     rpcMock.mockImplementation(
       createRpcMock({
@@ -667,6 +728,8 @@ describe('SystemPromptView', () => {
       'systemPrompt.preview.copy',
       'systemPrompt.preview.tokenCount',
       'systemPrompt.preview.agentLabel',
+      'systemPrompt.preview.agentGroup.identity',
+      'systemPrompt.preview.agentGroup.project',
       'systemPrompt.preview.empty',
       'systemPrompt.error.loadFailed',
       'systemPrompt.error.saveFailed',
@@ -789,17 +852,56 @@ function createRpcMock(options = {}) {
   };
 }
 
-function scopeOptionLabels() {
-  return Array.from(
-    document.body.querySelectorAll('#sp-scope-select option'),
-  ).map((option) => option.textContent.trim());
+// The scope and preview-agent pickers are the shared Dropdown primitive: a
+// <button> trigger plus a portaled list of <button role="option"> rows that
+// only exist in the DOM while the dropdown is open.
+function scopeTrigger() {
+  return document.body.querySelector('#sp-scope-select');
 }
 
-function selectPromptScope(value) {
-  const select = document.body.querySelector('#sp-scope-select');
-  expect(select).toBeTruthy();
-  select.value = value;
-  select.dispatchEvent(new Event('change', { bubbles: true }));
+function agentTrigger() {
+  return document.body.querySelector('#sp-agent-select');
+}
+
+function dropdownOptionButtons() {
+  return Array.from(document.body.querySelectorAll('.dropdown-option'));
+}
+
+function openDropdown(trigger) {
+  expect(trigger).toBeTruthy();
+  trigger.click();
+  flushSync();
+}
+
+// Open a dropdown, read its option labels, then close it again so the portaled
+// list does not linger for later queries.
+function readOpenOptionLabels(trigger) {
+  openDropdown(trigger);
+  const labels = dropdownOptionButtons().map((button) =>
+    button.textContent.trim(),
+  );
+  trigger.click();
+  flushSync();
+  return labels;
+}
+
+function scopeOptionLabels() {
+  return readOpenOptionLabels(scopeTrigger());
+}
+
+function agentOptionLabels() {
+  return readOpenOptionLabels(agentTrigger());
+}
+
+// Pick a scope by its visible label (e.g. 'Default', 'Alpha'); the Dropdown
+// option value (the scope key) rides through onValueChange to selectScope.
+function selectPromptScope(label) {
+  openDropdown(scopeTrigger());
+  const option = dropdownOptionButtons().find(
+    (button) => button.textContent.trim() === label,
+  );
+  expect(option, `scope option not found: ${label}`).toBeTruthy();
+  option.click();
   flushSync();
 }
 
