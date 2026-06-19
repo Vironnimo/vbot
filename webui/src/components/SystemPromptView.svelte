@@ -1,8 +1,14 @@
 <script>
   import { onMount } from 'svelte';
 
+  import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
-  import { rpc } from '$lib/api.js';
+  import {
+    buildAgentTargetDropdownOptions,
+    projectIdsFromList,
+    projectTeamEntry,
+  } from '$lib/agentTargetOptions.js';
+  import { listProjects, rpc, showProject } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -21,6 +27,14 @@
   let isRefreshingPreview = $state(false);
   let autoSaveTimers = [];
 
+  // Project teams power the project-agent options in the preview agent picker.
+  // Identity agents come from `agent.list`; project agents are scanned lazily
+  // (one `project.show` per project) and cached, so the N+1 scan never runs on
+  // every render. A scan failure is non-fatal — identity agents still preview.
+  let projectTeams = $state([]);
+  let projectTeamsLoaded = false;
+  let projectTeamsRequestId = 0;
+
   let isPromptSaveBusy = $derived(
     fragments.some((fragment) => fragment.isSaving || fragment.isResetting),
   );
@@ -28,9 +42,29 @@
     promptScopes.find((scope) => scope.key === selectedScopeKey) ??
       defaultPromptScope(),
   );
+  let scopeOptions = $derived(
+    promptScopes.map((scope) => ({ value: scope.key, label: scope.label })),
+  );
+  // Identity agents (bare-id values, unchanged) plus project agents addressed as
+  // `agent@projekt`. A project option's value IS the address, which the backend
+  // `prompt.preview` accepts directly as its `agent_id`. Group headers appear
+  // only when project agents exist, so an identity-only install is unchanged.
+  let previewAgentOptions = $derived(
+    buildAgentTargetDropdownOptions(agents, projectTeams, {
+      identityGroupLabel: t(
+        'systemPrompt.preview.agentGroup.identity',
+        'Identity agents',
+      ),
+      projectGroupLabel: t(
+        'systemPrompt.preview.agentGroup.project',
+        'Project agents',
+      ),
+    }),
+  );
 
   onMount(() => {
     loadData();
+    loadProjectTeams();
     return () => {
       clearAutoSaveTimers();
     };
@@ -81,6 +115,46 @@
       );
     } finally {
       isLoadingData = false;
+    }
+  }
+
+  // Lazily scan project teams so the preview picker can offer project agents as
+  // `agent@projekt`. Kicked off on mount; a failure is non-fatal (identity
+  // agents still preview) and leaves the cache unset so a reload can retry.
+  async function loadProjectTeams() {
+    if (projectTeamsLoaded) {
+      return;
+    }
+
+    const requestId = projectTeamsRequestId + 1;
+    projectTeamsRequestId = requestId;
+
+    try {
+      const listResult = await listProjects();
+      if (requestId !== projectTeamsRequestId) {
+        return;
+      }
+
+      const projectIds = projectIdsFromList(listResult);
+      const showResults = await Promise.all(
+        projectIds.map((projectId) =>
+          showProject(projectId)
+            .then((showResult) => projectTeamEntry(projectId, showResult))
+            .catch(() => null),
+        ),
+      );
+      if (requestId !== projectTeamsRequestId) {
+        return;
+      }
+
+      projectTeams = showResults.filter((entry) => entry !== null);
+      projectTeamsLoaded = true;
+    } catch {
+      // Identity agents remain available; leave projectTeams empty and allow a
+      // retry on the next mount (projectTeamsLoaded stays false).
+      if (requestId === projectTeamsRequestId) {
+        projectTeams = [];
+      }
     }
   }
 
@@ -472,19 +546,17 @@
           {t('systemPrompt.title', 'System Prompt')}
         </h2>
         <div class="sp-scope-control">
-          <label class="sp-scope-label" for="sp-scope-select">
+          <span class="sp-scope-label" id="sp-scope-label">
             {t('systemPrompt.scope.label', 'Prompt scope')}
-          </label>
-          <select
+          </span>
+          <Dropdown
             id="sp-scope-select"
-            class="sp-scope-select"
             value={selectedScopeKey}
-            onchange={(event) => selectScope(event.currentTarget.value)}
-          >
-            {#each promptScopes as scope (scope.key)}
-              <option value={scope.key}>{scope.label}</option>
-            {/each}
-          </select>
+            options={scopeOptions}
+            ariaLabel={t('systemPrompt.scope.label', 'Prompt scope')}
+            triggerClass="sp-scope-dropdown"
+            onValueChange={(value) => selectScope(value)}
+          />
         </div>
       </div>
 
@@ -571,18 +643,20 @@
               {#if selectedScope.type === 'agent'}
                 <span class="sp-scope-chip">{selectedScope.label}</span>
               {:else if agents.length > 0}
-                <label class="sp-agent-label" for="sp-agent-select">
+                <span class="sp-agent-label" id="sp-agent-label">
                   {t('systemPrompt.preview.agentLabel', 'Agent')}
-                </label>
-                <select
+                </span>
+                <Dropdown
                   id="sp-agent-select"
-                  class="sp-agent-select"
-                  bind:value={selectedAgentId}
-                >
-                  {#each agents as agent (agent.id)}
-                    <option value={agent.id}>{agent.name || agent.id}</option>
-                  {/each}
-                </select>
+                  value={selectedAgentId}
+                  options={previewAgentOptions}
+                  ariaLabel={t('systemPrompt.preview.agentLabel', 'Agent')}
+                  triggerClass="sp-agent-dropdown"
+                  listClass="sp-agent-dropdown-list"
+                  onValueChange={(value) => {
+                    selectedAgentId = value;
+                  }}
+                />
               {/if}
               {#if previewTokens !== null}
                 <span class="sp-token-count">
@@ -718,21 +792,26 @@
     text-transform: uppercase;
   }
 
-  .sp-scope-select,
-  .sp-agent-select {
-    padding: 4px 9px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-sm);
-    color: var(--text-hi);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    appearance: none;
-    cursor: pointer;
+  /* The scope and preview-agent pickers use the shared Dropdown primitive; only
+     width and the mono trigger/option type are view-specific. */
+  :global(.sp-scope-dropdown) {
+    max-width: min(280px, 56vw);
   }
 
-  .sp-scope-select {
-    max-width: min(280px, 56vw);
+  :global(.sp-agent-dropdown) {
+    max-width: 240px;
+  }
+
+  :global(.sp-scope-dropdown .dropdown-primitive__trigger),
+  :global(.sp-agent-dropdown .dropdown-primitive__trigger),
+  :global(.sp-agent-dropdown-list .dropdown-primitive__option) {
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  :global(.sp-agent-dropdown-list) {
+    max-height: 260px;
+    overflow-y: auto;
   }
 
   .sp-feedback {
@@ -919,10 +998,6 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     line-height: 1;
-  }
-
-  .sp-agent-select {
-    max-width: 220px;
   }
 
   .sp-scope-chip {

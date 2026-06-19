@@ -5,12 +5,8 @@ import {
   buildCronAgentDropdownOptions,
   buildCronAgentOptions,
   buildUpdateCronPayload,
-  CRON_AGENT_GROUP_IDENTITY,
-  CRON_AGENT_GROUP_PROJECT,
   createCronFormValues,
   describeCronExpression,
-  projectIdsFromList,
-  projectTeamEntry,
   visibleCronJobs,
 } from '../cronView.js';
 
@@ -114,7 +110,11 @@ describe('cron job target normalization (project-aware)', () => {
   });
 });
 
-describe('buildCronAgentOptions', () => {
+// The combined identity + project agent option builders now live in the shared
+// `agentTargetOptions` module, where their exhaustive coverage moved too. Cron
+// keeps a thin smoke test to lock the re-export aliases — and thus the project-
+// aware `agent@projekt` option values cron saves — against accidental breakage.
+describe('cron agent option re-exports', () => {
   const identityAgents = [{ id: 'researcher', name: 'Researcher' }];
   const projectTeams = [
     {
@@ -124,116 +124,20 @@ describe('buildCronAgentOptions', () => {
     },
   ];
 
-  it('lists identity agents as bare-id options (unchanged)', () => {
-    const options = buildCronAgentOptions(identityAgents, []);
-    expect(options).toEqual([
-      {
-        value: 'researcher',
-        label: 'Researcher',
-        secondaryLabel: 'researcher',
-        group: CRON_AGENT_GROUP_IDENTITY,
-        projectId: null,
-      },
-    ]);
+  it('still builds project-aware options under the cron names', () => {
+    expect(
+      buildCronAgentOptions(identityAgents, projectTeams).map((o) => o.value),
+    ).toEqual(['researcher', 'builder@vbot']);
   });
 
-  it('lists project agents with the address as the option value', () => {
-    const [, projectOption] = buildCronAgentOptions(
-      identityAgents,
-      projectTeams,
-    );
-    expect(projectOption.value).toBe('builder@vbot');
-    expect(projectOption.group).toBe(CRON_AGENT_GROUP_PROJECT);
-    expect(projectOption.projectId).toBe('vbot');
-  });
-
-  it('orders identity agents before project agents', () => {
-    const options = buildCronAgentOptions(identityAgents, projectTeams);
-    expect(options.map((option) => option.value)).toEqual([
-      'researcher',
-      'builder@vbot',
-    ]);
-  });
-
-  it('tolerates missing/empty inputs', () => {
-    expect(buildCronAgentOptions(null, null)).toEqual([]);
-    expect(buildCronAgentOptions([{ id: '' }], [{ projectId: '' }])).toEqual(
-      [],
-    );
-  });
-});
-
-describe('buildCronAgentDropdownOptions', () => {
-  const identityAgents = [{ id: 'researcher', name: 'Researcher' }];
-  const projectTeams = [
-    {
-      projectId: 'vbot',
-      displayName: 'vBot',
-      team: [{ agent_id: 'builder', display_name: 'Builder' }],
-    },
-  ];
-
-  it('inserts no group headers when only identity agents exist (unchanged)', () => {
-    const options = buildCronAgentDropdownOptions(identityAgents, [], {
+  it('still inserts group headers under the cron names', () => {
+    const options = buildCronAgentDropdownOptions(identityAgents, projectTeams, {
       identityGroupLabel: 'Identity agents',
       projectGroupLabel: 'Project agents',
     });
-    expect(options.some((option) => option.isGroupHeader)).toBe(false);
-    expect(options.map((option) => option.value)).toEqual(['researcher']);
-  });
-
-  it('separates the two kinds with disabled group headers', () => {
-    const options = buildCronAgentDropdownOptions(
-      identityAgents,
-      projectTeams,
-      {
-        identityGroupLabel: 'Identity agents',
-        projectGroupLabel: 'Project agents',
-      },
-    );
-    expect(options.map((option) => option.label)).toEqual([
+    expect(options.filter((o) => o.isGroupHeader).map((o) => o.label)).toEqual([
       'Identity agents',
-      'Researcher',
       'Project agents',
-      'builder@vbot',
     ]);
-    const headers = options.filter((option) => option.isGroupHeader);
-    expect(headers.every((header) => header.disabled)).toBe(true);
-  });
-});
-
-describe('project team gathering helpers', () => {
-  it('extracts non-empty project ids from a project.list response', () => {
-    expect(
-      projectIdsFromList({
-        projects: [{ project_id: 'vbot' }, { project_id: '' }, {}],
-      }),
-    ).toEqual(['vbot']);
-    expect(projectIdsFromList(null)).toEqual([]);
-  });
-
-  it('projects a project.show response into a team entry', () => {
-    const entry = projectTeamEntry('vbot', {
-      project: { display_name: 'vBot' },
-      scan: {
-        team: [
-          { agent_id: 'builder', display_name: 'Builder' },
-          { agent_id: '' },
-        ],
-      },
-    });
-    expect(entry).toEqual({
-      projectId: 'vbot',
-      displayName: 'vBot',
-      team: [{ agent_id: 'builder', display_name: 'Builder' }],
-    });
-  });
-
-  it('yields an empty team for a bare/empty project (normal case)', () => {
-    expect(projectTeamEntry('empty', { project: {}, scan: {} })).toEqual({
-      projectId: 'empty',
-      displayName: 'empty',
-      team: [],
-    });
   });
 });

@@ -393,6 +393,8 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.preview.copy': 'Copy',
   'systemPrompt.preview.tokenCount': '~{count} tokens',
   'systemPrompt.preview.agentLabel': 'Agent',
+  'systemPrompt.preview.agentGroup.identity': 'Identity agents',
+  'systemPrompt.preview.agentGroup.project': 'Project agents',
   'systemPrompt.preview.empty':
     'Click Refresh to generate a preview for the selected scope.',
   'systemPrompt.error.loadFailed': 'Failed to load prompt data',
