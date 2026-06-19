@@ -22,6 +22,7 @@ export const englishCatalog = Object.freeze({
   'common.close': 'Close',
   'common.confirm': 'Confirm',
   'common.copy': 'Copy',
+  'common.copied': 'Copied',
   'common.create': 'Create',
   'common.delete': 'Delete',
   'common.edit': 'Edit',
