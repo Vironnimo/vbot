@@ -12,7 +12,6 @@ export {
 } from './chatTimeline.js';
 
 export const CHAT_STATUS_IDLE = 'idle';
-export const CHAT_STATUS_LOADING = 'loading';
 export const CHAT_STATUS_RUNNING = 'running';
 export const CHAT_STATUS_COMPLETED = 'completed';
 export const CHAT_STATUS_FAILED = 'failed';
@@ -731,11 +730,6 @@ export function formatAgentAddress(agentId, projectId) {
   }
   return `${bareId}${AGENT_ADDRESS_SEPARATOR}${project}`;
 }
-
-// The empty/Personal project selection (no project chosen → `project_id=None`
-// on the backend, identity path). Kept as a named constant so the "no project"
-// sentinel is not a bare literal scattered across the component.
-export const NO_PROJECT_ID = '';
 
 // Whether a selected project id means "a real project" (vs. Personal/empty).
 export function isProjectSelected(projectId) {
