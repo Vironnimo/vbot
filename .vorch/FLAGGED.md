@@ -190,3 +190,13 @@ out-of-scope-for-Plan-1 gap, deliberately not fixed.
    channels-on-project is deferred, so a channel session never carries a project cwd and
    `effective_cwd` would fall back to `workspace` anyway. Switch it to `effective_cwd`
    when channels learn projects, for consistency.
+
+
+## 2026-06-19 — Unfinished "project-visiting" scaffolding
+
+Found during a dead-code audit of `core/`. **Unfertiges Feature „Project-Visiting":**
+`ChatLoop.inject_visiting_project_files` (`core/chat/chat.py`) is fully-built but never
+wired-up scaffolding — its own docstring says "a later phase calls this from that entry
+point", but nothing in product code ever invokes it (tests only). Either connect it to the
+visiting-project entry point or remove it. Kept for now pending a decision on whether the
+project-visiting feature is still coming.
