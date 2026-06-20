@@ -22,6 +22,7 @@ from core.recall.jsonl import (
     SESSION_RECALL_SUPPORTED_ROLES,
 )
 from core.sessions import ChatSessionManager
+from core.tools.arguments import optional_int, optional_string
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -208,15 +209,15 @@ def session_search_handler(
 
 
 def _parse_search_request(context: ToolContext, arguments: JsonObject) -> _ParsedSearchRequest:
-    agent_id = _optional_string(arguments.get("agent_id"), field_name="agent_id")
+    agent_id = optional_string(arguments.get("agent_id"), field_name="agent_id")
     if agent_id is None:
         agent_id = context.agent_id
     if not agent_id:
         raise ValueError("agent_id must be a non-empty string")
 
-    query = _optional_query(arguments.get("query"))
-    session_id = _optional_string(arguments.get("session_id"), field_name="session_id")
-    around_message_id = _optional_string(
+    query = optional_string(arguments.get("query"), field_name="query")
+    session_id = optional_string(arguments.get("session_id"), field_name="session_id")
+    around_message_id = optional_string(
         arguments.get("around_message_id"),
         field_name="around_message_id",
     )
@@ -252,21 +253,21 @@ def _parse_search_request(context: ToolContext, arguments: JsonObject) -> _Parse
                 default="all_terms",
             ),
         ),
-        limit=_integer_value(
+        limit=optional_int(
             arguments.get("limit"),
             field_name="limit",
             default=SESSION_SEARCH_DEFAULT_LIMIT,
             minimum=1,
             maximum=SESSION_SEARCH_MAX_LIMIT,
         ),
-        context_messages=_integer_value(
+        context_messages=optional_int(
             arguments.get("context"),
             field_name="context",
             default=2 if around_message_id is not None else 0,
             minimum=0,
             maximum=SESSION_SEARCH_MAX_CONTEXT_MESSAGES,
         ),
-        bookend_messages=_integer_value(
+        bookend_messages=optional_int(
             arguments.get("bookends"),
             field_name="bookends",
             default=SESSION_SEARCH_DEFAULT_BOOKEND_MESSAGES,
@@ -285,29 +286,12 @@ def _parse_search_request(context: ToolContext, arguments: JsonObject) -> _Parse
     )
 
 
-def _optional_string(value: object, *, field_name: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty string")
-    return value.strip()
-
-
-def _optional_query(value: object) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError("query must be a string")
-    return value.strip() or None
-
-
 def _optional_datetime(value: object, *, field_name: str, end_of_day: bool) -> datetime | None:
-    if value is None:
+    text = optional_string(value, field_name=field_name)
+    if text is None:
         return None
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty string")
     try:
-        return _parse_datetime(value.strip(), end_of_day=end_of_day)
+        return _parse_datetime(text, end_of_day=end_of_day)
     except ValueError as error:
         raise ValueError(f"{field_name} must be an ISO-8601 timestamp or YYYY-MM-DD") from error
 
@@ -340,35 +324,13 @@ def _enum_value(
     supported: tuple[str, ...],
     default: str,
 ) -> str:
-    if value is None:
+    text = optional_string(value, field_name=field_name)
+    if text is None:
         return default
-    if not isinstance(value, str) or value not in supported:
+    if text not in supported:
         supported_values = ", ".join(supported)
         raise ValueError(f"{field_name} must be one of: {supported_values}")
-    return value
-
-
-def _integer_value(
-    value: object,
-    *,
-    field_name: str,
-    default: int,
-    minimum: int,
-    maximum: int,
-) -> int:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be an integer between {minimum} and {maximum}")
-    if isinstance(value, int):
-        number = value
-    elif isinstance(value, float) and value.is_integer():
-        number = int(value)
-    else:
-        raise ValueError(f"{field_name} must be an integer between {minimum} and {maximum}")
-    if number < minimum or number > maximum:
-        raise ValueError(f"{field_name} must be between {minimum} and {maximum}")
-    return number
+    return text
 
 
 def _parse_datetime(value: str, *, end_of_day: bool) -> datetime:
