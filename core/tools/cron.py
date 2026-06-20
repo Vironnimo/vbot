@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter  # type: ignore[import-untyped]
 
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
+from core.tools.arguments import optional_string, required_string
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -182,20 +183,20 @@ def _handle_cron_tool(
 
 
 def _handle_create(cron_service: CronService, arguments: JsonObject) -> JsonObject:
-    agent_id = _required_non_empty_string(arguments.get("agent_id"), field_name="agent_id")
-    prompt = _required_non_empty_string(arguments.get("prompt"), field_name="prompt")
+    agent_id = required_string(arguments.get("agent_id"), field_name="agent_id")
+    prompt = required_string(arguments.get("prompt"), field_name="prompt")
     schedule_type = _required_enum(
         arguments.get("schedule_type"),
         field_name="schedule_type",
         allowed=CRON_SCHEDULE_TYPES,
     )
 
-    cron_expression = _optional_string(
+    cron_expression = optional_string(
         arguments.get("cron_expression"), field_name="cron_expression"
     )
-    run_at = _optional_string(arguments.get("run_at"), field_name="run_at")
-    timezone = _optional_string(arguments.get("timezone"), field_name="timezone")
-    session_id = _optional_string(arguments.get("session_id"), field_name="session_id")
+    run_at = optional_string(arguments.get("run_at"), field_name="run_at")
+    timezone = optional_string(arguments.get("timezone"), field_name="timezone")
+    session_id = optional_string(arguments.get("session_id"), field_name="session_id")
 
     if schedule_type == "cron":
         if cron_expression is None:
@@ -225,16 +226,16 @@ def _handle_list(cron_service: CronService) -> JsonObject:
 
 
 def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObject:
-    job_id = _required_non_empty_string(arguments.get("id"), field_name="id")
+    job_id = required_string(arguments.get("id"), field_name="id")
     updates: dict[str, str | None] = {}
 
     if "agent_id" in arguments:
-        updates["agent_id"] = _required_non_empty_string(
+        updates["agent_id"] = required_string(
             arguments.get("agent_id"),
             field_name="agent_id",
         )
     if "prompt" in arguments:
-        updates["prompt"] = _required_non_empty_string(arguments.get("prompt"), field_name="prompt")
+        updates["prompt"] = required_string(arguments.get("prompt"), field_name="prompt")
     if "schedule_type" in arguments:
         updates["schedule_type"] = _required_enum(
             arguments.get("schedule_type"),
@@ -243,16 +244,14 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
         )
     if "cron_expression" in arguments:
         updates["cron_expression"] = _validated_cron_expression(
-            _required_non_empty_string(
-                arguments.get("cron_expression"), field_name="cron_expression"
-            )
+            required_string(arguments.get("cron_expression"), field_name="cron_expression")
         )
     if "run_at" in arguments:
-        updates["run_at"] = _required_non_empty_string(arguments.get("run_at"), field_name="run_at")
+        updates["run_at"] = required_string(arguments.get("run_at"), field_name="run_at")
     if "timezone" in arguments:
-        updates["timezone"] = _optional_string(arguments.get("timezone"), field_name="timezone")
+        updates["timezone"] = optional_string(arguments.get("timezone"), field_name="timezone")
     if "session_id" in arguments:
-        updates["session_id"] = _optional_string(
+        updates["session_id"] = optional_string(
             arguments.get("session_id"), field_name="session_id"
         )
     if "status" in arguments:
@@ -267,19 +266,19 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
 
 
 def _handle_delete(cron_service: CronService, arguments: JsonObject) -> JsonObject:
-    job_id = _required_non_empty_string(arguments.get("id"), field_name="id")
+    job_id = required_string(arguments.get("id"), field_name="id")
     cron_service.delete_job(job_id)
     return tool_success({"id": job_id, "deleted": True})
 
 
 def _handle_enable(cron_service: CronService, arguments: JsonObject) -> JsonObject:
-    job_id = _required_non_empty_string(arguments.get("id"), field_name="id")
+    job_id = required_string(arguments.get("id"), field_name="id")
     job = cron_service.enable_job(job_id)
     return tool_success({"job": _job_payload(job)})
 
 
 def _handle_disable(cron_service: CronService, arguments: JsonObject) -> JsonObject:
-    job_id = _required_non_empty_string(arguments.get("id"), field_name="id")
+    job_id = required_string(arguments.get("id"), field_name="id")
     job = cron_service.disable_job(job_id)
     return tool_success({"job": _job_payload(job)})
 
@@ -326,21 +325,6 @@ def _validated_cron_expression(expression: str) -> str:
     if not croniter.is_valid(normalized):
         raise ValueError("cron_expression is invalid")
     return normalized
-
-
-def _required_non_empty_string(value: object, *, field_name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty string")
-    return value.strip()
-
-
-def _optional_string(value: object, *, field_name: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a string")
-    normalized = value.strip()
-    return normalized or None
 
 
 def _required_enum(value: object, *, field_name: str, allowed: frozenset[str]) -> str:

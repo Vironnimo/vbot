@@ -17,6 +17,7 @@ from core.projects import AgentResolutionError, AgentResolver, ProjectStore
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
+from core.tools.arguments import optional_string
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -66,8 +67,10 @@ def make_status_handler(
 
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         try:
-            requested_agent_id = _optional_target_string(arguments, "agent_id")
-            requested_session_id = _optional_target_string(arguments, "session_id")
+            requested_agent_id = optional_string(arguments.get("agent_id"), field_name="agent_id")
+            requested_session_id = optional_string(
+                arguments.get("session_id"), field_name="session_id"
+            )
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error))
         if requested_agent_id is not None and requested_session_id is None:
@@ -156,12 +159,3 @@ def register_status_tool(
         ),
         display=ToolDisplay(),
     )
-
-
-def _optional_target_string(arguments: JsonObject, field_name: str) -> str | None:
-    value = arguments.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty string")
-    return value
