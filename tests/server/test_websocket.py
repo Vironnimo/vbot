@@ -166,6 +166,89 @@ def test_websocket_receives_resource_changed_on_agent_create_via_rpc(tmp_path: P
     assert event["payload"] == {"kind": "agents"}
 
 
+def test_websocket_connect_publishes_clients_and_client_list_reflects_roster(
+    tmp_path: Path,
+) -> None:
+    """A connecting app window registers in the presence roster, publishes a
+    clients resource_changed signal, and shows up in client.list with the
+    derived browser/OS and its client-minted connection id."""
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    user_agent = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(
+            "/ws?connection_id=tab-a&accessor=browser",
+            headers={"user-agent": user_agent},
+        ) as websocket,
+    ):
+        # Receiving the hello proves register() ran (it precedes the hello
+        # send), so client.list is guaranteed to see the entry. The window does
+        # NOT replay its own connect signal, so we must not wait for one here.
+        assert websocket.receive_json()["type"] == "connection_ready"
+
+        response = client.post("/api/rpc", json={"method": "client.list"})
+
+    result = response.json()["result"]
+    assert len(result["clients"]) == 1
+    entry = result["clients"][0]
+    assert entry["connection_id"] == "tab-a"
+    assert entry["accessor"] == "browser"
+    assert entry["browser"] == "Chrome"
+    assert entry["os"] == "Windows"
+    assert entry["status"] == "connected"
+
+
+def test_websocket_disconnect_publishes_clients_to_other_windows(tmp_path: Path) -> None:
+    """Another window connecting and disconnecting each push a clients
+    resource_changed signal to an already-open window, and the disconnect drops
+    the entry from client.list."""
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/ws?connection_id=tab-a&accessor=browser") as window_a,
+    ):
+        # window_a does NOT receive its own connect signal (no self-replay), so
+        # after the hello it only hears about *other* windows.
+        assert window_a.receive_json()["type"] == "connection_ready"
+
+        with client.websocket_connect("/ws?connection_id=tab-b&accessor=desktop") as window_b:
+            assert window_b.receive_json()["type"] == "connection_ready"
+            # window_a observes window_b joining.
+            connect_signal = window_a.receive_json()
+            assert connect_signal["type"] == "resource_changed"
+            assert connect_signal["payload"] == {"kind": "clients"}
+
+            both = client.post("/api/rpc", json={"method": "client.list"})
+            assert {entry["connection_id"] for entry in both.json()["result"]["clients"]} == {
+                "tab-a",
+                "tab-b",
+            }
+
+        # window_b disconnected: window_a observes it leaving and the roster
+        # drops back to just window_a.
+        disconnect_signal = window_a.receive_json()
+        assert disconnect_signal["type"] == "resource_changed"
+        assert disconnect_signal["payload"] == {"kind": "clients"}
+
+        remaining = client.post("/api/rpc", json={"method": "client.list"})
+
+    assert [entry["connection_id"] for entry in remaining.json()["result"]["clients"]] == ["tab-a"]
+
+
+def test_client_list_empty_before_any_window_connects(tmp_path: Path) -> None:
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app) as client:
+        response = client.post("/api/rpc", json={"method": "client.list"})
+
+    assert response.json()["result"] == {"clients": []}
+
+
 def test_server_event_contract_allows_app_error_events() -> None:
     bus = ServerEventBus()
 
@@ -662,7 +745,10 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
             assert hello["epoch"] == bus_epoch
-            assert hello["last_sequence"] == 3
+            # Sequence 4 is this window's own presence connect signal, published
+            # on register before the hello read; the 3 pre-connect run events
+            # (1..3) are still not replayed below.
+            assert hello["last_sequence"] == 4
             assert hello["active_runs"] == []
             # Critical: no "sequence" field on the hello frame — it must not feed
             # the client's lastSequence bookkeeping.
@@ -676,9 +762,9 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
 
     assert first_live["type"] == "run_started"
     assert first_live["payload"] == {"id": "post-0"}
-    assert first_live["sequence"] == 4
+    assert first_live["sequence"] == 5
     assert second_live["type"] == "run_output"
-    assert second_live["sequence"] == 5
+    assert second_live["sequence"] == 6
 
 
 def test_websocket_handshake_replays_when_epoch_and_after_sequence_match(
@@ -699,7 +785,9 @@ def test_websocket_handshake_replays_when_epoch_and_after_sequence_match(
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
             assert hello["epoch"] == bus_epoch
-            assert hello["last_sequence"] == 5
+            # 6 = 5 retained run events + this window's own presence connect
+            # signal (published on register before the hello read).
+            assert hello["last_sequence"] == 6
 
             replayed = [websocket.receive_json() for _ in range(2)]
             assert [event["sequence"] for event in replayed] == [4, 5]
@@ -729,13 +817,15 @@ def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
             assert hello["epoch"] == bus_epoch
-            assert hello["last_sequence"] == 5
+            # 6 = 5 retained run events + this window's own presence connect
+            # signal (published on register before the hello read).
+            assert hello["last_sequence"] == 6
 
             bus.publish("run_started", {"id": "live-1"})
             bus.publish("run_output", {"id": "live-2"})
 
             live_events = [websocket.receive_json() for _ in range(2)]
-            assert [event["sequence"] for event in live_events] == [6, 7]
+            assert [event["sequence"] for event in live_events] == [7, 8]
             assert [event["payload"]["id"] for event in live_events] == [
                 "live-1",
                 "live-2",
@@ -753,12 +843,14 @@ def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
             assert hello["epoch"] == bus2_epoch
-            assert hello["last_sequence"] == 0
+            # 1 = this window's own presence connect signal (the only event so
+            # far); the live-only floor sits above it so it is not replayed.
+            assert hello["last_sequence"] == 1
 
             bus2.publish("run_started", {"id": "live-1"})
 
             live_event = websocket.receive_json()
-            assert live_event["sequence"] == 1
+            assert live_event["sequence"] == 2
             assert live_event["payload"] == {"id": "live-1"}
 
 
