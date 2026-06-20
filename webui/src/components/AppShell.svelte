@@ -84,6 +84,8 @@
             {:else if item.id === 'agents'}
               <circle cx="8" cy="5" r="2.5" />
               <path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" />
+            {:else if item.id === 'projects'}
+              <path d="M2 12.5V4h4l1.5 1.5h6.5v7z" />
             {:else if item.id === 'cron'}
               <circle cx="8" cy="8" r="6" />
               <path d="M8 4.5V8l2.5 2.5" />
