@@ -96,10 +96,21 @@ def _openai_configured() -> ModelConfigurationChecker:
 # ---------------------------------------------------------------------------
 
 
-def _write_agent(repo: Path, filename: str, *, model: str = "openai/gpt-5.2") -> None:
+def _write_agent(
+    repo: Path,
+    filename: str,
+    *,
+    model: str = "openai/gpt-5.2",
+    reasoning_effort: str | None = None,
+) -> None:
     agents_dir = repo.joinpath(*OPENCODE_AGENTS_SUBPATH)
     agents_dir.mkdir(parents=True, exist_ok=True)
-    front = f"description: An agent.\nmodel: {model}\n" if model else "description: An agent.\n"
+    lines = ["description: An agent."]
+    if model:
+        lines.append(f"model: {model}")
+    if reasoning_effort is not None:
+        lines.append(f"reasoningEffort: {reasoning_effort}")
+    front = "\n".join(lines) + "\n"
     (agents_dir / filename).write_text(f"---\n{front}---\nBody.\n", encoding="utf-8")
 
 
@@ -119,7 +130,7 @@ def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNames
         agents=cast(AgentStore, SimpleNamespace()),
         projects=projects,
         model_checker=_openai_configured(),
-        global_default_model=lambda: "",
+        global_agent_defaults=lambda: {},
     )
     chat_runs = ChatRunManager()
     cron_service = SimpleNamespace(list_jobs=lambda: list(cron_jobs or []))
@@ -311,6 +322,129 @@ def test_set_requires_a_change(tmp_path: Path) -> None:
 
     with pytest.raises(RpcError, match="at least one field"):
         _set_project(state, {"project_id": "vbot"})
+
+
+# ---------------------------------------------------------------------------
+# Default temperature / thinking effort: add, set, show, validation.
+# ---------------------------------------------------------------------------
+
+
+def test_add_persists_default_temperature_and_thinking(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+
+    result = _add_project(
+        state,
+        {
+            "cwd": str(repo),
+            "display_name": "vBot",
+            "default_temperature": 0.4,
+            "default_thinking_effort": "high",
+        },
+    )
+
+    assert result["project"]["default_temperature"] == 0.4
+    assert result["project"]["default_thinking_effort"] == "high"
+
+
+def test_add_rejects_temperature_out_of_range(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot")
+
+    with pytest.raises(RpcError) as exc_info:
+        _add_project(state, {"cwd": str(repo), "display_name": "vBot", "default_temperature": 3.0})
+
+    assert exc_info.value.code == "invalid_request"
+
+
+def test_set_changes_default_temperature_and_thinking(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    result = _set_project(
+        state,
+        {"project_id": "vbot", "default_temperature": 0.2, "default_thinking_effort": "low"},
+    )
+
+    assert result["project"]["default_temperature"] == 0.2
+    assert result["project"]["default_thinking_effort"] == "low"
+
+
+def test_set_accepts_empty_thinking_effort_as_provider_default(tmp_path: Path) -> None:
+    # "" is a real value (provider default), distinct from null — and _optional_string
+    # would reject it, so this also guards against using the wrong helper (D5).
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    result = _set_project(state, {"project_id": "vbot", "default_thinking_effort": ""})
+
+    assert result["project"]["default_thinking_effort"] == ""
+
+
+def test_set_null_clears_default_thinking_effort(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(
+        state,
+        {
+            "cwd": str(_make_repo(tmp_path, "vbot")),
+            "display_name": "vBot",
+            "default_thinking_effort": "high",
+        },
+    )
+
+    result = _set_project(state, {"project_id": "vbot", "default_thinking_effort": None})
+
+    assert result["project"]["default_thinking_effort"] is None
+
+
+def test_set_rejects_unknown_thinking_effort(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    with pytest.raises(RpcError) as exc_info:
+        _set_project(state, {"project_id": "vbot", "default_thinking_effort": "ultra"})
+
+    assert exc_info.value.code == "invalid_request"
+
+
+def test_set_rejects_temperature_out_of_range(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    with pytest.raises(RpcError) as exc_info:
+        _set_project(state, {"project_id": "vbot", "default_temperature": 3.0})
+
+    assert exc_info.value.code == "invalid_request"
+
+
+def test_show_includes_default_temperature_and_thinking(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(
+        state,
+        {
+            "cwd": str(_make_repo(tmp_path, "vbot")),
+            "display_name": "vBot",
+            "default_temperature": 0.7,
+            "default_thinking_effort": "medium",
+        },
+    )
+
+    result = _show_project(state, {"project_id": "vbot"})
+
+    assert result["project"]["default_temperature"] == 0.7
+    assert result["project"]["default_thinking_effort"] == "medium"
+
+
+def test_team_member_response_includes_thinking_effort(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot")
+    _write_agent(repo, "thinker.md", reasoning_effort="high")
+
+    result = _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    member = result["scan"]["team"][0]
+    assert member["agent_id"] == "thinker"
+    assert member["thinking_effort"] == "high"
 
 
 # ---------------------------------------------------------------------------

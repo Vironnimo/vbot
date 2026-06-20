@@ -16,6 +16,8 @@
     showProject,
   } from '$lib/api.js';
   import {
+    PROJECT_THINKING_EFFORT_NO_DEFAULT,
+    PROJECT_THINKING_EFFORT_OPTIONS,
     buildAddProjectPayload,
     buildDefaultAgentOptions,
     buildManageProjectPayload,
@@ -125,6 +127,27 @@
     }),
   );
 
+  // The project default thinking-effort options: the "no default" sentinel and
+  // the "provider default" ('') choice wrap the shared effort ladder, reusing the
+  // agent effort-level labels so there is no duplicate label catalog.
+  let thinkingEffortOptions = $derived([
+    {
+      value: PROJECT_THINKING_EFFORT_NO_DEFAULT,
+      label: t('projects.manage.noThinkingEffort', 'No project default'),
+    },
+    {
+      value: '',
+      label: t(
+        'projects.manage.providerThinkingEffortDefault',
+        '— (provider default)',
+      ),
+    },
+    ...PROJECT_THINKING_EFFORT_OPTIONS.map((option) => ({
+      value: option,
+      label: t(`agents.form.thinkingEffortOption.${option}`, option),
+    })),
+  ]);
+
   // The currently expanded project record (or null). Both the auto-save diff and
   // the explicit Save target it as the single source of truth.
   let expandedProject = $derived(
@@ -139,6 +162,8 @@
             display_name: editForm.display_name,
             default_agent: editForm.default_agent,
             default_model: editForm.default_model,
+            default_temperature: editForm.default_temperature,
+            default_thinking_effort: editForm.default_thinking_effort,
             auto_load: editForm.auto_load,
           },
           expandedProject,
@@ -200,8 +225,26 @@
       display_name: project?.display_name ?? '',
       default_agent: project?.default_agent ?? '',
       default_model: project?.default_model ?? '',
+      default_temperature: seedProjectTemperature(project?.default_temperature),
+      default_thinking_effort: seedProjectThinkingEffort(
+        project?.default_thinking_effort,
+      ),
       auto_load: [...(project?.auto_load ?? [])],
     };
+  }
+
+  // number → text box; null/absent → empty box ("no project default").
+  function seedProjectTemperature(value) {
+    return typeof value === 'number' ? String(value) : '';
+  }
+
+  // null/absent → the "no default" sentinel; '' (provider default) and a level
+  // seed verbatim so the dropdown shows the stored choice.
+  function seedProjectThinkingEffort(value) {
+    if (value === null || value === undefined) {
+      return PROJECT_THINKING_EFFORT_NO_DEFAULT;
+    }
+    return value;
   }
 
   function clearAutoSaveTimer() {
@@ -844,6 +887,49 @@
                         panelClass="projects-view__search-panel"
                         onOpenChange={trackModelDropdownOpen}
                         onValueChange={updateModelSelection}
+                      />
+                    </label>
+
+                    <label class="projects-view__field">
+                      <span class="projects-view__label">
+                        {t(
+                          'projects.manage.defaultTemperature',
+                          'Default temperature',
+                        )}
+                      </span>
+                      <TextField
+                        id="project-edit-temperature"
+                        inputmode="decimal"
+                        value={editForm.default_temperature}
+                        disabled={editSaving}
+                        ariaLabel={t(
+                          'projects.manage.defaultTemperature',
+                          'Default temperature',
+                        )}
+                        onInput={(next) =>
+                          updateEditField('default_temperature', next)}
+                      />
+                    </label>
+
+                    <label class="projects-view__field">
+                      <span class="projects-view__label">
+                        {t(
+                          'projects.manage.defaultThinkingEffort',
+                          'Default thinking effort',
+                        )}
+                      </span>
+                      <Dropdown
+                        id="project-edit-thinking-effort"
+                        value={editForm.default_thinking_effort}
+                        options={thinkingEffortOptions}
+                        ariaLabel={t(
+                          'projects.manage.defaultThinkingEffort',
+                          'Default thinking effort',
+                        )}
+                        disabled={editSaving}
+                        triggerClass="projects-view__dropdown"
+                        onValueChange={(value) =>
+                          updateEditField('default_thinking_effort', value)}
                       />
                     </label>
                   </div>

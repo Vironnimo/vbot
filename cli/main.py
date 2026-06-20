@@ -395,6 +395,7 @@ def _project_add_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
         fields["default_agent"] = args.default_agent
     if args.default_model is not None:
         fields["default_model"] = args.default_model
+    _apply_project_default_knobs(args, fields)
     if args.auto_load is not None:
         fields["auto_load"] = list(args.auto_load)
     return fields
@@ -410,9 +411,28 @@ def _project_set_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["default_agent"] = args.default_agent
     if args.default_model is not None:
         changes["default_model"] = args.default_model
+    _apply_project_default_knobs(args, changes)
     if args.auto_load is not None:
         changes["auto_load"] = list(args.auto_load)
     return changes
+
+
+def _apply_project_default_knobs(args: argparse.Namespace, target: dict[str, Any]) -> None:
+    """Map the temperature/thinking flags into a project add/set payload.
+
+    Mirrors ``_agent_changes_from_args``: a ``--clear-*`` flag wins and sends
+    ``null`` (fall through to the global default); otherwise a provided value is
+    sent. An empty ``--default-thinking-effort ""`` is a real value (provider
+    default), so it passes the ``is not None`` gate and is sent verbatim.
+    """
+    if args.clear_default_temperature:
+        target["default_temperature"] = None
+    elif args.default_temperature is not None:
+        target["default_temperature"] = args.default_temperature
+    if args.clear_default_thinking_effort:
+        target["default_thinking_effort"] = None
+    elif args.default_thinking_effort is not None:
+        target["default_thinking_effort"] = args.default_thinking_effort
 
 
 def dispatch_session_command(

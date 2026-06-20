@@ -5,6 +5,7 @@ import {
   FINDING_TYPE_ORPHAN,
   FINDING_TYPE_SLUG_COLLISION,
   FINDING_TYPE_UNSLUGIFIABLE_NAME,
+  PROJECT_THINKING_EFFORT_NO_DEFAULT,
   buildAddProjectPayload,
   buildDefaultAgentOptions,
   buildManageProjectPayload,
@@ -46,6 +47,30 @@ describe('buildAddProjectPayload', () => {
       default_model: 'openai/gpt-5.2',
       auto_load: ['AGENTS.md', 'README.md'],
     });
+  });
+
+  it('includes the default knobs when set, and 0 / "" count as real values', () => {
+    expect(
+      buildAddProjectPayload({
+        cwd: 'C:/repos/demo',
+        default_temperature: '0',
+        default_thinking_effort: '',
+      }),
+    ).toEqual({
+      cwd: 'C:/repos/demo',
+      default_temperature: 0,
+      default_thinking_effort: '',
+    });
+  });
+
+  it('omits the default knobs when blank / the no-default sentinel', () => {
+    expect(
+      buildAddProjectPayload({
+        cwd: 'C:/repos/demo',
+        default_temperature: '',
+        default_thinking_effort: PROJECT_THINKING_EFFORT_NO_DEFAULT,
+      }),
+    ).toEqual({ cwd: 'C:/repos/demo' });
   });
 });
 
@@ -131,6 +156,82 @@ describe('buildManageProjectPayload', () => {
   });
 });
 
+describe('buildManageProjectPayload default knobs', () => {
+  const baseProject = {
+    display_name: 'Demo',
+    default_agent: 'builder',
+    default_model: 'openai/gpt-5.2',
+    default_temperature: 0.5,
+    default_thinking_effort: 'high',
+    auto_load: ['AGENTS.md'],
+  };
+
+  function form(overrides) {
+    return {
+      display_name: 'Demo',
+      default_agent: 'builder',
+      default_model: 'openai/gpt-5.2',
+      default_temperature: '0.5',
+      default_thinking_effort: 'high',
+      auto_load: ['AGENTS.md'],
+      ...overrides,
+    };
+  }
+
+  it('emits no knob changes when they match the stored values', () => {
+    expect(buildManageProjectPayload(form(), baseProject)).toEqual({});
+  });
+
+  it('emits a changed temperature as a number', () => {
+    expect(
+      buildManageProjectPayload(
+        form({ default_temperature: '0.2' }),
+        baseProject,
+      ),
+    ).toEqual({ default_temperature: 0.2 });
+  });
+
+  it('clears temperature to null when the box is emptied', () => {
+    expect(
+      buildManageProjectPayload(form({ default_temperature: '' }), baseProject),
+    ).toEqual({ default_temperature: null });
+  });
+
+  it('treats 0 as a real temperature change versus a stored null', () => {
+    const project = { ...baseProject, default_temperature: null };
+    expect(
+      buildManageProjectPayload(form({ default_temperature: '0' }), project),
+    ).toEqual({ default_temperature: 0 });
+  });
+
+  it('clears thinking effort to null via the no-default sentinel', () => {
+    expect(
+      buildManageProjectPayload(
+        form({ default_thinking_effort: PROJECT_THINKING_EFFORT_NO_DEFAULT }),
+        baseProject,
+      ),
+    ).toEqual({ default_thinking_effort: null });
+  });
+
+  it('sends "" to force the provider default', () => {
+    expect(
+      buildManageProjectPayload(
+        form({ default_thinking_effort: '' }),
+        baseProject,
+      ),
+    ).toEqual({ default_thinking_effort: '' });
+  });
+
+  it('sends a changed effort level', () => {
+    expect(
+      buildManageProjectPayload(
+        form({ default_thinking_effort: 'low' }),
+        baseProject,
+      ),
+    ).toEqual({ default_thinking_effort: 'low' });
+  });
+});
+
 describe('buildDefaultAgentOptions', () => {
   it('leads with the empty option and lists the scanned team', () => {
     const options = buildDefaultAgentOptions({
@@ -202,6 +303,8 @@ describe('normalizeProject / normalizeProjects', () => {
         cwd_exists: true,
         default_agent: 'builder',
         default_model: '',
+        default_temperature: 0.4,
+        default_thinking_effort: 'high',
         auto_load: ['AGENTS.md', '  '],
         created_at: '2026-06-18T00:00:00Z',
         updated_at: '2026-06-18T01:00:00Z',
@@ -213,10 +316,28 @@ describe('normalizeProject / normalizeProjects', () => {
       cwd_exists: true,
       default_agent: 'builder',
       default_model: '',
+      default_temperature: 0.4,
+      default_thinking_effort: 'high',
       auto_load: ['AGENTS.md'],
       created_at: '2026-06-18T00:00:00Z',
       updated_at: '2026-06-18T01:00:00Z',
     });
+  });
+
+  it('defaults the knobs to null and preserves a "" provider-default effort', () => {
+    const noDefaults = normalizeProject({ project_id: 'demo' });
+    expect(noDefaults.default_temperature).toBeNull();
+    expect(noDefaults.default_thinking_effort).toBeNull();
+
+    // 0 is a real temperature, "" is the explicit provider-default effort — both
+    // are preserved (not coerced to null).
+    const explicit = normalizeProject({
+      project_id: 'demo',
+      default_temperature: 0,
+      default_thinking_effort: '',
+    });
+    expect(explicit.default_temperature).toBe(0);
+    expect(explicit.default_thinking_effort).toBe('');
   });
 
   it('coerces a missing cwd_exists to false and tolerates a non-list', () => {
@@ -239,6 +360,7 @@ describe('projectTeam', () => {
             description: 'Builds things',
             model: 'openai/gpt-5.2',
             temperature: 0.2,
+            thinking_effort: 'high',
             source_format: 'opencode',
             source_path: '.opencode/agents/builder.md',
           },
@@ -252,6 +374,7 @@ describe('projectTeam', () => {
         description: 'Builds things',
         model: 'openai/gpt-5.2',
         temperature: 0.2,
+        thinking_effort: 'high',
         source_format: 'opencode',
         source_path: '.opencode/agents/builder.md',
       },
@@ -261,6 +384,7 @@ describe('projectTeam', () => {
         description: '',
         model: '',
         temperature: null,
+        thinking_effort: null,
         source_format: '',
         source_path: '',
       },

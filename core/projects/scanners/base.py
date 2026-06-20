@@ -62,6 +62,10 @@ class ScannedAgent:
       for format precedence in collision resolution and for the report.
     - ``source_path`` — absolute path of the file the profile was read from, so
       the report can point at the exact offending file.
+    - ``thinking_effort`` — optional reasoning-effort level from the source, or
+      ``None`` when the source omits it / names an effort vBot does not know. This
+      is the **agent tier** of the resolver's thinking-effort chain (agent →
+      project default → global default → provider default).
     """
 
     agent_id: str
@@ -74,6 +78,7 @@ class ScannedAgent:
     source_path: Path
     tools: tuple[str, ...] = (ALLOW_ALL,)
     skills: tuple[str, ...] = (ALLOW_ALL,)
+    thinking_effort: str | None = None
 
 
 @runtime_checkable

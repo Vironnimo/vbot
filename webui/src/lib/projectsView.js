@@ -25,12 +25,33 @@ const FINDING_TYPES = Object.freeze([
 ]);
 
 // The mutable fields a manage form can change through project.set. cwd is
-// handled by the dedicated re-point path, so it is not part of the generic
-// manage diff here.
+// handled by the dedicated re-point path, and default_temperature /
+// default_thinking_effort have their own typed diff (number/null and
+// null/''/level), so they are not part of this generic string-trim diff.
 const MANAGE_FIELDS = Object.freeze([
   'display_name',
   'default_agent',
   'default_model',
+]);
+
+// The dropdown sentinel for "no project default" thinking effort. Defined here
+// (not imported from settingsView.js) to keep the two view modules decoupled; it
+// mirrors AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT. Distinct from '' which is a
+// real value meaning "provider default" (stops the resolution chain).
+export const PROJECT_THINKING_EFFORT_NO_DEFAULT =
+  '__project_thinking_effort_no_default__';
+
+// The effort ladder a project default may pick (mirrors the agent thinking
+// levels). The sentinel and '' (provider default) are added around these in the
+// dropdown; only these literals are accepted as a real level in the payload.
+export const PROJECT_THINKING_EFFORT_OPTIONS = Object.freeze([
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
 ]);
 
 // Build the project.add payload from the add-form values. cwd is required (the
@@ -55,6 +76,23 @@ export function buildAddProjectPayload(formValues) {
   const defaultModel = optionalText(formValues?.default_model);
   if (defaultModel !== null) {
     payload.default_model = defaultModel;
+  }
+
+  // Only include the knobs when the form carries a real value: a number for
+  // temperature, and a level or '' (provider default) for thinking effort. The
+  // "no default" sentinel / empty temperature box means "omit" at add time.
+  const defaultTemperature = normalizeProjectTemperature(
+    formValues?.default_temperature,
+  );
+  if (defaultTemperature !== null) {
+    payload.default_temperature = defaultTemperature;
+  }
+
+  const defaultThinkingEffort = normalizeProjectThinkingEffortForPayload(
+    formValues?.default_thinking_effort,
+  );
+  if (defaultThinkingEffort !== null) {
+    payload.default_thinking_effort = defaultThinkingEffort;
   }
 
   const autoLoad = normalizeAutoLoad(formValues?.auto_load);
@@ -95,6 +133,28 @@ export function buildManageProjectPayload(formValues, project) {
     // A cleared pointer must be sent as null (the backend maps None → "" to
     // clear it); a sent empty string would be rejected as invalid_request.
     changes[field] = next === '' ? null : next;
+  }
+
+  // Temperature: form string → number|null; send only when it differs from the
+  // stored value. null clears the project default (fall through the chain), a
+  // number sets it (0 is a real value, the sampling floor).
+  const nextTemperature = normalizeProjectTemperature(
+    formValues?.default_temperature,
+  );
+  const currentTemperature = numberOrNull(project?.default_temperature);
+  if (nextTemperature !== currentTemperature) {
+    changes.default_temperature = nextTemperature;
+  }
+
+  // Thinking effort: form (sentinel|''|level) → null|''|level; send only on a
+  // change. null clears the project default, '' forces the provider default, a
+  // level sets it.
+  const nextThinkingEffort = normalizeProjectThinkingEffortForPayload(
+    formValues?.default_thinking_effort,
+  );
+  const currentThinkingEffort = stringOrNull(project?.default_thinking_effort);
+  if (nextThinkingEffort !== currentThinkingEffort) {
+    changes.default_thinking_effort = nextThinkingEffort;
   }
 
   const nextAutoLoad = normalizeAutoLoad(formValues?.auto_load);
@@ -169,6 +229,8 @@ export function normalizeProject(project) {
     cwd_exists: project?.cwd_exists === true,
     default_agent: asText(project?.default_agent),
     default_model: asText(project?.default_model),
+    default_temperature: numberOrNull(project?.default_temperature),
+    default_thinking_effort: stringOrNull(project?.default_thinking_effort),
     auto_load: normalizeAutoLoad(project?.auto_load),
     created_at: optionalText(project?.created_at),
     updated_at: optionalText(project?.updated_at),
@@ -191,6 +253,7 @@ export function projectTeam(scan) {
     model: asText(member?.model),
     temperature:
       typeof member?.temperature === 'number' ? member.temperature : null,
+    thinking_effort: stringOrNull(member?.thinking_effort),
     source_format: asText(member?.source_format),
     source_path: asText(member?.source_path),
   }));
@@ -234,6 +297,49 @@ function normalizeAutoLoad(value) {
   return value
     .map((item) => asText(item).trim())
     .filter((item) => item.length > 0);
+}
+
+// Form temperature (a string, possibly comma-decimal) → number|null. Mirrors
+// settingsView.js' normalizeAgentDefaultsTemperature: an empty/non-numeric box
+// is "no value" (null), so the chain falls through.
+function normalizeProjectTemperature(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const normalized = String(value).trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+  const numberValue = Number(normalized.replace(',', '.'));
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+// Form thinking effort (sentinel|''|level) → null|''|level for the payload.
+// Mirrors settingsView.js' normalizeAgentDefaultsThinkingEffortForPayload: the
+// sentinel and a missing value mean "no default" (null), '' means "provider
+// default", and only a known level passes through (an unknown one → null).
+function normalizeProjectThinkingEffortForPayload(value) {
+  if (value === PROJECT_THINKING_EFFORT_NO_DEFAULT) {
+    return null;
+  }
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const normalized = String(value).trim();
+  if (normalized.length === 0) {
+    return '';
+  }
+  return PROJECT_THINKING_EFFORT_OPTIONS.includes(normalized)
+    ? normalized
+    : null;
+}
+
+function numberOrNull(value) {
+  return typeof value === 'number' ? value : null;
+}
+
+function stringOrNull(value) {
+  return typeof value === 'string' ? value : null;
 }
 
 function sameStringList(left, right) {

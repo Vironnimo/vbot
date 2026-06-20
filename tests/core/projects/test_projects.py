@@ -34,7 +34,40 @@ def test_build_project_minimal_just_cwd_defaults_optionals(tmp_path: Path) -> No
 
     assert project.default_agent == ""
     assert project.default_model == ""
+    assert project.default_temperature is None
+    assert project.default_thinking_effort is None
     assert project.auto_load == []
+
+
+def test_build_project_accepts_default_temperature_and_thinking(tmp_path: Path) -> None:
+    project = build_project(
+        "vbot",
+        "vBot",
+        tmp_path,
+        default_temperature=0.0,
+        default_thinking_effort="medium",
+    )
+
+    # 0.0 is a real value (the chain's floor), not "unset".
+    assert project.default_temperature == 0.0
+    assert project.default_thinking_effort == "medium"
+
+
+def test_build_project_accepts_empty_thinking_effort_as_provider_default(tmp_path: Path) -> None:
+    # "" is the explicit "provider default" value, distinct from None ("no default").
+    project = build_project("vbot", "vBot", tmp_path, default_thinking_effort="")
+
+    assert project.default_thinking_effort == ""
+
+
+def test_build_project_rejects_temperature_out_of_range(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError):
+        build_project("vbot", "vBot", tmp_path, default_temperature=3.0)
+
+
+def test_build_project_rejects_unknown_thinking_effort(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError):
+        build_project("vbot", "vBot", tmp_path, default_thinking_effort="ultra")
 
 
 def test_build_project_rejects_invalid_project_id(tmp_path: Path) -> None:
@@ -95,6 +128,8 @@ def test_to_dict_round_trips_through_project_from_dict(tmp_path: Path) -> None:
         tmp_path,
         default_agent="orchestrator",
         default_model="openai/gpt-5",
+        default_temperature=0.4,
+        default_thinking_effort="high",
         auto_load=["AGENTS.md"],
     )
 
@@ -112,6 +147,8 @@ def test_to_dict_has_stable_field_set(tmp_path: Path) -> None:
         "cwd",
         "default_agent",
         "default_model",
+        "default_temperature",
+        "default_thinking_effort",
         "auto_load",
         "created_at",
         "updated_at",
@@ -131,6 +168,8 @@ def test_project_from_dict_defaults_optional_fields() -> None:
 
     assert project.default_agent == ""
     assert project.default_model == ""
+    assert project.default_temperature is None
+    assert project.default_thinking_effort is None
     assert project.auto_load == []
 
 
