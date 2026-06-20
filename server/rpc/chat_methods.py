@@ -13,6 +13,7 @@ from core.projects import (
     parse_agent_address,
 )
 from core.runs import ActiveRunError, ChatRunManager
+from server.events import RESOURCE_KIND_QUEUE
 from server.rpc.agent_methods import _create_session
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -22,7 +23,11 @@ from server.rpc.errors import (
     RPC_ERROR_RUN_NOT_FOUND,
     RpcError,
 )
-from server.rpc.event_bridge import _bridge_queued_item_to_event_bus, _bridge_run_to_event_bus
+from server.rpc.event_bridge import (
+    _bridge_queued_item_to_event_bus,
+    _bridge_run_to_event_bus,
+    publish_resource_changed,
+)
 from server.rpc.payloads import (
     _is_visible_history_message,
     _queued_response,
@@ -67,6 +72,22 @@ HANDOFF_INSTRUCTION = (
     "and output only the handoff itself, with no preamble and no sign-off, because "
     "your reply becomes their first message."
 )
+
+
+def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
+    """Signal that one session's queue changed so other windows reload it live.
+
+    Scoped to the affected session (bare agent id, as the queue is keyed) so
+    windows on a different session ignore it. Only the browser/RPC send surface
+    emits this — core enqueues (automation, channels, sub-agents) deliberately
+    do not, keeping the chat core untouched; those windows still catch up on the
+    next terminal event.
+    """
+    publish_resource_changed(
+        state,
+        RESOURCE_KIND_QUEUE,
+        scope={"agent_id": agent_id, "session_id": session_id},
+    )
 
 
 def _chat_history(state: Any, params: JsonObject) -> JsonObject:
@@ -486,6 +507,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                     project_id=project_id,
                 )
             _bridge_queued_item_to_event_bus(state, queued_item)
+            _publish_queue_changed(state, agent_id, session_id)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
         return _queued_response(queued_item)
@@ -551,6 +573,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
                     project_id=project_id,
                 )
             _bridge_queued_item_to_event_bus(state, queued_item)
+            _publish_queue_changed(state, agent_id, session_id)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
         return _queued_response(queued_item)
@@ -691,6 +714,7 @@ def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
 
     if not removed:
         raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+    _publish_queue_changed(state, agent_id, session_id)
     return {"ok": True}
 
 
@@ -745,6 +769,9 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
 
     if not updated:
         raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+    # Scope on the resolved session id — content can move an item to a different
+    # session, and that resolved id (not the raw input) is what was mutated.
+    _publish_queue_changed(state, agent_id, resolved_session_id)
     return {"ok": True}
 
 
