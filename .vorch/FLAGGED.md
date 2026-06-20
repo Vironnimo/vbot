@@ -187,3 +187,30 @@ unverified pieces (no credentials in this environment — the Phase-0 gate could
    channels-on-project is deferred, so a channel session never carries a project cwd and
    `effective_cwd` would fall back to `workspace` anyway. Switch it to `effective_cwd`
    when channels learn projects, for consistency.
+
+## 2026-06-21 — WebUI long-lived tab: unbounded background-session run-event accumulation
+
+Found while diagnosing a long-lived-tab performance report (stream stutter that clears the
+instant the tab is hidden/minimized/reloaded). The B10 fix (`b3edb5f`) bounded the dedup
+key set and prunes the **displayed** session's `runEvents` on `loadHistory`, but two growth
+vectors stay open for **background** sessions (channels, cron, sub-agents) the user never
+opens:
+
+1. **`chatState.sessions` is never pruned.** `ensureSessionState` is the only writer; no
+   code deletes session entries. Every `(agent, session)` that ever receives a `/ws` run
+   event keeps a permanent entry for the tab's lifetime.
+
+2. **Per-session `runEvents` has no cap and an O(n) dedup.** `appendRunEvent` linear-scans
+   the whole `runEvents` array per non-streaming event, and background sessions never reach
+   the `loadHistory` prune path — so under sustained background activity the arrays grow
+   unbounded and per-event cost climbs (O(n²) overall).
+
+**Not the cause of the reported incident** (the tab was idle — Telegram connected but
+unused, no sub-agents — so no run events were flowing; removing the always-on `.pulse-dot`
+ripple animation in `5c640f5` addressed that case). This is latent: it only bites under
+heavy background workloads. Deferred because the fix has subtle edges — pruning a background
+session can drop the live sub-agent `running`/queue projection a still-rendered row relies
+on, so it is **not** a pure "longer load time" change. Fix carefully when background-heavy
+use makes it matter: cap per-session `runEvents`, and LRU-evict non-displayed session
+states, releasing their status-verification guards like the existing
+`subAgentGuardKeysForEvictedStatuses` path already does for evicted status keys.
