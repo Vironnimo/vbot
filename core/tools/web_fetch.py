@@ -13,6 +13,7 @@ import httpx
 from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import NavigableString, PageElement
 
+from core.tools.arguments import coerce_bool
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -564,14 +565,6 @@ def _truncate_formatted_output(output: str, text: str) -> str:
     return header + _truncate_utf8_with_suffix(text, remaining, _CONTENT_TRUNCATED_MARKER)
 
 
-def _coerce_bool(value: object, *, field_name: str, default: bool) -> bool:
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ValueError(f"{field_name} must be a boolean")
-    return value
-
-
 def _default_port_for_scheme(scheme: str) -> int:
     return 443 if scheme == "https" else 80
 
@@ -795,10 +788,10 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
         return tool_failure("validation_error", "url must be a non-empty string", retryable=False)
 
     try:
-        include_links = _coerce_bool(
+        include_links = coerce_bool(
             arguments.get("include_links"), field_name="include_links", default=True
         )
-        raw = _coerce_bool(arguments.get("raw"), field_name="raw", default=False)
+        raw = coerce_bool(arguments.get("raw"), field_name="raw", default=False)
     except ValueError as error:
         return tool_failure("validation_error", str(error), retryable=False)
 
