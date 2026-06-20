@@ -221,7 +221,9 @@ def test_grep_returns_failure_for_invalid_controls(
     assert error["message"] == message
 
 
-def test_grep_accepts_string_encoded_controls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_grep_accepts_string_encoded_controls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Models often encode numbers and booleans as strings; accept them.
     force_python_fallback(monkeypatch)
     workspace = tmp_path / "workspace"
