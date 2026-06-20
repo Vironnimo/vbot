@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from core.memory import MemoryEntry, MemoryError, MemoryScope, MemoryService
+from core.tools.arguments import required_int
 from core.tools.availability import MEMORY_TOOL_NAME
 from core.tools.tools import (
     JsonObject,
@@ -154,9 +155,7 @@ def _required_enum(value: object, *, field_name: str, values: tuple[str, ...]) -
 
 
 def _required_entry_id(value: object) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError("entry_id must be an integer")
-    return value
+    return required_int(value, field_name="entry_id")
 
 
 def _required_content(value: object) -> str:

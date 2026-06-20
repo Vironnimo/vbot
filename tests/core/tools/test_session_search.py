@@ -267,6 +267,34 @@ def test_session_search_blank_query_lists_sessions(tmp_path: Path) -> None:
     ]
 
 
+def test_session_search_blank_agent_id_falls_back_to_current_agent(tmp_path: Path) -> None:
+    # A blank optional id must mean "omitted" (use the current agent), not error.
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="own-session")
+    session.append(ChatMessage.user("some work", timestamp=timestamp(4)))
+
+    result = session_search_handler(
+        make_context(tmp_path, agent_id="coder"),
+        {"agent_id": "", "session_id": ""},
+        sessions,
+    )
+
+    data = assert_success_envelope(result)
+    assert [summary["session_id"] for summary in data["sessions"]] == ["own-session"]
+
+
+def test_session_search_accepts_string_encoded_limit(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    for index in range(3):
+        session = sessions.create("coder", session_id=f"session-{index}")
+        session.append(ChatMessage.user("work", timestamp=timestamp(index + 1)))
+
+    result = session_search_handler(make_context(tmp_path), {"limit": "2"}, sessions)
+
+    data = assert_success_envelope(result)
+    assert len(data["sessions"]) == 2
+
+
 def test_session_search_includes_neighbor_context_when_requested(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="thread-session")
