@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -99,14 +100,25 @@ def _openai_configured() -> ModelConfigurationChecker:
 # ---------------------------------------------------------------------------
 
 
-def _write_agent(repo: Path, filename: str, *, model: str = "", body: str = "Body.") -> Path:
+def _write_agent(
+    repo: Path,
+    filename: str,
+    *,
+    model: str = "",
+    body: str = "Body.",
+    temperature: float | None = 0.3,
+    reasoning_effort: str | None = None,
+) -> Path:
     agents_dir = repo.joinpath(*OPENCODE_AGENTS_SUBPATH)
     agents_dir.mkdir(parents=True, exist_ok=True)
-    front = (
-        f"description: An agent.\nmodel: {model}\ntemperature: 0.3\n"
-        if model
-        else ("description: An agent.\ntemperature: 0.3\n")
-    )
+    lines = ["description: An agent."]
+    if model:
+        lines.append(f"model: {model}")
+    if temperature is not None:
+        lines.append(f"temperature: {temperature}")
+    if reasoning_effort is not None:
+        lines.append(f"reasoningEffort: {reasoning_effort}")
+    front = "\n".join(lines) + "\n"
     path = agents_dir / filename
     path.write_text(f"---\n{front}---\n{body}\n", encoding="utf-8")
     return path
@@ -143,8 +155,22 @@ def projects(data_dir: Path) -> ProjectStore:
     return ProjectStore(data_dir)
 
 
-def _project(projects: ProjectStore, repo: Path, *, default_model: str = ""):
-    return projects.create("vbot", "vBot", repo, default_model=default_model)
+def _project(
+    projects: ProjectStore,
+    repo: Path,
+    *,
+    default_model: str = "",
+    default_temperature: float | None = None,
+    default_thinking_effort: str | None = None,
+):
+    return projects.create(
+        "vbot",
+        "vBot",
+        repo,
+        default_model=default_model,
+        default_temperature=default_temperature,
+        default_thinking_effort=default_thinking_effort,
+    )
 
 
 def _resolver(
@@ -153,8 +179,23 @@ def _resolver(
     checker: ModelConfigurationChecker,
     *,
     global_default: str = "",
+    global_temperature: float | None = None,
+    global_thinking_effort: str | None = None,
 ) -> AgentResolver:
-    return AgentResolver(agents, projects, checker, lambda: global_default)
+    """Build a resolver whose global tier is a ``defaults.agent`` dict provider.
+
+    A key is present only when its argument is given, so each test injects exactly
+    the global tier it wants — an absent key means "no global default" for that
+    field (the chain falls through). ``""`` is a real value for thinking effort.
+    """
+    defaults: dict[str, Any] = {}
+    if global_default:
+        defaults["model"] = global_default
+    if global_temperature is not None:
+        defaults["temperature"] = global_temperature
+    if global_thinking_effort is not None:
+        defaults["thinking_effort"] = global_thinking_effort
+    return AgentResolver(agents, projects, checker, lambda: defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +284,142 @@ def test_unconfigured_agent_model_falls_through_to_default(
 
     # Assert: chain fell through the unconfigured declared model.
     assert runtime_agent.model == "openai/gpt-5.2"
+
+
+# ---------------------------------------------------------------------------
+# Temperature chain: agent → project default → global default → None.
+# ---------------------------------------------------------------------------
+
+
+def test_temperature_chain_agent_value_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=0.7)
+    project = _project(projects, repo, default_temperature=0.2)
+    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.temperature == 0.7
+
+
+def test_temperature_chain_falls_back_to_project_default(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # Agent declares no temperature; the project default delivers.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
+    project = _project(projects, repo, default_temperature=0.2)
+    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.temperature == 0.2
+
+
+def test_temperature_chain_falls_back_to_global_default(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.temperature == 0.9
+
+
+def test_temperature_chain_all_empty_yields_none(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.temperature is None
+
+
+def test_temperature_project_zero_stops_chain(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # 0.0 is a real value (the sampling floor), not "unset" — it must stop the
+    # chain before the global default, not fall through.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
+    project = _project(projects, repo, default_temperature=0.0)
+    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.temperature == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Thinking-effort chain: agent → project default → global default → None.
+# ---------------------------------------------------------------------------
+
+
+def test_thinking_chain_agent_value_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # The agent tier is the scanned reasoningEffort (Phase 1b).
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", reasoning_effort="high")
+    project = _project(projects, repo, default_thinking_effort="low")
+    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.thinking_effort == "high"
+
+
+def test_thinking_chain_falls_back_to_project_default(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo, default_thinking_effort="low")
+    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.thinking_effort == "low"
+
+
+def test_thinking_chain_falls_back_to_global_default(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.thinking_effort == "medium"
+
+
+def test_thinking_project_empty_string_blocks_global(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # "" is a real value meaning "provider default" — it stops the chain, so the
+    # global default never applies. The resolved value is "" (not the global one).
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo, default_thinking_effort="")
+    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.thinking_effort == ""
+
+
+def test_thinking_chain_all_empty_yields_none(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.thinking_effort is None
 
 
 # ---------------------------------------------------------------------------

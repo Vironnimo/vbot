@@ -137,6 +137,54 @@ def test_get_returns_persisted_project(data_dir: Path, repo: Path) -> None:
     assert loaded.default_model == "openai/gpt-5"
 
 
+def test_create_persists_default_temperature_and_thinking(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create(
+        "vbot",
+        "vBot",
+        repo,
+        default_temperature=0.4,
+        default_thinking_effort="high",
+    )
+
+    loaded = store.get("vbot")
+    assert loaded.default_temperature == 0.4
+    assert loaded.default_thinking_effort == "high"
+
+
+def test_update_sets_default_temperature_and_thinking(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    updated = store.update("vbot", default_temperature=0.2, default_thinking_effort="low")
+
+    assert updated.default_temperature == 0.2
+    assert updated.default_thinking_effort == "low"
+    reloaded = store.get("vbot")
+    assert reloaded.default_temperature == 0.2
+    assert reloaded.default_thinking_effort == "low"
+
+
+def test_update_one_default_leaves_the_other_untouched(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo, default_temperature=0.5, default_thinking_effort="high")
+
+    updated = store.update("vbot", default_temperature=0.1)
+
+    assert updated.default_temperature == 0.1
+    # The thinking effort was not in the change set, so it must survive unchanged.
+    assert updated.default_thinking_effort == "high"
+
+
+def test_update_clears_default_thinking_with_none(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo, default_thinking_effort="high")
+
+    updated = store.update("vbot", default_thinking_effort=None)
+
+    assert updated.default_thinking_effort is None
+
+
 def test_get_raises_for_unknown_project(data_dir: Path) -> None:
     store = ProjectStore(data_dir)
 

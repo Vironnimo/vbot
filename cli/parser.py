@@ -301,6 +301,27 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Project default model as <provider>/<model-id>",
     )
     add_parser.add_argument(
+        "--default-temperature",
+        type=float,
+        metavar="<0.0-2.0>",
+        help="Project default sampling temperature (0.0-2.0)",
+    )
+    add_parser.add_argument(
+        "--clear-default-temperature",
+        action="store_true",
+        help="Clear the project default temperature (fall through to the global default)",
+    )
+    add_parser.add_argument(
+        "--default-thinking-effort",
+        choices=THINKING_EFFORTS,
+        help="Project default reasoning effort; empty string means provider default",
+    )
+    add_parser.add_argument(
+        "--clear-default-thinking-effort",
+        action="store_true",
+        help="Clear the project default thinking effort (fall through to the global default)",
+    )
+    add_parser.add_argument(
         "--auto-load",
         nargs="*",
         metavar="<file>",
@@ -332,6 +353,27 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "--default-model",
         metavar="<provider/model-id>",
         help="New project default model as <provider>/<model-id>",
+    )
+    set_parser.add_argument(
+        "--default-temperature",
+        type=float,
+        metavar="<0.0-2.0>",
+        help="New project default sampling temperature (0.0-2.0)",
+    )
+    set_parser.add_argument(
+        "--clear-default-temperature",
+        action="store_true",
+        help="Clear the project default temperature (fall through to the global default)",
+    )
+    set_parser.add_argument(
+        "--default-thinking-effort",
+        choices=THINKING_EFFORTS,
+        help="New project default reasoning effort; empty string means provider default",
+    )
+    set_parser.add_argument(
+        "--clear-default-thinking-effort",
+        action="store_true",
+        help="Clear the project default thinking effort (fall through to the global default)",
     )
     set_parser.add_argument(
         "--auto-load",

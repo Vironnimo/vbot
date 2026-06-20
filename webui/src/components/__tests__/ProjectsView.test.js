@@ -221,6 +221,91 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('seeds the temperature field and thinking-effort dropdown from the project', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({
+          project_id: 'demo',
+          display_name: 'Demo',
+          default_temperature: 0.4,
+          default_thinking_effort: 'high',
+        }),
+      ],
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-toggle-demo"]'),
+    );
+    buttonByTestId('project-toggle-demo').click();
+    flushSync();
+
+    await waitForCondition(() => inputById('project-edit-temperature'));
+    expect(inputById('project-edit-temperature').value).toBe('0.4');
+    const trigger = document.getElementById('project-edit-thinking-effort');
+    expect(trigger).toBeTruthy();
+    expect(trigger.textContent).toContain('high');
+  });
+
+  it('saves a changed default temperature through project.set', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-toggle-demo"]'),
+    );
+    buttonByTestId('project-toggle-demo').click();
+    flushSync();
+
+    await waitForCondition(() => inputById('project-edit-temperature'));
+    setInputValue('project-edit-temperature', '0.2');
+
+    buttonByTestId('project-save-demo').click();
+
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      default_temperature: 0.2,
+    });
+  });
+
+  it('saves a changed default thinking effort through project.set', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-toggle-demo"]'),
+    );
+    buttonByTestId('project-toggle-demo').click();
+    flushSync();
+
+    await waitForCondition(() =>
+      document.getElementById('project-edit-thinking-effort'),
+    );
+    // Open the dropdown and pick the "low" effort level.
+    document.getElementById('project-edit-thinking-effort').click();
+    flushSync();
+    await waitForCondition(() => optionByText('low'));
+    optionByText('low').click();
+    flushSync();
+
+    buttonByTestId('project-save-demo').click();
+
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      default_thinking_effort: 'low',
+    });
+  });
+
   it('adds and removes auto-load files through the list and saves them', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [
@@ -469,6 +554,14 @@ function submitButtonInDialog(label) {
 
 function inputById(id) {
   return document.getElementById(id);
+}
+
+// Dropdown options are portaled to the body as role="option" buttons; match by
+// the exact trimmed label text.
+function optionByText(text) {
+  return Array.from(document.querySelectorAll('[role="option"]')).find(
+    (item) => item.textContent?.trim() === text,
+  );
 }
 
 function setInputValue(id, value) {

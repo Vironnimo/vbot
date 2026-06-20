@@ -59,7 +59,8 @@ from core.projects.scanners.base import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
+    from typing import Any
 
     from core.agents.agents import Agent, AgentStore
     from core.models.models import ModelRegistry
@@ -163,8 +164,9 @@ class ConfigAgent:
     body: str
     source_path: Path
     source_format: str
-    # Config agents have no per-agent reasoning override in v1 — ``None`` means
-    # "provider default", same as an identity agent that leaves it unset.
+    # Resolved through the chain (agent → project default → global default); both
+    # ``temperature`` and ``thinking_effort`` carry the first tier that delivered,
+    # or ``None`` when all tiers fell through → the provider default.
     thinking_effort: str | None = None
     fallback_model: str = _CONFIG_AGENT_FALLBACK_MODEL
     workspace: str = _CONFIG_AGENT_WORKSPACE
@@ -207,10 +209,15 @@ class CredentialProbe(Protocol):
     def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool: ...
 
 
-class GlobalDefaultModelProvider(Protocol):
-    """Returns the instance-wide default agent model, or ``""`` when unset."""
+class GlobalAgentDefaultsProvider(Protocol):
+    """Returns the instance-wide ``defaults.agent`` map (model, temperature, …).
 
-    def __call__(self) -> str: ...
+    One seam for the whole global tier of the resolution chains: the resolver
+    reads ``model`` / ``temperature`` / ``thinking_effort`` out of the returned
+    mapping. Missing keys mean "no global default" for that field. An empty map is
+    a valid answer (nothing configured globally)."""
+
+    def __call__(self) -> Mapping[str, Any]: ...
 
 
 def _bad_model_finding(member: ScannedAgent) -> ScanFinding:
@@ -307,14 +314,14 @@ class AgentResolver:
         agents: AgentStore,
         projects: ProjectStore,
         model_checker: ModelConfigurationChecker,
-        global_default_model: GlobalDefaultModelProvider,
+        global_agent_defaults: GlobalAgentDefaultsProvider,
         *,
         detector_registry: list[DetectorRegistration] | None = None,
     ) -> None:
         self._agents = agents
         self._projects = projects
         self._model_checker = model_checker
-        self._global_default_model = global_default_model
+        self._global_agent_defaults = global_agent_defaults
         # Captured once; ``scan_project`` falls back to its own default registry
         # when this is ``None``, so tests can inject a custom registry.
         self._detector_registry = detector_registry
@@ -355,8 +362,18 @@ class AgentResolver:
         # cached Team only told us the agent still belongs; the live config comes
         # from disk.
         scanned = self._read_agent_fresh(project, agent_id)
-        resolved_model = self._resolve_model_or_raise(scanned, project)
-        return _build_config_agent(scanned, resolved_model)
+        # Read the global tier once and feed it to all three chains, so one resolve
+        # never reads the settings file three times (model + temp + thinking).
+        global_defaults = self._global_agent_defaults()
+        resolved_model = self._resolve_model_or_raise(scanned, project, global_defaults)
+        resolved_temperature = _resolve_temperature(scanned, project, global_defaults)
+        resolved_thinking_effort = _resolve_thinking_effort(scanned, project, global_defaults)
+        return _build_config_agent(
+            scanned,
+            resolved_model,
+            resolved_temperature,
+            resolved_thinking_effort,
+        )
 
     def scan_project_report(self, project: Project) -> ScanResult:
         """Scan a project into Team + a **complete** report (incl. model findings).
@@ -423,7 +440,9 @@ class AgentResolver:
             f"agent '{agent_id}' is no longer present in project '{project.project_id}'"
         )
 
-    def _resolve_model_or_raise(self, scanned: ScannedAgent, project: Project) -> str:
+    def _resolve_model_or_raise(
+        self, scanned: ScannedAgent, project: Project, global_defaults: Mapping[str, Any]
+    ) -> str:
         """Run the model chain and return the first usable model, or raise.
 
         Chain: agent model → project default → global default. Each candidate
@@ -431,7 +450,8 @@ class AgentResolver:
         candidate is skipped as if absent. Falling all the way through is a clear
         "cannot run" error.
         """
-        for candidate in (scanned.model, project.default_model, self._global_default_model()):
+        global_model = global_defaults.get("model", "")
+        for candidate in (scanned.model, project.default_model, global_model):
             if candidate and self._model_checker.is_configured(candidate):
                 return candidate
         raise AgentResolutionError(
@@ -468,18 +488,65 @@ def runtime_agent_body(agent: RuntimeAgent) -> str:
     return agent.body if isinstance(agent, ConfigAgent) else ""
 
 
-def _build_config_agent(scanned: ScannedAgent, resolved_model: str) -> ConfigAgent:
+def _build_config_agent(
+    scanned: ScannedAgent,
+    resolved_model: str,
+    resolved_temperature: float | None,
+    resolved_thinking_effort: str | None,
+) -> ConfigAgent:
     return ConfigAgent(
         id=scanned.agent_id,
         name=scanned.display_name,
         model=resolved_model,
-        temperature=scanned.temperature,
+        temperature=resolved_temperature,
+        thinking_effort=resolved_thinking_effort,
         body=scanned.body,
         source_path=scanned.source_path,
         source_format=scanned.source_format,
         allowed_tools=list(scanned.tools),
         allowed_skills=list(scanned.skills),
     )
+
+
+def _resolve_temperature(
+    scanned: ScannedAgent, project: Project, global_defaults: Mapping[str, Any]
+) -> float | None:
+    """Resolve temperature: agent value → project default → global default → None.
+
+    The first tier that carries a number wins; ``0.0`` is a real value (the
+    sampling floor) and stops the chain. Falling through every tier yields
+    ``None`` → the field is dropped at the wire and the provider default applies.
+    """
+    candidates = (
+        scanned.temperature,
+        project.default_temperature,
+        global_defaults.get("temperature"),
+    )
+    for candidate in candidates:
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _resolve_thinking_effort(
+    scanned: ScannedAgent, project: Project, global_defaults: Mapping[str, Any]
+) -> str | None:
+    """Resolve thinking effort: agent → project default → global default → None.
+
+    The first tier that is not ``None`` wins. ``""`` is a real value meaning
+    "provider default" and stops the chain, so a project ``default_thinking_effort
+    = ""`` blocks the global default (forces the provider default) while ``None``
+    lets the global default through. Falling through every tier yields ``None``.
+    """
+    candidates = (
+        scanned.thinking_effort,
+        project.default_thinking_effort,
+        global_defaults.get("thinking_effort"),
+    )
+    for candidate in candidates:
+        if candidate is not None:
+            return candidate
+    return None
 
 
 def _project_root(project: Project) -> Path:
@@ -493,7 +560,7 @@ def build_agent_resolver(
     models: ModelRegistry,
     providers: ProviderRegistry,
     provider_credentials: ProviderCredentialResolverProtocol,
-    global_default_model: Callable[[], str],
+    global_agent_defaults: Callable[[], Mapping[str, Any]],
     *,
     detector_registry: list[DetectorRegistration] | None = None,
 ) -> AgentResolver:
@@ -501,13 +568,14 @@ def build_agent_resolver(
 
     The runtime wiring point: it adapts the concrete registries to the resolver's
     local probe protocols and builds the shared model-configuration checker, so
-    the runtime only hands over the services it already owns.
+    the runtime only hands over the services it already owns. ``global_agent_defaults``
+    returns the live ``defaults.agent`` map (the global tier of every chain).
     """
     checker = ModelConfigurationChecker(models, providers, provider_credentials)
     return AgentResolver(
         agents,
         projects,
         checker,
-        global_default_model,
+        global_agent_defaults,
         detector_registry=detector_registry,
     )
