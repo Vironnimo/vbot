@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.tools.arguments import ToolArgumentError, coerce_bool, normalize_aliases
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -119,7 +120,18 @@ def _resolve_edit_path(context: ToolContext, path: str) -> Path:
     return (context.effective_cwd / candidate).resolve()
 
 
+_EDIT_ARGUMENT_ALIASES = {
+    "oldString": "old_string",
+    "newString": "new_string",
+    "replaceAll": "replace_all",
+}
+
+
 def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool] | JsonObject:
+    # Accept camelCase variants some models emit instead of rejecting the whole
+    # call as an unknown argument; the canonical key wins if both are present.
+    arguments = normalize_aliases(arguments, _EDIT_ARGUMENT_ALIASES)
+
     unknown_arguments = set(arguments) - {"path", "old_string", "new_string", "replace_all"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -139,9 +151,12 @@ def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool
     if not isinstance(new_string, str):
         return tool_failure("invalid_arguments", "new_string must be a string")
 
-    replace_all = arguments.get("replace_all", False)
-    if not isinstance(replace_all, bool):
-        return tool_failure("invalid_arguments", "replace_all must be a boolean")
+    try:
+        replace_all = coerce_bool(
+            arguments.get("replace_all"), field_name="replace_all", default=False
+        )
+    except ToolArgumentError as error:
+        return tool_failure("invalid_arguments", str(error))
 
     if old_string == new_string:
         return tool_failure(
