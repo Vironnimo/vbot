@@ -439,3 +439,87 @@ async def test_resolver_failure_maps_to_tool_failure_not_raised() -> None:
 
     assert failure is not None
     assert failure["error"]["code"] == "agent_not_found"
+
+
+async def test_subagent_blank_session_id_creates_new_session(tmp_path: Path) -> None:
+    # Models routinely emit an omitted optional string field as "" (schema-valid
+    # for ``type: string``). A blank session_id must mean "create a new session",
+    # exactly like omitting it — not a hard rejection.
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id="acme")
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "worker", "session_id": ""},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert: a fresh project-scoped session was created, never an empty-id lookup.
+    assert result["ok"] is True
+    child_session_id = result["data"]["session_id"]
+    assert child_session_id
+    project_session = (
+        tmp_path
+        / "projects"
+        / "acme"
+        / "agents"
+        / "worker"
+        / "sessions"
+        / f"{child_session_id}.jsonl"
+    )
+    assert project_session.exists()
+    # Settle the non-blocking completion tracker task before the loop closes.
+    started_run = manager.started[0]["run"]
+    started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
+    await asyncio.sleep(0)
+
+
+async def test_subagent_blank_agent_id_falls_back_to_calling_agent(tmp_path: Path) -> None:
+    # A blank (whitespace-only) agent_id must fall back to the calling agent,
+    # exactly like omitting it.
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id="acme")
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "   "},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["agent_id"] == "parent"
+    # Settle the non-blocking completion tracker task before the loop closes.
+    started_run = manager.started[0]["run"]
+    started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
+    await asyncio.sleep(0)
+
+
+async def test_subagent_non_string_session_id_is_rejected(tmp_path: Path) -> None:
+    # A present-but-non-string session_id is still a clean invalid_arguments
+    # failure — leniency is only for blank strings, not for the wrong type.
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id="acme")
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "worker", "session_id": 123},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert manager.started == []

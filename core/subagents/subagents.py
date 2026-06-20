@@ -104,6 +104,26 @@ class SubAgentCoordinator:
         )
 
 
+def _optional_string_argument(
+    arguments: JsonObject, key: str
+) -> tuple[str | None, JsonObject | None]:
+    """Read an optional string tool argument, treating a blank value as omitted.
+
+    Models routinely fill an omitted optional string field with an empty string
+    instead of leaving it out — schema-valid for ``type: string`` but a no-op in
+    intent. Treat a blank/whitespace value the same as absent so an otherwise
+    valid call (e.g. a first spawn with no target session) is not rejected.
+    Returns ``(value, None)`` where ``value`` is the trimmed string or ``None``
+    when absent/blank, or ``(None, failure)`` when present but not a string.
+    """
+    value = arguments.get(key)
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        return None, tool_failure("invalid_arguments", f"{key} must be a string")
+    return (value.strip() or None), None
+
+
 async def _handle_subagent(
     context: ToolContext,
     arguments: JsonObject,
@@ -117,15 +137,18 @@ async def _handle_subagent(
             "invalid_arguments", "content is required and must be a non-empty string"
         )
 
-    target_agent_id = arguments.get("agent_id", context.agent_id)
-    if not isinstance(target_agent_id, str) or not target_agent_id:
-        return tool_failure("invalid_arguments", "agent_id must be a non-empty string")
+    target_agent_id_value, agent_failure = _optional_string_argument(arguments, "agent_id")
+    if agent_failure is not None:
+        return agent_failure
+    target_agent_id = target_agent_id_value or context.agent_id
+
     blocking = arguments.get("blocking", False)
     if not isinstance(blocking, bool):
         return tool_failure("invalid_arguments", "blocking must be a boolean")
-    session_id = arguments.get("session_id")
-    if session_id is not None and (not isinstance(session_id, str) or not session_id):
-        return tool_failure("invalid_arguments", "session_id must be a non-empty string")
+
+    session_id, session_failure = _optional_string_argument(arguments, "session_id")
+    if session_failure is not None:
+        return session_failure
     if (
         session_id is not None
         and target_agent_id == context.agent_id
@@ -319,12 +342,14 @@ async def _handle_subagent_result(
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
     session_id = arguments.get("session_id")
-    if not isinstance(session_id, str) or not session_id:
+    if not isinstance(session_id, str) or not session_id.strip():
         return tool_failure("invalid_arguments", "session_id is required and must be a string")
+    session_id = session_id.strip()
 
-    agent_id = arguments.get("agent_id", context.agent_id)
-    if not isinstance(agent_id, str) or not agent_id:
-        return tool_failure("invalid_arguments", "agent_id must be a non-empty string")
+    agent_id_value, agent_failure = _optional_string_argument(arguments, "agent_id")
+    if agent_failure is not None:
+        return agent_failure
+    agent_id = agent_id_value or context.agent_id
 
     run_id = arguments.get("run_id")
     if run_id is not None and not isinstance(run_id, str):
