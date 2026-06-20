@@ -13,6 +13,10 @@
     agentId = '',
     currentSessionId = '',
     agentCurrentSessionId = '',
+    // Bumped by ChatView on `resource_changed(kind:"sessions")` so a new or
+    // switched session created in another window appears here without the user
+    // pressing Refresh.
+    reloadToken = 0,
     onSessionSelected = () => {},
   } = $props();
 
@@ -62,6 +66,21 @@
     }
 
     sessionState = selectSession(sessionState, normalizedCurrentSessionId);
+  });
+
+  // Reload the list when another window creates/switches a session
+  // (`resource_changed(kind:"sessions")`, forwarded by ChatView). The viewed
+  // conversation stays put — only the list refreshes.
+  let lastReloadToken = null;
+  $effect(() => {
+    if (lastReloadToken === null) {
+      lastReloadToken = reloadToken;
+      return;
+    }
+    if (reloadToken !== lastReloadToken) {
+      lastReloadToken = reloadToken;
+      loadSessions();
+    }
   });
 
   const loadSessions = async (targetAgentId = asText(agentId)) => {

@@ -82,7 +82,9 @@
   } from '$lib/navigationHistory.js';
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
   import {
+    RESOURCE_TOKEN_AGENTS,
     RESOURCE_TOKEN_MODELS,
+    RESOURCE_TOKEN_SESSIONS,
     tokenKeysForKind,
   } from '$lib/resourceInvalidation.js';
   import {
@@ -161,6 +163,15 @@
   // Bumped by the generic `resource_changed` channel whenever model-catalog or
   // provider availability changes; model surfaces reload on each bump.
   let modelsRefreshToken = $state(0);
+  // Bumped by `resource_changed(kind:"sessions")`. ChatView forwards it to the
+  // session drawer so a new/switched session in another window shows up in the
+  // list — it deliberately does NOT switch the viewed conversation (other
+  // windows "stay put").
+  let sessionsRefreshToken = $state(0);
+  // Scope of the latest `resource_changed(kind:"queue")` — a fresh object per
+  // signal so ChatView's effect re-fires. Carries the scope (not a bare token)
+  // because the watcher only re-syncs a queue for a session it actually holds.
+  let queueInvalidation = $state(null);
   let connectionState = $state(createConnectionState());
   let toastState = $state(createToastState());
   let pendingSessionNavigation = $state(null);
@@ -364,6 +375,20 @@
     agentsRefreshToken += 1;
   };
 
+  // Re-fetch the agent roster after a `resource_changed(kind:"agents")` signal
+  // (the migrated agent-CRUD reload — the channel carries no agent data, so we
+  // re-fetch agent.list). `refreshAgents` bumps `agentsRefreshToken`, so the
+  // Agents and Chat surfaces reload exactly as they did for the old agent.*
+  // events.
+  const reloadAgentsFromServer = async () => {
+    try {
+      const result = await rpc('agent.list');
+      refreshAgents(result.agents);
+    } catch (error) {
+      console.warn('Agent list refresh failed:', error);
+    }
+  };
+
   const clearToastDismissTimer = (id) => {
     const timer = toastDismissTimers.get(id);
     if (!timer) {
@@ -437,24 +462,31 @@
     }
 
     if (event.type === 'resource_changed') {
-      // The signal carries only a `kind`; route it to the refresh token(s) it
-      // invalidates and let the watching surfaces reload through their RPCs.
-      const tokenKeys = tokenKeysForKind(event.payload?.kind);
+      // The signal carries only a `kind` (plus an optional scope); route it to
+      // the refresh token(s)/reload it invalidates and let the watching surfaces
+      // re-fetch through their normal RPCs.
+      const kind = event.payload?.kind;
+      const tokenKeys = tokenKeysForKind(kind);
       if (tokenKeys.includes(RESOURCE_TOKEN_MODELS)) {
         modelsRefreshToken += 1;
       }
+      if (tokenKeys.includes(RESOURCE_TOKEN_SESSIONS)) {
+        sessionsRefreshToken += 1;
+      }
+      if (kind === 'queue') {
+        // A fresh object per signal so ChatView's effect re-fires even for a
+        // repeat scope; ChatView re-syncs the matching held session's queue.
+        const scope = event.payload?.scope ?? {};
+        queueInvalidation = {
+          agentId: typeof scope.agent_id === 'string' ? scope.agent_id : '',
+          sessionId:
+            typeof scope.session_id === 'string' ? scope.session_id : '',
+        };
+      }
+      if (tokenKeys.includes(RESOURCE_TOKEN_AGENTS)) {
+        await reloadAgentsFromServer();
+      }
       return;
-    }
-
-    const agentEventTypes = ['agent.created', 'agent.updated', 'agent.deleted'];
-    if (!agentEventTypes.includes(event.type)) {
-      return;
-    }
-    try {
-      const result = await rpc('agent.list');
-      refreshAgents(result.agents);
-    } catch (error) {
-      console.warn('Agent list refresh failed:', error);
     }
   };
 
@@ -484,6 +516,14 @@
   // can be verified without reaching into a child view's reload behavior.
   export function getModelsRefreshToken() {
     return modelsRefreshToken;
+  }
+
+  export function getSessionsRefreshToken() {
+    return sessionsRefreshToken;
+  }
+
+  export function getQueueInvalidation() {
+    return queueInvalidation;
   }
 
   onMount(() => {
@@ -607,6 +647,8 @@
       onSessionNavigation={handleChatSessionNavigation}
       {runServerEvents}
       {connectionSnapshot}
+      {sessionsRefreshToken}
+      {queueInvalidation}
       {wakewordStatus}
       {desktopCapabilities}
       onNavigateToVoiceSettings={navigateToVoiceSettings}
