@@ -312,6 +312,22 @@ describe('App', () => {
     ).toBeTruthy();
   });
 
+  it('renders the projects navigation item with a folder icon', () => {
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    const projectsButton = Array.from(
+      document.querySelectorAll('nav button'),
+    ).find((button) => button.textContent?.includes('Projects'));
+
+    expect(projectsButton).toBeTruthy();
+    expect(
+      projectsButton?.querySelector(
+        'svg.app-shell__nav-icon path[d="M2 12.5V4h4l1.5 1.5h6.5v7z"]',
+      ),
+    ).toBeTruthy();
+  });
+
   it('renders the statistics navigation item with a bar-chart icon', () => {
     mountedComponent = mount(App, { target: document.body });
     flushSync();
