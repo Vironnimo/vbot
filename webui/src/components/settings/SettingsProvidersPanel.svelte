@@ -22,6 +22,10 @@
     isOAuthDeviceFlowConnection,
     isProcessEnvAccount,
   } from '$lib/settingsView.js';
+  import {
+    SURFACE_FORM,
+    shouldApplyReloadNow,
+  } from '$lib/resourceInvalidation.js';
 
   const noop = () => {};
 
@@ -36,6 +40,7 @@
     onError = noop,
     onReloadSettings = noop,
     onHeaderActionChange = noop,
+    modelsRefreshToken = 0,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -48,6 +53,10 @@
   let modelRefreshError = $state('');
   let modalScope = $state(null);
   let forwardedAuthEvent = $state(null);
+  // A provider change elsewhere is mirrored here through a settings reload, but
+  // held while the key-input modal is open so a live edit is never interrupted.
+  let pendingSettingsReload = $state(false);
+  let lastModelsRefreshToken = null;
 
   let providerItems = $derived(getProviderItems(settings));
   let connectedProviders = $derived(getConnectedProviderItems(settings));
@@ -59,6 +68,31 @@
   $effect(() => {
     if (providerAuthEvent) {
       forwardedAuthEvent = providerAuthEvent;
+    }
+  });
+
+  // A `resource_changed(models|providers)` signal queues a settings reload so
+  // this window reflects the change (first run is a no-op: mount has the prop).
+  $effect(() => {
+    if (lastModelsRefreshToken === null) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      return;
+    }
+    if (modelsRefreshToken !== lastModelsRefreshToken) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      pendingSettingsReload = true;
+    }
+  });
+
+  // Run the queued reload once the key-input modal is closed, so a live
+  // credential edit is never swapped out from under the user.
+  $effect(() => {
+    if (
+      pendingSettingsReload &&
+      shouldApplyReloadNow(SURFACE_FORM, { focused: modalScope !== null })
+    ) {
+      pendingSettingsReload = false;
+      void onReloadSettings();
     }
   });
 

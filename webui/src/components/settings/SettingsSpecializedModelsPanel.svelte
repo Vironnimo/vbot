@@ -22,6 +22,10 @@
     stringifyJsonFieldValue,
     taskModelBindingsMatch,
   } from '$lib/taskModelSettings.js';
+  import {
+    SURFACE_FORM,
+    shouldApplyReloadNow,
+  } from '$lib/resourceInvalidation.js';
 
   const noop = () => {};
   const AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -31,6 +35,7 @@
     onCommit = noop,
     onToast = noop,
     onError = noop,
+    modelsRefreshToken = 0,
   } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
@@ -50,6 +55,10 @@
   let taskModelJsonErrors = $state({});
   let autoSaveTimer = null;
   let autoSaveArmed = $state(false);
+  // A queued model reload waits here while the user is actively editing, since
+  // a target reload re-applies option defaults onto the bindings.
+  let pendingTaskModelReload = $state(false);
+  let lastModelsRefreshToken = null;
 
   let saveDisabled = $derived(
     taskModelSaving ||
@@ -58,6 +67,11 @@
         taskModelBindings,
         normalizeTaskModelSettings(settings),
       ),
+  );
+  // "Busy" while loading, saving, or holding unsaved edits — a reload during any
+  // of those would disturb in-progress work, so it is deferred until idle.
+  let taskSurfaceBusy = $derived(
+    taskModelLoading || taskModelSaving || (autoSaveArmed && !saveDisabled),
   );
 
   onMount(() => {
@@ -83,6 +97,31 @@
     return () => {
       clearAutoSaveTimer();
     };
+  });
+
+  // A `resource_changed(models|providers)` signal queues a target reload (first
+  // run is a no-op: mount already loaded).
+  $effect(() => {
+    if (lastModelsRefreshToken === null) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      return;
+    }
+    if (modelsRefreshToken !== lastModelsRefreshToken) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      pendingTaskModelReload = true;
+    }
+  });
+
+  // Run the queued reload once the surface is idle, so it never re-applies
+  // option defaults over an edit the user is mid-way through.
+  $effect(() => {
+    if (
+      pendingTaskModelReload &&
+      shouldApplyReloadNow(SURFACE_FORM, { savePending: taskSurfaceBusy })
+    ) {
+      pendingTaskModelReload = false;
+      void loadTaskModelPanel();
+    }
   });
 
   function clearAutoSaveTimer() {

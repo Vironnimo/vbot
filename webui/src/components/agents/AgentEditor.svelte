@@ -55,6 +55,7 @@
     onAgentCreated = async () => {},
     onAgentDeleted = async () => {},
     onToast = () => {},
+    onModelDropdownOpenChange = () => {},
   } = $props();
 
   const initialAgent = untrack(() => agent);
@@ -717,6 +718,7 @@
             ariaLabel={t('agents.form.model', 'Model')}
             triggerClass="agents-view__dropdown"
             panelClass="agents-view__search-panel"
+            onOpenChange={onModelDropdownOpenChange}
             onValueChange={(selectedValue) =>
               updateModelSelection('model', selectedValue)}
           />
@@ -739,6 +741,7 @@
             ariaLabel={t('agents.form.fallbackModel', 'Fallback model')}
             triggerClass="agents-view__dropdown"
             panelClass="agents-view__search-panel"
+            onOpenChange={onModelDropdownOpenChange}
             onValueChange={(selectedValue) =>
               updateModelSelection('fallback_model', selectedValue)}
           />

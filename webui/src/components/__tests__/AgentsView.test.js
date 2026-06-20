@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { reactiveProps } from './_reactiveProps.svelte.js';
 
 const rpcMock = vi.fn();
 vi.mock('svelte', async () => {
@@ -1314,7 +1315,125 @@ describe('AgentsView', () => {
     );
     expect(updateCall[1].allowed_skills).toEqual(['sample-skill']);
   });
+
+  it('reloads the model catalog when modelsRefreshToken changes', async () => {
+    let models = [openaiModel()];
+    rpcMock.mockImplementation(async (method) => {
+      if (method === 'model.list') {
+        return { models };
+      }
+      if (method === 'connection.list') {
+        return {
+          connections: [
+            usableConnection('openai:api-key', 'openai', 'API Key'),
+            usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
+          ],
+        };
+      }
+      if (method === 'tool.list') {
+        return { tools: [] };
+      }
+      if (method === 'skill.list') {
+        return skillCatalog();
+      }
+      if (method === 'agent.list') {
+        return { agents: [baseAgent()] };
+      }
+      throw new Error(`Unexpected RPC method: ${method}`);
+    });
+
+    const props = reactiveProps({ modelsRefreshToken: 0 });
+    mountedComponent = mount(AgentsView, { target: document.body, props });
+    flushSync();
+    await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2');
+
+    const modelListBefore = modelListCallCount();
+    const connectionListBefore = connectionListCallCount();
+
+    // A model DB refresh elsewhere bumps the token; the catalog reloads.
+    models = [openaiModel(), anthropicModel()];
+    props.modelsRefreshToken = 1;
+    flushSync();
+    await waitForCondition(() => modelListCallCount() > modelListBefore);
+
+    expect(connectionListCallCount()).toBeGreaterThan(connectionListBefore);
+
+    // The freshly added model is now selectable without a remount.
+    await openSearchableDropdown('agent-model');
+    expect(searchableOptionLabels('agent-model')).toContain(
+      'anthropic/claude-sonnet-4-20250219',
+    );
+  });
+
+  it('defers the visible option swap while a model picker is open', async () => {
+    let models = [openaiModel()];
+    rpcMock.mockImplementation(async (method) => {
+      if (method === 'model.list') {
+        return { models };
+      }
+      if (method === 'connection.list') {
+        return {
+          connections: [
+            usableConnection('openai:api-key', 'openai', 'API Key'),
+            usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
+          ],
+        };
+      }
+      if (method === 'tool.list') {
+        return { tools: [] };
+      }
+      if (method === 'skill.list') {
+        return skillCatalog();
+      }
+      if (method === 'agent.list') {
+        return { agents: [baseAgent()] };
+      }
+      throw new Error(`Unexpected RPC method: ${method}`);
+    });
+
+    const props = reactiveProps({ modelsRefreshToken: 0 });
+    mountedComponent = mount(AgentsView, { target: document.body, props });
+    flushSync();
+    await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2');
+
+    await openSearchableDropdown('agent-model');
+    expect(searchableOptionLabels('agent-model')).not.toContain(
+      'anthropic/claude-sonnet-4-20250219',
+    );
+
+    // A reload arrives while the picker is open: fetched in the background, but
+    // the open option list must not change underfoot.
+    models = [openaiModel(), anthropicModel()];
+    props.modelsRefreshToken = 1;
+    flushSync();
+    await waitForCondition(() => modelListCallCount() >= 2);
+    await flushAsyncUpdates(6);
+
+    expect(getSearchableRoot('agent-model').dataset.state).toBe('open');
+    expect(searchableOptionLabels('agent-model')).not.toContain(
+      'anthropic/claude-sonnet-4-20250219',
+    );
+
+    // Closing the picker applies the deferred swap.
+    getSearchableTrigger('agent-model').dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+    flushSync();
+    await openSearchableDropdown('agent-model');
+    expect(searchableOptionLabels('agent-model')).toContain(
+      'anthropic/claude-sonnet-4-20250219',
+    );
+  });
 });
+
+function modelListCallCount() {
+  return rpcMock.mock.calls.filter((call) => call[0] === 'model.list').length;
+}
+
+function connectionListCallCount() {
+  return rpcMock.mock.calls.filter((call) => call[0] === 'connection.list')
+    .length;
+}
 
 function modelTriggerLabel() {
   return triggerTextContent(getSearchableTrigger('agent-model'));
