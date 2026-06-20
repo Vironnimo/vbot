@@ -13,6 +13,7 @@ from core.channels.channels import (
     ChannelError,
     ChannelNotFoundError,
 )
+from core.tools.arguments import optional_string, required_string
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -116,10 +117,8 @@ async def _handle_channel_send_tool(
         return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
     try:
-        channel_id = _required_non_empty_string(
-            arguments.get("channel_id"), field_name="channel_id"
-        )
-        message = _optional_non_empty_string(arguments.get("message"), field_name="message")
+        channel_id = required_string(arguments.get("channel_id"), field_name="channel_id")
+        message = optional_string(arguments.get("message"), field_name="message")
         files = _build_file_data(
             arguments.get("file_paths"),
             workspace=context.workspace,
@@ -214,9 +213,11 @@ def _platform_target_from_arguments_or_context(
     channel_id: str,
     channel_config: ChannelConfig,
 ) -> str:
-    platform_target_value = arguments.get("platform_target")
+    platform_target_value = optional_string(
+        arguments.get("platform_target"), field_name="platform_target"
+    )
     if platform_target_value is not None:
-        return _required_non_empty_string(platform_target_value, field_name="platform_target")
+        return platform_target_value
 
     metadata_platform_target = _platform_target_from_session_metadata(
         chat_sessions,
@@ -253,9 +254,7 @@ def _platform_target_from_session_metadata(
     if metadata_platform_target is None:
         return None
 
-    return _required_non_empty_string(
-        metadata_platform_target, field_name="last_reply_target.platform_target"
-    )
+    return required_string(metadata_platform_target, field_name="last_reply_target.platform_target")
 
 
 def _channel_config_for_agent(
@@ -278,18 +277,6 @@ def _platform_target_from_channel_config(channel_config: ChannelConfig) -> str |
     if len(channel_config.allowed_chat_ids) != 1:
         return None
     return str(channel_config.allowed_chat_ids[0])
-
-
-def _required_non_empty_string(value: object, *, field_name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty string")
-    return value.strip()
-
-
-def _optional_non_empty_string(value: object, *, field_name: str) -> str | None:
-    if value is None:
-        return None
-    return _required_non_empty_string(value, field_name=field_name)
 
 
 def _build_file_data(value: object, *, workspace: Path, max_size_bytes: int) -> list[FileData]:
