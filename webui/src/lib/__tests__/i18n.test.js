@@ -306,6 +306,29 @@ describe('i18n t()', () => {
     expect(t('settings.providers.add.button')).toBe('Add provider');
   });
 
+  it('contains Connected clients copy for the General settings panel', () => {
+    const requiredKeys = [
+      'settings.general.clients.title',
+      'settings.general.clients.description',
+      'settings.general.clients.loading',
+      'settings.general.clients.empty',
+      'settings.general.clients.loadError',
+      'settings.general.clients.thisWindow',
+      'settings.general.clients.connectedAt',
+      'settings.general.clients.accessor.browser',
+      'settings.general.clients.accessor.desktop',
+      'settings.general.clients.accessor.unknown',
+      'settings.general.clients.status.connected',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(t('settings.general.clients.title')).toBe('Connected clients');
+    expect(t('settings.general.clients.thisWindow')).toBe('This window');
+    expect(
+      t('settings.general.clients.connectedAt', undefined, { time: '10:00' }),
+    ).toBe('Connected 10:00');
+  });
+
   it('contains Logs tab copy for navigation, filters, and states', () => {
     const requiredKeys = [
       'navigation.logs',
