@@ -33,6 +33,10 @@
     parseModelSelectionValue,
     selectModelValue,
   } from '$lib/modelSelection.js';
+  import {
+    SURFACE_FORM,
+    shouldApplyReloadNow,
+  } from '$lib/resourceInvalidation.js';
   import { t } from '$lib/i18n.js';
 
   const PROJECT_BUSY_CODE = 'project_busy';
@@ -44,7 +48,7 @@
 
   const noop = () => {};
 
-  let { onToast = noop } = $props();
+  let { onToast = noop, modelsRefreshToken = 0 } = $props();
 
   let projects = $state([]);
   let loadingProjects = $state(false);
@@ -55,6 +59,11 @@
   // dropdown (the same picker the Agents tab uses, see modelSelection.js).
   let availableModels = $state([]);
   let availableConnections = $state([]);
+  // A live model reload fetches in the background but holds the visible option
+  // swap while the picker is open, so an open selection is never disturbed.
+  let modelDropdownOpenCount = $state(0);
+  let pendingModelCatalogs = null;
+  let lastModelsRefreshToken = null;
 
   // Add modal state — the popup needs only the repo path plus an optional
   // display name (blank → backend derives the name from the folder).
@@ -169,6 +178,19 @@
     };
   });
 
+  // Reload the model catalog when the generic invalidation channel signals a
+  // model/provider change (first run is a no-op: mount already loaded).
+  $effect(() => {
+    if (lastModelsRefreshToken === null) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      return;
+    }
+    if (modelsRefreshToken !== lastModelsRefreshToken) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      void reloadModelCatalogs();
+    }
+  });
+
   function createAddForm() {
     return { cwd: '', display_name: '' };
   }
@@ -189,24 +211,64 @@
     }
   }
 
-  async function loadCatalogs() {
+  async function fetchModelCatalogs() {
     try {
       const [modelsResult, connectionsResult] = await Promise.all([
         rpc('model.list'),
         rpc('connection.list'),
       ]);
       if (destroyed) {
-        return;
+        return null;
       }
-      availableModels = Array.isArray(modelsResult?.models)
-        ? modelsResult.models
-        : [];
-      availableConnections = Array.isArray(connectionsResult?.connections)
-        ? connectionsResult.connections
-        : [];
+      return {
+        models: Array.isArray(modelsResult?.models) ? modelsResult.models : [],
+        connections: Array.isArray(connectionsResult?.connections)
+          ? connectionsResult.connections
+          : [],
+      };
     } catch {
       // A missing model catalog only degrades the default-model picker (it still
       // lists the empty option); it must not block the projects list itself.
+      return null;
+    }
+  }
+
+  function applyModelCatalogs(catalogs) {
+    availableModels = catalogs.models;
+    availableConnections = catalogs.connections;
+    pendingModelCatalogs = null;
+  }
+
+  async function loadCatalogs() {
+    const catalogs = await fetchModelCatalogs();
+    if (catalogs) {
+      applyModelCatalogs(catalogs);
+    }
+  }
+
+  async function reloadModelCatalogs() {
+    const catalogs = await fetchModelCatalogs();
+    if (!catalogs) {
+      return;
+    }
+    if (
+      shouldApplyReloadNow(SURFACE_FORM, {
+        dropdownOpen: modelDropdownOpenCount > 0,
+      })
+    ) {
+      applyModelCatalogs(catalogs);
+    } else {
+      pendingModelCatalogs = catalogs;
+    }
+  }
+
+  function trackModelDropdownOpen(open) {
+    modelDropdownOpenCount = Math.max(
+      0,
+      modelDropdownOpenCount + (open ? 1 : -1),
+    );
+    if (modelDropdownOpenCount === 0 && pendingModelCatalogs) {
+      applyModelCatalogs(pendingModelCatalogs);
     }
   }
 
@@ -780,6 +842,7 @@
                         disabled={editSaving}
                         triggerClass="projects-view__dropdown"
                         panelClass="projects-view__search-panel"
+                        onOpenChange={trackModelDropdownOpen}
                         onValueChange={updateModelSelection}
                       />
                     </label>

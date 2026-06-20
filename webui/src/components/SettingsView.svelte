@@ -32,6 +32,7 @@
     targetPanelId = '',
     targetPanelRequestId = 0,
     onDebugEnabledChange = noop,
+    modelsRefreshToken = 0,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -329,6 +330,7 @@
           onError={(message) => (saveError = message)}
           onReloadSettings={loadSettings}
           onHeaderActionChange={updateProviderHeaderAction}
+          {modelsRefreshToken}
         />
 
         {#if activePanelId === 'general'}
@@ -339,6 +341,7 @@
             onCommit={commitSettings}
             {onToast}
             onError={(message) => (saveError = message)}
+            {modelsRefreshToken}
           />
         {:else if activePanelId === 'skills'}
           <SettingsSkillsPanel
@@ -360,6 +363,7 @@
             onCommit={commitSettings}
             {onToast}
             onError={(message) => (saveError = message)}
+            {modelsRefreshToken}
           />
         {:else if activePanelId === 'recall'}
           <SettingsRecallPanel
@@ -389,6 +393,7 @@
             onCommit={commitSettings}
             {onToast}
             onError={(message) => (saveError = message)}
+            {modelsRefreshToken}
           />
         {:else if activePanelId === 'channels'}
           <SettingsChannelsPanel />

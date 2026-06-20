@@ -649,6 +649,40 @@ describe('App', () => {
     // And the connection snapshot is still null because no hello arrived.
     expect(mountedComponent.getConnectionSnapshot()).toBeNull();
   });
+
+  it('bumps the models refresh token on resource_changed(models|providers) and ignores other kinds', () => {
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    expect(mountedComponent.getModelsRefreshToken()).toBe(0);
+
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 1,
+      payload: { kind: 'models' },
+    });
+    flushSync();
+    expect(mountedComponent.getModelsRefreshToken()).toBe(1);
+
+    // A provider change also alters which models are selectable → same token.
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 2,
+      payload: { kind: 'providers' },
+    });
+    flushSync();
+    expect(mountedComponent.getModelsRefreshToken()).toBe(2);
+
+    // An out-of-scope kind must not touch the models token.
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 3,
+      payload: { kind: 'queue' },
+    });
+    flushSync();
+    expect(mountedComponent.getModelsRefreshToken()).toBe(2);
+  });
 });
 
 async function waitForAssertion(assertion) {

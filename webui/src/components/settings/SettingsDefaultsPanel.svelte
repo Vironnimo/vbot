@@ -18,6 +18,10 @@
     buildAgentDefaultsPayload,
     normalizeAgentDefaultsSettings,
   } from '$lib/settingsView.js';
+  import {
+    SURFACE_FORM,
+    shouldApplyReloadNow,
+  } from '$lib/resourceInvalidation.js';
 
   const noop = () => {};
   const AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -51,6 +55,7 @@
     onCommit = noop,
     onToast = noop,
     onError = noop,
+    modelsRefreshToken = 0,
   } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
@@ -62,6 +67,12 @@
   let availableModels = $state([]);
   let availableConnections = $state([]);
   let autoSaveTimer = null;
+  // A live model reload fetches in the background but holds the visible option
+  // swap while a picker is open, so an open selection is never disturbed; the
+  // form's selected value lives in `agentDefaults`, separate from these options.
+  let modelDropdownOpenCount = $state(0);
+  let pendingModelCatalogs = null;
+  let lastModelsRefreshToken = null;
 
   let defaultModelOptions = $derived(
     selectModelOptions(
@@ -125,6 +136,19 @@
     };
   });
 
+  // Reload the model catalog when the generic invalidation channel signals a
+  // model/provider change (first run is a no-op: mount already loaded).
+  $effect(() => {
+    if (lastModelsRefreshToken === null) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      return;
+    }
+    if (modelsRefreshToken !== lastModelsRefreshToken) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      void reloadModelCatalogs();
+    }
+  });
+
   function clearAutoSaveTimer() {
     if (autoSaveTimer !== null) {
       clearTimeout(autoSaveTimer);
@@ -132,23 +156,63 @@
     }
   }
 
-  async function loadModelCatalogs() {
+  async function fetchModelCatalogs() {
     try {
       const [modelsResult, connectionsResult] = await Promise.all([
         rpc('model.list'),
         rpc('connection.list'),
       ]);
 
-      availableModels = Array.isArray(modelsResult?.models)
-        ? modelsResult.models
-        : [];
-      availableConnections = Array.isArray(connectionsResult?.connections)
-        ? connectionsResult.connections
-        : [];
+      return {
+        models: Array.isArray(modelsResult?.models) ? modelsResult.models : [],
+        connections: Array.isArray(connectionsResult?.connections)
+          ? connectionsResult.connections
+          : [],
+      };
     } catch (error) {
       onError(
         `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
       );
+      return null;
+    }
+  }
+
+  function applyModelCatalogs(catalogs) {
+    availableModels = catalogs.models;
+    availableConnections = catalogs.connections;
+    pendingModelCatalogs = null;
+  }
+
+  async function loadModelCatalogs() {
+    const catalogs = await fetchModelCatalogs();
+    if (catalogs) {
+      applyModelCatalogs(catalogs);
+    }
+  }
+
+  async function reloadModelCatalogs() {
+    const catalogs = await fetchModelCatalogs();
+    if (!catalogs) {
+      return;
+    }
+    if (
+      shouldApplyReloadNow(SURFACE_FORM, {
+        dropdownOpen: modelDropdownOpenCount > 0,
+      })
+    ) {
+      applyModelCatalogs(catalogs);
+    } else {
+      pendingModelCatalogs = catalogs;
+    }
+  }
+
+  function trackModelDropdownOpen(open) {
+    modelDropdownOpenCount = Math.max(
+      0,
+      modelDropdownOpenCount + (open ? 1 : -1),
+    );
+    if (modelDropdownOpenCount === 0 && pendingModelCatalogs) {
+      applyModelCatalogs(pendingModelCatalogs);
     }
   }
 
@@ -262,6 +326,7 @@
       ariaLabel={t('settings.defaults.model', 'Model')}
       triggerClass="settings-view__dropdown"
       panelClass="settings-view__model-panel"
+      onOpenChange={trackModelDropdownOpen}
       onValueChange={(selectedValue) =>
         updateAgentDefaultsModelSelection('model', selectedValue)}
     />
@@ -297,6 +362,7 @@
       ariaLabel={t('settings.defaults.fallbackModel', 'Fallback model')}
       triggerClass="settings-view__dropdown"
       panelClass="settings-view__model-panel"
+      onOpenChange={trackModelDropdownOpen}
       onValueChange={(selectedValue) =>
         updateAgentDefaultsModelSelection('fallback_model', selectedValue)}
     />
