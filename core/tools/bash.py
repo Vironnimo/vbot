@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from core.tools.arguments import coerce_bool, optional_number, optional_string
 from core.tools.process_manager import ProcessManager, SessionNotFoundError
 from core.tools.tools import (
     JsonObject,
@@ -344,20 +345,23 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
     if not isinstance(command, str) or not command:
         return "command must be a non-empty string"
 
-    workdir = arguments.get("workdir")
-    if workdir is not None and not isinstance(workdir, str):
-        return "workdir must be a string"
-
-    background = arguments.get("background", False)
-    if not isinstance(background, bool):
-        return "background must be a boolean"
-
     try:
-        yield_after = _coerce_non_negative_float(
-            arguments.get("yield_after", DEFAULT_YIELD_AFTER_SECONDS),
-            field_name="yield_after",
+        workdir = optional_string(arguments.get("workdir"), field_name="workdir")
+        background = coerce_bool(
+            arguments.get("background"), field_name="background", default=False
         )
-        timeout = _coerce_optional_positive_float(arguments.get("timeout"), field_name="timeout")
+        yield_after = optional_number(
+            arguments.get("yield_after"),
+            field_name="yield_after",
+            default=DEFAULT_YIELD_AFTER_SECONDS,
+            minimum=0,
+        )
+        timeout = optional_number(
+            arguments.get("timeout"),
+            field_name="timeout",
+            minimum=0,
+            minimum_exclusive=True,
+        )
     except ValueError as error:
         return str(error)
 
@@ -379,26 +383,6 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         "background": background,
         "timeout": timeout,
     }
-
-
-def _coerce_non_negative_float(value: object, *, field_name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError(f"{field_name} must be a number")
-    coerced = float(value)
-    if coerced < 0:
-        raise ValueError(f"{field_name} must be >= 0")
-    return coerced
-
-
-def _coerce_optional_positive_float(value: object, *, field_name: str) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError(f"{field_name} must be a number")
-    coerced = float(value)
-    if coerced <= 0:
-        raise ValueError(f"{field_name} must be > 0")
-    return coerced
 
 
 def _resolve_workdir(context: ToolContext, workdir: object) -> Path:

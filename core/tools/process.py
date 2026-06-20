@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from core.tools.arguments import coerce_bool, optional_int, required_string
 from core.tools.process_manager import (
     ProcessManager,
     SessionInputClosedError,
@@ -146,10 +147,11 @@ async def _handle_poll(
     arguments: JsonObject,
 ) -> JsonObject:
     session_id = _required_session_id(arguments)
-    timeout_ms = _coerce_non_negative_int(
+    timeout_ms = optional_int(
         arguments.get("timeout_ms"),
         field_name="timeout_ms",
         default=0,
+        minimum=0,
     )
     if timeout_ms > MAX_POLL_TIMEOUT_MS:
         timeout_ms = MAX_POLL_TIMEOUT_MS
@@ -171,11 +173,12 @@ async def _handle_log(
     arguments: JsonObject,
 ) -> JsonObject:
     session_id = _required_session_id(arguments)
-    offset = _coerce_non_negative_int(arguments.get("offset"), field_name="offset", default=0)
-    limit = _coerce_non_negative_int(
+    offset = optional_int(arguments.get("offset"), field_name="offset", default=0, minimum=0)
+    limit = optional_int(
         arguments.get("limit"),
         field_name="limit",
         default=DEFAULT_LOG_LIMIT,
+        minimum=0,
     )
     result = await process_manager.log(session_id, context.agent_id, offset=offset, limit=limit)
     return tool_success(
@@ -196,7 +199,7 @@ async def _handle_write(
     data = arguments.get("data")
     if not isinstance(data, str):
         raise ValueError("data must be a string")
-    eof = _coerce_bool(arguments.get("eof"), field_name="eof", default=False)
+    eof = coerce_bool(arguments.get("eof"), field_name="eof", default=False)
 
     await process_manager.write(session_id, context.agent_id, data, eof=eof)
     return tool_success({"session_id": session_id, "written": len(data)})
@@ -233,34 +236,7 @@ async def _handle_clear(
 
 
 def _required_session_id(arguments: JsonObject) -> str:
-    session_id = arguments.get("session_id")
-    if not isinstance(session_id, str) or not session_id:
-        raise ValueError("session_id must be a non-empty string")
-    return session_id
-
-
-def _coerce_non_negative_int(value: object, *, field_name: str, default: int) -> int:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be an integer >= 0")
-    if isinstance(value, int):
-        coerced = value
-    elif isinstance(value, float) and value.is_integer():
-        coerced = int(value)
-    else:
-        raise ValueError(f"{field_name} must be an integer >= 0")
-    if coerced < 0:
-        raise ValueError(f"{field_name} must be >= 0")
-    return coerced
-
-
-def _coerce_bool(value: object, *, field_name: str, default: bool) -> bool:
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ValueError(f"{field_name} must be a boolean")
-    return value
+    return required_string(arguments.get("session_id"), field_name="session_id")
 
 
 def _format_timestamp(value: datetime | None) -> str | None:
