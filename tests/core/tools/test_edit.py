@@ -371,7 +371,7 @@ def test_edit_returns_failure_for_unknown_argument(tmp_path: Path) -> None:
             "new_string must be a string",
         ),
         (
-            {"path": "notes.txt", "old_string": "old", "new_string": "new", "replace_all": "true"},
+            {"path": "notes.txt", "old_string": "old", "new_string": "new", "replace_all": "maybe"},
             "replace_all must be a boolean",
         ),
     ],
@@ -407,3 +407,35 @@ def test_edit_success_and_failure_results_are_valid_envelopes(tmp_path: Path) ->
 
     assert is_tool_result_envelope(success) is True
     assert is_tool_result_envelope(failure) is True
+
+
+def test_edit_accepts_camelcase_aliases(tmp_path: Path) -> None:
+    # Some models emit camelCase; accept oldString/newString as the canonical keys.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("old value", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "oldString": "old value", "newString": "new value"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_text(encoding="utf-8") == "new value"
+
+
+def test_edit_accepts_string_encoded_replace_all(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("x x x", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "x", "new_string": "y", "replace_all": "true"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["replacements"] == 3
+    assert target.read_text(encoding="utf-8") == "y y y"
