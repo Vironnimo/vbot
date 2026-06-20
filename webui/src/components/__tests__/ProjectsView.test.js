@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { reactiveProps } from './_reactiveProps.svelte.js';
 
 const addProjectMock = vi.fn();
 const listProjectsMock = vi.fn();
@@ -399,6 +400,34 @@ describe('ProjectsView', () => {
       document.body.textContent.includes('cron job'),
     );
     expect(document.body.textContent).toContain('cron job');
+  });
+
+  it('reloads the model catalog when modelsRefreshToken changes', async () => {
+    const props = reactiveProps({ modelsRefreshToken: 0 });
+    mountedComponent = mount(ProjectsView, { target: document.body, props });
+    flushSync();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some((call) => call[0] === 'model.list'),
+    );
+
+    const modelListBefore = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'model.list',
+    ).length;
+    const connectionListBefore = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'connection.list',
+    ).length;
+
+    props.modelsRefreshToken = 1;
+    flushSync();
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.filter((call) => call[0] === 'model.list').length >
+        modelListBefore,
+    );
+
+    expect(
+      rpcMock.mock.calls.filter((call) => call[0] === 'connection.list').length,
+    ).toBeGreaterThan(connectionListBefore);
   });
 });
 

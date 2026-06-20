@@ -3,6 +3,10 @@
 
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import {
+    SURFACE_FORM,
+    shouldApplyReloadNow,
+  } from '$lib/resourceInvalidation.js';
 
   import AgentCreateModal from './agents/AgentCreateModal.svelte';
   import AgentEditor from './agents/AgentEditor.svelte';
@@ -15,6 +19,7 @@
     onAgentsChanged,
     onAgentSelected,
     onToast = noop,
+    modelsRefreshToken = 0,
   } = $props();
 
   let agents = $state([]);
@@ -28,6 +33,12 @@
   let availableTools = $state([]);
   let availableSkills = $state([]);
   let invalidSkills = $state([]);
+  // A live model reload fetches in the background but holds the visible option
+  // swap while a model picker in the editor is open, so an open selection is
+  // never disturbed (the chosen value lives in the editor's form state).
+  let modelDropdownOpenCount = $state(0);
+  let pendingModelCatalogs = null;
+  let lastModelsRefreshToken = null;
 
   let selectedAgent = $derived(
     agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -52,6 +63,70 @@
     void loadCatalogs();
     void loadAgents({ preferredAgentId: sharedSelectedAgentId });
   });
+
+  // Reload the model catalog when the generic invalidation channel signals a
+  // model/provider change (first run is a no-op: mount already loaded).
+  $effect(() => {
+    if (lastModelsRefreshToken === null) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      return;
+    }
+    if (modelsRefreshToken !== lastModelsRefreshToken) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      void reloadModelCatalogs();
+    }
+  });
+
+  async function fetchModelCatalogs() {
+    try {
+      const [modelsResult, connectionsResult] = await Promise.all([
+        rpc('model.list'),
+        rpc('connection.list'),
+      ]);
+
+      return {
+        models: Array.isArray(modelsResult?.models) ? modelsResult.models : [],
+        connections: Array.isArray(connectionsResult?.connections)
+          ? connectionsResult.connections
+          : [],
+      };
+    } catch (error) {
+      loadError = viewErrorMessage(error, t('agents.loadError'));
+      return null;
+    }
+  }
+
+  function applyModelCatalogs(catalogs) {
+    availableModels = catalogs.models;
+    availableConnections = catalogs.connections;
+    pendingModelCatalogs = null;
+  }
+
+  async function reloadModelCatalogs() {
+    const catalogs = await fetchModelCatalogs();
+    if (!catalogs) {
+      return;
+    }
+    if (
+      shouldApplyReloadNow(SURFACE_FORM, {
+        dropdownOpen: modelDropdownOpenCount > 0,
+      })
+    ) {
+      applyModelCatalogs(catalogs);
+    } else {
+      pendingModelCatalogs = catalogs;
+    }
+  }
+
+  function trackModelDropdownOpen(open) {
+    modelDropdownOpenCount = Math.max(
+      0,
+      modelDropdownOpenCount + (open ? 1 : -1),
+    );
+    if (modelDropdownOpenCount === 0 && pendingModelCatalogs) {
+      applyModelCatalogs(pendingModelCatalogs);
+    }
+  }
 
   async function loadCatalogs() {
     try {
@@ -175,6 +250,7 @@
         onAgentCreated={handleAgentCreated}
         onAgentDeleted={handleAgentDeleted}
         {onToast}
+        onModelDropdownOpenChange={trackModelDropdownOpen}
       />
     {/key}
   </div>
