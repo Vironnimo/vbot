@@ -8,6 +8,7 @@ from server.rpc import (
     catalog_methods,
     channel_methods,
     chat_methods,
+    client_methods,
     connection_methods,
     debug_methods,
     extensions_methods,
@@ -38,6 +39,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         debug_methods,
         statistics_methods,
         provider_usage_methods,
+        client_methods,
     ):
         handlers.update(registry.method_handlers())
     return handlers
