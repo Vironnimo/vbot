@@ -30,7 +30,9 @@ from core.runs import (
 )
 from core.subagents import SUBAGENT_SESSION_STARTED_EVENT
 from server.events import (
+    ALLOWED_RESOURCE_KINDS,
     PROVIDER_AUTH_COMPLETED_EVENT,
+    RESOURCE_CHANGED_EVENT,
     RUN_CANCELLED_SERVER_EVENT,
     RUN_COMPLETED_SERVER_EVENT,
     RUN_FAILED_SERVER_EVENT,
@@ -144,6 +146,30 @@ def _publish_provider_auth_completed_event(
             "success": success,
         },
     )
+
+
+def publish_resource_changed(
+    state: Any,
+    kind: str,
+    *,
+    scope: JsonObject | None = None,
+) -> None:
+    """Publish the generic "resource ``kind`` changed → reload it" signal.
+
+    The event carries no payload beyond ``kind`` (and an optional ``scope`` that
+    narrows it to one agent/session) — the client re-fetches the affected
+    resource through its normal RPC, so this never ships data. No-op when no
+    event bus is wired (CLI-only runtime stubs).
+    """
+    if kind not in ALLOWED_RESOURCE_KINDS:
+        raise ValueError(f"unsupported resource kind: {kind}")
+    event_bus = getattr(state, "event_bus", None)
+    if event_bus is None:
+        return
+    payload: JsonObject = {"kind": kind}
+    if scope:
+        payload["scope"] = scope
+    event_bus.publish(RESOURCE_CHANGED_EVENT, payload)
 
 
 async def _publish_run_events(event_bus: Any, run: Run) -> None:
