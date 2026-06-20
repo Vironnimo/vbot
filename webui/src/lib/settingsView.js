@@ -16,6 +16,31 @@ export const CHANNEL_FORM_MODE_EDIT = 'edit';
 
 export { CHANNEL_DM_SCOPES, CHANNEL_PLATFORM_TELEGRAM, CHANNEL_PLATFORMS };
 
+// Presence rows for the General panel "Connected clients" list. Pure: passes
+// the registry fields through and flags the caller's own row by matching the
+// client-minted connection id (an empty own id matches nothing).
+export function buildClientPresenceRows(clients, ownConnectionId) {
+  if (!Array.isArray(clients)) {
+    return [];
+  }
+  const ownId = typeof ownConnectionId === 'string' ? ownConnectionId : '';
+  return clients.map((client) => {
+    const connectionId =
+      typeof client?.connection_id === 'string' ? client.connection_id : '';
+    return {
+      id: typeof client?.id === 'string' ? client.id : '',
+      connectionId,
+      accessor: typeof client?.accessor === 'string' ? client.accessor : '',
+      browser: typeof client?.browser === 'string' ? client.browser : '',
+      os: typeof client?.os === 'string' ? client.os : '',
+      connectedAt:
+        typeof client?.connected_at === 'string' ? client.connected_at : '',
+      status: typeof client?.status === 'string' ? client.status : '',
+      isOwn: ownId.length > 0 && connectionId === ownId,
+    };
+  });
+}
+
 const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
   max_subagent_depth: 4,
   max_subagents_per_turn: 8,

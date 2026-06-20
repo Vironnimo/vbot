@@ -83,6 +83,7 @@
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
   import {
     RESOURCE_TOKEN_AGENTS,
+    RESOURCE_TOKEN_CLIENTS,
     RESOURCE_TOKEN_MODELS,
     RESOURCE_TOKEN_SESSIONS,
     tokenKeysForKind,
@@ -172,6 +173,9 @@
   // signal so ChatView's effect re-fires. Carries the scope (not a bare token)
   // because the watcher only re-syncs a queue for a session it actually holds.
   let queueInvalidation = $state(null);
+  // Bumped by `resource_changed(kind:"clients")` — a window connecting or
+  // disconnecting. The General settings panel reloads its presence roster.
+  let clientsRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
   let toastState = $state(createToastState());
   let pendingSessionNavigation = $state(null);
@@ -483,6 +487,9 @@
             typeof scope.session_id === 'string' ? scope.session_id : '',
         };
       }
+      if (tokenKeys.includes(RESOURCE_TOKEN_CLIENTS)) {
+        clientsRefreshToken += 1;
+      }
       if (tokenKeys.includes(RESOURCE_TOKEN_AGENTS)) {
         await reloadAgentsFromServer();
       }
@@ -524,6 +531,10 @@
 
   export function getQueueInvalidation() {
     return queueInvalidation;
+  }
+
+  export function getClientsRefreshToken() {
+    return clientsRefreshToken;
   }
 
   onMount(() => {
@@ -677,6 +688,7 @@
       targetPanelRequestId={settingsPanelTargetRequestId}
       onDebugEnabledChange={handleDebugEnabledChange}
       {modelsRefreshToken}
+      {clientsRefreshToken}
     />
   {:else if activeViewId === 'logs'}
     <LogsView />

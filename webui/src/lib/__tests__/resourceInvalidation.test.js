@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   RESOURCE_TOKEN_AGENTS,
+  RESOURCE_TOKEN_CLIENTS,
   RESOURCE_TOKEN_MODELS,
   RESOURCE_TOKEN_SESSIONS,
   SURFACE_DISPLAY,
@@ -28,6 +29,10 @@ describe('tokenKeysForKind()', () => {
     expect(tokenKeysForKind('sessions')).toEqual([RESOURCE_TOKEN_SESSIONS]);
   });
 
+  it('routes a clients change to the clients token', () => {
+    expect(tokenKeysForKind('clients')).toEqual([RESOURCE_TOKEN_CLIENTS]);
+  });
+
   it('returns no tokens for the queue kind (scope-routed, not token-routed)', () => {
     // `queue` carries a session scope the watcher must match, so App routes it
     // directly rather than through a counter — it has no token group.
@@ -35,7 +40,7 @@ describe('tokenKeysForKind()', () => {
   });
 
   it('returns no tokens for an unknown kind', () => {
-    expect(tokenKeysForKind('clients')).toEqual([]);
+    expect(tokenKeysForKind('mystery')).toEqual([]);
     expect(tokenKeysForKind(undefined)).toEqual([]);
   });
 });

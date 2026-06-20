@@ -33,6 +33,7 @@
     targetPanelRequestId = 0,
     onDebugEnabledChange = noop,
     modelsRefreshToken = 0,
+    clientsRefreshToken = 0,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -334,7 +335,7 @@
         />
 
         {#if activePanelId === 'general'}
-          <SettingsGeneralPanel {settings} />
+          <SettingsGeneralPanel {settings} {clientsRefreshToken} />
         {:else if activePanelId === 'defaults'}
           <SettingsDefaultsPanel
             {settings}

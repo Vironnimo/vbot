@@ -6,6 +6,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 
 const rpcMock = vi.fn();
+const listClientsMock = vi.fn(() => Promise.resolve({ clients: [] }));
 const listQueueMock = vi.fn(() => Promise.resolve({ items: [] }));
 const listLogsMock = vi.fn();
 const readLogFileMock = vi.fn();
@@ -32,6 +33,7 @@ vi.mock('$lib/api.js', () => ({
   RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
   debugStatus: (...args) => debugStatusMock(...args),
   rpc: (...args) => rpcMock(...args),
+  listClients: (...args) => listClientsMock(...args),
   listQueue: (...args) => listQueueMock(...args),
   listLogs: (...args) => listLogsMock(...args),
   readLogFile: (...args) => readLogFileMock(...args),
@@ -54,6 +56,8 @@ describe('App', () => {
     init('en');
     mountedComponent = null;
     listLogsMock.mockReset();
+    listClientsMock.mockReset();
+    listClientsMock.mockResolvedValue({ clients: [] });
     listQueueMock.mockReset();
     listQueueMock.mockResolvedValue({ items: [] });
     readLogFileMock.mockReset();
@@ -674,14 +678,32 @@ describe('App', () => {
     flushSync();
     expect(mountedComponent.getModelsRefreshToken()).toBe(2);
 
-    // A kind the app does not handle yet must not touch the models token.
+    // An unknown kind must not touch the models token.
     handlers.onEvent({
       type: 'resource_changed',
       sequence: 3,
-      payload: { kind: 'clients' },
+      payload: { kind: 'mystery' },
     });
     flushSync();
     expect(mountedComponent.getModelsRefreshToken()).toBe(2);
+  });
+
+  it('bumps the clients refresh token on resource_changed(clients)', () => {
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    expect(mountedComponent.getClientsRefreshToken()).toBe(0);
+
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 1,
+      payload: { kind: 'clients' },
+    });
+    flushSync();
+    expect(mountedComponent.getClientsRefreshToken()).toBe(1);
+    // A clients change is presence-only — it must not touch the models token.
+    expect(mountedComponent.getModelsRefreshToken()).toBe(0);
   });
 
   it('bumps the sessions refresh token on resource_changed(sessions)', () => {

@@ -420,6 +420,19 @@ export const englishCatalog = Object.freeze({
   'settings.general.dataDirectory': 'Data directory',
   'settings.general.dataDirectoryDescription':
     'Root path for agents, sessions, and workspace files.',
+  'settings.general.clients.title': 'Connected clients',
+  'settings.general.clients.description':
+    'App windows currently connected to this server (browser tabs and the Desktop app).',
+  'settings.general.clients.loading': 'Loading connected clients…',
+  'settings.general.clients.empty': 'No app windows connected.',
+  'settings.general.clients.loadError':
+    'Connected clients could not be loaded.',
+  'settings.general.clients.thisWindow': 'This window',
+  'settings.general.clients.connectedAt': 'Connected {time}',
+  'settings.general.clients.accessor.browser': 'Browser',
+  'settings.general.clients.accessor.desktop': 'Desktop',
+  'settings.general.clients.accessor.unknown': 'Unknown',
+  'settings.general.clients.status.connected': 'Connected',
   'settings.defaults.title': 'Defaults',
   'settings.defaults.subtitle':
     'Fallback values for agent fields that are not explicitly set.',
