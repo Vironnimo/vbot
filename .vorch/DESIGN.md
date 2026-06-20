@@ -218,7 +218,7 @@ The palette is organized around four layers of warm dark surface and three seman
 - **Text-med (#9A8C7E):** Secondary copy — assistant author label, tool event text, description rows, metadata.
 - **Text-lo (#5E4C38):** Muted — timestamps, section labels, placeholder text, inactive nav items, toggle-list item names.
 - **Accent (#E8870A):** The single interaction color — a saturated amber-orange. Active nav, focused borders, primary buttons, user message accent border. Reserve it; never use it for decoration.
-- **Green (#4ADE80):** Success and running-healthy state (tool call done, server status pulse dot).
+- **Green (#4ADE80):** Success and running-healthy state (tool call done, server status dot).
 - **Amber (#F59E0B):** In-progress / warning state (running tool call indicator, blinking dot animation).
 - **Red (#FC8181):** Error state (failed tool call, destructive button hover).
 
