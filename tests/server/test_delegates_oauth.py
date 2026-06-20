@@ -361,9 +361,7 @@ async def test_provider_connect_completion_callback_publishes_event(tmp_path: An
     # A successful login also emits a generic resource_changed alongside this
     # event, so locate the targeted auth event rather than assuming it is last.
     auth_events = [
-        event
-        for event in state.event_bus.events
-        if event["type"] == PROVIDER_AUTH_COMPLETED_EVENT
+        event for event in state.event_bus.events if event["type"] == PROVIDER_AUTH_COMPLETED_EVENT
     ]
     assert len(auth_events) == 1
     assert auth_events[0]["payload"] == {

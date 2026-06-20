@@ -1934,9 +1934,7 @@ async def test_provider_set_key_publishes_providers_resource_changed(
     # Setting a key changes which models are selectable → signal a reload.
     assert response["ok"] is True
     assert [
-        event["payload"]
-        for event in state.event_bus.events
-        if event["type"] == "resource_changed"
+        event["payload"] for event in state.event_bus.events if event["type"] == "resource_changed"
     ] == [{"kind": "providers"}]
 
 
@@ -2116,9 +2114,7 @@ async def test_provider_unset_key_publishes_providers_resource_changed(
     # Removing a key changes which models are selectable → signal a reload.
     assert response["ok"] is True
     assert [
-        event["payload"]
-        for event in state.event_bus.events
-        if event["type"] == "resource_changed"
+        event["payload"] for event in state.event_bus.events if event["type"] == "resource_changed"
     ] == [{"kind": "providers"}]
 
 
@@ -2683,9 +2679,7 @@ async def test_model_refresh_db_provider_publishes_models_resource_changed(
     # reload their model lists.
     assert response["ok"] is True
     assert [
-        event["payload"]
-        for event in state.event_bus.events
-        if event["type"] == "resource_changed"
+        event["payload"] for event in state.event_bus.events if event["type"] == "resource_changed"
     ] == [{"kind": "models"}]
 
 
@@ -2706,9 +2700,7 @@ async def test_model_refresh_db_global_publishes_models_resource_changed(
 
     assert response["ok"] is True
     assert [
-        event["payload"]
-        for event in state.event_bus.events
-        if event["type"] == "resource_changed"
+        event["payload"] for event in state.event_bus.events if event["type"] == "resource_changed"
     ] == [{"kind": "models"}]
 
 
@@ -4323,7 +4315,9 @@ async def test_agent_get_reflects_configured_default_model(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_agent_create_returns_and_publishes_resolved_defaults(tmp_path: Path) -> None:
+async def test_agent_create_returns_resolved_defaults_and_signals_agents_reload(
+    tmp_path: Path,
+) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.storage.update_settings_sections(
         {
@@ -4362,14 +4356,12 @@ async def test_agent_create_returns_and_publishes_resolved_defaults(tmp_path: Pa
     assert raw_agent.temperature is None
     assert raw_agent.thinking_effort is None
 
+    # Agent create now signals a reload over the generic channel (the payload
+    # carries no agent data); the resolved defaults are verified on the response.
     assert len(state.event_bus.events) == 1
     event = state.event_bus.events[0]
-    assert event["type"] == "agent.created"
-    assert event["payload"]["id"] == "writer"
-    assert event["payload"]["model"] == "openai/gpt-5.2"
-    assert event["payload"]["temperature"] == 0.6
-    assert event["payload"]["thinking_effort"] == "high"
-    assert event["payload"]["context_window"] == 256000
+    assert event["type"] == "resource_changed"
+    assert event["payload"] == {"kind": "agents"}
 
 
 @pytest.mark.asyncio
@@ -5666,7 +5658,7 @@ async def test_dispatch_validates_unknown_method_and_required_params(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_agent_create_publishes_agent_created_event(tmp_path: Path) -> None:
+async def test_agent_create_publishes_agents_resource_changed(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
     response = await dispatch_rpc(
@@ -5677,14 +5669,13 @@ async def test_agent_create_publishes_agent_created_event(tmp_path: Path) -> Non
     assert response["ok"] is True
     assert len(state.event_bus.events) == 1
     event = state.event_bus.events[0]
-    assert event["type"] == "agent.created"
-    assert event["payload"]["id"] == "writer"
-    assert event["payload"]["name"] == "Writer"
+    assert event["type"] == "resource_changed"
+    assert event["payload"] == {"kind": "agents"}
     assert event["sequence"] == 1
 
 
 @pytest.mark.asyncio
-async def test_agent_update_publishes_agent_updated_event(tmp_path: Path) -> None:
+async def test_agent_update_publishes_agents_resource_changed(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
     response = await dispatch_rpc(
@@ -5695,13 +5686,12 @@ async def test_agent_update_publishes_agent_updated_event(tmp_path: Path) -> Non
     assert response["ok"] is True
     assert len(state.event_bus.events) == 1
     event = state.event_bus.events[0]
-    assert event["type"] == "agent.updated"
-    assert event["payload"]["id"] == "coder"
-    assert event["payload"]["name"] == "Updated Coder"
+    assert event["type"] == "resource_changed"
+    assert event["payload"] == {"kind": "agents"}
 
 
 @pytest.mark.asyncio
-async def test_agent_delete_publishes_agent_deleted_event(tmp_path: Path) -> None:
+async def test_agent_delete_publishes_agents_resource_changed(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.create("writer", "Writer")
 
@@ -5711,12 +5701,13 @@ async def test_agent_delete_publishes_agent_deleted_event(tmp_path: Path) -> Non
     )
 
     assert response["ok"] is True
+    # The remaining-agents detail lives on the RPC response; the event is a bare
+    # "agents changed → reload" signal carrying no agent data.
+    assert response["result"]["remaining_agents"][0]["id"] == "coder"
     assert len(state.event_bus.events) == 1
     event = state.event_bus.events[0]
-    assert event["type"] == "agent.deleted"
-    assert event["payload"]["agent_id"] == "writer"
-    assert len(event["payload"]["remaining_agents"]) == 1
-    assert event["payload"]["remaining_agents"][0]["id"] == "coder"
+    assert event["type"] == "resource_changed"
+    assert event["payload"] == {"kind": "agents"}
 
 
 @pytest.mark.asyncio
