@@ -26,6 +26,7 @@ RUN_COMPLETED_SERVER_EVENT = "run_completed"
 RUN_CANCELLED_SERVER_EVENT = "run_cancelled"
 RUN_FAILED_SERVER_EVENT = "run_failed"
 PROVIDER_AUTH_COMPLETED_EVENT = "provider_auth_completed"
+RESOURCE_CHANGED_EVENT = "resource_changed"
 
 ALLOWED_SERVER_EVENT_TYPES = frozenset(
     {
@@ -39,6 +40,28 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
         RUN_CANCELLED_SERVER_EVENT,
         RUN_FAILED_SERVER_EVENT,
         PROVIDER_AUTH_COMPLETED_EVENT,
+        RESOURCE_CHANGED_EVENT,
+    }
+)
+
+# The generic "resource X changed → reload it" signal (RESOURCE_CHANGED_EVENT)
+# carries no data beyond which kind of shared app state changed. One kind = one
+# constant, no new plumbing; an optional scope narrows the signal to a single
+# agent/session where that makes sense (queue/sessions). Adding a kind means
+# adding it here and pointing one more consumer at it.
+RESOURCE_KIND_MODELS = "models"
+RESOURCE_KIND_QUEUE = "queue"
+RESOURCE_KIND_SESSIONS = "sessions"
+RESOURCE_KIND_PROVIDERS = "providers"
+RESOURCE_KIND_CLIENTS = "clients"
+
+ALLOWED_RESOURCE_KINDS = frozenset(
+    {
+        RESOURCE_KIND_MODELS,
+        RESOURCE_KIND_QUEUE,
+        RESOURCE_KIND_SESSIONS,
+        RESOURCE_KIND_PROVIDERS,
+        RESOURCE_KIND_CLIENTS,
     }
 )
 
