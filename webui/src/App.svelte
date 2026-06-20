@@ -82,6 +82,10 @@
   } from '$lib/navigationHistory.js';
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
   import {
+    RESOURCE_TOKEN_MODELS,
+    tokenKeysForKind,
+  } from '$lib/resourceInvalidation.js';
+  import {
     isDesktopAccessor,
     getDesktopCapabilities,
     onWakewordStatusChange,
@@ -154,6 +158,9 @@
   let projects = $state([]);
   let selectedProjectId = $state(readStoredSelectedProjectId());
   let agentsRefreshToken = $state(0);
+  // Bumped by the generic `resource_changed` channel whenever model-catalog or
+  // provider availability changes; model surfaces reload on each bump.
+  let modelsRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
   let toastState = $state(createToastState());
   let pendingSessionNavigation = $state(null);
@@ -429,6 +436,16 @@
       return;
     }
 
+    if (event.type === 'resource_changed') {
+      // The signal carries only a `kind`; route it to the refresh token(s) it
+      // invalidates and let the watching surfaces reload through their RPCs.
+      const tokenKeys = tokenKeysForKind(event.payload?.kind);
+      if (tokenKeys.includes(RESOURCE_TOKEN_MODELS)) {
+        modelsRefreshToken += 1;
+      }
+      return;
+    }
+
     const agentEventTypes = ['agent.created', 'agent.updated', 'agent.deleted'];
     if (!agentEventTypes.includes(event.type)) {
       return;
@@ -461,6 +478,12 @@
   // binding above.
   export function getConnectionSnapshot() {
     return connectionSnapshot;
+  }
+
+  // Exposed for tests so the `resource_changed` routing in `handleServerEvent`
+  // can be verified without reaching into a child view's reload behavior.
+  export function getModelsRefreshToken() {
+    return modelsRefreshToken;
   }
 
   onMount(() => {
@@ -594,9 +617,10 @@
       onAgentsChanged={refreshAgents}
       onAgentSelected={selectAgent}
       onToast={showToast}
+      {modelsRefreshToken}
     />
   {:else if activeViewId === 'projects'}
-    <ProjectsView onToast={showToast} />
+    <ProjectsView onToast={showToast} {modelsRefreshToken} />
   {:else if activeViewId === 'cron'}
     <CronView />
   {:else if activeViewId === 'system-prompt'}
@@ -610,6 +634,7 @@
       targetPanelId={settingsPanelTarget}
       targetPanelRequestId={settingsPanelTargetRequestId}
       onDebugEnabledChange={handleDebugEnabledChange}
+      {modelsRefreshToken}
     />
   {:else if activeViewId === 'logs'}
     <LogsView />
