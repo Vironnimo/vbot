@@ -17,6 +17,7 @@ from core.search_config import (
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
     WEB_SEARCH_PROVIDER_SEARXNG,
 )
+from core.tools.arguments import ToolArgumentError, optional_int
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -127,30 +128,6 @@ def _normalize_text(raw: Any) -> str:
     if not isinstance(raw, str):
         return ""
     return raw.strip()
-
-
-def _normalize_count(raw: Any) -> int:
-    resolved = _DEFAULT_COUNT
-
-    if isinstance(raw, bool):
-        resolved = _DEFAULT_COUNT
-    elif isinstance(raw, int):
-        resolved = raw
-    elif isinstance(raw, float) and raw.is_integer():
-        resolved = int(raw)
-    elif isinstance(raw, str):
-        text = raw.strip()
-        if text:
-            try:
-                resolved = int(text)
-            except ValueError:
-                resolved = _DEFAULT_COUNT
-
-    if resolved < _MIN_COUNT:
-        return _MIN_COUNT
-    if resolved > _MAX_COUNT:
-        return _MAX_COUNT
-    return resolved
 
 
 def _normalize_date(raw: Any, field_name: str) -> tuple[str, str | None]:
@@ -604,19 +581,16 @@ async def web_search_handler(
     if not query:
         return tool_failure("validation_error", "query must be a non-empty string", retryable=False)
 
-    if "count" in arguments:
-        raw_count = arguments.get("count")
-        if not isinstance(raw_count, int) or isinstance(raw_count, bool):
-            return tool_failure("validation_error", "count must be an integer", retryable=False)
-        if raw_count < _MIN_COUNT or raw_count > _MAX_COUNT:
-            return tool_failure(
-                "validation_error",
-                f"count must be between {_MIN_COUNT} and {_MAX_COUNT}",
-                retryable=False,
-            )
-    else:
-        raw_count = _DEFAULT_COUNT
-    count = _normalize_count(raw_count)
+    try:
+        count = optional_int(
+            arguments.get("count"),
+            field_name="count",
+            default=_DEFAULT_COUNT,
+            minimum=_MIN_COUNT,
+            maximum=_MAX_COUNT,
+        )
+    except ToolArgumentError as error:
+        return tool_failure("validation_error", str(error), retryable=False)
 
     freshness = _normalize_text(arguments.get("freshness")).lower()
     date_after, after_error = _normalize_date(arguments.get("date_after"), "date_after")
