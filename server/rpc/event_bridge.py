@@ -118,14 +118,6 @@ def _bridge_queued_item_to_event_bus(state: Any, item: QueuedRunItem) -> None:
     item.future.add_done_callback(_on_run_started)
 
 
-def _publish_agent_event(state: Any, event_type: str, payload: JsonObject) -> None:
-    """Publish an agent CRUD event to the server event bus if available."""
-    event_bus = getattr(state, "event_bus", None)
-    if event_bus is None:
-        return
-    event_bus.publish(event_type, payload)
-
-
 def _publish_provider_auth_completed_event(
     state: Any,
     *,

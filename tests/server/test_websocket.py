@@ -144,8 +144,10 @@ def test_websocket_disconnect_removes_event_bus_subscriber(tmp_path: Path) -> No
     assert app.state.event_bus.subscriber_count == 0
 
 
-def test_websocket_receives_agent_created_event_via_rpc(tmp_path: Path) -> None:
-    """Agent CRUD events published by RPC delegates stream over WebSocket."""
+def test_websocket_receives_resource_changed_on_agent_create_via_rpc(tmp_path: Path) -> None:
+    """Agent CRUD rides the generic reload-on-change channel: agent.create
+    publishes resource_changed(kind="agents") over /ws, carrying no agent data
+    (open windows re-fetch agent.list), not a dedicated agent.created event."""
     app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
 
     with TestClient(app) as client, client.websocket_connect("/ws") as websocket:
@@ -160,8 +162,8 @@ def test_websocket_receives_agent_created_event_via_rpc(tmp_path: Path) -> None:
         assert response.json()["ok"] is True
         event = websocket.receive_json()
 
-    assert event["type"] == "agent.created"
-    assert event["payload"]["id"] == "writer"
+    assert event["type"] == "resource_changed"
+    assert event["payload"] == {"kind": "agents"}
 
 
 def test_server_event_contract_allows_app_error_events() -> None:
@@ -523,9 +525,9 @@ def test_parse_after_sequence_valid_and_invalid_inputs(raw: str | None, expected
 @pytest.mark.asyncio
 async def test_event_bus_subscribe_replays_only_newer_events() -> None:
     bus = ServerEventBus()
-    bus.publish("agent.created", {"id": "a"})  # sequence 1
-    bus.publish("agent.updated", {"id": "a"})  # sequence 2
-    bus.publish("agent.deleted", {"agent_id": "a"})  # sequence 3
+    bus.publish("run_started", {"id": "a"})  # sequence 1
+    bus.publish("run_output", {"id": "a"})  # sequence 2
+    bus.publish("run_completed", {"agent_id": "a"})  # sequence 3
 
     events: list[dict[str, Any]] = []
     async for event in bus.subscribe(after_sequence=1):
@@ -534,15 +536,15 @@ async def test_event_bus_subscribe_replays_only_newer_events() -> None:
             break
 
     assert events[0]["sequence"] == 2
-    assert events[0]["type"] == "agent.updated"
+    assert events[0]["type"] == "run_output"
     assert events[1]["sequence"] == 3
-    assert events[1]["type"] == "agent.deleted"
+    assert events[1]["type"] == "run_completed"
 
 
 @pytest.mark.asyncio
 async def test_event_bus_subscribe_after_sequence_zero_receives_all_events() -> None:
     bus = ServerEventBus()
-    bus.publish("agent.created", {"id": "a"})
+    bus.publish("run_started", {"id": "a"})
 
     events: list[dict[str, Any]] = []
     async for event in bus.subscribe(after_sequence=0):
@@ -551,15 +553,15 @@ async def test_event_bus_subscribe_after_sequence_zero_receives_all_events() -> 
 
     assert len(events) == 1
     assert events[0]["sequence"] == 1
-    assert events[0]["type"] == "agent.created"
+    assert events[0]["type"] == "run_started"
 
 
 @pytest.mark.asyncio
 async def test_event_bus_replay_window_is_bounded_without_reusing_sequences() -> None:
     bus = ServerEventBus(event_retention_limit=2)
-    bus.publish("agent.created", {"id": "a"})
-    bus.publish("agent.updated", {"id": "a"})
-    bus.publish("agent.deleted", {"agent_id": "a"})
+    bus.publish("run_started", {"id": "a"})
+    bus.publish("run_output", {"id": "a"})
+    bus.publish("run_completed", {"agent_id": "a"})
 
     events: list[dict[str, Any]] = []
     async for event in bus.subscribe(after_sequence=0):
@@ -569,7 +571,7 @@ async def test_event_bus_replay_window_is_bounded_without_reusing_sequences() ->
 
     assert [event["sequence"] for event in bus.events] == [2, 3]
     assert [event["sequence"] for event in events] == [2, 3]
-    assert [event["type"] for event in events] == ["agent.updated", "agent.deleted"]
+    assert [event["type"] for event in events] == ["run_output", "run_completed"]
 
 
 @pytest.mark.asyncio
@@ -580,14 +582,14 @@ async def test_event_bus_evicts_lagging_live_subscriber() -> None:
         first_event_task = asyncio.create_task(gen.__anext__())
         await asyncio.sleep(0)
 
-        bus.publish("agent.created", {"id": "a"})
+        bus.publish("run_started", {"id": "a"})
         first_event = await first_event_task
 
-        bus.publish("agent.updated", {"id": "a"})
-        bus.publish("agent.updated", {"id": "a"})
-        bus.publish("agent.deleted", {"agent_id": "a"})
+        bus.publish("run_output", {"id": "a"})
+        bus.publish("run_output", {"id": "a"})
+        bus.publish("run_completed", {"agent_id": "a"})
 
-        assert first_event["type"] == "agent.created"
+        assert first_event["type"] == "run_started"
         assert bus.subscriber_count == 0
         with pytest.raises(StopAsyncIteration):
             await gen.__anext__()
@@ -598,7 +600,7 @@ async def test_event_bus_subscribe_after_sequence_higher_skips_all_replays() -> 
     """When after_sequence exceeds all existing sequences, no events are replayed.
     The subscriber goes straight to the live subscription loop."""
     bus = ServerEventBus()
-    bus.publish("agent.created", {"id": "a"})  # sequence 1
+    bus.publish("run_started", {"id": "a"})  # sequence 1
 
     async with aclosing(bus.subscribe(after_sequence=100)) as gen:
         # No replayed events — __anext__ enters the live queue wait immediately.
@@ -654,7 +656,7 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
         bus_epoch = _override_bus_epoch(bus, epoch="epoch-abc")
 
         for index in range(3):
-            bus.publish("agent.created", {"id": f"pre-{index}"})
+            bus.publish("run_started", {"id": f"pre-{index}"})
 
         with client.websocket_connect("/ws") as websocket:
             hello = websocket.receive_json()
@@ -666,16 +668,16 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
             # the client's lastSequence bookkeeping.
             assert "sequence" not in hello
 
-            bus.publish("agent.created", {"id": "post-0"})
-            bus.publish("agent.updated", {"id": "post-0"})
+            bus.publish("run_started", {"id": "post-0"})
+            bus.publish("run_output", {"id": "post-0"})
 
             first_live = websocket.receive_json()
             second_live = websocket.receive_json()
 
-    assert first_live["type"] == "agent.created"
+    assert first_live["type"] == "run_started"
     assert first_live["payload"] == {"id": "post-0"}
     assert first_live["sequence"] == 4
-    assert second_live["type"] == "agent.updated"
+    assert second_live["type"] == "run_output"
     assert second_live["sequence"] == 5
 
 
@@ -691,7 +693,7 @@ def test_websocket_handshake_replays_when_epoch_and_after_sequence_match(
         bus_epoch = _override_bus_epoch(bus, epoch="epoch-abc")
 
         for index in range(5):
-            bus.publish("agent.created", {"id": f"event-{index + 1}"})
+            bus.publish("run_started", {"id": f"event-{index + 1}"})
 
         with client.websocket_connect(f"/ws?after_sequence=3&epoch={bus_epoch}") as websocket:
             hello = websocket.receive_json()
@@ -720,7 +722,7 @@ def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
         bus_epoch = _override_bus_epoch(bus, epoch="epoch-abc")
 
         for index in range(5):
-            bus.publish("agent.created", {"id": f"event-{index + 1}"})
+            bus.publish("run_started", {"id": f"event-{index + 1}"})
 
         # Stale epoch path: client passes a different (older) epoch string.
         with client.websocket_connect("/ws?after_sequence=3000&epoch=stale-epoch") as websocket:
@@ -729,8 +731,8 @@ def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
             assert hello["epoch"] == bus_epoch
             assert hello["last_sequence"] == 5
 
-            bus.publish("agent.created", {"id": "live-1"})
-            bus.publish("agent.updated", {"id": "live-2"})
+            bus.publish("run_started", {"id": "live-1"})
+            bus.publish("run_output", {"id": "live-2"})
 
             live_events = [websocket.receive_json() for _ in range(2)]
             assert [event["sequence"] for event in live_events] == [6, 7]
@@ -753,7 +755,7 @@ def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
             assert hello["epoch"] == bus2_epoch
             assert hello["last_sequence"] == 0
 
-            bus2.publish("agent.created", {"id": "live-1"})
+            bus2.publish("run_started", {"id": "live-1"})
 
             live_event = websocket.receive_json()
             assert live_event["sequence"] == 1

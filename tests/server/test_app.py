@@ -275,8 +275,8 @@ def test_bus_epoch_returns_property_value_from_bus() -> None:
 
 def test_bus_last_sequence_uses_property_value_from_bus() -> None:
     bus = ServerEventBus()
-    bus.publish("agent.created", {"id": "a"})
-    bus.publish("agent.updated", {"id": "a"})
+    bus.publish("run_started", {"id": "a"})
+    bus.publish("run_output", {"id": "a"})
     assert _bus_last_sequence(bus) == 2
 
 

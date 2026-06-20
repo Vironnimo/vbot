@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from server.events import ServerEventBus
 from server.rpc.agent_methods import _create_session, _list_sessions
 from server.rpc.errors import RpcError
 
@@ -55,9 +56,15 @@ def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
         chat_sessions=sessions,
         agents=SimpleNamespace(update=lambda agent_id, **k: updates.append({agent_id: k})),
     )
-    state = SimpleNamespace(runtime=runtime)
+    state = SimpleNamespace(runtime=runtime, event_bus=ServerEventBus())
     state._updates = updates  # type: ignore[attr-defined]
     return state, resolver, sessions
+
+
+def _sessions_resource_events(state: SimpleNamespace) -> list[dict[str, Any]]:
+    return [
+        event["payload"] for event in state.event_bus.events if event["type"] == "resource_changed"
+    ]
 
 
 def test_create_bare_agent_creates_identity_session() -> None:
@@ -109,3 +116,27 @@ def test_list_bare_agent_is_identity() -> None:
     _list_sessions(state, {"agent_id": "builder"})
 
     assert sessions.listed == [("builder", None)]
+
+
+def test_create_session_publishes_sessions_resource_changed() -> None:
+    state, _resolver, _sessions = _make_state()
+
+    _create_session(state, {"agent_id": "builder", "make_current": True})
+
+    # The single sessions emit point: other windows refresh this agent's session
+    # list/marking. Scoped to the agent so windows on a different agent ignore it.
+    assert _sessions_resource_events(state) == [
+        {"kind": "sessions", "scope": {"agent_id": "builder"}}
+    ]
+
+
+def test_create_session_scope_uses_bare_agent_id_for_project_address() -> None:
+    state, _resolver, _sessions = _make_state()
+
+    _create_session(state, {"agent_id": "builder@vbot"})
+
+    # The scope carries the bare agent id (the project rides separately), matching
+    # how the queue/session channels are keyed on the client.
+    assert _sessions_resource_events(state) == [
+        {"kind": "sessions", "scope": {"agent_id": "builder"}}
+    ]

@@ -18,13 +18,12 @@ from typing import Any
 import pytest
 
 from server.events import (
-    AGENT_CREATED_EVENT,
-    AGENT_UPDATED_EVENT,
     ALLOWED_RESOURCE_KINDS,
     ALLOWED_SERVER_EVENT_TYPES,
     APP_ERROR_EVENT,
     RESOURCE_CHANGED_EVENT,
     RESOURCE_KIND_MODELS,
+    RUN_COMPLETED_SERVER_EVENT,
     RUN_STARTED_SERVER_EVENT,
     ServerEventBus,
 )
@@ -53,8 +52,8 @@ def test_event_bus_epoch_is_stable_across_the_instance_lifetime() -> None:
     bus = ServerEventBus()
 
     # Act
-    bus.publish(AGENT_CREATED_EVENT, {"id": "a"})
-    bus.publish(AGENT_UPDATED_EVENT, {"id": "a"})
+    bus.publish(RUN_STARTED_SERVER_EVENT, {"id": "a"})
+    bus.publish(RUN_COMPLETED_SERVER_EVENT, {"id": "a"})
 
     # Assert: every read returns the same value.
     assert bus.epoch == bus.epoch
@@ -109,11 +108,11 @@ def test_event_bus_last_sequence_tracks_the_most_recent_publish() -> None:
     bus = ServerEventBus()
 
     # Act / Assert: increments by one per publish, matching the sequence field.
-    bus.publish(AGENT_CREATED_EVENT, {"id": "a"})
+    bus.publish(RUN_STARTED_SERVER_EVENT, {"id": "a"})
     assert bus.last_sequence == 1
     assert bus.events[-1]["sequence"] == 1
 
-    bus.publish(AGENT_UPDATED_EVENT, {"id": "a"})
+    bus.publish(RUN_COMPLETED_SERVER_EVENT, {"id": "a"})
     assert bus.last_sequence == 2
     assert bus.events[-1]["sequence"] == 2
 
@@ -125,7 +124,7 @@ def test_event_bus_last_sequence_tracks_the_most_recent_publish() -> None:
 def test_event_bus_last_sequence_is_not_writable() -> None:
     # Arrange
     bus = ServerEventBus()
-    bus.publish(AGENT_CREATED_EVENT, {"id": "a"})
+    bus.publish(RUN_STARTED_SERVER_EVENT, {"id": "a"})
 
     # Act / Assert: read-only property.
     with pytest.raises(AttributeError):
@@ -141,8 +140,8 @@ def test_publish_includes_epoch_and_sequence_on_every_event() -> None:
     expected_epoch = bus.epoch
 
     # Act
-    first = bus.publish(AGENT_CREATED_EVENT, {"id": "a"})
-    second = bus.publish(AGENT_UPDATED_EVENT, {"id": "a"})
+    first = bus.publish(RUN_STARTED_SERVER_EVENT, {"id": "a"})
+    second = bus.publish(RUN_COMPLETED_SERVER_EVENT, {"id": "a"})
     third = bus.publish(APP_ERROR_EVENT, {"message": "boom"})
 
     # Assert: every event dict carries both ``epoch`` and ``sequence``.
@@ -191,8 +190,8 @@ async def test_replayed_events_carry_the_same_epoch_as_new_publishes() -> None:
     # Arrange
     bus = ServerEventBus()
     expected_epoch = bus.epoch
-    bus.publish(AGENT_CREATED_EVENT, {"id": "a"})  # sequence 1
-    bus.publish(AGENT_UPDATED_EVENT, {"id": "a"})  # sequence 2
+    bus.publish(RUN_STARTED_SERVER_EVENT, {"id": "a"})  # sequence 1
+    bus.publish(RUN_COMPLETED_SERVER_EVENT, {"id": "a"})  # sequence 2
 
     # Act: subscribe with after_sequence=0 replays both, then a live publish.
     received: list[dict[str, Any]] = []
@@ -255,13 +254,14 @@ def test_publish_accepts_resource_changed_with_a_kind_payload() -> None:
 def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
     # Assert: the wire strings (not just the constants) are frozen so an
     # accidental rename of a kind is caught — these are part of the contract.
-    assert ALLOWED_RESOURCE_KINDS == {
+    assert {
         "models",
         "queue",
         "sessions",
+        "agents",
         "providers",
         "clients",
-    }
+    } == ALLOWED_RESOURCE_KINDS
 
 
 # -- integration: the bus re-uses the same uuid module behaviour -------------

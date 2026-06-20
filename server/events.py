@@ -17,9 +17,6 @@ DEFAULT_SERVER_EVENT_SUBSCRIBER_QUEUE_LIMIT = 1024
 _LOGGER = logging.getLogger("vbot.server.events")
 
 APP_ERROR_EVENT = "app_error"
-AGENT_CREATED_EVENT = "agent.created"
-AGENT_UPDATED_EVENT = "agent.updated"
-AGENT_DELETED_EVENT = "agent.deleted"
 RUN_STARTED_SERVER_EVENT = "run_started"
 RUN_OUTPUT_SERVER_EVENT = "run_output"
 RUN_COMPLETED_SERVER_EVENT = "run_completed"
@@ -31,9 +28,6 @@ RESOURCE_CHANGED_EVENT = "resource_changed"
 ALLOWED_SERVER_EVENT_TYPES = frozenset(
     {
         APP_ERROR_EVENT,
-        AGENT_CREATED_EVENT,
-        AGENT_UPDATED_EVENT,
-        AGENT_DELETED_EVENT,
         RUN_STARTED_SERVER_EVENT,
         RUN_OUTPUT_SERVER_EVENT,
         RUN_COMPLETED_SERVER_EVENT,
@@ -48,10 +42,12 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
 # carries no data beyond which kind of shared app state changed. One kind = one
 # constant, no new plumbing; an optional scope narrows the signal to a single
 # agent/session where that makes sense (queue/sessions). Adding a kind means
-# adding it here and pointing one more consumer at it.
+# adding it here and pointing one more consumer at it. Agent CRUD rides this
+# channel too (kind "agents") rather than a parallel set of agent.* events.
 RESOURCE_KIND_MODELS = "models"
 RESOURCE_KIND_QUEUE = "queue"
 RESOURCE_KIND_SESSIONS = "sessions"
+RESOURCE_KIND_AGENTS = "agents"
 RESOURCE_KIND_PROVIDERS = "providers"
 RESOURCE_KIND_CLIENTS = "clients"
 
@@ -60,6 +56,7 @@ ALLOWED_RESOURCE_KINDS = frozenset(
         RESOURCE_KIND_MODELS,
         RESOURCE_KIND_QUEUE,
         RESOURCE_KIND_SESSIONS,
+        RESOURCE_KIND_AGENTS,
         RESOURCE_KIND_PROVIDERS,
         RESOURCE_KIND_CLIENTS,
     }
