@@ -674,14 +674,87 @@ describe('App', () => {
     flushSync();
     expect(mountedComponent.getModelsRefreshToken()).toBe(2);
 
-    // An out-of-scope kind must not touch the models token.
+    // A kind the app does not handle yet must not touch the models token.
     handlers.onEvent({
       type: 'resource_changed',
       sequence: 3,
-      payload: { kind: 'queue' },
+      payload: { kind: 'clients' },
     });
     flushSync();
     expect(mountedComponent.getModelsRefreshToken()).toBe(2);
+  });
+
+  it('bumps the sessions refresh token on resource_changed(sessions)', () => {
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    expect(mountedComponent.getSessionsRefreshToken()).toBe(0);
+
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 1,
+      payload: { kind: 'sessions', scope: { agent_id: 'alpha' } },
+    });
+    flushSync();
+    expect(mountedComponent.getSessionsRefreshToken()).toBe(1);
+    // Sessions invalidation must not touch the models token.
+    expect(mountedComponent.getModelsRefreshToken()).toBe(0);
+  });
+
+  it('forwards the affected session scope on resource_changed(queue)', () => {
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    expect(mountedComponent.getQueueInvalidation()).toBeNull();
+
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 1,
+      payload: {
+        kind: 'queue',
+        scope: { agent_id: 'alpha', session_id: 's1' },
+      },
+    });
+    flushSync();
+    expect(mountedComponent.getQueueInvalidation()).toEqual({
+      agentId: 'alpha',
+      sessionId: 's1',
+    });
+  });
+
+  it('re-fetches the agent roster on resource_changed(agents)', async () => {
+    const agents = [
+      { id: 'alpha', name: 'Alpha', current_session_id: 'session-alpha' },
+    ];
+    rpcMock.mockImplementation(createChatRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(activeAgentTab()?.textContent).toContain('Alpha');
+    });
+
+    const agentListCallsBefore = rpcMock.mock.calls.filter(
+      ([method]) => method === 'agent.list',
+    ).length;
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    await handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 1,
+      payload: { kind: 'agents' },
+    });
+    flushSync();
+
+    // The migrated agent-CRUD reload re-fetches agent.list (the channel carries
+    // no agent data); the old agent.created/updated/deleted branch is gone.
+    const agentListCallsAfter = rpcMock.mock.calls.filter(
+      ([method]) => method === 'agent.list',
+    ).length;
+    expect(agentListCallsAfter).toBeGreaterThan(agentListCallsBefore);
   });
 });
 
