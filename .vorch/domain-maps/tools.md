@@ -33,6 +33,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ToolExecutor.execute_many(tool_calls, config) -> list[dict]` executes sibling tool calls concurrently and returns results in original call order.
 - `core.tools.availability.effective_agent_allowed_tools(...)` applies Agent-level derived availability before runtime dispatch. The `memory` tool is added when `memory_prompt_mode` is not `off` and removed when it is `off`, independent of persisted `allowed_tools`.
 - Extensions register their own tools through `api.register_tool(name, description, parameters, handler, *, internal=False, display=None)` (`.vorch/domain-maps/extensions.md`), which routes into this same `ToolRegistry.register` during runtime bootstrap — applied after the last built-in tool, right before `SystemPromptManager` consumes the registry. Extension tools are **normal tools** afterward: same provider/prompt definitions, allowlist filtering, and dispatch with no special-casing. A name colliding with a built-in or another extension's tool is skipped (the existing tool wins) and diagnosed on the extension's record — extensions never override a registered tool.
+- `core.tools.arguments` is the shared home for lenient coercion of model-supplied arguments: `optional_string`/`required_string`, `optional_int`/`required_int`, `optional_number`, `coerce_bool`, and `normalize_aliases`. They raise `ToolArgumentError` (a `ValueError`) so a tool's existing `except ValueError` parse guard — and the dispatch layer's `ValueError → invalid_arguments` mapping — surface them as `invalid_arguments`. Built-in tools use these instead of re-deriving per-tool `isinstance` checks.
 
 ## Specific Specs
 
@@ -58,6 +59,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 
 ## Conventions
 
+- **Argument coercion is lenient by policy.** Nothing validates arguments against the JSON Schema before a handler runs — the schema is only a hint the model may ignore — and models routinely encode an omitted optional field as `""`, an int as `"5"`, or a bool as `"true"`. So via `core.tools.arguments`: a blank optional string means "omitted" (use the default), `"5"`/`5.0` coerce to an int, and `"true"/"false"/"yes"/"no"/"on"/"off"/0/1` coerce to a bool. Genuinely wrong types (a word where a number belongs, an object where a string belongs) still fail `invalid_arguments`. Required-content fields keep their own checks and may be empty (`write` content, `edit` new_string). Unknown arguments stay rejected (a real model mistake), except known camelCase aliases normalized via `normalize_aliases` (currently `edit`'s `oldString`/`newString`/`replaceAll`).
 - `allowed_tools=None` and `["*"]` mean all registered normal tools; `allowed_tools=[]` means no normal tools.
 - Agent `allowed_tools` is the configurable allowlist for normal tools except `memory`; Memory mode owns that tool's effective availability.
 - Internal tools bypass normal `allowed_tools` filtering and must enforce their own domain rules.
