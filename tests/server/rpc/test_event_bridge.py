@@ -15,10 +15,12 @@ from typing import cast
 import pytest
 
 from core.runs import RUN_STARTED_EVENT, RunEvent
+from server.events import ServerEventBus
 from server.rpc.event_bridge import (
     QueuedRunItem,
     _bridge_queued_item_to_event_bus,
     _server_event_from_run_event,
+    publish_resource_changed,
 )
 
 
@@ -98,3 +100,42 @@ def test_server_event_keeps_project_id_none_for_identity_run() -> None:
     summary = _server_event_from_run_event(event)
 
     assert summary["payload"]["project_id"] is None
+
+
+def test_publish_resource_changed_emits_kind_only_payload() -> None:
+    state = SimpleNamespace(event_bus=ServerEventBus())
+
+    publish_resource_changed(state, "models")
+
+    assert len(state.event_bus.events) == 1
+    event = state.event_bus.events[0]
+    assert event["type"] == "resource_changed"
+    # No data beyond the kind — the client re-fetches through its normal RPC.
+    assert event["payload"] == {"kind": "models"}
+
+
+def test_publish_resource_changed_includes_scope_when_given() -> None:
+    state = SimpleNamespace(event_bus=ServerEventBus())
+
+    publish_resource_changed(state, "queue", scope={"session_id": "s-1"})
+
+    assert state.event_bus.events[-1]["payload"] == {
+        "kind": "queue",
+        "scope": {"session_id": "s-1"},
+    }
+
+
+def test_publish_resource_changed_is_noop_without_event_bus() -> None:
+    state = SimpleNamespace(event_bus=None)
+
+    # A CLI-only runtime stub has no bus — the helper must no-op, not crash.
+    publish_resource_changed(state, "models")
+
+
+def test_publish_resource_changed_rejects_unknown_kind() -> None:
+    state = SimpleNamespace(event_bus=ServerEventBus())
+
+    with pytest.raises(ValueError, match="unsupported resource kind"):
+        publish_resource_changed(state, "bogus")
+
+    assert state.event_bus.events == []

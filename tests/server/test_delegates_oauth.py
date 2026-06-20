@@ -13,7 +13,11 @@ from core.providers.auth_flow import DeviceFlowSession
 from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderConfig
 from core.providers.token_store import OAuthToken, TokenStore
 from server.delegates import dispatch_rpc
-from server.events import PROVIDER_AUTH_COMPLETED_EVENT, ServerEventBus
+from server.events import (
+    PROVIDER_AUTH_COMPLETED_EVENT,
+    RESOURCE_CHANGED_EVENT,
+    ServerEventBus,
+)
 
 
 class StubDeviceFlowEngine:
@@ -354,8 +358,15 @@ async def test_provider_connect_completion_callback_publishes_event(tmp_path: An
     await on_complete(success=True)
 
     assert response["ok"] is True
-    assert state.event_bus.events[-1]["type"] == PROVIDER_AUTH_COMPLETED_EVENT
-    assert state.event_bus.events[-1]["payload"] == {
+    # A successful login also emits a generic resource_changed alongside this
+    # event, so locate the targeted auth event rather than assuming it is last.
+    auth_events = [
+        event
+        for event in state.event_bus.events
+        if event["type"] == PROVIDER_AUTH_COMPLETED_EVENT
+    ]
+    assert len(auth_events) == 1
+    assert auth_events[0]["payload"] == {
         "provider_id": "github-copilot",
         "connection_id": "github-copilot:oauth",
         "account": "default",
@@ -393,6 +404,123 @@ async def test_provider_connect_completion_event_carries_named_account(tmp_path:
         "account": "work",
         "success": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_provider_connect_start_emits_no_resource_changed_until_login(
+    tmp_path: Any,
+) -> None:
+    state = make_state(tmp_path, make_provider(connection=make_oauth_connection()))
+    engine = StubDeviceFlowEngine()
+    state.device_flow_engine = engine
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.connect",
+            "params": {
+                "provider_id": "github-copilot",
+                "connection_id": "github-copilot:oauth",
+            },
+        },
+    )
+    await asyncio.sleep(0)
+
+    # Connect-start only begins the device flow — the connection is not yet
+    # established, so no reload signal until the login completes.
+    assert response["ok"] is True
+    assert [e for e in state.event_bus.events if e["type"] == RESOURCE_CHANGED_EVENT] == []
+
+
+@pytest.mark.asyncio
+async def test_provider_connect_completion_publishes_resource_changed_on_success(
+    tmp_path: Any,
+) -> None:
+    state = make_state(tmp_path, make_provider(connection=make_oauth_connection()))
+    engine = StubDeviceFlowEngine()
+    state.device_flow_engine = engine
+
+    await dispatch_rpc(
+        state,
+        {
+            "method": "provider.connect",
+            "params": {
+                "provider_id": "github-copilot",
+                "connection_id": "github-copilot:oauth",
+            },
+        },
+    )
+    await asyncio.sleep(0)
+    on_complete = engine.polls[0][6]
+
+    await on_complete(success=True)
+
+    # A successful login newly enables the provider's models → reload signal,
+    # emitted alongside (not replacing) the targeted auth event.
+    assert [
+        e["payload"] for e in state.event_bus.events if e["type"] == RESOURCE_CHANGED_EVENT
+    ] == [{"kind": "providers"}]
+    assert any(e["type"] == PROVIDER_AUTH_COMPLETED_EVENT for e in state.event_bus.events)
+
+
+@pytest.mark.asyncio
+async def test_provider_connect_completion_skips_resource_changed_on_failure(
+    tmp_path: Any,
+) -> None:
+    state = make_state(tmp_path, make_provider(connection=make_oauth_connection()))
+    engine = StubDeviceFlowEngine()
+    state.device_flow_engine = engine
+
+    await dispatch_rpc(
+        state,
+        {
+            "method": "provider.connect",
+            "params": {
+                "provider_id": "github-copilot",
+                "connection_id": "github-copilot:oauth",
+            },
+        },
+    )
+    await asyncio.sleep(0)
+    on_complete = engine.polls[0][6]
+
+    await on_complete(success=False)
+
+    # A failed login changes nothing about availability — only the targeted
+    # auth event fires so the modal can surface the failure.
+    assert [e for e in state.event_bus.events if e["type"] == RESOURCE_CHANGED_EVENT] == []
+    assert state.event_bus.events[-1]["type"] == PROVIDER_AUTH_COMPLETED_EVENT
+
+
+@pytest.mark.asyncio
+async def test_provider_disconnect_publishes_providers_resource_changed(
+    tmp_path: Any,
+) -> None:
+    state = make_state(tmp_path, make_provider(connection=make_oauth_connection()))
+    engine = StubDeviceFlowEngine()
+    state.device_flow_engine = engine
+    state.runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(access_token="stored-token"),
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.disconnect",
+            "params": {
+                "provider_id": "github-copilot",
+                "connection_id": "github-copilot:oauth",
+            },
+        },
+    )
+
+    # Dropping a connection changes which models are selectable → reload signal.
+    assert response["ok"] is True
+    assert [
+        e["payload"] for e in state.event_bus.events if e["type"] == RESOURCE_CHANGED_EVENT
+    ] == [{"kind": "providers"}]
 
 
 @pytest.mark.asyncio

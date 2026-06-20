@@ -26,10 +26,14 @@ from core.providers.accounts import (
 )
 from core.providers.errors import NetworkError, ProviderError
 from core.utils.errors import ConfigError
+from server.events import RESOURCE_KIND_MODELS, RESOURCE_KIND_PROVIDERS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.event_bridge import _publish_provider_auth_completed_event
+from server.rpc.event_bridge import (
+    _publish_provider_auth_completed_event,
+    publish_resource_changed,
+)
 from server.rpc.payloads import _model_response
 from server.rpc.provider_access import (
     _api_key_connection,
@@ -174,6 +178,8 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
+    # A credential change immediately alters which models are selectable.
+    publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
     return {
         "provider_id": provider_id,
         "connection_id": public_connection_id,
@@ -213,6 +219,8 @@ def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
+    # A credential change immediately alters which models are selectable.
+    publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
     return {
         "provider_id": provider_id,
         "connection_id": public_connection_id,
@@ -236,11 +244,15 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
         resources_dir = _runtime_resources_dir(runtime)
         if "provider_id" in params:
             provider_id = _required_string(params, "provider_id")
-            return await _refresh_provider_model_db(runtime, provider_id, resources_dir)
-
-        result = await _refresh_global_model_db(runtime, resources_dir)
+            result = await _refresh_provider_model_db(runtime, provider_id, resources_dir)
+        else:
+            result = await _refresh_global_model_db(runtime, resources_dir)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    # Both refresh paths reloaded the registry in place; tell open windows to
+    # reload their model lists. Single tail emit so the per-provider early
+    # return cannot skip the signal.
+    publish_resource_changed(state, RESOURCE_KIND_MODELS)
     return result
 
 
@@ -277,6 +289,11 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
                 account=account_id,
                 success=success,
             )
+            # The targeted auth event drives the OAuth modal; a successful login
+            # also newly enables this provider's models, so signal the generic
+            # reload alongside it (only on success — connect-start does not).
+            if success:
+                publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
 
         poll_task = asyncio.create_task(
             engine._poll_for_token(
@@ -336,6 +353,8 @@ def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
+    # Dropping a connection immediately alters which models are selectable.
+    publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
     return {
         "provider_id": provider_id,
         "connection_id": compose_connection_id(provider_id, connection.id),
