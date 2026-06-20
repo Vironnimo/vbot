@@ -14,7 +14,7 @@ from core.settings import (
     validate_temperature,
     validate_thinking_effort,
 )
-from server.events import AGENT_CREATED_EVENT, AGENT_DELETED_EVENT, AGENT_UPDATED_EVENT
+from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_SESSIONS
 from server.rpc.agent_refs import _agent_reference_ids, _agent_reference_lock
 from server.rpc.channel_methods import _channel_config_by_id
 from server.rpc.dispatcher import RpcMethodHandler
@@ -26,7 +26,7 @@ from server.rpc.errors import (
     RPC_ERROR_LAST_AGENT,
     RpcError,
 )
-from server.rpc.event_bridge import _publish_agent_event
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.payloads import _agent_response
 from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
@@ -79,7 +79,9 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)
-    _publish_agent_event(state, AGENT_CREATED_EVENT, response)
+    # Agent CRUD rides the generic reload-on-change channel ("one app system"):
+    # the signal carries no agent data, open windows re-fetch agent.list.
+    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     return response
 
 
@@ -98,7 +100,7 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)
-    _publish_agent_event(state, AGENT_UPDATED_EVENT, response)
+    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     return response
 
 
@@ -129,7 +131,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
         "agent_id": agent_id,
         "remaining_agents": [_agent_response(state, agent) for agent in remaining_agents],
     }
-    _publish_agent_event(state, AGENT_DELETED_EVENT, result)
+    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     return result
 
 
@@ -152,6 +154,12 @@ def _create_session(state: Any, params: JsonObject) -> JsonObject:
             state.runtime.agents.update(agent_id, current_session_id=session.id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    # Session creation is the single emit point for the sessions channel: it also
+    # covers /new and /handoff, which create their session through here. Other
+    # windows refresh their session list (and the make-current marking) for this
+    # agent; they do NOT switch to the new session. Scoped to the agent so windows
+    # on a different agent ignore it.
+    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
     return {"agent_id": agent_id, "session_id": session.id}
 
 
