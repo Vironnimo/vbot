@@ -295,11 +295,11 @@ async def test_read_returns_eof_notice_when_offset_is_past_end(tmp_path: Path) -
     ("line_control", "message"),
     [
         ({"limit": 0}, "limit must be >= 1"),
-        ({"limit": True}, "limit must be a positive integer"),
-        ({"limit": 1.5}, "limit must be a positive integer"),
+        ({"limit": True}, "limit must be an integer"),
+        ({"limit": 1.5}, "limit must be an integer"),
         ({"offset": 0}, "offset must be >= 1"),
-        ({"offset": True}, "offset must be a positive integer"),
-        ({"offset": 1.5}, "offset must be a positive integer"),
+        ({"offset": True}, "offset must be an integer"),
+        ({"offset": 1.5}, "offset must be an integer"),
     ],
 )
 async def test_read_returns_failure_envelope_for_invalid_line_controls(
@@ -341,6 +341,24 @@ async def test_read_accepts_integer_valued_float_limit(tmp_path: Path) -> None:
     result_int = await handler(make_context(workspace), {"path": "lines.txt", "limit": 2})
 
     assert result_float == result_int
+
+
+@pytest.mark.asyncio
+async def test_read_accepts_string_encoded_offset_and_limit(tmp_path: Path) -> None:
+    # Models sometimes encode numeric arguments as strings; accept them.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("lines.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    handler = make_handler()
+
+    result_string = await handler(
+        make_context(workspace), {"path": "lines.txt", "offset": "2", "limit": "1"}
+    )
+    result_int = await handler(
+        make_context(workspace), {"path": "lines.txt", "offset": 2, "limit": 1}
+    )
+
+    assert result_string == result_int
 
 
 @pytest.mark.asyncio

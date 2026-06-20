@@ -195,13 +195,13 @@ def test_grep_returns_failure_for_invalid_regex(
     ("arguments", "message"),
     [
         ({"context": -1}, "context must be >= 0"),
-        ({"context": True}, "context must be an integer >= 0"),
-        ({"context": 1.5}, "context must be an integer >= 0"),
+        ({"context": True}, "context must be an integer"),
+        ({"context": 1.5}, "context must be an integer"),
         ({"limit": 0}, "limit must be >= 1"),
-        ({"limit": True}, "limit must be an integer >= 1"),
-        ({"limit": 1.5}, "limit must be an integer >= 1"),
-        ({"ignoreCase": "yes"}, "ignoreCase must be a boolean"),
-        ({"literal": "yes"}, "literal must be a boolean"),
+        ({"limit": True}, "limit must be an integer"),
+        ({"limit": 1.5}, "limit must be an integer"),
+        ({"ignoreCase": "maybe"}, "ignoreCase must be a boolean"),
+        ({"literal": "maybe"}, "literal must be a boolean"),
     ],
 )
 def test_grep_returns_failure_for_invalid_controls(
@@ -219,6 +219,26 @@ def test_grep_returns_failure_for_invalid_controls(
 
     error = assert_failure_envelope(result, "invalid_arguments")
     assert error["message"] == message
+
+
+def test_grep_accepts_string_encoded_controls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Models often encode numbers and booleans as strings; accept them.
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("Hello\nhello\n", encoding="utf-8")
+
+    string_result = grep_handler(
+        make_context(workspace),
+        {"pattern": "hello", "ignoreCase": "true", "limit": "5", "context": "0"},
+    )
+    typed_result = grep_handler(
+        make_context(workspace),
+        {"pattern": "hello", "ignoreCase": True, "limit": 5, "context": 0},
+    )
+
+    assert string_result["ok"] is True
+    assert string_result == typed_result
 
 
 def test_grep_output_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

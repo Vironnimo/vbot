@@ -7,6 +7,7 @@ from typing import Any
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
+from core.tools.arguments import optional_int
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -47,28 +48,6 @@ READ_TOOL_PARAMETERS: JsonObject = {
     "required": ["path"],
     "additionalProperties": False,
 }
-
-
-def _coerce_positive_int(value: object, *, field_name: str) -> int | None:
-    if value is None:
-        return None
-
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be a positive integer")
-
-    if isinstance(value, int):
-        coerced = value
-    elif isinstance(value, float):
-        if not value.is_integer():
-            raise ValueError(f"{field_name} must be a positive integer")
-        coerced = int(value)
-    else:
-        raise ValueError(f"{field_name} must be a positive integer")
-
-    if coerced < 1:
-        raise ValueError(f"{field_name} must be >= 1")
-
-    return coerced
 
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:
@@ -122,8 +101,8 @@ def _resolve_read_path(context: ToolContext, path: str) -> Path:
 
 def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> str:
     """Render file bytes as text with offset/limit controls and truncation safeguards."""
-    start_line = _coerce_positive_int(offset, field_name="offset") or 1
-    max_lines = _coerce_positive_int(limit, field_name="limit") or DEFAULT_LINE_LIMIT
+    start_line = optional_int(offset, field_name="offset", minimum=1) or 1
+    max_lines = optional_int(limit, field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
 
     decoded = raw.decode("utf-8", errors="replace")
     all_lines = decoded.splitlines(keepends=True)
