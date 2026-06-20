@@ -60,6 +60,14 @@ def test_opencode_detector_satisfies_protocol() -> None:
     assert isinstance(OpenCodeDetector(), AgentDetector)
 
 
+def test_scanned_agent_defaults_thinking_effort_to_none() -> None:
+    # The thinking_effort field is additive with a default, so existing
+    # constructions that omit it stay valid (agent declares no effort).
+    agent = _fake_agent("builder", Path("/repo/builder"))
+
+    assert agent.thinking_effort is None
+
+
 def test_default_registry_has_opencode_first() -> None:
     registry = build_default_registry()
 

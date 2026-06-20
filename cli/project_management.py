@@ -27,6 +27,8 @@ PROJECT_SET_FLAGS = (
     "--name",
     "--default-agent",
     "--default-model",
+    "--default-temperature",
+    "--default-thinking-effort",
     "--auto-load",
 )
 
@@ -136,12 +138,16 @@ def _format_project_detail(data: Mapping[str, Any]) -> str:
 def _project_config_lines(project: object) -> list[str]:
     if not isinstance(project, dict):
         return ["  config: invalid project entry"]
+    temperature = _number_or_default(project.get("default_temperature"), "-")
+    thinking_effort = _thinking_effort_text(project.get("default_thinking_effort"))
     return [
         f"  display_name: {_string_or_default(project.get('display_name'), '-')}",
         f"  cwd: {_string_or_default(project.get('cwd'), '-')}",
         f"  cwd_exists: {_bool_text(project.get('cwd_exists'))}",
         f"  default_agent: {_string_or_default(project.get('default_agent'), '-')}",
         f"  default_model: {_string_or_default(project.get('default_model'), '-')}",
+        f"  default_temperature: {temperature}",
+        f"  default_thinking_effort: {thinking_effort}",
         f"  auto_load: {_format_string_list(project.get('auto_load'))}",
     ]
 
@@ -238,6 +244,24 @@ def _bool_text(value: object) -> str:
     if value is False:
         return "no"
     return "unknown"
+
+
+def _number_or_default(value: object, default: str) -> str:
+    # bool is an int subclass; never render a stray boolean as a temperature.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return default
+
+
+def _thinking_effort_text(value: object) -> str:
+    # null = no project default; "" = explicit provider default; else the level.
+    if value is None:
+        return "-"
+    if value == "":
+        return "(provider default)"
+    if isinstance(value, str):
+        return value
+    return "-"
 
 
 def _string_or_default(value: object, default: str) -> str:

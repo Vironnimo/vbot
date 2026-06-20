@@ -40,6 +40,8 @@ def _project_response(**overrides: Any) -> dict[str, Any]:
         "cwd_exists": True,
         "default_agent": "orchestrator",
         "default_model": "openai/gpt-5.2",
+        "default_temperature": None,
+        "default_thinking_effort": None,
         "auto_load": ["AGENTS.md"],
         "created_at": "2026-06-18T08:00:00+00:00",
         "updated_at": "2026-06-18T08:00:00+00:00",
@@ -88,6 +90,40 @@ def test_parse_args_supports_project_set_and_rm() -> None:
     # Assert
     assert (set_args.command, set_args.id, set_args.default_agent) == ("set", "vbot", "builder")
     assert (rm_args.command, rm_args.id) == ("rm", "vbot")
+
+
+def test_parse_args_supports_project_default_knobs() -> None:
+    args = cli_main.parse_args(
+        [
+            "project",
+            "add",
+            "./my-repo",
+            "--default-temperature",
+            "0.4",
+            "--default-thinking-effort",
+            "high",
+        ]
+    )
+
+    assert args.default_temperature == 0.4
+    assert args.default_thinking_effort == "high"
+    assert args.clear_default_temperature is False
+    assert args.clear_default_thinking_effort is False
+
+
+def test_parse_args_supports_project_clear_default_knobs() -> None:
+    args = cli_main.parse_args(
+        [
+            "project",
+            "set",
+            "vbot",
+            "--clear-default-temperature",
+            "--clear-default-thinking-effort",
+        ]
+    )
+
+    assert args.clear_default_temperature is True
+    assert args.clear_default_thinking_effort is True
 
 
 # --- project add -------------------------------------------------------------
@@ -155,6 +191,8 @@ def test_project_add_posts_rpc_and_renders_scan_preview(
         "  cwd_exists: yes",
         "  default_agent: orchestrator",
         "  default_model: openai/gpt-5.2",
+        "  default_temperature: -",
+        "  default_thinking_effort: -",
         "  auto_load: AGENTS.md",
         "  team:",
         "    - orchestrator model=openai/gpt-5.2 description=Routes work",
@@ -309,6 +347,36 @@ def test_project_show_posts_rpc_and_renders_team(
     assert calls == [{"method": "project.show", "params": {"project_id": "vbot"}}]
 
 
+def test_project_show_renders_default_knob_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 0.0 is a real temperature (renders as a number, not "-"); "" thinking is the
+    # explicit provider default (rendered distinctly from "no default" = "-").
+    instance = make_instance(tmp_path)
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "project": _project_response(
+                        default_temperature=0.0, default_thinking_effort=""
+                    ),
+                    "scan": {"team": [], "report": {"clean": True, "findings": []}},
+                },
+            },
+        )
+
+    monkeypatch.setattr(project_management.httpx, "post", fake_post)
+
+    result = project_management.project_show(instance, "vbot")
+
+    lines = result.message.splitlines()
+    assert "  default_temperature: 0.0" in lines
+    assert "  default_thinking_effort: (provider default)" in lines
+
+
 # --- project set -------------------------------------------------------------
 
 
@@ -345,6 +413,117 @@ def test_project_set_posts_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     ]
 
 
+def test_run_project_set_maps_default_knobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `project set --default-temperature 0.4 --default-thinking-effort high` must
+    # map to the matching RPC params (the args→changes wiring).
+    instance = make_instance(tmp_path, port=8765)
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "project": _project_response(
+                        default_temperature=0.4, default_thinking_effort="high"
+                    ),
+                    "scan": {"team": [], "report": {"clean": True, "findings": []}},
+                },
+            },
+        )
+
+    monkeypatch.setattr(project_management.httpx, "post", fake_post)
+
+    exit_code = cli_main.run(
+        [
+            "project",
+            "set",
+            "vbot",
+            "--default-temperature",
+            "0.4",
+            "--default-thinking-effort",
+            "high",
+            "--port",
+            "8765",
+        ],
+        resolve=fake_resolve,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "method": "project.set",
+            "params": {
+                "project_id": "vbot",
+                "default_temperature": 0.4,
+                "default_thinking_effort": "high",
+            },
+        }
+    ]
+
+
+def test_run_project_set_clear_flags_send_null(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The clear flags map to explicit null (fall through to the global default).
+    instance = make_instance(tmp_path, port=8765)
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "project": _project_response(),
+                    "scan": {"team": [], "report": {"clean": True, "findings": []}},
+                },
+            },
+        )
+
+    monkeypatch.setattr(project_management.httpx, "post", fake_post)
+
+    exit_code = cli_main.run(
+        [
+            "project",
+            "set",
+            "vbot",
+            "--clear-default-temperature",
+            "--clear-default-thinking-effort",
+            "--port",
+            "8765",
+        ],
+        resolve=fake_resolve,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "method": "project.set",
+            "params": {
+                "project_id": "vbot",
+                "default_temperature": None,
+                "default_thinking_effort": None,
+            },
+        }
+    ]
+
+
 def test_project_set_rejects_empty_changes(tmp_path: Path) -> None:
     # Arrange
     instance = make_instance(tmp_path)
@@ -357,7 +536,8 @@ def test_project_set_rejects_empty_changes(tmp_path: Path) -> None:
         ok=False,
         message=(
             "no project fields provided; use one of: "
-            "--cwd, --name, --default-agent, --default-model, --auto-load"
+            "--cwd, --name, --default-agent, --default-model, "
+            "--default-temperature, --default-thinking-effort, --auto-load"
         ),
         instance=instance,
     )

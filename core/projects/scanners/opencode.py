@@ -10,6 +10,9 @@ file to a :class:`ScannedAgent` per the v1 minimal rule (see add-projects.md →
 - ``agent_id`` = filename stem **slugified** (``slugify_agent_id``); a name that
   cannot be slugified becomes a parse failure the report turns into a finding.
 - ``description`` / ``temperature`` taken from the front matter.
+- ``thinking_effort`` taken from the front matter's ``reasoningEffort`` (the
+  OpenCode key), defensively normalized to vBot's effort ladder; an unknown or
+  empty value becomes ``None`` so a foreign effort never crashes the scan.
 - ``model`` taken **1:1** (``<provider>/<model-id>``), never rewritten; may be
   empty. Model existence/configuration is judged later by the resolver, not here.
 - ``body`` = the file body after the front matter, **verbatim** (opaque text;
@@ -28,6 +31,7 @@ import yaml
 
 from core.projects.paths import slugify_agent_id
 from core.projects.scanners.base import ALLOW_ALL, DetectedFile, ScannedAgent
+from core.settings import ALLOWED_THINKING_EFFORTS
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("projects")
@@ -94,6 +98,7 @@ class OpenCodeDetector:
             description=_string_field(fields.get("description")),
             model=_string_field(fields.get("model")),
             temperature=_temperature_field(fields.get("temperature")),
+            thinking_effort=_thinking_effort_field(fields.get("reasoningEffort")),
             body=body,
             source_format=OPENCODE_FORMAT_KEY,
             source_path=path,
@@ -166,3 +171,23 @@ def _temperature_field(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _thinking_effort_field(value: Any) -> str | None:
+    """Return a known thinking-effort level, or ``None`` when absent/unknown.
+
+    Defensively normalized (D3): OpenCode's ``reasoningEffort`` is matched
+    case-insensitively and trimmed against vBot's effort ladder
+    (:data:`ALLOWED_THINKING_EFFORTS`). A missing, empty, or foreign value yields
+    ``None`` — the agent tier simply declares nothing and the resolver chain falls
+    through to the project/global default — exactly as :func:`_temperature_field`
+    drops an invalid temperature rather than raising. ``""`` is intentionally
+    *not* propagated from the scan: an OpenCode agent that omits the key declares
+    nothing, so "provider default" stays a project/global decision.
+    """
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if not normalized or normalized not in ALLOWED_THINKING_EFFORTS:
+        return None
+    return normalized

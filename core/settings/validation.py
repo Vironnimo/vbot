@@ -154,6 +154,8 @@ PROJECT_FIELDS = frozenset(
         "cwd",
         "default_agent",
         "default_model",
+        "default_temperature",
+        "default_thinking_effort",
         "display_name",
         "project_id",
         "updated_at",
@@ -517,6 +519,19 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     # "fall through the resolution chain", so an empty string is allowed.
     _validate_optional_string(diagnostics, "$.default_agent", data.get("default_agent"))
     _validate_optional_string(diagnostics, "$.default_model", data.get("default_model"))
+    # default_temperature / default_thinking_effort are optional defaults that join
+    # the same resolution chain; null means "no project default", and for thinking
+    # effort "" is a real value meaning "provider default" (both allowed via the
+    # canonical field validators).
+    _validate_temperature_value(
+        diagnostics, "$.default_temperature", data.get("default_temperature"), allow_none=True
+    )
+    _validate_thinking_effort_value(
+        diagnostics,
+        "$.default_thinking_effort",
+        data.get("default_thinking_effort"),
+        allow_none=True,
+    )
     _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
     _validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
     _validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
