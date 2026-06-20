@@ -1915,6 +1915,32 @@ async def test_provider_set_key_writes_api_key_credential_and_reloads(
 
 
 @pytest.mark.asyncio
+async def test_provider_set_key_publishes_providers_resource_changed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.set_key",
+            "params": {"provider_id": "openrouter", "value": "sk-or-test"},
+        },
+    )
+
+    # Setting a key changes which models are selectable → signal a reload.
+    assert response["ok"] is True
+    assert [
+        event["payload"]
+        for event in state.event_bus.events
+        if event["type"] == "resource_changed"
+    ] == [{"kind": "providers"}]
+
+
+@pytest.mark.asyncio
 async def test_provider_set_key_with_account_writes_derived_credential_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2070,6 +2096,30 @@ async def test_provider_unset_key_removes_data_dir_credential(
         },
     }
     assert state.runtime.storage.load_environment() == {}
+
+
+@pytest.mark.asyncio
+async def test_provider_unset_key_publishes_providers_resource_changed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY", "sk-or-test")
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "provider.unset_key", "params": {"provider_id": "openrouter"}},
+    )
+
+    # Removing a key changes which models are selectable → signal a reload.
+    assert response["ok"] is True
+    assert [
+        event["payload"]
+        for event in state.event_bus.events
+        if event["type"] == "resource_changed"
+    ] == [{"kind": "providers"}]
 
 
 @pytest.mark.asyncio
@@ -2609,6 +2659,57 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
     assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key"]
     refreshed_model = state.runtime.models.get("openrouter", "fresh-model")
     assert refreshed_model.name == "Fresh Model"
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_provider_publishes_models_resource_changed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}},
+    )
+
+    # The per-provider path returns early but must still tell open windows to
+    # reload their model lists.
+    assert response["ok"] is True
+    assert [
+        event["payload"]
+        for event in state.event_bus.events
+        if event["type"] == "resource_changed"
+    ] == [{"kind": "models"}]
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_global_publishes_models_resource_changed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(state, {"method": "model.refresh_db"})
+
+    assert response["ok"] is True
+    assert [
+        event["payload"]
+        for event in state.event_bus.events
+        if event["type"] == "resource_changed"
+    ] == [{"kind": "models"}]
 
 
 @pytest.mark.asyncio

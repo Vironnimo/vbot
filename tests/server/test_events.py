@@ -20,8 +20,11 @@ import pytest
 from server.events import (
     AGENT_CREATED_EVENT,
     AGENT_UPDATED_EVENT,
+    ALLOWED_RESOURCE_KINDS,
     ALLOWED_SERVER_EVENT_TYPES,
     APP_ERROR_EVENT,
+    RESOURCE_CHANGED_EVENT,
+    RESOURCE_KIND_MODELS,
     RUN_STARTED_SERVER_EVENT,
     ServerEventBus,
 )
@@ -226,6 +229,39 @@ def test_publish_stamps_epoch_for_every_allowed_event_type() -> None:
     assert len(published) == len(ALLOWED_SERVER_EVENT_TYPES)
     assert len({event["sequence"] for event in published}) == len(published)
     assert all(event["epoch"] == epoch for event in published)
+
+
+# -- resource_changed is part of the contract allowlist ----------------------
+
+
+def test_resource_changed_is_in_the_event_contract_allowlist() -> None:
+    # Arrange / Assert: the generic invalidation event is a first-class
+    # contract event, so /ws clients accept it like any lifecycle event.
+    assert RESOURCE_CHANGED_EVENT in ALLOWED_SERVER_EVENT_TYPES
+
+
+def test_publish_accepts_resource_changed_with_a_kind_payload() -> None:
+    # Arrange
+    bus = ServerEventBus()
+
+    # Act
+    event = bus.publish(RESOURCE_CHANGED_EVENT, {"kind": RESOURCE_KIND_MODELS})
+
+    # Assert: the payload rides through unchanged (the bus is payload-agnostic).
+    assert event["type"] == RESOURCE_CHANGED_EVENT
+    assert event["payload"] == {"kind": "models"}
+
+
+def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
+    # Assert: the wire strings (not just the constants) are frozen so an
+    # accidental rename of a kind is caught — these are part of the contract.
+    assert ALLOWED_RESOURCE_KINDS == {
+        "models",
+        "queue",
+        "sessions",
+        "providers",
+        "clients",
+    }
 
 
 # -- integration: the bus re-uses the same uuid module behaviour -------------
