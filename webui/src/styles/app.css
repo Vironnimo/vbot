@@ -309,45 +309,12 @@ svg {
   border-top: 1px solid var(--border);
 }
 
-.pulse-dot {
-  position: relative;
-}
-
-.pulse-dot::after {
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  animation: ripple 2s ease-out infinite;
-  background: var(--green);
-  content: '';
-  opacity: 0.25;
-}
-
-.pulse-dot--placeholder,
-.pulse-dot--placeholder::after {
+.pulse-dot--placeholder {
   background: var(--amber);
 }
 
-.pulse-dot--disconnected,
-.pulse-dot--disconnected::after {
+.pulse-dot--disconnected {
   background: var(--red);
-}
-
-.pulse-dot--disconnected::after {
-  animation: none;
-  opacity: 0;
-}
-
-@keyframes ripple {
-  0% {
-    opacity: 0.25;
-    transform: scale(1);
-  }
-
-  100% {
-    opacity: 0;
-    transform: scale(2.5);
-  }
 }
 
 .footer-text {
