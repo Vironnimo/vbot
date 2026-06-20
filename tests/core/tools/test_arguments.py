@@ -93,7 +93,9 @@ class TestOptionalNumber:
     def test_absent_or_blank_yields_default(self, value: object) -> None:
         assert optional_number(value, field_name="t", default=30.0) == 30.0
 
-    @pytest.mark.parametrize(("value", "expected"), [(5, 5.0), (1.5, 1.5), ("1.5", 1.5), ("2", 2.0)])
+    @pytest.mark.parametrize(
+        ("value", "expected"), [(5, 5.0), (1.5, 1.5), ("1.5", 1.5), ("2", 2.0)]
+    )
     def test_accepts_numbers_and_strings(self, value: object, expected: float) -> None:
         assert optional_number(value, field_name="t") == expected
 
