@@ -31,8 +31,10 @@ from core.runs import ChatRunManager, RunNotFoundError, RunStatus
 from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
+from server.clients import ClientRegistry
 from server.delegates import RPC_ERROR_INVALID_REQUEST, bridge_run_to_event_bus, dispatch_rpc
-from server.events import ServerEventBus
+from server.events import RESOURCE_KIND_CLIENTS, ServerEventBus
+from server.rpc.event_bridge import publish_resource_changed
 
 JsonObject = dict[str, Any]
 
@@ -274,6 +276,13 @@ def create_app(
         event_bus = websocket.app.state.event_bus
         client_epoch = _parse_query_string(websocket.query_params.get("epoch"))
         client_after_sequence = _parse_after_sequence(websocket.query_params.get("after_sequence"))
+        # Register this window in the presence roster *before* reading the hello
+        # high-water mark and *before* the subscribe loop. Publishing the connect
+        # signal first means its sequence sits at or below the live-only floor,
+        # so this window does not replay its own presence event while other
+        # windows still see it; the floor is read before the hello send, so
+        # events arriving during that send are not skipped (no replay gap).
+        client_entry = _register_ws_client(websocket)
         # Read last_sequence *before* sending the hello frame so any events
         # published during the await are still in the retained deque and get
         # replayed by the subsequent subscribe.
@@ -299,6 +308,8 @@ def create_app(
                 await websocket.send_json(event)
         except WebSocketDisconnect:
             return
+        finally:
+            _unregister_ws_client(websocket.app.state, client_entry)
 
     @app.websocket("/ws/logs")
     async def websocket_logs(websocket: WebSocket) -> None:
@@ -328,6 +339,7 @@ def _initialize_app_state(
     app.state.runtime = runtime
     app.state.chat_runs = runtime.chat_run_manager
     app.state.event_bus = ServerEventBus()
+    app.state.client_registry = ClientRegistry()
     app.state.run_event_bridge_run_ids = OrderedDict()
     app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
     app.state.chat_loop = runtime.chat_loop
@@ -607,6 +619,38 @@ def _parse_query_string(raw: str | None) -> str:
     if raw is None:
         return ""
     return raw.strip()
+
+
+def _register_ws_client(websocket: WebSocket) -> Any:
+    """Register the connecting window in the presence roster, if one is wired.
+
+    Reads the client-minted connection id and accessor type from the query
+    params and the browser/OS from the ``User-Agent`` header, then publishes a
+    ``clients`` reload-on-change signal so other windows refresh the roster.
+    Returns the registry entry (the unregister handle) or ``None`` when no
+    registry exists (CLI-only runtime stub).
+    """
+    registry = getattr(websocket.app.state, "client_registry", None)
+    if registry is None:
+        return None
+    entry = registry.register(
+        connection_id=_parse_query_string(websocket.query_params.get("connection_id")),
+        accessor=_parse_query_string(websocket.query_params.get("accessor")),
+        user_agent=websocket.headers.get("user-agent", ""),
+    )
+    publish_resource_changed(websocket.app.state, RESOURCE_KIND_CLIENTS)
+    return entry
+
+
+def _unregister_ws_client(state: Any, entry: Any) -> None:
+    """Remove a previously registered window and signal the roster change."""
+    if entry is None:
+        return
+    registry = getattr(state, "client_registry", None)
+    if registry is None:
+        return
+    registry.unregister(entry.id)
+    publish_resource_changed(state, RESOURCE_KIND_CLIENTS)
 
 
 def _bus_epoch(event_bus: ServerEventBus) -> str:
