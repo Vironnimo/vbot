@@ -98,6 +98,39 @@ def test_validate_project_data_rejects_non_string_default_pointer() -> None:
     assert ("error", "$.default_agent", "must be a string or null") in _diagnostics(data)
 
 
+def test_validate_project_data_accepts_default_temperature_and_thinking() -> None:
+    data = _valid_project_data()
+    data["default_temperature"] = 0.4
+    data["default_thinking_effort"] = "high"
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_accepts_null_temperature_and_empty_thinking() -> None:
+    # null = no project default; "" = explicit provider default. Both are valid.
+    data = _valid_project_data()
+    data["default_temperature"] = None
+    data["default_thinking_effort"] = ""
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_temperature_out_of_range() -> None:
+    data = _valid_project_data()
+    data["default_temperature"] = 3.0
+
+    error_paths = {path for severity, path, _ in _diagnostics(data) if severity == "error"}
+    assert "$.default_temperature" in error_paths
+
+
+def test_validate_project_data_rejects_unknown_thinking_effort() -> None:
+    data = _valid_project_data()
+    data["default_thinking_effort"] = "ultra"
+
+    error_paths = {path for severity, path, _ in _diagnostics(data) if severity == "error"}
+    assert "$.default_thinking_effort" in error_paths
+
+
 def test_validate_project_data_rejects_non_list_auto_load() -> None:
     data = _valid_project_data()
     data["auto_load"] = "AGENTS.md"

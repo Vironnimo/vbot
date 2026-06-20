@@ -23,10 +23,20 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from core.projects.paths import normalize_cwd
-from core.settings import is_valid_project_id
+from core.settings import (
+    SettingsValidationError,
+    is_valid_project_id,
+    validate_temperature,
+    validate_thinking_effort,
+)
 
 DEFAULT_DEFAULT_AGENT = ""
 DEFAULT_DEFAULT_MODEL = ""
+# A project may carry default reasoning/sampling knobs alongside its default
+# model; unset (``None``) means "fall through the resolution chain" to the global
+# agent default and finally the provider default, exactly like ``default_model``.
+DEFAULT_DEFAULT_TEMPERATURE: float | None = None
+DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 
 # The tool-neutral project-instruction convention (the agents.md standard). Seeded
 # as the first ``auto_load`` entry when a project is created
@@ -84,6 +94,8 @@ class Project:
     updated_at: str
     default_agent: str = DEFAULT_DEFAULT_AGENT
     default_model: str = DEFAULT_DEFAULT_MODEL
+    default_temperature: float | None = DEFAULT_DEFAULT_TEMPERATURE
+    default_thinking_effort: str | None = DEFAULT_DEFAULT_THINKING_EFFORT
     auto_load: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -94,6 +106,8 @@ class Project:
             "cwd": self.cwd,
             "default_agent": self.default_agent,
             "default_model": self.default_model,
+            "default_temperature": self.default_temperature,
+            "default_thinking_effort": self.default_thinking_effort,
             "auto_load": list(self.auto_load),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -107,6 +121,8 @@ def build_project(
     *,
     default_agent: str = DEFAULT_DEFAULT_AGENT,
     default_model: str = DEFAULT_DEFAULT_MODEL,
+    default_temperature: float | None = DEFAULT_DEFAULT_TEMPERATURE,
+    default_thinking_effort: str | None = DEFAULT_DEFAULT_THINKING_EFFORT,
     auto_load: list[str] | None = None,
     created_at: str | None = None,
     updated_at: str | None = None,
@@ -123,6 +139,8 @@ def build_project(
     validated_cwd = str(_normalize_cwd(cwd))
     validated_default_agent = _validate_optional_string("default_agent", default_agent)
     validated_default_model = _validate_optional_string("default_model", default_model)
+    validated_default_temperature = _validate_default_temperature(default_temperature)
+    validated_default_thinking_effort = _validate_default_thinking_effort(default_thinking_effort)
     validated_auto_load = _validate_auto_load(auto_load)
     now = _utc_now()
     return Project(
@@ -131,6 +149,8 @@ def build_project(
         cwd=validated_cwd,
         default_agent=validated_default_agent,
         default_model=validated_default_model,
+        default_temperature=validated_default_temperature,
+        default_thinking_effort=validated_default_thinking_effort,
         auto_load=validated_auto_load,
         created_at=created_at or now,
         updated_at=updated_at or now,
@@ -150,6 +170,10 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         cwd=data["cwd"],
         default_agent=data.get("default_agent", DEFAULT_DEFAULT_AGENT),
         default_model=data.get("default_model", DEFAULT_DEFAULT_MODEL),
+        default_temperature=data.get("default_temperature", DEFAULT_DEFAULT_TEMPERATURE),
+        default_thinking_effort=data.get(
+            "default_thinking_effort", DEFAULT_DEFAULT_THINKING_EFFORT
+        ),
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
         created_at=data["created_at"],
         updated_at=data["updated_at"],
@@ -183,6 +207,33 @@ def _validate_optional_string(field_name: str, value: Any) -> str:
     if not isinstance(value, str):
         raise ProjectError(f"{field_name} must be a string")
     return value
+
+
+def _validate_default_temperature(value: Any) -> float | None:
+    """Validate the optional project-default temperature via the canonical rule.
+
+    Delegates to ``core.settings.validate_temperature`` (the single sampling-range
+    authority) so the project default obeys the same ``[0, 2]`` bounds as an
+    agent's; ``None`` means "no project default". The settings error is rewrapped
+    as a :class:`ProjectError`, mirroring how the agent store wraps it.
+    """
+    try:
+        return validate_temperature(value, label="default_temperature", allow_none=True)
+    except SettingsValidationError as exc:
+        raise ProjectError(str(exc)) from exc
+
+
+def _validate_default_thinking_effort(value: Any) -> str | None:
+    """Validate the optional project-default thinking effort via the canonical rule.
+
+    Delegates to ``core.settings.validate_thinking_effort`` so the project default
+    accepts exactly the same effort ladder as an agent's, including ``""`` as the
+    explicit "provider default" value; ``None`` means "no project default".
+    """
+    try:
+        return validate_thinking_effort(value, label="default_thinking_effort", allow_none=True)
+    except SettingsValidationError as exc:
+        raise ProjectError(str(exc)) from exc
 
 
 def _validate_auto_load(auto_load: list[str] | None) -> list[str]:

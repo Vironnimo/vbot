@@ -97,6 +97,8 @@ class ProjectStore:
         *,
         default_agent: str = "",
         default_model: str = "",
+        default_temperature: float | None = None,
+        default_thinking_effort: str | None = None,
         auto_load: list[str] | None = None,
     ) -> Project:
         """Create and persist a project anchor and its ``agents/`` subtree.
@@ -115,6 +117,8 @@ class ProjectStore:
             cwd,
             default_agent=default_agent,
             default_model=default_model,
+            default_temperature=default_temperature,
+            default_thinking_effort=default_thinking_effort,
             auto_load=seed_default_auto_load(auto_load),
         )
 
@@ -176,6 +180,8 @@ class ProjectStore:
             "cwd",
             "default_agent",
             "default_model",
+            "default_temperature",
+            "default_thinking_effort",
             "auto_load",
         }
         unknown_fields = sorted(set(changes) - allowed_fields)
@@ -190,6 +196,10 @@ class ProjectStore:
             changes.get("cwd", project.cwd),
             default_agent=changes.get("default_agent", project.default_agent),
             default_model=changes.get("default_model", project.default_model),
+            default_temperature=changes.get("default_temperature", project.default_temperature),
+            default_thinking_effort=changes.get(
+                "default_thinking_effort", project.default_thinking_effort
+            ),
             auto_load=changes.get("auto_load", list(project.auto_load)),
             created_at=project.created_at,
         )

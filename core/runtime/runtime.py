@@ -303,7 +303,7 @@ class Runtime:
             self._models,
             self._providers,
             self._provider_credentials,
-            self._global_default_agent_model,
+            self._global_agent_defaults,
         )
         self._ensure_bootstrap_agent()
         recall_registry = self._build_recall_backend_registry()
@@ -668,18 +668,19 @@ class Runtime:
             return os.environ[key]
         return self._fallback_environment.get(key, "")
 
-    def _global_default_agent_model(self) -> str:
-        """Return the instance-wide default agent model, or ``""`` when unset.
+    def _global_agent_defaults(self) -> dict[str, Any]:
+        """Return the instance-wide ``defaults.agent`` map, or ``{}`` when unset.
 
-        Read live from persisted ``defaults.agent`` so the agent resolver's model
-        chain (agent → project default → **global**) always sees the current
-        value without a restart. Mirrors how ``AgentStore`` reads agent defaults.
+        Read live from persisted ``defaults.agent`` so the resolver's chains
+        (agent → project default → **global**) for model, temperature, and
+        thinking effort always see the current values without a restart. Mirrors
+        how ``AgentStore`` reads agent defaults; one read per resolve feeds all
+        three chains.
         """
         if self._storage is None:
-            return ""
+            return {}
         agent_defaults = self._storage.load_defaults().get("agent", {})
-        model = agent_defaults.get("model", "") if isinstance(agent_defaults, dict) else ""
-        return model if isinstance(model, str) else ""
+        return agent_defaults if isinstance(agent_defaults, dict) else {}
 
     def _skill_environment(self, fallback_environment: dict[str, str]) -> dict[str, str]:
         environment = dict(fallback_environment)

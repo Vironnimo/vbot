@@ -130,7 +130,7 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 **Not:** The global Agent store. Team membership is project-scoped and lives in the repo, not in the data-dir agent store. A visiting identity agent is **not** a team member.
 
 ## Config Agent
-**Definition:** An Agent that is *only* a profile — model, tools, prompt body, temperature — with **no Workspace and no identity** (and, in v1, **no memory tool**). The typical Project Agent: a scanned OpenCode agent. At runtime it is a `ConfigAgent` synthesized from the scan (`workspace=""`, `memory_prompt_mode="off"`, `tools/skills=["*"]`, plus a verbatim prompt `body`). If it wants durable notes it writes a normal file in its cwd (the repo), via the file tools — agent work, not vBot runtime state.
+**Definition:** An Agent that is *only* a profile — model, tools, prompt body, temperature, thinking effort — with **no Workspace and no identity** (and, in v1, **no memory tool**). Its temperature and thinking effort resolve through the same Agent → Project default → global → Provider-default chain as its model. The typical Project Agent: a scanned OpenCode agent. At runtime it is a `ConfigAgent` synthesized from the scan (`workspace=""`, `memory_prompt_mode="off"`, `tools/skills=["*"]`, plus a verbatim prompt `body`). If it wants durable notes it writes a normal file in its cwd (the repo), via the file tools — agent work, not vBot runtime state.
 **Not:** An Identity Agent. A Config Agent has no SOUL/USER/MEMORY home and no memory tool; it is interchangeable run-config, not a persistent identity.
 
 ## Identity Agent

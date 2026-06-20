@@ -37,6 +37,11 @@ from core.projects import (
 )
 from core.projects.scan_report import ScanFinding, ScanReport
 from core.projects.scanners.base import ScannedAgent, ScanResult
+from core.settings import (
+    SettingsValidationError,
+    validate_temperature,
+    validate_thinking_effort,
+)
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -55,9 +60,27 @@ JsonObject = dict[str, Any]
 # eine cwd"): the OpenCode location's presence is surfaced in the scan preview's
 # Team, never a hard add-time requirement, so add only validates that the folder
 # exists and is not already claimed.
-_ADD_FIELDS = frozenset({"cwd", "display_name", "default_agent", "default_model", "auto_load"})
+_ADD_FIELDS = frozenset(
+    {
+        "cwd",
+        "display_name",
+        "default_agent",
+        "default_model",
+        "default_temperature",
+        "default_thinking_effort",
+        "auto_load",
+    }
+)
 _SET_MUTABLE_FIELDS = frozenset(
-    {"cwd", "display_name", "default_agent", "default_model", "auto_load"}
+    {
+        "cwd",
+        "display_name",
+        "default_agent",
+        "default_model",
+        "default_temperature",
+        "default_thinking_effort",
+        "auto_load",
+    }
 )
 
 
@@ -87,6 +110,16 @@ def _add_project(state: Any, params: JsonObject) -> JsonObject:
     display_name = _optional_string(params, "display_name")
     default_agent = _optional_string(params, "default_agent")
     default_model = _optional_string(params, "default_model")
+    default_temperature = (
+        _validate_default_temperature(params["default_temperature"])
+        if "default_temperature" in params
+        else None
+    )
+    default_thinking_effort = (
+        _validate_default_thinking_effort(params["default_thinking_effort"])
+        if "default_thinking_effort" in params
+        else None
+    )
     auto_load = _optional_auto_load(params)
     resolved_display_name = display_name or _display_name_from_cwd(cwd)
     project_id = _slug_from_display_name(resolved_display_name)
@@ -98,6 +131,8 @@ def _add_project(state: Any, params: JsonObject) -> JsonObject:
             cwd,
             default_agent=default_agent or "",
             default_model=default_model or "",
+            default_temperature=default_temperature,
+            default_thinking_effort=default_thinking_effort,
             auto_load=auto_load,
         )
     except Exception as exc:
@@ -260,6 +295,17 @@ def _set_changes(params: JsonObject) -> JsonObject:
         changes["default_agent"] = _optional_string(params, "default_agent") or ""
     if "default_model" in params:
         changes["default_model"] = _optional_string(params, "default_model") or ""
+    # Not _optional_string: it rejects "", but "" is a real thinking value
+    # ("provider default"). Presence decides change-vs-not; null clears the
+    # default, "" forces the provider default, a level sets it.
+    if "default_temperature" in params:
+        changes["default_temperature"] = _validate_default_temperature(
+            params["default_temperature"]
+        )
+    if "default_thinking_effort" in params:
+        changes["default_thinking_effort"] = _validate_default_thinking_effort(
+            params["default_thinking_effort"]
+        )
     if "auto_load" in params:
         changes["auto_load"] = _optional_auto_load(params)
     return changes
@@ -277,6 +323,33 @@ def _optional_auto_load(params: JsonObject) -> list[str]:
             "params.auto_load must be a list of non-empty strings",
         )
     return list(value)
+
+
+def _validate_default_temperature(value: Any) -> float | None:
+    """Validate the optional project-default temperature (null allowed = no default).
+
+    Delegates to the canonical ``core.settings`` rule (the single ``[0, 2]``
+    authority), wrapping its error as ``invalid_request`` — exactly as the
+    ``agent.*`` RPC validates the per-agent temperature (D5).
+    """
+    try:
+        return validate_temperature(value, label="params.default_temperature", allow_none=True)
+    except SettingsValidationError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+
+def _validate_default_thinking_effort(value: Any) -> str | None:
+    """Validate the optional project-default thinking effort (null = no default).
+
+    Delegates to the canonical ``core.settings`` rule, which accepts ``""`` as the
+    explicit "provider default" value; wraps its error as ``invalid_request``.
+    """
+    try:
+        return validate_thinking_effort(
+            value, label="params.default_thinking_effort", allow_none=True
+        )
+    except SettingsValidationError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
 
 def _display_name_from_cwd(cwd: str) -> str:
@@ -304,6 +377,8 @@ def _project_response(project: Project) -> JsonObject:
         "cwd_exists": cwd_exists(project.cwd),
         "default_agent": project.default_agent,
         "default_model": project.default_model,
+        "default_temperature": project.default_temperature,
+        "default_thinking_effort": project.default_thinking_effort,
         "auto_load": list(project.auto_load),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
@@ -324,6 +399,7 @@ def _team_member_response(member: ScannedAgent) -> JsonObject:
         "description": member.description,
         "model": member.model,
         "temperature": member.temperature,
+        "thinking_effort": member.thinking_effort,
         "source_format": member.source_format,
         "source_path": str(member.source_path),
     }

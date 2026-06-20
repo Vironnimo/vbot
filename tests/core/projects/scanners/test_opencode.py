@@ -26,6 +26,7 @@ def test_detect_parses_frontmatter_and_body(tmp_path: Path) -> None:
         "description: Writes code and tests.\n"
         "model: opencode-go/minimax-m3\n"
         "temperature: 0.4\n"
+        "reasoningEffort: high\n"
         "permission:\n"
         "  task: deny\n"
         "---\n"
@@ -48,6 +49,7 @@ def test_detect_parses_frontmatter_and_body(tmp_path: Path) -> None:
     assert agent.description == "Writes code and tests."
     assert agent.model == "opencode-go/minimax-m3"
     assert agent.temperature == 0.4
+    assert agent.thinking_effort == "high"
     assert agent.source_format == OPENCODE_FORMAT_KEY
     assert agent.tools == ("*",)
     assert agent.skills == ("*",)
@@ -164,3 +166,40 @@ def test_detect_rejects_boolean_temperature(tmp_path: Path) -> None:
 
     assert detected[0].agent is not None
     assert detected[0].agent.temperature is None
+
+
+def test_detect_reads_reasoning_effort(tmp_path: Path) -> None:
+    _write_agent(tmp_path, "a.md", "---\nreasoningEffort: high\n---\nBody.\n")
+
+    detected = OpenCodeDetector().detect(tmp_path)
+
+    assert detected[0].agent is not None
+    assert detected[0].agent.thinking_effort == "high"
+
+
+def test_detect_normalizes_reasoning_effort_case_and_whitespace(tmp_path: Path) -> None:
+    _write_agent(tmp_path, "a.md", '---\nreasoningEffort: "  High  "\n---\nBody.\n')
+
+    detected = OpenCodeDetector().detect(tmp_path)
+
+    assert detected[0].agent is not None
+    assert detected[0].agent.thinking_effort == "high"
+
+
+def test_detect_missing_reasoning_effort_yields_none(tmp_path: Path) -> None:
+    _write_agent(tmp_path, "a.md", "---\ndescription: x\n---\nBody.\n")
+
+    detected = OpenCodeDetector().detect(tmp_path)
+
+    assert detected[0].agent is not None
+    assert detected[0].agent.thinking_effort is None
+
+
+def test_detect_unknown_reasoning_effort_yields_none(tmp_path: Path) -> None:
+    # A foreign effort vBot does not know must fall through silently, not crash.
+    _write_agent(tmp_path, "a.md", "---\nreasoningEffort: turbo\n---\nBody.\n")
+
+    detected = OpenCodeDetector().detect(tmp_path)
+
+    assert detected[0].agent is not None
+    assert detected[0].agent.thinking_effort is None
