@@ -20,6 +20,8 @@ failure, so raising is the idiomatic signal here.
 
 from __future__ import annotations
 
+from typing import overload
+
 from core.tools.tools import JsonObject
 
 _TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
@@ -57,6 +59,28 @@ def required_string(value: object, *, field_name: str, strip: bool = True) -> st
     if not isinstance(value, str) or not value.strip():
         raise ToolArgumentError(f"{field_name} must be a non-empty string")
     return value.strip() if strip else value
+
+
+@overload
+def optional_int(
+    value: object,
+    *,
+    field_name: str,
+    default: int,
+    minimum: int | None = ...,
+    maximum: int | None = ...,
+) -> int: ...
+
+
+@overload
+def optional_int(
+    value: object,
+    *,
+    field_name: str,
+    default: None = ...,
+    minimum: int | None = ...,
+    maximum: int | None = ...,
+) -> int | None: ...
 
 
 def optional_int(
@@ -97,6 +121,28 @@ def required_int(
     number = _to_int(value, field_name)
     _check_int_range(number, field_name=field_name, minimum=minimum, maximum=maximum)
     return number
+
+
+@overload
+def optional_number(
+    value: object,
+    *,
+    field_name: str,
+    default: float,
+    minimum: float | None = ...,
+    minimum_exclusive: bool = ...,
+) -> float: ...
+
+
+@overload
+def optional_number(
+    value: object,
+    *,
+    field_name: str,
+    default: None = ...,
+    minimum: float | None = ...,
+    minimum_exclusive: bool = ...,
+) -> float | None: ...
 
 
 def optional_number(

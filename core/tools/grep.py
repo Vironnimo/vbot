@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from core.tools.arguments import coerce_bool, optional_int, optional_string
 from core.tools.search import (
     file_filter_matches,
     normalize_file_filter_pattern,
@@ -91,46 +92,6 @@ GREP_TOOL_PARAMETERS: JsonObject = {
     "required": ["pattern"],
     "additionalProperties": False,
 }
-
-
-def _coerce_non_negative_int(value: object, *, field_name: str, default: int) -> int:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be an integer >= 0")
-    if isinstance(value, int):
-        coerced = value
-    elif isinstance(value, float) and value.is_integer():
-        coerced = int(value)
-    else:
-        raise ValueError(f"{field_name} must be an integer >= 0")
-    if coerced < 0:
-        raise ValueError(f"{field_name} must be >= 0")
-    return coerced
-
-
-def _coerce_positive_int(value: object, *, field_name: str, default: int) -> int:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be an integer >= 1")
-    if isinstance(value, int):
-        coerced = value
-    elif isinstance(value, float) and value.is_integer():
-        coerced = int(value)
-    else:
-        raise ValueError(f"{field_name} must be an integer >= 1")
-    if coerced < 1:
-        raise ValueError(f"{field_name} must be >= 1")
-    return coerced
-
-
-def _coerce_bool(value: object, *, field_name: str, default: bool) -> bool:
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ValueError(f"{field_name} must be a boolean")
-    return value
 
 
 def _truncate_line(content: str) -> str:
@@ -391,20 +352,18 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         return tool_failure("invalid_arguments", "pattern must be a non-empty string")
 
     try:
-        path_argument = arguments.get("path")
-        if path_argument is not None and not isinstance(path_argument, str):
-            raise ValueError("path must be a non-empty string")
+        path_argument = optional_string(arguments.get("path"), field_name="path")
         search_target = resolve_search_path(context, path_argument)
-        context_lines = _coerce_non_negative_int(
-            arguments.get("context"), field_name="context", default=0
+        context_lines = optional_int(
+            arguments.get("context"), field_name="context", default=0, minimum=0
         )
-        match_limit = _coerce_positive_int(
-            arguments.get("limit"), field_name="limit", default=DEFAULT_LIMIT
+        match_limit = optional_int(
+            arguments.get("limit"), field_name="limit", default=DEFAULT_LIMIT, minimum=1
         )
-        ignore_case = _coerce_bool(
+        ignore_case = coerce_bool(
             arguments.get("ignoreCase"), field_name="ignoreCase", default=False
         )
-        literal = _coerce_bool(arguments.get("literal"), field_name="literal", default=False)
+        literal = coerce_bool(arguments.get("literal"), field_name="literal", default=False)
         output_mode = str(arguments.get("output_mode") or "content").strip() or "content"
         if output_mode not in SUPPORTED_OUTPUT_MODES:
             raise ValueError("output_mode must be one of: content, files_with_matches, count")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.tools.arguments import optional_string
 from core.tools.search import normalize_file_filter_pattern, resolve_search_path
 from core.tools.tools import (
     JsonObject,
@@ -74,11 +75,8 @@ def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     if not isinstance(pattern_argument, str) or not pattern_argument.strip():
         return tool_failure("invalid_arguments", "pattern must be a non-empty string")
 
-    path_argument = arguments.get("path")
-    if path_argument is not None and not isinstance(path_argument, str):
-        return tool_failure("invalid_arguments", "path must be a non-empty string")
-
     try:
+        path_argument = optional_string(arguments.get("path"), field_name="path")
         search_root = resolve_search_path(context, path_argument)
         normalized_pattern = normalize_file_filter_pattern(pattern_argument, field_name="pattern")
     except (RuntimeError, ValueError) as error:
