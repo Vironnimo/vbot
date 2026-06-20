@@ -3225,6 +3225,93 @@ describe('ChatView', () => {
 
     expect(document.querySelector('.project-scan-banner')).toBeNull();
   });
+
+  it('re-syncs a held session queue on a matching queue resource_changed', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const parentHarness = createChatViewParentHarness();
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        get queueInvalidation() {
+          return parentHarness.queueInvalidation;
+        },
+      },
+    });
+    flushSync();
+
+    // The initial history load syncs the current session's queue once.
+    await waitForCondition(
+      () =>
+        listQueueMock.mock.calls.some(
+          ([agentId, sessionId]) =>
+            agentId === 'alpha' && sessionId === 'session-1',
+        ),
+      100,
+    );
+    const callsBefore = listQueueMock.mock.calls.length;
+
+    // A queue signal for a session this window does not hold is ignored.
+    parentHarness.setQueueInvalidation({
+      agentId: 'alpha',
+      sessionId: 'unheld',
+    });
+    flushSync();
+    expect(listQueueMock.mock.calls.length).toBe(callsBefore);
+
+    // A queue signal for the held session re-syncs just that session's queue.
+    parentHarness.setQueueInvalidation({
+      agentId: 'alpha',
+      sessionId: 'session-1',
+    });
+    flushSync();
+
+    expect(listQueueMock.mock.calls.length).toBe(callsBefore + 1);
+    expect(listQueueMock).toHaveBeenLastCalledWith('alpha', 'session-1');
+  });
+
+  it('does not switch the viewed conversation on a sessions resource_changed', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const parentHarness = createChatViewParentHarness();
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        get sessionsRefreshToken() {
+          return parentHarness.sessionsRefreshToken;
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    const historyCallsBefore = rpcMock.mock.calls.filter(
+      ([method]) => method === 'chat.history',
+    ).length;
+
+    // A sessions signal refreshes the session list (drawer) only — it must not
+    // reload the agent or switch the viewed conversation ("stay put").
+    parentHarness.bumpSessionsRefreshToken();
+    flushSync();
+
+    const historyCallsAfter = rpcMock.mock.calls.filter(
+      ([method]) => method === 'chat.history',
+    ).length;
+    expect(historyCallsAfter).toBe(historyCallsBefore);
+    expect(document.body.textContent).toContain('Hello');
+  });
 });
 function createChatRpcMock({
   usage,

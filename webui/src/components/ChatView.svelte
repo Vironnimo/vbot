@@ -84,6 +84,13 @@
     runServerEvent = null,
     runServerEvents = [],
     connectionSnapshot = null,
+    // Bumped by App on `resource_changed(kind:"sessions")`; forwarded to the
+    // session drawer so a new/switched session in another window appears in the
+    // list. It deliberately does NOT switch the viewed conversation.
+    sessionsRefreshToken = 0,
+    // Scope object of the latest `resource_changed(kind:"queue")` (a fresh
+    // object per signal); re-syncs the matching held session's queue live.
+    queueInvalidation = null,
     wakewordStatus = { enabled: false, state: 'off' },
     desktopCapabilities = null,
     onNavigateToVoiceSettings = () => {},
@@ -393,6 +400,32 @@
 
   $effect(() => {
     runStream.handleServerEvents(runServerEvent, runServerEvents);
+  });
+
+  // Re-sync a held session's queue when another window mutates it. App forwards
+  // the generic `resource_changed(kind:"queue")` signal as a scope object (a
+  // fresh object per signal, so this re-fires even for a repeat scope). Only
+  // sessions we actually hold are synced — the queue RPC keys on the bare agent
+  // id, so match the scope's bare agent id + session id against each held
+  // session. The viewed conversation is never switched.
+  let handledQueueInvalidation = null;
+  $effect(() => {
+    const scope = queueInvalidation;
+    if (!scope || scope === handledQueueInvalidation) {
+      return;
+    }
+    handledQueueInvalidation = scope;
+    if (!scope.sessionId) {
+      return;
+    }
+    for (const sessionState of Object.values(chatState.sessions)) {
+      if (
+        sessionState.sessionId === scope.sessionId &&
+        bareIdFromSessionAgentId(sessionState.agentId) === scope.agentId
+      ) {
+        syncSessionQueue(sessionState);
+      }
+    }
   });
 
   onMount(() => {
@@ -1562,6 +1595,7 @@
           agentId={activeAgent.id}
           currentSessionId={viewingSessionId || activeAgent.current_session_id}
           agentCurrentSessionId={activeAgent.current_session_id}
+          reloadToken={sessionsRefreshToken}
           onSessionSelected={handleSessionSelected}
         />
       {/if}
