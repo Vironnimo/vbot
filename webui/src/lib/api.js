@@ -1,4 +1,8 @@
 import {
+  resolveAccessorType,
+  resolveClientConnectionId,
+} from './clientIdentity.js';
+import {
   buildProviderConnectPayload,
   buildProviderDisconnectPayload,
 } from './settingsView.js';
@@ -387,6 +391,10 @@ export function readLogFile(file, options = {}) {
   }
 
   return rpc('log.read', { file }, options);
+}
+
+export function listClients(options = {}) {
+  return rpc('client.list', {}, options);
 }
 
 export function listCronJobs(options = {}) {
@@ -895,6 +903,10 @@ export function subscribeServerEvents(handlers = {}, options = {}) {
       options.baseUrl,
       options.afterSequence ?? 0,
       options.epoch,
+      // Per-window presence identity sent on connect (overridable for tests);
+      // the server registers the window and the General panel marks its own row.
+      options.connectionId ?? resolveClientConnectionId(),
+      options.accessor ?? resolveAccessorType(),
     ),
   );
   const cleanupCallbacks = [];
@@ -1083,13 +1095,26 @@ function buildHttpUrlWithAfterSequence(path, afterSequence = 0) {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-function buildWebSocketUrl(path, baseUrl, afterSequence = 0, epoch) {
+function buildWebSocketUrl(
+  path,
+  baseUrl,
+  afterSequence = 0,
+  epoch,
+  connectionId,
+  accessor,
+) {
   const params = {};
   if (afterSequence > 0) {
     params.after_sequence = String(afterSequence);
   }
   if (isNonEmptyString(epoch)) {
     params.epoch = epoch;
+  }
+  if (isNonEmptyString(connectionId)) {
+    params.connection_id = connectionId;
+  }
+  if (isNonEmptyString(accessor)) {
+    params.accessor = accessor;
   }
   return buildWebSocketUrlWithParams(path, baseUrl, params);
 }

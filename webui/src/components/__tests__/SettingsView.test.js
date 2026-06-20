@@ -12,6 +12,7 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
+  listClients: () => Promise.resolve({ clients: [] }),
   getTaskModelOptions: (taskType, target) =>
     rpcMock('task_model.options', { task_type: taskType, target }),
   listTaskModelTargets: (taskType) =>

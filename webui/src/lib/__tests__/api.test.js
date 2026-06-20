@@ -806,7 +806,11 @@ describe('subscribeServerEvents()', () => {
     connection.close(1000, 'done');
     connection.close(1000, 'done');
 
-    expect(connection.socket.url).toBe('wss://localhost:8420/ws');
+    // The /ws connect carries the per-window presence identity by default
+    // (a minted connection_id + accessor type).
+    expect(connection.socket.url).toContain('wss://localhost:8420/ws');
+    expect(connection.socket.url).toContain('connection_id=');
+    expect(connection.socket.url).toContain('accessor=browser');
     expect(onEvent).toHaveBeenCalledWith(
       { type: 'run_started' },
       expect.any(Object),
@@ -814,6 +818,23 @@ describe('subscribeServerEvents()', () => {
     expect(connection.socket.closeCalls).toEqual([
       { code: 1000, reason: 'done' },
     ]);
+  });
+
+  it('sends explicit connection_id and accessor query params when provided', () => {
+    const connection = subscribeServerEvents(
+      { onEvent: vi.fn() },
+      {
+        WebSocket: MockWebSocket,
+        baseUrl: 'https://localhost:8420/',
+        connectionId: 'tab-xyz',
+        accessor: 'desktop',
+      },
+    );
+
+    expect(connection.socket.url).toContain('connection_id=tab-xyz');
+    expect(connection.socket.url).toContain('accessor=desktop');
+
+    connection.close();
   });
 
   it('reports malformed WebSocket messages through the error handler', () => {
