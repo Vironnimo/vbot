@@ -22,6 +22,7 @@ from server.app import (
     _register_run_event_bridge,
     create_app,
 )
+from server.clients import ClientRegistry
 
 
 def test_create_app_does_not_mount_webui_when_build_is_absent(monkeypatch, tmp_path: Path) -> None:
@@ -48,6 +49,7 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
         assert isinstance(app.state.chat_runs, ChatRunManager)
         assert isinstance(app.state.chat_loop, ChatLoop)
         assert isinstance(app.state.event_bus, ServerEventBus)
+        assert isinstance(app.state.client_registry, ClientRegistry)
         assert isinstance(app.state.agent_delete_lock, asyncio.Lock)
         assert app.state.server_bind == {
             "listen_host": "127.0.0.1",
