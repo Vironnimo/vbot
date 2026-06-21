@@ -17,6 +17,7 @@ Coverage (AAA):
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,6 +35,8 @@ from core.projects.resolver import (
 from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager, Run
+from core.runtime.runtime import Runtime
+from core.utils.config import Config
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.project_methods import (
@@ -149,6 +152,29 @@ def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNames
         cron_service=cron_service,
     )
     return SimpleNamespace(runtime=runtime, chat_runs=chat_runs)
+
+
+def _build_started_runtime(tmp_path: Path) -> Runtime:
+    """Start a real Runtime so the per-project skill cache is exercised end-to-end.
+
+    The minimal ``_make_state`` runtime has no skill seam, so the skill-cache half
+    of the open-time refresh needs the real runtime cache behind
+    ``project_skill_names`` / ``invalidate_project_skills``.
+    """
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    return runtime
+
+
+def _write_project_skill(repo: Path, name: str, description: str) -> None:
+    """Write a project-owned skill under ``<repo>/.opencode/skills/<name>/``."""
+    skill_dir = repo / ".opencode" / "skills" / name
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\nUse this skill.\n",
+        encoding="utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +294,52 @@ def test_show_rescans_repo_changes(tmp_path: Path) -> None:
     result = _show_project(state, {"project_id": "vbot"})
 
     assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder", "tester"]
+
+
+def test_show_reflects_a_newly_added_repo_skill(tmp_path: Path) -> None:
+    # Open re-scans the Team on every call; the skill pool must keep pace. A skill
+    # newly added under <cwd>/.opencode/skills surfaces after project.show in both
+    # the editor pool and the resolver's effective-skills input — not only after a
+    # cwd change or a restart.
+    runtime = _build_started_runtime(tmp_path)
+    state = SimpleNamespace(runtime=runtime)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "alpha", "Alpha playbook.")
+    runtime.projects.create("p", "P", repo)
+
+    # The first open primes the per-project skill cache against the current repo.
+    primed = _show_project(state, {"project_id": "p"})
+    assert primed["scan"]["skills"]["project"] == ["alpha"]
+
+    # A new project skill lands in the repo after that first open.
+    _write_project_skill(repo, "beta", "Beta playbook.")
+
+    refreshed = _show_project(state, {"project_id": "p"})
+
+    # The editor pool reflects the new skill...
+    assert refreshed["scan"]["skills"]["project"] == ["alpha", "beta"]
+    # ...and so does project_skill_names, which is exactly what the resolver feeds
+    # into a config agent's effective skills, so the next resolve sees it too.
+    assert runtime.project_skill_names("p") == frozenset({"alpha", "beta"})
+
+
+def test_show_drops_team_cache_so_a_new_repo_agent_resolves(tmp_path: Path) -> None:
+    # Open drops the Team cache together with the skill cache, so an agent added to
+    # the repo after an earlier run resolves on the next run instead of being
+    # rejected by a stale Team cache.
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    resolver = state.runtime.agent_resolver
+    # An earlier run caches the Team (builder only).
+    resolver.resolve_agent("vbot", "builder")
+    # A new agent is added to the repo afterwards.
+    _write_agent(repo, "tester.md")
+
+    _show_project(state, {"project_id": "vbot"})
+
+    assert resolver.resolve_agent("vbot", "tester").id == "tester"
 
 
 def test_show_unknown_project_errors(tmp_path: Path) -> None:
