@@ -105,22 +105,31 @@
   {:else if isImageMediaContentBlock(block)}
     {@const mediaUrl = attachmentUrlForBlock(block)}
     {#if mediaUrl}
-      <a
-        class="inline-attachment"
-        href={mediaUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        title={attachmentFilename(block)}
-        aria-label={attachmentPreviewLabel(block)}
-      >
-        <img
-          class="inline-attachment-image"
-          src={mediaUrl}
-          alt={attachmentPreviewLabel(block)}
-          loading="lazy"
-        />
-        <span class="inline-attachment-name">{attachmentFilename(block)}</span>
-      </a>
+      <div class="attachment-item attachment-item-image inline-attachment-card">
+        <a
+          class="inline-attachment"
+          href={mediaUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={attachmentFilename(block)}
+          aria-label={attachmentPreviewLabel(block)}
+        >
+          <img
+            class="attachment-thumb"
+            src={mediaUrl}
+            alt={attachmentPreviewLabel(block)}
+            loading="lazy"
+          />
+        </a>
+        <div class="attachment-hover-preview" aria-hidden="true">
+          <img class="attachment-hover-image" src={mediaUrl} alt="" />
+        </div>
+        <div class="attachment-meta">
+          <span class="attachment-name" title={attachmentFilename(block)}
+            >{attachmentFilename(block)}</span
+          >
+        </div>
+      </div>
     {/if}
   {:else if isFileContentBlock(block) || isMediaContentBlock(block)}
     {@const fileUrl = attachmentUrlForBlock(block)}
