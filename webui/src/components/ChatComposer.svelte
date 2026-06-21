@@ -946,118 +946,10 @@
     padding: 10px 2px 0;
   }
 
-  .attachment-item {
-    position: relative;
-    display: flex;
-    min-width: 0;
-    max-width: min(320px, 100%);
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-  }
-
-  .attachment-thumb-trigger {
-    flex-shrink: 0;
-    padding: 0;
-    border: 0;
-    border-radius: var(--r-sm);
-    background: transparent;
-  }
-
-  .attachment-thumb {
-    display: block;
-    width: 56px;
-    height: 56px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    object-fit: cover;
-    background: var(--bg);
-  }
-
-  .attachment-hover-preview {
-    position: absolute;
-    left: 0;
-    bottom: calc(100% + 8px);
-    z-index: 15;
-    width: min(300px, 72vw);
-    padding: 6px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--surface);
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(6px);
-    transition:
-      opacity 140ms ease,
-      transform 140ms ease;
-  }
-
-  .attachment-item-image:hover .attachment-hover-preview,
-  .attachment-item-image:focus-within .attachment-hover-preview {
-    opacity: 1;
-    transform: translateY(0);
-  }
-
-  .attachment-hover-image {
-    display: block;
-    width: 100%;
-    border-radius: var(--r-sm);
-    object-fit: contain;
-    background: var(--bg);
-  }
-
-  .attachment-file-icon {
-    display: flex;
-    width: 30px;
-    height: 30px;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    color: var(--text-med);
-    background: var(--surface-3);
-  }
-
-  .attachment-file-icon svg {
-    width: 14px;
-    height: 14px;
-    fill: none;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-width: 1.3;
-  }
-
-  .attachment-meta {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .attachment-name {
-    overflow: hidden;
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: 12.5px;
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .attachment-status {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
+  /* The attachment card chrome (.attachment-item, .attachment-thumb,
+     .attachment-hover-preview, .attachment-meta, .attachment-name, …) is shared
+     with the chat timeline and lives in styles/chat-timeline.css. Only the
+     composer-specific controls below (tray, remove button) stay scoped here. */
 
   .attachment-remove {
     display: flex;
@@ -1096,14 +988,6 @@
   @media (max-width: 640px) {
     .input-area {
       padding: 12px 14px;
-    }
-
-    .attachment-item {
-      max-width: 100%;
-    }
-
-    .attachment-hover-preview {
-      width: min(260px, calc(100vw - 48px));
     }
   }
 </style>

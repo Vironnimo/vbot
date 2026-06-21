@@ -888,7 +888,7 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    const image = document.querySelector('.inline-attachment-image');
+    const image = document.querySelector('.attachment-thumb');
     expect(image).toBeTruthy();
     expect(image.getAttribute('src')).toBe(
       '/api/attachments/image-attachment-id',
@@ -939,7 +939,7 @@ describe('ChatTimeline', () => {
       '/api/attachments/file-attachment-id',
     );
     expect(fileLink.textContent).toContain('report.pdf');
-    expect(document.querySelector('.inline-attachment-image')).toBeNull();
+    expect(document.querySelector('.attachment-thumb')).toBeNull();
   });
 
   it('renders text blocks inline instead of attachment links', () => {
@@ -973,7 +973,7 @@ describe('ChatTimeline', () => {
 
     expect(document.body.textContent).toContain('embedded text file content');
     expect(document.querySelector('.inline-file-link')).toBeNull();
-    expect(document.querySelector('.inline-attachment-image')).toBeNull();
+    expect(document.querySelector('.attachment-thumb')).toBeNull();
   });
 
   it('renders mixed text and media blocks in one user message', () => {
@@ -1013,7 +1013,7 @@ describe('ChatTimeline', () => {
 
     expect(document.body.textContent).toContain('note before image');
 
-    const image = document.querySelector('.inline-attachment-image');
+    const image = document.querySelector('.attachment-thumb');
     expect(image).toBeTruthy();
     expect(image.getAttribute('src')).toBe('/api/attachments/mixed-image-id');
     expect(image.getAttribute('alt')).toBe('mixed.png');
@@ -1046,7 +1046,7 @@ describe('ChatTimeline', () => {
     expect(document.body.textContent).toContain('plain text message');
     expect(document.querySelector('.msg-body-blocks')).toBeNull();
     expect(document.querySelector('.inline-file-link')).toBeNull();
-    expect(document.querySelector('.inline-attachment-image')).toBeNull();
+    expect(document.querySelector('.attachment-thumb')).toBeNull();
   });
 
   it('allows long unbroken user text to wrap inside the user bubble', () => {
@@ -1225,7 +1225,7 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    const image = document.querySelector('.inline-attachment-image');
+    const image = document.querySelector('.attachment-thumb');
     expect(image).toBeTruthy();
     expect(document.querySelector('.image-lightbox')).toBeNull();
 
@@ -1270,7 +1270,7 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    const image = document.querySelector('.inline-attachment-image');
+    const image = document.querySelector('.attachment-thumb');
     expect(image).toBeTruthy();
 
     image.dispatchEvent(
