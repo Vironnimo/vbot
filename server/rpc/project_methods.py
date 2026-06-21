@@ -95,6 +95,22 @@ def _agent_resolver(state: Any) -> Any:
     return state.runtime.agent_resolver
 
 
+def _invalidate_project_caches(state: Any, project_id: str) -> None:
+    """Drop both per-project caches that hang off a project's cwd/repo.
+
+    The resolver's Team-scan cache and the runtime's project-skill bundle are both
+    keyed on a project's repo, so any operation that re-points or drops that repo
+    must invalidate them **together** — a surviving half would resolve the
+    project's agents against the old repo's Team or skills. The skill half is
+    guarded with ``getattr`` so a minimal runtime without the skill seam degrades
+    cleanly, mirroring ``_project_skill_pool``.
+    """
+    _agent_resolver(state).invalidate_team_cache(project_id)
+    invalidate_project_skills = getattr(state.runtime, "invalidate_project_skills", None)
+    if callable(invalidate_project_skills):
+        invalidate_project_skills(project_id)
+
+
 def _add_project(state: Any, params: JsonObject) -> JsonObject:
     unsupported_fields = sorted(set(params) - _ADD_FIELDS)
     if unsupported_fields:
@@ -200,15 +216,13 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    # A cwd change re-points the repo, so the live Team can change — drop the
-    # cached scan and return a fresh report so the caller sees the new Team. The
-    # project's cached skills (own ``.opencode/skills`` + bundled merge) hang off
-    # the cwd too, so drop them on the same trigger.
+    # A cwd change re-points the repo, so the live Team and the project's own
+    # skills can both change — drop the per-project caches so the returned report
+    # and every later resolve see the new repo. A non-cwd change (e.g. a whitelist
+    # edit) deliberately does not invalidate: project.json is read fresh per
+    # resolve and the skill cache holds only the file pool, not the whitelist rule.
     if "cwd" in changes:
-        _agent_resolver(state).invalidate_team_cache(project_id)
-        invalidate_project_skills = getattr(state.runtime, "invalidate_project_skills", None)
-        if callable(invalidate_project_skills):
-            invalidate_project_skills(project_id)
+        _invalidate_project_caches(state, project_id)
     scan = _scan_preview(state, project)
     return {"project": _project_response(project), "scan": scan}
 
@@ -234,6 +248,12 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
             archive_path = projects.delete(project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    # Removal drops this repo from resolution; clear both per-project caches so a
+    # later project that reuses this slug against a different repo resolves fresh
+    # instead of inheriting the removed project's stale Team or skills. Safe after
+    # the lock: a deleted project can no longer repopulate either cache (every
+    # load raises), so nothing can race a stale entry back in.
+    _invalidate_project_caches(state, project_id)
     return {"project_id": project_id, "archived": True, "archive_path": str(archive_path)}
 
 
