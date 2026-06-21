@@ -74,6 +74,15 @@
     projects = [],
     selectedProjectId = '',
     onProjectSelected = () => {},
+    // The agent to restore inside the selected project on the initial mount.
+    // Tri-state: null/omitted = nothing remembered (the initial load picks the
+    // default), '' = an identity agent was active alongside an open project
+    // (restore it, open no team member), or a team member's bare id. Honored
+    // only on the first project load after mount (the reload restore); later
+    // changes are reported up through `onProjectAgentSelected`, and a genuine
+    // project switch jumps to the project default instead.
+    sharedSelectedProjectAgentId = null,
+    onProjectAgentSelected = () => {},
     onNavigateToProjects = () => {},
     agentsRefreshToken = 0,
     onAgentsChanged,
@@ -158,6 +167,11 @@
   let projectAgentSessions = $state({});
   // Guards repeated project-show side effects for the same chosen project.
   let lastLoadedProjectId = '';
+  // Set true after the first project effect run. That first run is the reload
+  // restore — it honors the remembered project agent (`sharedSelectedProjectAgentId`);
+  // every later run is a user-initiated dropdown switch that jumps to the
+  // project default.
+  let initialProjectRestoreDone = false;
   // The agent address the command/skill suggestions were last loaded for. Starts
   // as `undefined` (distinct from any real address, including the empty one) so the
   // first effect run always loads; reloaded whenever the active agent changes so
@@ -334,10 +348,16 @@
   });
 
   // React to the project dropdown selection. Choosing a project loads its
-  // scan team + report (second bar) and jumps to the default agent (else the
-  // first team member). Selecting "No project" (Personal) tears the second bar
-  // down and the chat falls back to the identity path — byte-identical to
-  // today. Guarded by `lastLoadedProjectId` so the load runs once per choice.
+  // scan team + report (second bar). Selecting "No project" (Personal) tears the
+  // second bar down and the chat falls back to the identity path — byte-
+  // identical to today. Guarded by `lastLoadedProjectId` so the load runs once
+  // per choice.
+  //
+  // The first run after mount is the reload restore: it honors the remembered
+  // project agent (a team-member id, or '' = an identity agent was active so no
+  // team member is opened, or null = nothing remembered → default). Every later
+  // run is a user-initiated switch, which jumps to the project default —
+  // `restoreAgentId === null` signals that.
   $effect(() => {
     const projectId = isProjectSelected(selectedProjectId)
       ? selectedProjectId
@@ -345,12 +365,16 @@
     if (projectId === lastLoadedProjectId) {
       return;
     }
+    const restoreAgentId = initialProjectRestoreDone
+      ? null
+      : (sharedSelectedProjectAgentId ?? null);
+    initialProjectRestoreDone = true;
     lastLoadedProjectId = projectId;
     if (!projectId) {
       clearProjectContext();
       return;
     }
-    loadProjectTeam(projectId);
+    loadProjectTeam(projectId, { restoreAgentId });
   });
 
   // App-driven session navigation: sub-agent link clicks routed through
@@ -921,15 +945,23 @@
     projectReport = null;
     projectScanError = '';
     selectedProjectAgentId = '';
+    onProjectAgentSelected?.('');
     loadingProjectTeam = false;
   };
 
   // Load a project's scan team (second bar) and report (banner) via
-  // `project.show` (live re-scan), then jump to its default agent — or the
-  // first team member if no default is set. An empty team is valid: the second
-  // bar simply renders empty, no error. The report is kept for the banner,
-  // shown only when the scan was not clean.
-  const loadProjectTeam = async (projectId) => {
+  // `project.show` (live re-scan), then choose the active agent. An empty team
+  // is valid: the second bar simply renders empty, no error. The report is kept
+  // for the banner, shown only when the scan was not clean.
+  //
+  // `restoreAgentId` decides who becomes active:
+  //   - `null` — a genuine project switch: jump to the default agent (else the
+  //     first team member).
+  //   - `''` — a reload restore where an identity agent was active alongside the
+  //     project: open no team member, the identity bar stays in control.
+  //   - a team-member id — a reload restore: reopen that member if it is still
+  //     on the team, otherwise fall through to the default.
+  const loadProjectTeam = async (projectId, { restoreAgentId = null } = {}) => {
     loadingProjectTeam = true;
     projectScanError = '';
     selectedProjectAgentId = '';
@@ -941,6 +973,18 @@
       }
       projectTeam = normalizeProjectTeam(result?.scan);
       projectReport = normalizeScanReport(result?.scan?.report);
+      if (restoreAgentId !== null) {
+        if (restoreAgentId === '') {
+          return;
+        }
+        const remembered = projectTeam.find(
+          (member) => member.agent_id === restoreAgentId,
+        );
+        if (remembered) {
+          await openProjectAgent(remembered.agent_id);
+          return;
+        }
+      }
       const defaultAgentId = defaultProjectAgentId(result?.project);
       const target =
         projectTeam.find((member) => member.agent_id === defaultAgentId) ??
@@ -975,6 +1019,7 @@
   const openProjectAgent = async (agentId) => {
     clearSessionOverride();
     selectedProjectAgentId = agentId;
+    onProjectAgentSelected?.(agentId);
     const addressing = resolveAgentAddressing(agentId, selectedProjectId, true);
     await ensureProjectAgentSession(addressing);
   };
@@ -1095,6 +1140,7 @@
     // the identity path; the project stays selected in the dropdown so its
     // team bar remains, but the active chat is the identity agent).
     selectedProjectAgentId = '';
+    onProjectAgentSelected?.('');
     if (agentId === chatState.selectedAgentId) {
       if (sessionOverrideActive) {
         clearSessionOverride();
