@@ -390,12 +390,14 @@ def _read_media_injections(result: JsonObject) -> list[JsonObject]:
 
 
 def _activate_triggered_skills(
-    runtime: RuntimeServices, agent: Any, session: ChatSession, content: str
+    agent: Any,
+    session: ChatSession,
+    content: str,
+    skill_registry: SkillRegistry,
 ) -> None:
     if not _triggered_skill_names(content):
         return
 
-    skill_registry = runtime.skills
     allowed_skills = getattr(agent, "allowed_skills", None)
     if allowed_skills is None:
         allowed_skills = ["*"]

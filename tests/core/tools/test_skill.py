@@ -1,6 +1,7 @@
 """Tests for the internal skill activation tool."""
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,10 +17,15 @@ from core.tools import (
 from core.tools.skill import load_skill_content
 
 
+def _fixed_registry(registry: SkillRegistry) -> Callable[[str | None], SkillRegistry]:
+    """Wrap a fixed registry as the project→registry resolver the tool now expects."""
+    return lambda _project_id: registry
+
+
 def test_skill_tool_loads_body_and_resources(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path))
     tools = ToolRegistry()
-    register_skill_tool(tools, registry)
+    register_skill_tool(tools, _fixed_registry(registry))
     stored: dict[str, object] = {}
 
     def activate(name: str, data: dict[str, object]) -> dict[str, object]:
@@ -49,7 +55,7 @@ def test_skill_tool_loads_body_and_resources(tmp_path: Path) -> None:
 def test_skill_tool_without_activation_hook_returns_minimal_status(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path))
     tools = ToolRegistry()
-    register_skill_tool(tools, registry)
+    register_skill_tool(tools, _fixed_registry(registry))
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
     data = cast(dict[str, Any], result["data"])
@@ -64,7 +70,7 @@ def test_skill_tool_without_activation_hook_returns_minimal_status(tmp_path: Pat
 
 def test_skill_tool_unknown_skill_fails(tmp_path: Path) -> None:
     tools = ToolRegistry()
-    register_skill_tool(tools, SkillRegistry.load(_skills_dir(tmp_path)))
+    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))))
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "missing"}))
 
@@ -90,7 +96,7 @@ metadata:
         encoding="utf-8",
     )
     tools = ToolRegistry()
-    register_skill_tool(tools, SkillRegistry.load(skills_dir, environment={}))
+    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(skills_dir, environment={})))
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "openai-helper"}))
 
@@ -102,7 +108,7 @@ metadata:
 
 def test_skill_tool_dedup_uses_session_activation_hook(tmp_path: Path) -> None:
     tools = ToolRegistry()
-    register_skill_tool(tools, SkillRegistry.load(_skills_dir(tmp_path)))
+    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))))
 
     result = tool_success(
         {
@@ -135,13 +141,40 @@ def test_skill_tool_file_read_error(tmp_path: Path) -> None:
     registry = SkillRegistry.load(skills_dir)
     skill_file.unlink()
     tools = ToolRegistry()
-    register_skill_tool(tools, registry)
+    register_skill_tool(tools, _fixed_registry(registry))
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
     error = cast(dict[str, Any], result["error"])
 
     assert result["ok"] is False
     assert error["code"] == "skill_read_error"
+
+
+def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
+    # The handler picks its registry per call from the run's project_id: a
+    # project-only skill is loadable in the project run, the global registry is used
+    # for the identity run.
+    global_registry = SkillRegistry.load(_skills_dir(tmp_path))
+    project_skills = tmp_path / "project-skills"
+    project_skill_dir = project_skills / "proj-skill"
+    project_skill_dir.mkdir(parents=True)
+    (project_skill_dir / "SKILL.md").write_text(
+        "---\nname: proj-skill\ndescription: Project scoped.\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    project_registry = SkillRegistry.load(project_skills)
+    registries: dict[str | None, SkillRegistry] = {"vbot": project_registry}
+    tools = ToolRegistry()
+    register_skill_tool(tools, lambda project_id: registries.get(project_id, global_registry))
+
+    project_result = asyncio.run(
+        async_dispatch(tools, _context(tmp_path, project_id="vbot"), {"name": "proj-skill"})
+    )
+    identity_result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "proj-skill"}))
+
+    assert project_result["ok"] is True
+    # The project-only skill is not in the global registry, so the identity run fails.
+    assert identity_result == tool_failure("skill_not_found", "Skill not found: proj-skill")
 
 
 def test_load_skill_content_escapes_skill_name_in_wrapper(tmp_path: Path) -> None:
@@ -198,6 +231,8 @@ Investigate failures methodically.
 def _context(
     tmp_path: Path,
     activation_hook: object | None = None,
+    *,
+    project_id: str | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id="coder",
@@ -209,6 +244,7 @@ def _context(
         workspace=tmp_path,
         app_root=tmp_path,
         data_root=tmp_path,
+        project_id=project_id,
         skill_activation_hook=activation_hook,  # type: ignore[arg-type]
         allowed_skills=["*"],
     )

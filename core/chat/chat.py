@@ -146,6 +146,7 @@ if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
     from core.compaction import CompactionService, CompactionSettings
     from core.runtime.interfaces import RuntimeServices
+    from core.skills.skills import SkillRegistry
 
 _LOGGER = get_logger("chat")
 
@@ -532,6 +533,11 @@ class ChatLoop:
         # the assembled prompt stays byte-identical to today.
         agent_body = runtime_agent_body(agent)
         project_prompt_context = self._resolve_project_prompt_context(project_id)
+        # The project-scoped skill registry (project skills first, then bundled) for
+        # every skill consumer in this run: triggers, the prompt skills block, and
+        # the provider skill-tool gate. ``project_id is None`` → the global registry,
+        # so an identity run is byte-identical to before.
+        skill_registry = self._runtime.skills_for(project_id)
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
@@ -566,7 +572,7 @@ class ChatLoop:
                 session.append(user_message)
                 _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
                 if isinstance(content, str):
-                    _activate_triggered_skills(self._runtime, agent, session, content)
+                    _activate_triggered_skills(agent, session, content, skill_registry)
             run.raise_if_cancelled()
             messages = await self._build_request_messages(
                 agent,
@@ -575,8 +581,11 @@ class ChatLoop:
                 wire_media_types=_resolve_wire_media_support(adapter, model_id),
                 agent_body=agent_body,
                 project_context=project_prompt_context,
+                skill_registry=skill_registry,
             )
-            tools = self._runtime.system_prompts.provider_tool_definitions(agent)
+            tools = self._runtime.system_prompts.provider_tool_definitions(
+                agent, skill_registry=skill_registry
+            )
 
             extension_registry = self._runtime.extensions
             if extension_registry is not None:
@@ -850,14 +859,18 @@ class ChatLoop:
         wire_media_types: frozenset[str] = frozenset(),
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
+        skill_registry: SkillRegistry | None = None,
     ) -> list[JsonObject]:
         # For a project-born session the project files land in the system prompt;
         # for an identity session both are empty and the prompt is unchanged. The
         # config-agent body is inserted verbatim (never re-expanded) by the builder.
+        # ``skill_registry`` scopes the skills block to the project pool (``None`` =
+        # the global registry).
         system_prompt = self._runtime.system_prompts.build_system_prompt(
             agent,
             agent_body=agent_body,
             project_context=project_context,
+            skill_registry=skill_registry,
         )
         system_messages = (
             [ChatMessage.system(system_prompt, agent.model).to_dict()]
@@ -1218,6 +1231,7 @@ class ChatLoop:
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
             agent_body=runtime_agent_body(agent),
             project_context=self._resolve_project_prompt_context(project_id),
+            skill_registry=self._runtime.skills_for(project_id),
         )
         return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)
 
