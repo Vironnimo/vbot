@@ -104,7 +104,7 @@ class _ProjectSkillBundle:
 
     Cached per ``project_id`` on the runtime, like the resolver's Team cache: built
     once at project open / first use and dropped on the same triggers (cwd change,
-    global skill reload). ``registry`` is the project-first merge of project +
+    project removal, global skill reload). ``registry`` is the project-first merge of project +
     bundled skills (the ``skills_for`` answer); ``names`` is the project-owned skill
     set the resolver subtracts ``skills_project_disabled`` from.
     """
@@ -183,7 +183,8 @@ class Runtime:
         self._skills: SkillRegistry | None = None
         # Per-project merged skill registries + project-skill names, cached by
         # project id like the resolver's Team cache; ``skills_for`` / project skill
-        # resolution build on miss and drop on cwd change or global skill reload.
+        # resolution build on miss and drop on cwd change, project removal, or a
+        # global skill reload.
         self._project_skills: dict[str, _ProjectSkillBundle] = {}
         self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
