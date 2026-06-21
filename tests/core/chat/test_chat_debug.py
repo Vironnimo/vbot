@@ -19,6 +19,7 @@ import pytest
 from core.chat import ChatLoop, ChatSessionManager
 from core.debug.recorder import DebugContext
 from core.runs import ChatRunManager
+from core.skills.skills import SkillRegistry
 from core.tools import ToolRegistry, tool_success
 
 JsonObject = dict[str, Any]
@@ -180,13 +181,16 @@ class StubPrompts:
         *,
         agent_body: str = "",
         project_context: Any = None,
+        skill_registry: Any = None,
     ) -> str:
         return f"System for {agent.id}"
 
     def render_project_files(self, project_context: Any) -> str:
         return "" if project_context is None else "RENDERED-PROJECT-FILES"
 
-    def provider_tool_definitions(self, agent: StubAgent) -> list[JsonObject]:
+    def provider_tool_definitions(
+        self, agent: StubAgent, *, skill_registry: Any = None
+    ) -> list[JsonObject]:
         return [
             {
                 "name": "get_weather",
@@ -248,6 +252,12 @@ class StubRuntime:
         self.adapter_provider_id = provider_id
         self.adapter_connection_id = connection_id
         return self.adapter
+
+    def skills_for(self, _project_id: str | None = None) -> SkillRegistry:
+        return SkillRegistry({})
+
+    def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
+        return frozenset()
 
 
 # ---------------------------------------------------------------------------

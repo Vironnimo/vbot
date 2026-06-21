@@ -25,6 +25,7 @@ from typing import cast
 import pytest
 
 from core.agents.agents import AgentStore
+from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
@@ -102,6 +103,7 @@ def _write_agent(
     *,
     model: str = "openai/gpt-5.2",
     reasoning_effort: str | None = None,
+    permission: dict[str, str] | None = None,
 ) -> None:
     agents_dir = repo.joinpath(*OPENCODE_AGENTS_SUBPATH)
     agents_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +112,9 @@ def _write_agent(
         lines.append(f"model: {model}")
     if reasoning_effort is not None:
         lines.append(f"reasoningEffort: {reasoning_effort}")
+    if permission:
+        lines.append("permission:")
+        lines.extend(f"  {key}: {value}" for key, value in permission.items())
     front = "\n".join(lines) + "\n"
     (agents_dir / filename).write_text(f"---\n{front}---\nBody.\n", encoding="utf-8")
 
@@ -322,6 +327,99 @@ def test_set_requires_a_change(tmp_path: Path) -> None:
 
     with pytest.raises(RpcError, match="at least one field"):
         _set_project(state, {"project_id": "vbot"})
+
+
+# ---------------------------------------------------------------------------
+# Tool / Skill Whitelist fields: add defaults, set, validation, team denials.
+# ---------------------------------------------------------------------------
+
+
+def test_add_returns_default_whitelist_fields(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+
+    result = _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    assert result["project"]["allowed_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert result["project"]["skills_bundled_enabled"] == []
+    assert result["project"]["skills_project_disabled"] == []
+
+
+def test_set_changes_whitelist_fields(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    result = _set_project(
+        state,
+        {
+            "project_id": "vbot",
+            "allowed_tools": ["read", "grep"],
+            "skills_bundled_enabled": ["frontend-design"],
+            "skills_project_disabled": ["debugging"],
+        },
+    )
+
+    assert result["project"]["allowed_tools"] == ["read", "grep"]
+    assert result["project"]["skills_bundled_enabled"] == ["frontend-design"]
+    assert result["project"]["skills_project_disabled"] == ["debugging"]
+
+
+def test_set_allows_empty_allowed_tools(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    result = _set_project(state, {"project_id": "vbot", "allowed_tools": []})
+
+    assert result["project"]["allowed_tools"] == []
+
+
+def test_set_rejects_non_string_tool_entry(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    with pytest.raises(RpcError) as exc_info:
+        _set_project(state, {"project_id": "vbot", "allowed_tools": ["read", 7]})
+
+    assert exc_info.value.code == "invalid_request"
+
+
+def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:
+    # The scan response carries the editor's skill pool: the project's own skills
+    # plus the bundled pool with name collisions removed (project wins).
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    state.runtime.project_skill_names = lambda _project_id: frozenset({"refactoring", "glossary"})
+    state.runtime.skills = SimpleNamespace(
+        list_all=lambda: [
+            SimpleNamespace(name="glossary"),
+            SimpleNamespace(name="pdf"),
+        ]
+    )
+
+    result = _show_project(state, {"project_id": "vbot"})
+
+    assert result["scan"]["skills"] == {
+        "project": ["glossary", "refactoring"],
+        # "glossary" is shadowed by the project skill of the same name, so it is not
+        # offered again as a bundled opt-in.
+        "bundled": ["pdf"],
+    }
+
+
+def test_team_member_reports_denied_tools(tmp_path: Path) -> None:
+    # An OpenCode agent denying task → the team response surfaces the mapped vBot
+    # tool it turns off, so the editor can show it uses less than the ceiling.
+    state = _make_state(tmp_path)
+    repo = tmp_path / "repos" / "vbot"
+    repo.mkdir(parents=True)
+    _write_agent(repo, "explorer.md", permission={"task": "deny", "edit": "deny"})
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    result = _show_project(state, {"project_id": "vbot"})
+
+    member = next(m for m in result["scan"]["team"] if m["agent_id"] == "explorer")
+    assert member["denied_tools"] == ["edit", "subagent", "write"]
 
 
 # ---------------------------------------------------------------------------

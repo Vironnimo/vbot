@@ -34,6 +34,19 @@ const MANAGE_FIELDS = Object.freeze([
   'default_model',
 ]);
 
+// The list-valued whitelist fields, diffed by SET (order-insensitive) so a
+// reorder alone never counts as a change. Tool/skill names are unordered membership
+// sets; an empty list is a real value (e.g. every tool off).
+const WHITELIST_LIST_FIELDS = Object.freeze([
+  'allowed_tools',
+  'skills_bundled_enabled',
+  'skills_project_disabled',
+]);
+
+// The memory tool is runtime-derived from the agent's memory mode and never part
+// of a project Tool Whitelist, so the editor hides it from the toggle catalog.
+export const PROJECT_TOOL_WHITELIST_EXCLUDED = Object.freeze(['memory']);
+
 // The dropdown sentinel for "no project default" thinking effort. Defined here
 // (not imported from settingsView.js) to keep the two view modules decoupled; it
 // mirrors AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT. Distinct from '' which is a
@@ -163,7 +176,85 @@ export function buildManageProjectPayload(formValues, project) {
     changes.auto_load = nextAutoLoad;
   }
 
+  // The Tool/Skill Whitelist lists are membership sets: send a field only when its
+  // set actually changed, so toggling tools/skills persists but a mere reorder does
+  // not. An empty list (e.g. every tool off) is a real value and is sent as `[]`.
+  for (const field of WHITELIST_LIST_FIELDS) {
+    const next = normalizeStringList(formValues?.[field]);
+    const current = normalizeStringList(project?.[field]);
+    if (!sameStringSet(next, current)) {
+      changes[field] = next;
+    }
+  }
+
   return changes;
+}
+
+// Build the tool toggle rows for the editor: every catalog tool (minus the
+// runtime-derived `memory` tool) with whether it is in the project's current Tool
+// Whitelist. The catalog is the tool-catalog RPC's tool list, so new tools appear
+// automatically. Rows are sorted by name for a stable display.
+export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
+  const excluded = new Set(PROJECT_TOOL_WHITELIST_EXCLUDED);
+  const enabled = new Set(normalizeStringList(allowedTools));
+  const names = (Array.isArray(catalog) ? catalog : [])
+    .map((tool) => asText(typeof tool === 'string' ? tool : tool?.name).trim())
+    .filter((name) => name.length > 0 && !excluded.has(name));
+  const unique = Array.from(new Set(names)).sort();
+  return unique.map((name) => ({ name, enabled: enabled.has(name) }));
+}
+
+// Build the two skill toggle sections for the editor from a project's skill pool
+// and its stored whitelist rule. Project skills are on by default (off only when
+// named in `skills_project_disabled`); bundled skills are off by default (on only
+// when named in `skills_bundled_enabled`). A bundled skill shadowed by a project
+// skill of the same name is dropped from the bundled section (project wins).
+export function buildSkillToggleSections({
+  projectSkills = [],
+  bundledSkills = [],
+  skillsBundledEnabled = [],
+  skillsProjectDisabled = [],
+} = {}) {
+  const disabled = new Set(normalizeStringList(skillsProjectDisabled));
+  const enabledBundled = new Set(normalizeStringList(skillsBundledEnabled));
+  const projectNames = normalizeStringList(projectSkills);
+  const projectSet = new Set(projectNames);
+  return {
+    project: projectNames.map((name) => ({
+      name,
+      enabled: !disabled.has(name),
+    })),
+    bundled: normalizeStringList(bundledSkills)
+      .filter((name) => !projectSet.has(name))
+      .map((name) => ({ name, enabled: enabledBundled.has(name) })),
+  };
+}
+
+// Add or remove a name from a list (returns a new normalized list), the single
+// primitive the editor's toggle handlers use to mutate a whitelist field.
+export function setListMembership(list, name, include) {
+  const normalized = normalizeStringList(list);
+  const target = asText(name).trim();
+  if (!target) {
+    return normalized;
+  }
+  const has = normalized.includes(target);
+  if (include && !has) {
+    return [...normalized, target];
+  }
+  if (!include && has) {
+    return normalized.filter((item) => item !== target);
+  }
+  return normalized;
+}
+
+// Normalize the scan response's skill pool into the editor's two name lists.
+export function normalizeScanSkills(scan) {
+  const skills = scan?.skills ?? {};
+  return {
+    project: normalizeStringList(skills.project),
+    bundled: normalizeStringList(skills.bundled),
+  };
 }
 
 // Whether a manage payload carries at least one change (project.set needs ≥1).
@@ -232,6 +323,13 @@ export function normalizeProject(project) {
     default_temperature: numberOrNull(project?.default_temperature),
     default_thinking_effort: stringOrNull(project?.default_thinking_effort),
     auto_load: normalizeAutoLoad(project?.auto_load),
+    allowed_tools: normalizeStringList(project?.allowed_tools),
+    skills_bundled_enabled: normalizeStringList(
+      project?.skills_bundled_enabled,
+    ),
+    skills_project_disabled: normalizeStringList(
+      project?.skills_project_disabled,
+    ),
     created_at: optionalText(project?.created_at),
     updated_at: optionalText(project?.updated_at),
   };
@@ -256,6 +354,7 @@ export function projectTeam(scan) {
     thinking_effort: stringOrNull(member?.thinking_effort),
     source_format: asText(member?.source_format),
     source_path: asText(member?.source_path),
+    denied_tools: normalizeStringList(member?.denied_tools),
   }));
 }
 
@@ -290,13 +389,19 @@ export function normalizeScanReport(report) {
   };
 }
 
-function normalizeAutoLoad(value) {
+// Trim + drop empties from a list-of-strings value (a non-array → []). The shared
+// primitive behind auto_load and the whitelist list fields.
+function normalizeStringList(value) {
   if (!Array.isArray(value)) {
     return [];
   }
   return value
     .map((item) => asText(item).trim())
     .filter((item) => item.length > 0);
+}
+
+function normalizeAutoLoad(value) {
+  return normalizeStringList(value);
 }
 
 // Form temperature (a string, possibly comma-decimal) → number|null. Mirrors
@@ -347,6 +452,15 @@ function sameStringList(left, right) {
     return false;
   }
   return left.every((item, index) => item === right[index]);
+}
+
+// Order-insensitive equality for the membership-set whitelist fields.
+function sameStringSet(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
 }
 
 function optionalText(value) {

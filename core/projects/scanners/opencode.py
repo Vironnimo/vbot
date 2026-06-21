@@ -17,9 +17,15 @@ file to a :class:`ScannedAgent` per the v1 minimal rule (see add-projects.md →
   empty. Model existence/configuration is judged later by the resolver, not here.
 - ``body`` = the file body after the front matter, **verbatim** (opaque text;
   ``{...}`` is not expanded here).
-- ``tools`` and ``skills`` = ``["*"]`` for every agent.
+- ``denied_tools`` = the set of vBot tools this agent turns off, parsed from the
+  front matter ``permission`` and ``tools`` maps (see :func:`_denied_tools`). Per
+  the v1 max-agency reading, granularity is ignored: a tool is off only on an
+  unambiguous full deny. The OpenCode **global** config file is out of scope — only
+  this per-agent file is read.
 
-Everything else in the front matter stays out in v1.
+Skills are not narrowed per agent in v1 (``permission.skill`` is out of scope), so
+the profile carries no skill list; a config agent's skills are resolved from the
+project. Everything else in the front matter stays out in v1.
 """
 
 from __future__ import annotations
@@ -30,7 +36,7 @@ from typing import Any
 import yaml
 
 from core.projects.paths import slugify_agent_id
-from core.projects.scanners.base import ALLOW_ALL, DetectedFile, ScannedAgent
+from core.projects.scanners.base import DetectedFile, ScannedAgent
 from core.settings import ALLOWED_THINKING_EFFORTS
 from core.utils.logging import get_logger
 
@@ -42,6 +48,41 @@ OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
 OPENCODE_FORMAT_KEY = "opencode"
 _AGENT_FILE_GLOB = "*.md"
 _FRONT_MATTER_DELIMITER = "---"
+_OPENCODE_DENY = "deny"
+
+# OpenCode ``permission`` key → the vBot tools a full deny on that key turns off.
+# ``edit`` covers both edit and write (no ``write`` permission key exists); ``bash``
+# covers bash and process (OpenCode ``bash`` maps to both, grant/deny together);
+# ``task`` governs the subagent tool. Keys without a vBot counterpart (``list``,
+# ``lsp``, ``todowrite``, ``question``, ``external_directory``, ``doom_loop``,
+# ``skill``) are absent here and therefore ignored.
+_PERMISSION_DENY_MAP: dict[str, frozenset[str]] = {
+    "edit": frozenset({"edit", "write"}),
+    "bash": frozenset({"bash", "process"}),
+    "read": frozenset({"read"}),
+    "grep": frozenset({"grep"}),
+    "glob": frozenset({"glob"}),
+    "webfetch": frozenset({"web_fetch"}),
+    "websearch": frozenset({"web_search"}),
+    "task": frozenset({"subagent"}),
+}
+
+# OpenCode ``tools`` map name → the vBot tools a ``false`` entry turns off. Differs
+# from the permission map only on edit/write: ``tools.edit`` and ``tools.write`` are
+# separate names, so each denies its own vBot tool, whereas ``permission.edit``
+# covers both. Unmapped tool names (``list``, ``lsp``, ``todowrite``,
+# ``external_directory``) are ignored.
+_TOOLS_DENY_MAP: dict[str, frozenset[str]] = {
+    "edit": frozenset({"edit"}),
+    "write": frozenset({"write"}),
+    "bash": frozenset({"bash", "process"}),
+    "read": frozenset({"read"}),
+    "grep": frozenset({"grep"}),
+    "glob": frozenset({"glob"}),
+    "webfetch": frozenset({"web_fetch"}),
+    "websearch": frozenset({"web_search"}),
+    "task": frozenset({"subagent"}),
+}
 
 
 class OpenCodeDetector:
@@ -102,8 +143,7 @@ class OpenCodeDetector:
             body=body,
             source_format=OPENCODE_FORMAT_KEY,
             source_path=path,
-            tools=(ALLOW_ALL,),
-            skills=(ALLOW_ALL,),
+            denied_tools=_denied_tools(fields),
         )
         return DetectedFile(source_path=path, raw_name=raw_name, agent=agent)
 
@@ -191,3 +231,58 @@ def _thinking_effort_field(value: Any) -> str | None:
     if not normalized or normalized not in ALLOWED_THINKING_EFFORTS:
         return None
     return normalized
+
+
+def _denied_tools(fields: dict[str, Any]) -> frozenset[str]:
+    """Return the vBot tools an OpenCode agent turns off, from its front matter.
+
+    Reads both the ``permission`` map (deny-by-key, scalar or granular) and the
+    ``tools`` map (deny-by-exception ``false``), unions their mapped vBot tools, and
+    ignores everything without a vBot counterpart. Granularity is collapsed to one
+    bit per the max-agency rule (:func:`_is_effective_full_deny`): a tool is denied
+    only on an unambiguous full deny. Any foreign/unknown shape fails open (not a
+    deny) and never raises — a malformed agent file must not crash the scan.
+    """
+    denied: set[str] = set()
+    _collect_permission_denials(fields.get("permission"), denied)
+    _collect_tools_denials(fields.get("tools"), denied)
+    return frozenset(denied)
+
+
+def _collect_permission_denials(permission: Any, denied: set[str]) -> None:
+    if not isinstance(permission, dict):
+        return
+    for key, value in permission.items():
+        mapped = _PERMISSION_DENY_MAP.get(key) if isinstance(key, str) else None
+        if mapped is not None and _is_effective_full_deny(value):
+            denied.update(mapped)
+
+
+def _collect_tools_denials(tools: Any, denied: set[str]) -> None:
+    if not isinstance(tools, dict):
+        return
+    for name, value in tools.items():
+        mapped = _TOOLS_DENY_MAP.get(name) if isinstance(name, str) else None
+        # Deny-by-exception: only an explicit boolean ``false`` turns a tool off.
+        # ``true``, absence, or any non-bool value leaves it on (fail open). The
+        # ``is False`` identity check keeps a stray ``0`` from counting as a deny.
+        if mapped is not None and value is False:
+            denied.update(mapped)
+
+
+def _is_effective_full_deny(value: Any) -> bool:
+    """Return whether a permission value is an *effective* full deny (collapse rule).
+
+    The scalar ``"deny"`` denies. A granular map denies only when it has at least
+    one entry and **every** entry is ``"deny"`` (no ``allow``/``ask`` anywhere) — a
+    single non-deny entry, an empty map, or any non-string value makes it not a deny
+    (fail open, max-agency). Comparison is case-insensitive and trimmed.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() == _OPENCODE_DENY
+    if isinstance(value, dict):
+        actions = list(value.values())
+        if not actions or not all(isinstance(action, str) for action in actions):
+            return False
+        return all(action.strip().lower() == _OPENCODE_DENY for action in actions)
+    return False

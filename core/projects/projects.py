@@ -38,6 +38,27 @@ DEFAULT_DEFAULT_MODEL = ""
 DEFAULT_DEFAULT_TEMPERATURE: float | None = None
 DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 
+# The project Tool Whitelist ceiling a new project starts with and the fallback an
+# old ``project.json`` missing the field loads at (decision 2 / decision 10). This
+# is the SINGLE source for the creation seed, the missing-field fallback, and the
+# UI "reset to defaults" — change the base list here and all three move together.
+# The default-off-but-UI-toggleable tools (``session_search``, ``image_generation``,
+# ``text_to_speech``, ``cron``, ``channel_send``, the Home-Assistant tools) are
+# deliberately absent; ``memory`` and the internal tools are never here at all.
+PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
+    "read",
+    "write",
+    "edit",
+    "glob",
+    "grep",
+    "bash",
+    "process",
+    "web_fetch",
+    "web_search",
+    "status",
+    "subagent",
+)
+
 # The tool-neutral project-instruction convention (the agents.md standard). Seeded
 # as the first ``auto_load`` entry when a project is created
 # (:func:`seed_default_auto_load`, used by ``ProjectStore.create``), then treated
@@ -97,6 +118,15 @@ class Project:
     default_temperature: float | None = DEFAULT_DEFAULT_TEMPERATURE
     default_thinking_effort: str | None = DEFAULT_DEFAULT_THINKING_EFFORT
     auto_load: list[str] = field(default_factory=list)
+    # The Project Tool Whitelist — the hard ceiling for this project's config
+    # agents (GLOSSARY → Project Tool Whitelist). Defaults to the base list; an
+    # explicit empty list is a real value (every tool off) and is preserved.
+    allowed_tools: list[str] = field(default_factory=lambda: list(PROJECT_DEFAULT_ALLOWED_TOOLS))
+    # The Project Skill Whitelist as a rule, not a resolved set (decision 3): which
+    # bundled skills are opted in, and which project skills are exceptionally off.
+    # Both empty by default → only the project's own scanned skills are active.
+    skills_bundled_enabled: list[str] = field(default_factory=list)
+    skills_project_disabled: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable mapping persisted to ``project.json``."""
@@ -109,6 +139,9 @@ class Project:
             "default_temperature": self.default_temperature,
             "default_thinking_effort": self.default_thinking_effort,
             "auto_load": list(self.auto_load),
+            "allowed_tools": list(self.allowed_tools),
+            "skills_bundled_enabled": list(self.skills_bundled_enabled),
+            "skills_project_disabled": list(self.skills_project_disabled),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -124,15 +157,20 @@ def build_project(
     default_temperature: float | None = DEFAULT_DEFAULT_TEMPERATURE,
     default_thinking_effort: str | None = DEFAULT_DEFAULT_THINKING_EFFORT,
     auto_load: list[str] | None = None,
+    allowed_tools: list[str] | None = None,
+    skills_bundled_enabled: list[str] | None = None,
+    skills_project_disabled: list[str] | None = None,
     created_at: str | None = None,
     updated_at: str | None = None,
 ) -> Project:
     """Validate fields and construct a :class:`Project` with normalized cwd.
 
     The ``cwd`` is resolved (symlinks, ``.``/``..``) and stored as an absolute
-    path; case is preserved. Timestamps default to now (UTC ISO 8601 with
-    offset). Raises :class:`ProjectError` / :class:`InvalidProjectIdError` on
-    bad input.
+    path; case is preserved. ``allowed_tools=None`` falls back to the base list
+    :data:`PROJECT_DEFAULT_ALLOWED_TOOLS` (an explicit ``[]`` is kept as "every
+    tool off"); the skill lists default to empty. Timestamps default to now (UTC
+    ISO 8601 with offset). Raises :class:`ProjectError` /
+    :class:`InvalidProjectIdError` on bad input.
     """
     validated_id = _validate_project_id(project_id)
     validated_display_name = _validate_non_empty_string("display_name", display_name)
@@ -142,6 +180,13 @@ def build_project(
     validated_default_temperature = _validate_default_temperature(default_temperature)
     validated_default_thinking_effort = _validate_default_thinking_effort(default_thinking_effort)
     validated_auto_load = _validate_auto_load(auto_load)
+    validated_allowed_tools = _validate_allowed_tools(allowed_tools)
+    validated_skills_bundled = _validate_string_list(
+        "skills_bundled_enabled", skills_bundled_enabled
+    )
+    validated_skills_disabled = _validate_string_list(
+        "skills_project_disabled", skills_project_disabled
+    )
     now = _utc_now()
     return Project(
         project_id=validated_id,
@@ -152,6 +197,9 @@ def build_project(
         default_temperature=validated_default_temperature,
         default_thinking_effort=validated_default_thinking_effort,
         auto_load=validated_auto_load,
+        allowed_tools=validated_allowed_tools,
+        skills_bundled_enabled=validated_skills_bundled,
+        skills_project_disabled=validated_skills_disabled,
         created_at=created_at or now,
         updated_at=updated_at or now,
     )
@@ -175,9 +223,27 @@ def project_from_dict(data: dict[str, Any]) -> Project:
             "default_thinking_effort", DEFAULT_DEFAULT_THINKING_EFFORT
         ),
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
+        allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
+        skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
+        skills_project_disabled=list(cast("list[str]", data.get("skills_project_disabled") or [])),
         created_at=data["created_at"],
         updated_at=data["updated_at"],
     )
+
+
+def _allowed_tools_from_data(value: Any) -> list[str]:
+    """Return the persisted Tool Whitelist, defaulting a missing field to the base list.
+
+    An absent field (old ``project.json``) and any non-list value fall back to
+    :data:`PROJECT_DEFAULT_ALLOWED_TOOLS` (decision 10), while an explicit empty
+    list is preserved as "every tool off" — the ``isinstance`` check is what keeps
+    ``[]`` distinct from absent (a plain ``or`` would collapse both to the base
+    list). Validation runs before this, so a malformed value is already rejected;
+    the defensive fallback only matters for a direct :func:`project_from_dict`.
+    """
+    if isinstance(value, list):
+        return list(value)
+    return list(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 
 def _normalize_cwd(cwd: str | os.PathLike[str]) -> Any:
@@ -245,6 +311,29 @@ def _validate_auto_load(auto_load: list[str] | None) -> list[str]:
         if not isinstance(item, str) or not item.strip():
             raise ProjectError("auto_load entries must be non-empty strings")
     return list(auto_load)
+
+
+def _validate_allowed_tools(allowed_tools: list[str] | None) -> list[str]:
+    """Validate the Tool Whitelist; ``None`` falls back to the base list.
+
+    An explicit empty list is a valid value (every tool off) and is kept as-is,
+    so only ``None`` (caller said nothing) seeds the base ceiling.
+    """
+    if allowed_tools is None:
+        return list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    return _validate_string_list("allowed_tools", allowed_tools)
+
+
+def _validate_string_list(field_name: str, values: list[str] | None) -> list[str]:
+    """Validate an optional list-of-non-empty-strings field; ``None`` → ``[]``."""
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise ProjectError(f"{field_name} must be a list of strings")
+    for item in values:
+        if not isinstance(item, str) or not item.strip():
+            raise ProjectError(f"{field_name} entries must be non-empty strings")
+    return list(values)
 
 
 def _utc_now() -> str:

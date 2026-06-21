@@ -145,6 +145,41 @@ def test_validate_project_data_rejects_empty_auto_load_entry() -> None:
     assert ("error", "$.auto_load[1]", "must be a non-empty string") in _diagnostics(data)
 
 
+def test_validate_project_data_accepts_whitelist_fields() -> None:
+    data = _valid_project_data()
+    data["allowed_tools"] = ["read", "grep"]
+    data["skills_bundled_enabled"] = ["frontend-design"]
+    data["skills_project_disabled"] = ["debugging"]
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_accepts_empty_allowed_tools() -> None:
+    # An empty Tool Whitelist (every tool off) is a valid value, not an error.
+    data = _valid_project_data()
+    data["allowed_tools"] = []
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_non_list_allowed_tools() -> None:
+    data = _valid_project_data()
+    data["allowed_tools"] = "read"
+
+    assert ("error", "$.allowed_tools", "must be a list of strings") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_empty_skill_entry() -> None:
+    data = _valid_project_data()
+    data["skills_bundled_enabled"] = ["frontend-design", "  "]
+
+    assert (
+        "error",
+        "$.skills_bundled_enabled[1]",
+        "must be a non-empty string",
+    ) in _diagnostics(data)
+
+
 def test_validate_project_data_warns_on_unknown_field() -> None:
     data = _valid_project_data()
     data["team"] = ["builder"]

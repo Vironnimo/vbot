@@ -757,6 +757,117 @@ def _write_test_skill(skill_root: Path, name: str, description: str) -> None:
     )
 
 
+def _write_project_skill(repo: Path, name: str, description: str) -> None:
+    """Write a project-owned skill under ``<repo>/.opencode/skills/<name>/``."""
+    _write_test_skill(repo / ".opencode" / "skills", name, description)
+
+
+def test_skills_for_none_returns_global_registry(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+
+    # The identity path is byte-identical to the global registry — no scoping.
+    assert runtime.skills_for(None) is runtime.skills
+
+
+def test_skills_for_project_merges_project_and_bundled(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "proj-only-skill", "A project-scoped playbook.")
+    project = runtime.projects.create("p", "P", repo)
+
+    registry = runtime.skills_for(project.project_id)
+
+    names = {skill.name for skill in registry.list_all()}
+    # The project's own skill plus the entire bundled pool are visible.
+    assert "proj-only-skill" in names
+    assert {skill.name for skill in runtime.skills.list_all()}.issubset(names)
+
+
+def test_skills_for_project_skill_wins_name_collision(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    bundled_name = runtime.skills.list_all()[0].name
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, bundled_name, "Project override of a bundled skill.")
+    project = runtime.projects.create("p", "P", repo)
+
+    registry = runtime.skills_for(project.project_id)
+
+    # The project skill shadows the bundled one of the same name (one slot, project wins).
+    assert registry.get(bundled_name).description == "Project override of a bundled skill."
+
+
+def test_project_skill_names_returns_project_owned_only(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "alpha", "Alpha.")
+    _write_project_skill(repo, "beta", "Beta.")
+    project = runtime.projects.create("p", "P", repo)
+
+    assert runtime.project_skill_names(project.project_id) == frozenset({"alpha", "beta"})
+    assert runtime.project_skill_names(None) == frozenset()
+
+
+def test_skills_for_project_is_cached_until_invalidated(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "alpha", "Alpha.")
+    project = runtime.projects.create("p", "P", repo)
+
+    first = runtime.skills_for(project.project_id)
+    assert runtime.skills_for(project.project_id) is first  # cached, not re-scanned
+    runtime.invalidate_project_skills(project.project_id)
+    assert runtime.skills_for(project.project_id) is not first  # rebuilt after invalidation
+
+
+def test_invalidate_project_skills_reflects_cwd_change(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo_a = tmp_path / "a"
+    repo_a.mkdir()
+    _write_project_skill(repo_a, "skill-a", "From repo A.")
+    repo_b = tmp_path / "b"
+    repo_b.mkdir()
+    _write_project_skill(repo_b, "skill-b", "From repo B.")
+    project = runtime.projects.create("p", "P", repo_a)
+    assert runtime.project_skill_names(project.project_id) == frozenset({"skill-a"})
+
+    runtime.projects.update(project.project_id, cwd=str(repo_b))
+    runtime.invalidate_project_skills(project.project_id)
+
+    assert runtime.project_skill_names(project.project_id) == frozenset({"skill-b"})
+
+
+def test_reload_skills_drops_project_skill_cache(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "alpha", "Alpha.")
+    project = runtime.projects.create("p", "P", repo)
+    first = runtime.skills_for(project.project_id)
+
+    runtime.reload_skills()
+
+    # A global skill reload makes project registries stale, so they rebuild.
+    assert runtime.skills_for(project.project_id) is not first
+
+
 class _BlockingChannelAdapter:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -823,6 +934,12 @@ class _ChatRuntimeStub:
     def get_adapter(self, _provider_id: str, _connection_id: str) -> _BlockingAdapter:
         return self._adapter
 
+    def skills_for(self, _project_id: str | None = None) -> SkillRegistry:
+        return SkillRegistry({})
+
+    def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
+        return frozenset()
+
     @property
     def process_manager(self) -> _RecordingProcessManager:
         return self._process_manager
@@ -869,8 +986,11 @@ class _StubPrompts:
         *,
         agent_body: str = "",
         project_context: object = None,
+        skill_registry: object = None,
     ) -> str:
         return "System prompt"
 
-    def provider_tool_definitions(self, _agent: object) -> list[dict[str, object]]:
+    def provider_tool_definitions(
+        self, _agent: object, *, skill_registry: object = None
+    ) -> list[dict[str, object]]:
         return []

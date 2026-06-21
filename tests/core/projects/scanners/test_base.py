@@ -68,6 +68,14 @@ def test_scanned_agent_defaults_thinking_effort_to_none() -> None:
     assert agent.thinking_effort is None
 
 
+def test_scanned_agent_defaults_denied_tools_to_empty() -> None:
+    # An agent that declares no denials turns nothing off (the project ceiling
+    # applies whole). The field is an immutable frozenset.
+    agent = _fake_agent("builder", Path("/repo/builder"))
+
+    assert agent.denied_tools == frozenset()
+
+
 def test_default_registry_has_opencode_first() -> None:
     registry = build_default_registry()
 

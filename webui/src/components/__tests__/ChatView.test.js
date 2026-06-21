@@ -145,6 +145,30 @@ describe('ChatView', () => {
     ).toBe('full');
   });
 
+  it('requests command suggestions scoped to the active agent address', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    // chat.commands is fetched with the active agent's address so the server can
+    // return that agent's effective (project-scoped) skills, not the global list.
+    const calledWithAgent = () =>
+      rpcMock.mock.calls.some(
+        ([method, params]) =>
+          method === 'chat.commands' && params?.agent_id === 'alpha',
+      );
+    await waitForCondition(calledWithAgent, 100);
+
+    expect(calledWithAgent()).toBe(true);
+  });
+
   it('shows the combined input and output usage in the token badge', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({

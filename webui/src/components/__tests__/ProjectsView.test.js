@@ -221,6 +221,108 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('toggles a tool into the whitelist and persists it via project.set', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({
+          project_id: 'demo',
+          display_name: 'Demo',
+          allowed_tools: ['read'],
+        }),
+      ],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo', allowed_tools: ['read'] }),
+      scan: { team: [], report: { clean: true, findings: [] }, skills: {} },
+    });
+    mockToolCatalog(['read', 'edit'], ['read']);
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await expandDemo();
+    await waitForCondition(() => toggleByAriaLabel('Toggle tool edit'));
+    toggleByAriaLabel('Toggle tool edit').click();
+    buttonByTestId('project-save-demo').click();
+
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      allowed_tools: ['read', 'edit'],
+    });
+  });
+
+  it('resets the tool whitelist to the base list', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({
+          project_id: 'demo',
+          display_name: 'Demo',
+          allowed_tools: ['read', 'edit', 'grep'],
+        }),
+      ],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({
+        project_id: 'demo',
+        allowed_tools: ['read', 'edit', 'grep'],
+      }),
+      scan: { team: [], report: { clean: true, findings: [] }, skills: {} },
+    });
+    mockToolCatalog(['read', 'edit', 'grep'], ['read']);
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await expandDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-tools-reset"]'),
+    );
+    buttonByTestId('project-tools-reset').click();
+    buttonByTestId('project-save-demo').click();
+
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      allowed_tools: ['read'],
+    });
+  });
+
+  it('shows project skills on by default and persists an off-exception', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [],
+        report: { clean: true, findings: [] },
+        skills: { project: ['debugging'], bundled: ['pdf'] },
+      },
+    });
+    mockToolCatalog([], []);
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await expandDemo();
+    await waitForCondition(() => toggleByAriaLabel('Toggle skill debugging'));
+    // Project skill is on by default; bundled skill is off by default.
+    expect(
+      toggleByAriaLabel('Toggle skill debugging').getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      toggleByAriaLabel('Toggle skill pdf').getAttribute('aria-checked'),
+    ).toBe('false');
+
+    // Turning the project skill off records it as a disabled exception.
+    toggleByAriaLabel('Toggle skill debugging').click();
+    buttonByTestId('project-save-demo').click();
+
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      skills_project_disabled: ['debugging'],
+    });
+  });
+
   it('seeds the temperature field and thinking-effort dropdown from the project', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [
@@ -586,4 +688,37 @@ async function waitForCondition(condition, maxAttempts = 20) {
     flushSync();
   }
   throw new Error('Timed out waiting for condition');
+}
+
+// Stub the tool-catalog RPC for the whitelist editor while keeping the model/
+// connection catalogs the default-model picker needs.
+function mockToolCatalog(toolNames, defaultProjectTools) {
+  rpcMock.mockImplementation((method) => {
+    if (method === 'model.list') {
+      return Promise.resolve({ models: [] });
+    }
+    if (method === 'connection.list') {
+      return Promise.resolve({ connections: [] });
+    }
+    if (method === 'tool.list') {
+      return Promise.resolve({
+        tools: toolNames.map((name) => ({ name, description: '' })),
+        default_project_tools: defaultProjectTools,
+      });
+    }
+    return Promise.resolve({});
+  });
+}
+
+// Expand the inline edit panel for the `demo` project.
+async function expandDemo() {
+  await waitForCondition(() =>
+    document.querySelector('[data-testid="project-toggle-demo"]'),
+  );
+  buttonByTestId('project-toggle-demo').click();
+  flushSync();
+}
+
+function toggleByAriaLabel(label) {
+  return document.querySelector(`button[aria-label="${label}"]`);
 }
