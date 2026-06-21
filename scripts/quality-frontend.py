@@ -292,7 +292,8 @@ def main() -> int:
 
     # Each step: (label, command, kind)
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
-    #       "test" = test runner with count display
+    #       "test" = test runner with count display,
+    #       "build" = full build; surfaces stderr warnings on success without failing
     steps: list[tuple[str, list[str], str, list[str] | None]] = [
         (
             "prettier",
@@ -319,7 +320,7 @@ def main() -> int:
 
     # Build is always full-project — only run when no paths were given.
     if is_full_scan:
-        steps.append(("build", [npm_exe, "run", "build"], "gate", None))
+        steps.append(("build", [npm_exe, "run", "build"], "build", None))
 
     title = "Quality Gates (Frontend)"
     print(title)
@@ -328,6 +329,7 @@ def main() -> int:
     total_elapsed = 0.0
     validation_passed = True
     failures: list[tuple[str, str]] = []  # (label, full_output)
+    build_warnings: list[tuple[str, str]] = []  # (label, stderr) — non-fatal
 
     for label, cmd, kind, snapshot_paths in steps:
         before_snapshot: dict[str, str] = {}
@@ -379,8 +381,25 @@ def main() -> int:
                 status = f"FAIL ({elapsed:.1f}s, {passed}/{total})"
                 validation_passed = False
                 failures.append((label, filter_vitest_failure_output(output)))
+        elif kind == "build":
+            # A successful build still emits warnings (oversized chunks, a11y,
+            # unused CSS, deprecations) on stderr without changing the exit code.
+            # Surface those — they are the whole reason to look here — but never
+            # let them fail the gate. The asset-list noise stays on stdout, so a
+            # clean build prints nothing extra.
+            if result.returncode == 0:
+                warning_text = _ANSI_ESCAPE_RE.sub("", result.stderr or "").strip()
+                if warning_text:
+                    status = f"PASS ({elapsed:.1f}s, warnings)"
+                    build_warnings.append((label, warning_text))
+                else:
+                    status = f"PASS ({elapsed:.1f}s)"
+            else:
+                status = f"FAIL ({elapsed:.1f}s)"
+                validation_passed = False
+                failures.append((label, output))
         else:
-            # eslint / build
+            # eslint
             if result.returncode == 0:
                 status = f"PASS ({elapsed:.1f}s)"
             else:
@@ -401,6 +420,13 @@ def main() -> int:
             print(f"--- {label} ---")
             if output:
                 print(output)
+            print()
+
+    # Surface non-fatal build warnings — the build still passed.
+    if build_warnings:
+        for label, warning_text in build_warnings:
+            print(f"--- {label} (warnings) ---")
+            print(warning_text)
             print()
 
     if validation_passed:
