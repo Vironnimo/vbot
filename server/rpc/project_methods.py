@@ -186,6 +186,12 @@ def _show_project(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
+    # Open is a full per-project cache-refresh point. The Team is re-scanned on
+    # every show, so drop both per-project caches first so the skill pool — and the
+    # next resolve's effective skills — reflect the current repo together: a skill
+    # newly added under .opencode/skills surfaces here just like a newly added repo
+    # agent does. Runs never call project.show, so per-run caching is unaffected.
+    _invalidate_project_caches(state, project_id)
     scan = _scan_preview(state, project)
     return {"project": _project_response(project), "scan": scan}
 
