@@ -3044,6 +3044,319 @@ describe('ChatView', () => {
     expect(createCall[1]).not.toHaveProperty('make_current');
   });
 
+  it('restores the remembered project agent on reload instead of the default', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [
+          { agent_id: 'reviewer', display_name: 'Reviewer', model: 'm' },
+          { agent_id: 'builder', display_name: 'Builder', model: 'm' },
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'reviewer-session',
+          created_at: '2026-06-01T00:00:00+00:00',
+          last_active_at: '2026-06-10T00:00:00+00:00',
+        },
+      ],
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'reviewer-session': [
+            {
+              id: 'reviewer-assistant-one',
+              role: 'assistant',
+              content: 'Reviewer project reply',
+            },
+          ],
+        },
+      }),
+    );
+
+    // A reload where the Reviewer team member was active: App restores the
+    // project AND the remembered project agent.
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+        sharedSelectedProjectAgentId: 'reviewer',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Reviewer project reply'),
+      100,
+    );
+
+    // Restored the remembered agent (Reviewer), NOT the project default
+    // (Builder) — exactly one active tab, in the project bar.
+    const activeTabs = document.querySelectorAll('.agent-tab.active');
+    expect(activeTabs).toHaveLength(1);
+    expect(activeTabs[0].textContent).toContain('Reviewer');
+    expect(
+      document.querySelector('.chat-view__project-team .agent-tab.active')
+        ?.textContent,
+    ).toContain('Reviewer');
+    // Session/history resolution used the restored agent's full address.
+    expect(listSessionsMock).toHaveBeenCalledWith('reviewer@vbot');
+    expect(listSessionsMock).not.toHaveBeenCalledWith('builder@vbot');
+  });
+
+  it('restores the identity agent on reload when it was active alongside the project', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [{ agent_id: 'builder', display_name: 'Builder', model: 'm' }],
+        report: { clean: true, findings: [] },
+      },
+    });
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    // A reload where an identity agent was active despite the open project:
+    // App restores the project but the remembered project agent is '' (none).
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+        sharedSelectedProjectAgentId: '',
+      },
+    });
+    flushSync();
+
+    // The identity agent's history loads and stays active.
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    // The project team bar renders, but no project agent is opened — the
+    // single active tab is the identity agent in the header bar.
+    expect(document.querySelector('.chat-view__project-team')).toBeTruthy();
+    const activeTabs = document.querySelectorAll('.agent-tab.active');
+    expect(activeTabs).toHaveLength(1);
+    expect(
+      document.querySelector('.chat-header .agent-tab.active')?.textContent,
+    ).toContain('Alpha');
+    expect(
+      document.querySelector('.chat-view__project-team .agent-tab.active'),
+    ).toBeNull();
+    // No project agent was opened, so its session was never resolved.
+    expect(listSessionsMock).not.toHaveBeenCalledWith('builder@vbot');
+  });
+
+  it('falls back to the project default when the remembered agent left the team', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [{ agent_id: 'builder', display_name: 'Builder', model: 'm' }],
+        report: { clean: true, findings: [] },
+      },
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'builder-session',
+          created_at: '2026-06-01T00:00:00+00:00',
+          last_active_at: '2026-06-10T00:00:00+00:00',
+        },
+      ],
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'builder-session': [
+            {
+              id: 'builder-assistant-one',
+              role: 'assistant',
+              content: 'Builder project reply',
+            },
+          ],
+        },
+      }),
+    );
+
+    // The remembered agent ('ghost') is no longer scanned — restore must heal
+    // to the project default rather than leave the chat agent-less.
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+        sharedSelectedProjectAgentId: 'ghost',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-view__project-team .agent-tab.active')
+          ?.textContent?.includes('Builder'),
+      100,
+    );
+    expect(listSessionsMock).toHaveBeenCalledWith('builder@vbot');
+  });
+
+  it('jumps to the default on a genuine project switch and reports it up for persistence', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [
+          { agent_id: 'reviewer', display_name: 'Reviewer', model: 'm' },
+          { agent_id: 'builder', display_name: 'Builder', model: 'm' },
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'builder-session',
+          created_at: '2026-06-01T00:00:00+00:00',
+          last_active_at: '2026-06-10T00:00:00+00:00',
+        },
+      ],
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'builder-session': [
+            {
+              id: 'builder-assistant-one',
+              role: 'assistant',
+              content: 'Builder project reply',
+            },
+          ],
+        },
+      }),
+    );
+
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const parentHarness = createChatViewParentHarness();
+
+    // Start with no project (Personal), mirroring App's persisted state.
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        get selectedProjectId() {
+          return parentHarness.selectedProjectId;
+        },
+        onProjectSelected: (id) => parentHarness.setSelectedProjectId(id),
+        get sharedSelectedProjectAgentId() {
+          return parentHarness.selectedProjectAgentId;
+        },
+        onProjectAgentSelected: (id) =>
+          parentHarness.setSelectedProjectAgentId(id),
+      },
+    });
+    flushSync();
+
+    // The user picks a project from the dropdown (a genuine switch, not a
+    // reload): it must jump to the default agent.
+    parentHarness.setSelectedProjectId('vbot');
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-view__project-team .agent-tab.active')
+          ?.textContent?.includes('Builder'),
+      100,
+    );
+
+    // The chosen agent is reported up so App can persist it for the next reload.
+    expect(parentHarness.selectedProjectAgentId).toBe('builder');
+  });
+
+  it('reports the identity agent up as the active project agent when switching back to it', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [{ agent_id: 'builder', display_name: 'Builder', model: 'm' }],
+        report: { clean: true, findings: [] },
+      },
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'builder-session',
+          created_at: '2026-06-01T00:00:00+00:00',
+          last_active_at: '2026-06-10T00:00:00+00:00',
+        },
+      ],
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: { 'builder-session': [] },
+      }),
+    );
+
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const parentHarness = createChatViewParentHarness();
+    // A reload restoring the Builder project agent.
+    parentHarness.setSelectedProjectId('vbot');
+    parentHarness.setSelectedProjectAgentId('builder');
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        get selectedProjectId() {
+          return parentHarness.selectedProjectId;
+        },
+        onProjectSelected: (id) => parentHarness.setSelectedProjectId(id),
+        get sharedSelectedProjectAgentId() {
+          return parentHarness.selectedProjectAgentId;
+        },
+        onProjectAgentSelected: (id) =>
+          parentHarness.setSelectedProjectAgentId(id),
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-view__project-team .agent-tab.active')
+          ?.textContent?.includes('Builder'),
+      100,
+    );
+
+    // Stepping back up to the identity agent persists '' (identity active),
+    // distinct from null/"nothing remembered" — this is what a reload restores
+    // to keep the chat on the identity agent.
+    document.querySelector('.chat-header .agent-tab').click();
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-header .agent-tab.active')
+          ?.textContent?.includes('Alpha'),
+      100,
+    );
+    expect(parentHarness.selectedProjectAgentId).toBe('');
+  });
+
   it('renders an empty second bar without error for an empty project team', async () => {
     showProjectMock.mockResolvedValue({
       project: { project_id: 'empty', default_agent: '' },

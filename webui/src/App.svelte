@@ -104,6 +104,7 @@
   );
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
   const SELECTED_PROJECT_KEY = 'vbot.selectedProjectId';
+  const SELECTED_PROJECT_AGENT_KEY = 'vbot.selectedProjectAgentId';
   const TOAST_AUTO_DISMISS_MS = 3200;
   const MAX_RUN_SERVER_EVENTS = 500;
   const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
@@ -139,6 +140,24 @@
     }
   };
 
+  // The remembered active agent inside the selected project, restored on reload
+  // so the chat returns to the same agent instead of the project default (the
+  // default jump is only for a genuine project switch). Three states, so it is
+  // read as a tri-state (never collapsed to ''):
+  //   - null  → nothing remembered yet → the initial load picks the default
+  //   - ''    → an identity agent was active alongside the project → restore it
+  //   - 'id'  → restore that team member
+  const readStoredSelectedProjectAgentId = () => {
+    try {
+      if (typeof localStorage === 'undefined') {
+        return null;
+      }
+      return localStorage.getItem(SELECTED_PROJECT_AGENT_KEY);
+    } catch {
+      return null;
+    }
+  };
+
   const knownViewIds = navigationItems.map((item) => item.id);
 
   const initialViewId = () => {
@@ -160,6 +179,11 @@
   // `selectedProjectId` is the chosen project (empty = Personal/identity path).
   let projects = $state([]);
   let selectedProjectId = $state(readStoredSelectedProjectId());
+  // The remembered active agent inside the selected project (tri-state: null =
+  // nothing remembered, '' = identity agent active alongside the project, or a
+  // bare team-member id). Persisted like the selected agent/project; ChatView
+  // reports changes back through `onProjectAgentSelected`.
+  let selectedProjectAgentId = $state(readStoredSelectedProjectAgentId());
   let agentsRefreshToken = $state(0);
   // Bumped by the generic `resource_changed` channel whenever model-catalog or
   // provider availability changes; model surfaces reload on each bump.
@@ -224,10 +248,35 @@
     }
   });
 
+  $effect(() => {
+    try {
+      // Tri-state: null clears the key; '' (identity active) and a team-member
+      // id are both stored verbatim so the restore can tell them apart.
+      if (selectedProjectAgentId === null) {
+        localStorage.removeItem(SELECTED_PROJECT_AGENT_KEY);
+      } else {
+        localStorage.setItem(
+          SELECTED_PROJECT_AGENT_KEY,
+          selectedProjectAgentId,
+        );
+      }
+    } catch {
+      // localStorage unavailable (private browsing, storage quota)
+    }
+  });
+
   // ChatView reflects the project dropdown choice back here so the persisted
   // mirror stays current.
   const selectProject = (projectId) => {
     selectedProjectId = typeof projectId === 'string' ? projectId : '';
+  };
+
+  // ChatView reports the active project agent (a team-member id, or '' for an
+  // identity agent active alongside the project) so the persisted mirror can
+  // restore it on reload. ChatView always reports a string; null stays internal
+  // to App (a removed project, see loadProjects).
+  const selectProjectAgent = (agentId) => {
+    selectedProjectAgentId = typeof agentId === 'string' ? agentId : null;
   };
 
   const navigateToProjects = () => {
@@ -238,12 +287,15 @@
     try {
       const result = await listProjects();
       projects = Array.isArray(result?.projects) ? result.projects : [];
-      // Drop a stale persisted selection if its project no longer exists.
+      // Drop a stale persisted selection if its project no longer exists. The
+      // remembered project agent goes with it — it only means anything within a
+      // live project.
       if (
         selectedProjectId &&
         !projects.some((project) => project.project_id === selectedProjectId)
       ) {
         selectedProjectId = '';
+        selectedProjectAgentId = null;
       }
     } catch {
       // Projects RPC unavailable — keep the chat in the identity-only path.
@@ -649,6 +701,8 @@
       {projects}
       {selectedProjectId}
       onProjectSelected={selectProject}
+      sharedSelectedProjectAgentId={selectedProjectAgentId}
+      onProjectAgentSelected={selectProjectAgent}
       onNavigateToProjects={navigateToProjects}
       {agentsRefreshToken}
       onAgentsChanged={syncAgents}
