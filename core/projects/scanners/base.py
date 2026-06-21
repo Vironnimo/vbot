@@ -30,11 +30,6 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from core.projects.scan_report import ScanReport
 
-# Tools and skills are granted wholesale to every scanned project agent in v1
-# (see add-projects.md → "OpenCode-Agent lesen"): build the system cleanly first,
-# narrow later. The wildcard is the project-wide allow-all token.
-ALLOW_ALL = "*"
-
 
 @dataclass(frozen=True)
 class ScannedAgent:
@@ -57,7 +52,13 @@ class ScannedAgent:
     - ``body`` — the source file body, **verbatim**, used as the system prompt.
       Treated as opaque text: ``{...}`` in it is *not* expanded here (the prompt
       builder inserts it via the ``{include}`` path later).
-    - ``tools`` / ``skills`` — the allow-lists; ``["*"]`` for every v1 agent.
+    - ``denied_tools`` — the set of vBot tool names this agent turns **off**
+      (default empty = nothing turned off). OpenCode is deny-by-exception with no
+      clean allow-list form, so the detector emits what the agent *denies*; the
+      resolver computes the effective tools as the project's Tool Whitelist ceiling
+      minus this set. The agent can only narrow the ceiling, never widen it. Skills
+      are no longer carried on the profile — a config agent's allowed skills are
+      resolved from the project (OpenCode does not narrow skills per agent in v1).
     - ``source_format`` — the detector's format key (e.g. ``"opencode"``), used
       for format precedence in collision resolution and for the report.
     - ``source_path`` — absolute path of the file the profile was read from, so
@@ -76,8 +77,7 @@ class ScannedAgent:
     body: str
     source_format: str
     source_path: Path
-    tools: tuple[str, ...] = (ALLOW_ALL,)
-    skills: tuple[str, ...] = (ALLOW_ALL,)
+    denied_tools: frozenset[str] = frozenset()
     thinking_effort: str | None = None
 
 

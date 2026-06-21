@@ -250,8 +250,14 @@ class SkillPromptMetadata(Protocol):
 class SkillPromptRegistry(Protocol):
     """Skill registry method needed for prompt-visible skill filtering."""
 
-    def filter_allowed(self, allowed_skills: list[str]) -> list[SkillPromptMetadata]:
-        """Return prompt-visible skills filtered by an agent allowlist."""
+    def filter_allowed(self, allowed_skills: list[str]) -> Sequence[SkillPromptMetadata]:
+        """Return prompt-visible skills filtered by an agent allowlist.
+
+        Declared as a covariant ``Sequence`` (not ``list``) so the concrete
+        ``SkillRegistry`` — whose ``filter_allowed`` returns ``list[SkillMetadata]``
+        — structurally satisfies this protocol and a per-project registry can be
+        passed straight through without a cast.
+        """
         ...
 
 
@@ -471,6 +477,7 @@ class SystemPromptManager:
         *,
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
+        skill_registry: SkillPromptRegistry | None = None,
     ) -> str:
         """Build the complete system prompt for an agent.
 
@@ -479,8 +486,12 @@ class SystemPromptManager:
         and auto-load list so ``{project_files}`` renders the repo files (``None``
         for an identity session). Both placeholders collapse to ``""`` when their
         input is empty, so an identity agent at home gets the unchanged prompt.
+        ``skill_registry`` overrides the registry the skills block is filtered
+        against — a project run passes its project-scoped registry; ``None`` uses
+        the configured global one (identity runs, unchanged).
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
+        active_skill_registry = self._resolve_skill_registry(skill_registry)
         prompt = self._read_prompt_fragment(prompt_scope, agent.id, "system.md")
 
         if "{app_version}" in prompt:
@@ -500,7 +511,10 @@ class SystemPromptManager:
         if "{channels}" in prompt:
             prompt = prompt.replace("{channels}", self._build_channels_block(agent, prompt_scope))
         if "{skills}" in prompt:
-            prompt = prompt.replace("{skills}", self._build_skills_block(agent, prompt_scope))
+            prompt = prompt.replace(
+                "{skills}",
+                self._build_skills_block(agent, prompt_scope, active_skill_registry),
+            )
 
         prompt = self._replace_workspace_includes(prompt, agent.workspace)
 
@@ -569,16 +583,34 @@ class SystemPromptManager:
             return None
         return _wrap_include_file(filename, content)
 
-    def provider_tool_definitions(self, agent: PromptAgent) -> list[dict[str, Any]]:
-        """Return provider tool definitions filtered by the agent allowlist."""
+    def provider_tool_definitions(
+        self,
+        agent: PromptAgent,
+        *,
+        skill_registry: SkillPromptRegistry | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return provider tool definitions filtered by the agent allowlist.
+
+        ``skill_registry`` scopes the "does this agent have loadable skills?" check
+        that decides whether the internal ``skill`` tool is exposed — a project run
+        passes its project registry so the tool appears only when the project's
+        effective skills are non-empty; ``None`` uses the global registry.
+        """
+        active_skill_registry = self._resolve_skill_registry(skill_registry)
         definitions = self._provider_definitions_for_agent(agent)
-        if not self._agent_has_loadable_skills(agent):
+        if not self._agent_has_loadable_skills(agent, active_skill_registry):
             return definitions
 
         return [
             *definitions,
             *self._tool_registry.provider_definitions(["skill"], include_internal=True),
         ]
+
+    def _resolve_skill_registry(
+        self, skill_registry: SkillPromptRegistry | None
+    ) -> SkillPromptRegistry:
+        """Return the per-call registry, or the configured global one when absent."""
+        return skill_registry if skill_registry is not None else self._skill_registry
 
     def _build_memory_block(self, agent: PromptAgent) -> str:
         mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
@@ -645,9 +677,14 @@ class SystemPromptManager:
         channel_list = _format_channel_list(self._agent_active_channels(agent))
         return channels.replace("{channel_list}", channel_list)
 
-    def _build_skills_block(self, agent: PromptAgent, scope: PromptScope) -> str:
+    def _build_skills_block(
+        self,
+        agent: PromptAgent,
+        scope: PromptScope,
+        skill_registry: SkillPromptRegistry,
+    ) -> str:
         skills = self._read_prompt_fragment(scope, agent.id, "skills.md")
-        skill_list = _format_skill_list(self._skill_registry.filter_allowed(agent.allowed_skills))
+        skill_list = _format_skill_list(skill_registry.filter_allowed(agent.allowed_skills))
         return skills.replace("{skill_list}", skill_list)
 
     def _resolve_build_scope(self, agent: PromptAgent, scope: Any = None) -> PromptScope:
@@ -677,8 +714,10 @@ class SystemPromptManager:
             return self._storage.read_agent_prompt_fragment(agent_id, fragment_name)
         return self._storage.read_prompt_fragment(fragment_name)
 
-    def _agent_has_loadable_skills(self, agent: PromptAgent) -> bool:
-        return bool(self._skill_registry.filter_allowed(agent.allowed_skills))
+    def _agent_has_loadable_skills(
+        self, agent: PromptAgent, skill_registry: SkillPromptRegistry
+    ) -> bool:
+        return bool(skill_registry.filter_allowed(agent.allowed_skills))
 
     def _agent_active_channels(self, agent: PromptAgent) -> list[ChannelPromptMetadata]:
         channel_registry = self._channel_registry
@@ -820,7 +859,7 @@ def _format_channel_list(channels: list[ChannelPromptMetadata]) -> str:
     return "\n".join(lines)
 
 
-def _format_skill_list(skills: list[SkillPromptMetadata]) -> str:
+def _format_skill_list(skills: Sequence[SkillPromptMetadata]) -> str:
     lines = ["<available_skills>"]
     for skill in skills:
         lines.extend(

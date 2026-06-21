@@ -26,6 +26,7 @@ from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
 from core.projects import ProjectNotFoundError
+from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import AgentResolutionError, ConfigAgent
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
@@ -923,6 +924,7 @@ class StubPrompts:
         *,
         agent_body: str = "",
         project_context: object = None,
+        skill_registry: object = None,
     ) -> str:
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
@@ -941,7 +943,9 @@ class StubPrompts:
             extras.append(f"project_cwd={getattr(project_context, 'cwd', '')}")
         return " ".join([base, *extras])
 
-    def provider_tool_definitions(self, _agent: StubAgent) -> list[JsonObject]:
+    def provider_tool_definitions(
+        self, _agent: StubAgent, *, skill_registry: object = None
+    ) -> list[JsonObject]:
         return []
 
 
@@ -1103,6 +1107,12 @@ class StubRuntime:
         if self.chat_runs is None:
             self.chat_runs = ChatRunManager()
         return self.chat_runs
+
+    def skills_for(self, _project_id: str | None = None) -> Any:
+        return self.skills
+
+    def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
+        return frozenset()
 
     def start(self) -> None:
         return None
@@ -3328,7 +3338,8 @@ async def test_tool_list_returns_all_registered_tools_with_name_and_description(
             "tools": [
                 {"name": "a_tool", "description": "First tool alphabetically"},
                 {"name": "z_tool", "description": "Last tool alphabetically"},
-            ]
+            ],
+            "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
         },
     }
 
@@ -3346,7 +3357,13 @@ async def test_tool_list_omits_internal_skill_tool(tmp_path: Path) -> None:
 
     response = await dispatch_rpc(state, {"method": "tool.list", "params": {}})
 
-    assert response == {"ok": True, "result": {"tools": []}}
+    assert response == {
+        "ok": True,
+        "result": {
+            "tools": [],
+            "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
+        },
+    }
 
 
 @pytest.mark.asyncio

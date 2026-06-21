@@ -46,6 +46,7 @@ class _StubPrompts:
         *,
         agent_body: str = "",
         project_context: object = None,
+        skill_registry: object = None,
     ) -> str:
         return "System prompt"
 

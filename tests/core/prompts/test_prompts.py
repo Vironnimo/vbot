@@ -1121,3 +1121,63 @@ def _filter_by_allowlist(
     if allowlist is None or "*" in allowlist:
         return definitions
     return [definition for definition in definitions if definition["name"] in allowlist]
+
+
+def _skills_manager(fragments: dict[str, str], tmp_path: Path, skills: StubSkills) -> Any:
+    return SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        skills,
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+
+
+def test_build_system_prompt_skill_registry_override_scopes_skills_block(
+    fragments: dict[str, str], tmp_path: Path
+) -> None:
+    # A per-call skill_registry (a project run's registry) overrides the global one
+    # for the skills block.
+    global_skills = StubSkills([StubSkill("global-skill", "Global only.")])
+    project_skills = StubSkills([StubSkill("project-skill", "Project only.")])
+    manager = _skills_manager(fragments, tmp_path, global_skills)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent, skill_registry=project_skills)
+
+    assert "project-skill" in prompt
+    assert "global-skill" not in prompt
+
+
+def test_build_system_prompt_without_override_uses_global_registry(
+    fragments: dict[str, str], tmp_path: Path
+) -> None:
+    global_skills = StubSkills([StubSkill("global-skill", "Global only.")])
+    manager = _skills_manager(fragments, tmp_path, global_skills)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "global-skill" in prompt
+
+
+def test_provider_tool_definitions_skill_tool_gated_by_override_registry(
+    fragments: dict[str, str], tmp_path: Path
+) -> None:
+    # The internal skill tool appears only when the *override* registry has loadable
+    # skills: a project with skills exposes it; an empty project registry does not,
+    # even though the global registry has skills.
+    global_skills = StubSkills([StubSkill("global-skill", "Global only.")])
+    manager = _skills_manager(fragments, tmp_path, global_skills)
+    # Scope the agent's regular tools so the skill tool can only enter through the
+    # skills gate, not the wildcard tool list.
+    agent = _agent("", allowed_tools=["read_file"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    with_project_skills = manager.provider_tool_definitions(
+        agent, skill_registry=StubSkills([StubSkill("project-skill", "Project only.")])
+    )
+    without_project_skills = manager.provider_tool_definitions(agent, skill_registry=StubSkills([]))
+
+    assert any(definition["name"] == "skill" for definition in with_project_skills)
+    assert all(definition["name"] != "skill" for definition in without_project_skills)

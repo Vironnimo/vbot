@@ -10,6 +10,7 @@ import pytest
 
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
+    PROJECT_DEFAULT_ALLOWED_TOOLS,
     ProjectAlreadyExistsError,
     ProjectError,
     ProjectNotFoundError,
@@ -77,6 +78,67 @@ def test_create_does_not_duplicate_agents_file(data_dir: Path, repo: Path) -> No
     project = store.create("vbot", "vBot", repo, auto_load=["agents.md", "CONTEXT.md"])
 
     assert project.auto_load == ["agents.md", "CONTEXT.md"]
+
+
+def test_create_seeds_base_tool_whitelist_and_empty_skill_lists(data_dir: Path, repo: Path) -> None:
+    # A new project starts at the base Tool Whitelist ceiling; the Skill Whitelist
+    # rule lists start empty (only the project's own scanned skills are active).
+    store = ProjectStore(data_dir)
+
+    project = store.create("vbot", "vBot", repo)
+
+    assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert project.skills_bundled_enabled == []
+    assert project.skills_project_disabled == []
+
+
+def test_create_persists_whitelist_fields_to_disk(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    payload = json.loads((data_dir / "projects" / "vbot" / "project.json").read_text("utf-8"))
+    assert payload["allowed_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert payload["skills_bundled_enabled"] == []
+    assert payload["skills_project_disabled"] == []
+
+
+def test_update_round_trips_whitelist_fields(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    updated = store.update(
+        "vbot",
+        allowed_tools=["read", "grep"],
+        skills_bundled_enabled=["frontend-design"],
+        skills_project_disabled=["debugging"],
+    )
+
+    assert updated.allowed_tools == ["read", "grep"]
+    assert updated.skills_bundled_enabled == ["frontend-design"]
+    assert updated.skills_project_disabled == ["debugging"]
+    reloaded = store.get("vbot")
+    assert reloaded.allowed_tools == ["read", "grep"]
+    assert reloaded.skills_bundled_enabled == ["frontend-design"]
+    assert reloaded.skills_project_disabled == ["debugging"]
+
+
+def test_load_falls_back_to_base_tools_for_old_config(data_dir: Path, repo: Path) -> None:
+    # An old project.json missing the whitelist fields loads at the base defaults,
+    # without any migration step.
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    config_path = data_dir / "projects" / "vbot" / "project.json"
+    payload = json.loads(config_path.read_text("utf-8"))
+    del payload["allowed_tools"]
+    del payload["skills_bundled_enabled"]
+    del payload["skills_project_disabled"]
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reloaded = store.get("vbot")
+
+    assert reloaded.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert reloaded.skills_bundled_enabled == []
+    assert reloaded.skills_project_disabled == []
 
 
 def test_update_does_not_reseed_agents_file(data_dir: Path, repo: Path) -> None:

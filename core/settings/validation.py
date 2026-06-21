@@ -149,6 +149,7 @@ ALLOWED_CHANNEL_RESPONSE_MODES = frozenset({"all", "mention"})
 
 PROJECT_FIELDS = frozenset(
     {
+        "allowed_tools",
         "auto_load",
         "created_at",
         "cwd",
@@ -158,6 +159,8 @@ PROJECT_FIELDS = frozenset(
         "default_thinking_effort",
         "display_name",
         "project_id",
+        "skills_bundled_enabled",
+        "skills_project_disabled",
         "updated_at",
     }
 )
@@ -533,6 +536,17 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
         allow_none=True,
     )
     _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
+    # The Tool/Skill Whitelist fields are optional (an old project.json omits them
+    # and falls back to defaults at load); validate shape only when present. Tool
+    # and skill names are not checked against any registry here — an unknown name is
+    # harmlessly ignored by the allowlist filters, not a config error.
+    _validate_optional_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
+    _validate_optional_string_list(
+        diagnostics, "$.skills_bundled_enabled", data.get("skills_bundled_enabled")
+    )
+    _validate_optional_string_list(
+        diagnostics, "$.skills_project_disabled", data.get("skills_project_disabled")
+    )
     _validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
     _validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
     return diagnostics
@@ -1065,6 +1079,26 @@ def _validate_string_list(diagnostics: list[JsonDiagnostic], path: str, value: A
     for index, item in enumerate(value):
         if not isinstance(item, str):
             _error(diagnostics, f"{path}[{index}]", "must be a string")
+
+
+def _validate_optional_string_list(
+    diagnostics: list[JsonDiagnostic], path: str, value: Any
+) -> None:
+    """Validate an optional list-of-non-empty-strings field, tolerating absence.
+
+    ``None`` (absent field or explicit ``null``) is accepted as "use the default";
+    any present value must be a list whose entries are non-empty strings. Mirrors
+    how :func:`core.projects.projects.project_from_dict` defaults a missing
+    whitelist field rather than treating it as an error.
+    """
+    if value is None:
+        return
+    if not isinstance(value, list):
+        _error(diagnostics, path, "must be a list of strings")
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            _error(diagnostics, f"{path}[{index}]", "must be a non-empty string")
 
 
 def _validate_regex_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:

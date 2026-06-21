@@ -51,8 +51,8 @@ def test_detect_parses_frontmatter_and_body(tmp_path: Path) -> None:
     assert agent.temperature == 0.4
     assert agent.thinking_effort == "high"
     assert agent.source_format == OPENCODE_FORMAT_KEY
-    assert agent.tools == ("*",)
-    assert agent.skills == ("*",)
+    # permission.task: deny → the subagent tool is the only thing turned off.
+    assert agent.denied_tools == frozenset({"subagent"})
     assert agent.body == "# builder Agent\n\nYou write code.\n"
 
 
@@ -203,3 +203,116 @@ def test_detect_unknown_reasoning_effort_yields_none(tmp_path: Path) -> None:
 
     assert detected[0].agent is not None
     assert detected[0].agent.thinking_effort is None
+
+
+def _denied_tools_for(tmp_path: Path, front_matter: str) -> frozenset[str]:
+    """Parse one agent file's front matter and return its scanned denied_tools."""
+    _write_agent(tmp_path, "a.md", f"---\n{front_matter}---\nBody.\n")
+    detected = OpenCodeDetector().detect(tmp_path)
+    assert detected[0].agent is not None
+    return detected[0].agent.denied_tools
+
+
+def test_denied_tools_empty_when_no_permission_or_tools(tmp_path: Path) -> None:
+    # An agent that declares nothing turns nothing off — the ceiling stays whole.
+    assert _denied_tools_for(tmp_path, "description: x\n") == frozenset()
+
+
+def test_denied_tools_permission_edit_denies_edit_and_write(tmp_path: Path) -> None:
+    # The edit permission key has no separate write counterpart, so it covers both.
+    assert _denied_tools_for(tmp_path, "permission:\n  edit: deny\n") == frozenset(
+        {"edit", "write"}
+    )
+
+
+def test_denied_tools_permission_bash_denies_bash_and_process(tmp_path: Path) -> None:
+    # OpenCode bash maps to both vBot bash and process — denied together.
+    assert _denied_tools_for(tmp_path, "permission:\n  bash: deny\n") == frozenset(
+        {"bash", "process"}
+    )
+
+
+def test_denied_tools_permission_task_denies_subagent(tmp_path: Path) -> None:
+    assert _denied_tools_for(tmp_path, "permission:\n  task: deny\n") == frozenset({"subagent"})
+
+
+def test_denied_tools_maps_each_permission_key(tmp_path: Path) -> None:
+    front_matter = (
+        "permission:\n"
+        "  read: deny\n"
+        "  grep: deny\n"
+        "  glob: deny\n"
+        "  webfetch: deny\n"
+        "  websearch: deny\n"
+    )
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset(
+        {"read", "grep", "glob", "web_fetch", "web_search"}
+    )
+
+
+def test_denied_tools_allow_and_ask_are_not_denials(tmp_path: Path) -> None:
+    # allow / ask never turn a tool off (ask has no per-call gate in vBot).
+    front_matter = "permission:\n  edit: allow\n  bash: ask\n  task: allow\n"
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset()
+
+
+def test_denied_tools_ignores_unmapped_permission_keys(tmp_path: Path) -> None:
+    # Keys without a vBot counterpart are ignored even on deny, never crashing.
+    front_matter = (
+        "permission:\n"
+        "  list: deny\n"
+        "  lsp: deny\n"
+        "  todowrite: deny\n"
+        "  question: deny\n"
+        "  external_directory: deny\n"
+        "  doom_loop: deny\n"
+        "  skill: deny\n"
+    )
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset()
+
+
+def test_denied_tools_granular_all_deny_collapses_to_deny(tmp_path: Path) -> None:
+    # A granular map where every entry denies collapses to a full deny.
+    front_matter = 'permission:\n  bash:\n    "*": deny\n    "rm *": deny\n'
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"bash", "process"})
+
+
+def test_denied_tools_granular_with_any_allow_is_not_denied(tmp_path: Path) -> None:
+    # A single allow/ask anywhere in the granular map means the tool stays on.
+    front_matter = 'permission:\n  bash:\n    "*": ask\n    "git *": allow\n'
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset()
+
+
+def test_denied_tools_empty_granular_map_is_not_denied(tmp_path: Path) -> None:
+    front_matter = "permission:\n  bash: {}\n"
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset()
+
+
+def test_denied_tools_case_insensitive_deny(tmp_path: Path) -> None:
+    assert _denied_tools_for(tmp_path, "permission:\n  task: DENY\n") == frozenset({"subagent"})
+
+
+def test_denied_tools_from_tools_map_false_denies(tmp_path: Path) -> None:
+    # tools is deny-by-exception: only an explicit false turns a tool off, and
+    # tools.write / tools.edit are separate names (unlike permission.edit).
+    front_matter = "tools:\n  write: false\n  read: false\n"
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"write", "read"})
+
+
+def test_denied_tools_tools_edit_denies_edit_only(tmp_path: Path) -> None:
+    assert _denied_tools_for(tmp_path, "tools:\n  edit: false\n") == frozenset({"edit"})
+
+
+def test_denied_tools_tools_true_keeps_tool_on(tmp_path: Path) -> None:
+    assert _denied_tools_for(tmp_path, "tools:\n  read: true\n") == frozenset()
+
+
+def test_denied_tools_unions_permission_and_tools(tmp_path: Path) -> None:
+    front_matter = "permission:\n  task: deny\ntools:\n  read: false\n"
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"subagent", "read"})
+
+
+def test_denied_tools_foreign_permission_shape_fails_open(tmp_path: Path) -> None:
+    # A non-string, non-map permission value is foreign — treated as not a deny.
+    front_matter = "permission:\n  bash: 123\n"
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset()

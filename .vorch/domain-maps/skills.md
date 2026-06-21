@@ -6,6 +6,8 @@ Local skill metadata loading, validation diagnostics, and prompt allowlist filte
 
 `core/skills/` scans bundled skills under `resources/skills/`, user skills under `<data_dir>/skills/`, and configured extra skill directories. A directory is considered a skill only when it contains `SKILL.md`.
 
+**Project-scoped pool.** A project run uses a *merged* registry: the project's own skills under `<cwd>/.opencode/skills/` scanned **first** (so a project skill wins a name collision with a bundled one), then the same bundled scan roots the global registry uses. The single seam is `runtime.skills_for(project_id)` — `None` returns the global registry (identity runs, byte-identical), a set `project_id` returns the cached per-project merge. The runtime caches these per `project_id` (like the resolver's Team cache) and drops them on the same triggers (cwd change, global `reload_skills`). All run-time skill consumers — prompt assembly, `/`–`$` triggers, the internal `skill` tool, and autocomplete — resolve through this one seam, so project skills never leak between projects or to the home agent.
+
 Skills are playbooks, not normal user-managed tools. The registry exposes prompt metadata and internal activation metadata; actual activation is handled by the chat/tool pipeline. Agents can activate skills through the internal `skill` tool, while user messages can activate skills deterministically through `/skill-name` at the start of the message or `$skill-name` anywhere in the message before the provider request is sent.
 
 ## Data Model
@@ -35,7 +37,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - `available_skills` is the root element.
 - Each `skill` element contains only `name` and `description`.
 - Do not expose `path`, `location`, or other local filesystem details in the prompt catalog.
-- The prompt catalog includes only skills allowed for the agent (`agent.allowed_skills`) and currently `available`. Command autocomplete (`chat.commands` RPC) takes no agent context, so it lists every currently `available` skill (`filter_allowed(['*'])`) alongside all built-in slash commands — it is not agent-scoped. `skill.list` still returns unavailable skills with requirement details (availability state plus missing/optional-missing) so the user can fix local prerequisites.
+- The prompt catalog includes only skills allowed for the agent (`agent.allowed_skills`) and currently `available`, filtered against the run's project-scoped registry (`build_system_prompt`/`provider_tool_definitions` take an optional `skill_registry`; the chat loop passes `runtime.skills_for(project_id)`). Command autocomplete (`chat.commands` RPC) **is** agent-scoped: given an optional `agent_id` (a bare id or an `agent@projekt` address) it resolves the agent and returns its effective skills via `skills_for(project_id).filter_allowed(agent.allowed_skills)`; with no address it returns the global list (`filter_allowed(['*'])`, today's behavior). The WebUI passes the active agent's address. `skill.list` still returns unavailable skills with requirement details (availability state plus missing/optional-missing) so the user can fix local prerequisites.
 - Skill values inserted into the XML block must be XML-escaped.
 - The bundled skills prompt must explain that `/skill-name` and `$skill-name` user tokens are activation hints once matching `<skill_content>` has been injected, so the model follows the loaded skill instructions without echoing the marker as requested output.
 
@@ -43,6 +45,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 
 - `core/skills/__init__.py` exports `SkillMetadata`, `SkillRegistry`, `SkillAvailability`, `SkillRequirements`, and the allowlist/frontmatter constants (`WILDCARD_ALLOWLIST`, `FRONT_MATTER_DELIMITER`).
 - `SkillRegistry.load(skills_dir, extra_dirs=None, environment=None) -> SkillRegistry` — missing roots mean an empty contribution. `environment` snapshots the env used for requirement checks (see Constraints & Gotchas); when omitted it defaults to `os.environ`.
+- `load_project_skill_registry(project_cwd, bundled_scan_roots, environment=None) -> SkillRegistry` — the project-first merge (project's own `.opencode/skills/` then the bundled roots). `scan_project_skill_names(project_cwd, environment=None) -> frozenset[str]` — only the project's own skill names (the set the resolver subtracts `skills_project_disabled` from). `project_skills_dir(cwd)` returns `<cwd>/.opencode/skills`. The runtime owns the per-project cache and exposes `skills_for(project_id)` / `project_skill_names(project_id)` / `invalidate_project_skills(project_id=None)`.
 - `get(name) -> SkillMetadata`
 - `list_all() -> list[SkillMetadata]`
 - `filter_allowed(allowed_skills) -> list[SkillMetadata]`
@@ -60,7 +63,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - Explicit allowlists match exact skill names.
 - Unknown allowlist entries are ignored because skills are not hard execution gates.
 - Skill dependency requirements (`skill: other-skill`) must not bypass agent allowlists. If the dependency skill is not allowed for the current agent, the dependent skill is unavailable for that agent.
-- Duplicate skill names are resolved by first-found-wins scan order and recorded as diagnostics for rejected duplicates.
+- Duplicate skill names are resolved by first-found-wins scan order and recorded as diagnostics for rejected duplicates. In a project's merged registry the project skill dir is scanned first, so a project skill **wins** a name collision with a bundled skill of the same name (one slot, the project's own playbook wins); the WebUI editor drops the shadowed bundled name from the opt-in list.
 - The internal `skill` tool is included in provider tool definitions when an agent has at least one loadable allowed skill. It is not controlled by `allowed_tools` and must stay out of normal tool lists and Agent tool toggles.
 - Full skill instructions have a single provider-visible source: the session-scoped injected `<skill_content>` note. Tool-call results for the internal `skill` tool must not include `content`, raw skill Markdown, or a `<skill_content>` block, otherwise the model sees duplicate instructions.
 - `/skill-name` and `$skill-name` triggers preserve the original user message. Unknown, non-loadable, or unavailable triggers become internal system reminders rather than activations.

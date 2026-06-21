@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from core.agents.agents import AgentStore
+from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import (
     AgentResolutionError,
     AgentResolver,
@@ -108,6 +109,7 @@ def _write_agent(
     body: str = "Body.",
     temperature: float | None = 0.3,
     reasoning_effort: str | None = None,
+    permission: dict[str, str] | None = None,
 ) -> Path:
     agents_dir = repo.joinpath(*OPENCODE_AGENTS_SUBPATH)
     agents_dir.mkdir(parents=True, exist_ok=True)
@@ -118,6 +120,9 @@ def _write_agent(
         lines.append(f"temperature: {temperature}")
     if reasoning_effort is not None:
         lines.append(f"reasoningEffort: {reasoning_effort}")
+    if permission:
+        lines.append("permission:")
+        lines.extend(f"  {key}: {value}" for key, value in permission.items())
     front = "\n".join(lines) + "\n"
     path = agents_dir / filename
     path.write_text(f"---\n{front}---\n{body}\n", encoding="utf-8")
@@ -181,12 +186,15 @@ def _resolver(
     global_default: str = "",
     global_temperature: float | None = None,
     global_thinking_effort: str | None = None,
+    project_skill_names: dict[str, frozenset[str]] | None = None,
 ) -> AgentResolver:
     """Build a resolver whose global tier is a ``defaults.agent`` dict provider.
 
     A key is present only when its argument is given, so each test injects exactly
     the global tier it wants — an absent key means "no global default" for that
     field (the chain falls through). ``""`` is a real value for thinking effort.
+    ``project_skill_names`` injects the project-skill probe: a map of project id →
+    its own scanned skill names (default: no project skills anywhere).
     """
     defaults: dict[str, Any] = {}
     if global_default:
@@ -195,7 +203,14 @@ def _resolver(
         defaults["temperature"] = global_temperature
     if global_thinking_effort is not None:
         defaults["thinking_effort"] = global_thinking_effort
-    return AgentResolver(agents, projects, checker, lambda: defaults)
+    skill_names = project_skill_names or {}
+    return AgentResolver(
+        agents,
+        projects,
+        checker,
+        lambda: defaults,
+        project_skill_names=lambda project_id: skill_names.get(project_id, frozenset()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -219,13 +234,130 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.id == "builder"
     assert runtime_agent.model == "openai/gpt-5.2"
     assert runtime_agent.body == "You build.\n"
-    # v1 config-agent invariants: no workspace, no memory tool, tools/skills = *.
+    # v1 config-agent invariants: no workspace, no memory tool. With no agent
+    # denials the effective tools are exactly the project Tool Whitelist ceiling;
+    # skills stay wildcard until Phase 3 wires the project skill rule.
     assert runtime_agent.workspace == ""
     assert runtime_agent.memory_prompt_mode == "off"
-    assert runtime_agent.allowed_tools == ["*"]
-    assert runtime_agent.allowed_skills == ["*"]
+    assert runtime_agent.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    # No project skills and nothing opted in → the agent has zero skills.
+    assert runtime_agent.allowed_skills == []
     assert runtime_agent.fallback_model == ""
     assert runtime_agent.thinking_effort is None
+
+
+def test_effective_tools_drop_explorer_denials(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # An explorer-shaped agent (edit/webfetch/websearch/task all denied) resolves
+    # without write+edit (permission.edit covers both), web_fetch, web_search, and
+    # subagent — everything else in the project ceiling stays.
+    _write_agent(
+        repo,
+        "explorer.md",
+        model="openai/gpt-5.2",
+        permission={"edit": "deny", "webfetch": "deny", "websearch": "deny", "task": "deny"},
+    )
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "explorer")
+
+    denied = {"write", "edit", "web_fetch", "web_search", "subagent"}
+    assert set(runtime_agent.allowed_tools).isdisjoint(denied)
+    assert runtime_agent.allowed_tools == [
+        tool for tool in PROJECT_DEFAULT_ALLOWED_TOOLS if tool not in denied
+    ]
+
+
+def test_effective_tools_drop_only_subagent_for_builder(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # A builder-shaped agent denies only task → only subagent is removed.
+    _write_agent(
+        repo,
+        "builder.md",
+        model="openai/gpt-5.2",
+        permission={"task": "deny"},
+    )
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert "subagent" not in runtime_agent.allowed_tools
+    assert runtime_agent.allowed_tools == [
+        tool for tool in PROJECT_DEFAULT_ALLOWED_TOOLS if tool != "subagent"
+    ]
+
+
+def test_effective_tools_no_denials_equal_project_ceiling(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "writer.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
+
+    assert runtime_agent.allowed_tools == list(project.allowed_tools)
+
+
+def test_project_ceiling_omitting_a_tool_wins_over_no_denial(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # The ceiling is the hard cap: a tool the project omits is absent even when the
+    # agent declares no denial for it.
+    _write_agent(repo, "writer.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    project = projects.update("vbot", allowed_tools=["read", "grep"])
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
+
+    assert runtime_agent.allowed_tools == ["read", "grep"]
+
+
+def test_effective_skills_default_to_project_skills(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # With empty whitelist lists, a config agent's skills are exactly the project's
+    # own scanned skills (bundled lie alongside as opt-in, off by default).
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        project_skill_names={"vbot": frozenset({"debugging", "refactoring"})},
+    )
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.allowed_skills == ["debugging", "refactoring"]
+
+
+def test_effective_skills_apply_disabled_and_bundled_rule(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # (project skills − disabled) ∪ enabled-bundled, sorted.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    project = projects.update(
+        "vbot",
+        skills_project_disabled=["refactoring"],
+        skills_bundled_enabled=["pdf"],
+    )
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        project_skill_names={"vbot": frozenset({"debugging", "refactoring"})},
+    )
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.allowed_skills == ["debugging", "pdf"]
 
 
 def test_model_chain_falls_back_to_project_default(

@@ -151,7 +151,21 @@ class RuntimeServices(Protocol):
 
     @property
     def skills(self) -> SkillRegistry:
-        """Loaded skill metadata registry."""
+        """Loaded skill metadata registry (the global/identity pool)."""
+        ...
+
+    def skills_for(self, project_id: str | None) -> SkillRegistry:
+        """Return the skill registry for a run, scoped to its project.
+
+        ``None`` returns the global registry (identity runs, unchanged); a set
+        ``project_id`` returns the project's merged registry (its own
+        ``.opencode/skills`` first, then the bundled pool). The single seam every
+        run-time skill consumer resolves through.
+        """
+        ...
+
+    def project_skill_names(self, project_id: str | None) -> frozenset[str]:
+        """Return the names of a project's own scanned skills (empty for ``None``)."""
         ...
 
     @property
