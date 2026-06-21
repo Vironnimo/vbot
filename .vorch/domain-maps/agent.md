@@ -37,7 +37,7 @@ Persisted agent configuration and workspace lifecycle management.
 Run paths no longer call `runtime.agents.get(...)` directly. They go through one seam, `AgentResolver.resolve_agent(project_id, agent_id) -> RuntimeAgent` (owned by `core/projects/`, see `projects.md`), so identity and project agents load through the same call. The fork is at exactly one place:
 
 - `project_id is None` → the identity `AgentStore` (this domain), **byte-identical** to the old `agents.get`: the `defaults.agent` model→global→empty injection and the workspace are exactly as before.
-- `project_id` set → a **config agent** synthesized from that project's team scan (no `agent.json`, no workspace, `memory_prompt_mode="off"`, `allowed_tools/skills=["*"]`).
+- `project_id` set → a **config agent** synthesized from that project's team scan (no `agent.json`, no workspace, `memory_prompt_mode="off"`). Its `allowed_tools`/`allowed_skills` are no longer `["*"]`: the resolver computes them from the project's whitelists — `allowed_tools` = the project Tool Whitelist minus the agent's OpenCode denials, `allowed_skills` = `(project skills − disabled) ∪ enabled-bundled` (see `projects.md` → Effective tools/skills).
 
 `RuntimeAgent` is a `Protocol` that the store `Agent` already satisfies, so consumers read the same attribute surface (`id`, `model`, `fallback_model`, `workspace`, `temperature`, `thinking_effort`, `allowed_tools`, `allowed_skills`, `memory_prompt_mode`, …) regardless of source; a config agent is a `ConfigAgent` carrying that surface plus its verbatim prompt `body`.
 

@@ -6,6 +6,9 @@ from core.skills.skills import (
     WILDCARD_ALLOWLIST,
     SkillMetadata,
     SkillRegistry,
+    load_project_skill_registry,
+    project_skills_dir,
+    scan_project_skill_names,
 )
 
 __all__ = [
@@ -15,4 +18,7 @@ __all__ = [
     "SkillRegistry",
     "SkillRequirements",
     "WILDCARD_ALLOWLIST",
+    "load_project_skill_registry",
+    "project_skills_dir",
+    "scan_project_skill_names",
 ]

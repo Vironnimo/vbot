@@ -18,6 +18,7 @@ from core.models.query import ModelQuery
 from core.projects.resolver import AgentResolutionError
 from core.providers.accounts import ProviderAccount
 from core.runs import ChatRunManager
+from core.skills.skills import SkillRegistry
 from core.tools import ToolContext, ToolRegistry, tool_success
 from server.app import create_app
 from server.delegates import dispatch_rpc
@@ -235,10 +236,13 @@ class IntegrationPrompts:
         *,
         agent_body: str = "",
         project_context: object = None,
+        skill_registry: object = None,
     ) -> str:
         return f"System prompt for {agent.id}"
 
-    def provider_tool_definitions(self, agent: IntegrationAgent) -> list[JsonObject]:
+    def provider_tool_definitions(
+        self, agent: IntegrationAgent, *, skill_registry: object = None
+    ) -> list[JsonObject]:
         return self._tools.provider_definitions(agent.allowed_tools)
 
 
@@ -345,6 +349,12 @@ class IntegrationRuntime:
         if self.chat_runs is None:
             self.chat_runs = ChatRunManager()
         return self.chat_runs
+
+    def skills_for(self, _project_id: str | None = None) -> SkillRegistry:
+        return SkillRegistry({})
+
+    def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
+        return frozenset()
 
     def start(self) -> None:
         self.started = True

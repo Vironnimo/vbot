@@ -7,6 +7,7 @@
   import Modal from './ui/Modal.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import TextField from './ui/TextField.svelte';
+  import Toggle from './ui/Toggle.svelte';
   import {
     addProject,
     listProjects,
@@ -22,12 +23,16 @@
     buildDefaultAgentOptions,
     buildManageProjectPayload,
     buildRePointPayload,
+    buildSkillToggleSections,
+    buildToolToggleList,
     hasManageChanges,
     needsRePoint,
     normalizeProject,
     normalizeProjects,
     normalizeScanReport,
+    normalizeScanSkills,
     projectTeam,
+    setListMembership,
   } from '$lib/projectsView.js';
   import {
     buildModelSelectOptions,
@@ -85,8 +90,16 @@
   let autoLoadDraft = $state('');
   let activeTeam = $state([]);
   let activeReport = $state(null);
+  // The expanded project's skill pool (own + bundled names) from the scan, for the
+  // skill toggle sections. Reset whenever the expansion changes.
+  let activeScanSkills = $state({ project: [], bundled: [] });
   let scanLoading = $state(false);
   let removingProjectId = $state('');
+
+  // The toggleable tool catalog and the base Tool Whitelist (reset target), both
+  // from the tool-catalog RPC so new tools appear without hardcoding names.
+  let toolCatalog = $state([]);
+  let defaultProjectTools = $state([]);
 
   // Re-point modal state (a project whose cwd_exists === false).
   let rePointProject = $state(null);
@@ -165,12 +178,33 @@
             default_temperature: editForm.default_temperature,
             default_thinking_effort: editForm.default_thinking_effort,
             auto_load: editForm.auto_load,
+            allowed_tools: editForm.allowed_tools,
+            skills_bundled_enabled: editForm.skills_bundled_enabled,
+            skills_project_disabled: editForm.skills_project_disabled,
           },
           expandedProject,
         )
       : {},
   );
   let saveDisabled = $derived(editSaving || !hasManageChanges(pendingChanges));
+
+  // The Tool Whitelist toggle rows (catalog minus memory, checked when in the
+  // project ceiling) and the Skill Whitelist sections (project skills auto-on,
+  // bundled opt-in), recomputed as the form's lists change.
+  let toolToggleRows = $derived(
+    buildToolToggleList({
+      catalog: toolCatalog,
+      allowedTools: editForm.allowed_tools,
+    }),
+  );
+  let skillToggleSections = $derived(
+    buildSkillToggleSections({
+      projectSkills: activeScanSkills.project,
+      bundledSkills: activeScanSkills.bundled,
+      skillsBundledEnabled: editForm.skills_bundled_enabled,
+      skillsProjectDisabled: editForm.skills_project_disabled,
+    }),
+  );
 
   onMount(() => {
     void loadCatalogs();
@@ -230,6 +264,9 @@
         project?.default_thinking_effort,
       ),
       auto_load: [...(project?.auto_load ?? [])],
+      allowed_tools: [...(project?.allowed_tools ?? [])],
+      skills_bundled_enabled: [...(project?.skills_bundled_enabled ?? [])],
+      skills_project_disabled: [...(project?.skills_project_disabled ?? [])],
     };
   }
 
@@ -286,6 +323,26 @@
     const catalogs = await fetchModelCatalogs();
     if (catalogs) {
       applyModelCatalogs(catalogs);
+    }
+    await loadToolCatalog();
+  }
+
+  // The tool catalog feeds the Tool Whitelist toggle list and its reset target. A
+  // failure only degrades that one section (the toggles render empty), so it never
+  // blocks the projects list.
+  async function loadToolCatalog() {
+    try {
+      const result = await rpc('tool.list');
+      if (destroyed) {
+        return;
+      }
+      toolCatalog = Array.isArray(result?.tools) ? result.tools : [];
+      defaultProjectTools = Array.isArray(result?.default_project_tools)
+        ? result.default_project_tools
+        : [];
+    } catch {
+      toolCatalog = [];
+      defaultProjectTools = [];
     }
   }
 
@@ -422,10 +479,12 @@
     editError = '';
     activeTeam = [];
     activeReport = null;
+    activeScanSkills = { project: [], bundled: [] };
 
     if (scan) {
       activeTeam = projectTeam(scan);
       activeReport = normalizeScanReport(scan.report);
+      activeScanSkills = normalizeScanSkills(scan);
       return;
     }
 
@@ -436,6 +495,7 @@
     expandedProjectId = '';
     activeTeam = [];
     activeReport = null;
+    activeScanSkills = { project: [], bundled: [] };
     editError = '';
   }
 
@@ -451,6 +511,7 @@
       }
       activeTeam = projectTeam(result?.scan);
       activeReport = normalizeScanReport(result?.scan?.report);
+      activeScanSkills = normalizeScanSkills(result?.scan);
     } catch (error) {
       if (destroyed || requestId !== scanRequestId) {
         return;
@@ -465,6 +526,44 @@
 
   function updateEditField(field, value) {
     editForm[field] = value;
+    editError = '';
+  }
+
+  // Tool/Skill Whitelist toggles mutate the editForm lists; the auto-save effect
+  // then persists the diff. A tool is in the ceiling when checked. A project skill
+  // is active unless named in skills_project_disabled (so unchecking adds it there);
+  // a bundled skill is opt-in via skills_bundled_enabled.
+  function toggleTool(name, enabled) {
+    editForm.allowed_tools = setListMembership(
+      editForm.allowed_tools,
+      name,
+      enabled,
+    );
+    editError = '';
+  }
+
+  function toggleProjectSkill(name, active) {
+    editForm.skills_project_disabled = setListMembership(
+      editForm.skills_project_disabled,
+      name,
+      !active,
+    );
+    editError = '';
+  }
+
+  function toggleBundledSkill(name, enabled) {
+    editForm.skills_bundled_enabled = setListMembership(
+      editForm.skills_bundled_enabled,
+      name,
+      enabled,
+    );
+    editError = '';
+  }
+
+  // Reset the Tool Whitelist to the base list (the server-provided default), the
+  // single "back to defaults" affordance for the ceiling.
+  function resetToolsToDefaults() {
+    editForm.allowed_tools = [...defaultProjectTools];
     editError = '';
   }
 
@@ -527,6 +626,7 @@
       editForm = createEditForm(saved);
       activeTeam = projectTeam(result?.scan);
       activeReport = normalizeScanReport(result?.scan?.report);
+      activeScanSkills = normalizeScanSkills(result?.scan);
       onToast({
         title: t('projects.manage.saveSuccess', 'Project updated.'),
         variant: 'success',
@@ -1004,6 +1104,129 @@
                     </div>
                   </div>
 
+                  <div class="projects-view__field">
+                    <div class="projects-view__field-header">
+                      <span class="projects-view__label">
+                        {t('projects.manage.allowedTools', 'Tool whitelist')}
+                      </span>
+                      <Button
+                        variant="tertiary"
+                        data-testid="project-tools-reset"
+                        disabled={editSaving}
+                        onClick={resetToolsToDefaults}
+                      >
+                        {t(
+                          'projects.manage.resetDefaults',
+                          'Reset to defaults',
+                        )}
+                      </Button>
+                    </div>
+                    <p class="projects-view__help">
+                      {t(
+                        'projects.manage.allowedToolsHelp',
+                        'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
+                      )}
+                    </p>
+                    {#if toolToggleRows.length > 0}
+                      <ul class="projects-view__file-list">
+                        {#each toolToggleRows as tool (tool.name)}
+                          <li class="projects-view__file-row">
+                            <span class="projects-view__file-name">
+                              {tool.name}
+                            </span>
+                            <Toggle
+                              size="sm"
+                              checked={tool.enabled}
+                              disabled={editSaving}
+                              ariaLabel={t(
+                                'projects.manage.toggleTool',
+                                'Toggle tool {name}',
+                                { name: tool.name },
+                              )}
+                              onChange={(next) => toggleTool(tool.name, next)}
+                            />
+                          </li>
+                        {/each}
+                      </ul>
+                    {:else}
+                      <p class="projects-view__file-empty">
+                        {t('projects.manage.toolsEmpty', 'No tools available')}
+                      </p>
+                    {/if}
+                  </div>
+
+                  <div class="projects-view__field">
+                    <span class="projects-view__label">
+                      {t('projects.manage.allowedSkills', 'Skill whitelist')}
+                    </span>
+                    <p class="projects-view__help">
+                      {t(
+                        'projects.manage.allowedSkillsHelp',
+                        'Project skills are active by default; bundled skills are opt-in.',
+                      )}
+                    </p>
+                    {#if skillToggleSections.project.length > 0}
+                      <span class="projects-view__sublabel">
+                        {t('projects.manage.projectSkills', 'Project skills')}
+                      </span>
+                      <ul class="projects-view__file-list">
+                        {#each skillToggleSections.project as skill (skill.name)}
+                          <li class="projects-view__file-row">
+                            <span class="projects-view__file-name">
+                              {skill.name}
+                            </span>
+                            <Toggle
+                              size="sm"
+                              checked={skill.enabled}
+                              disabled={editSaving}
+                              ariaLabel={t(
+                                'projects.manage.toggleSkill',
+                                'Toggle skill {name}',
+                                { name: skill.name },
+                              )}
+                              onChange={(next) =>
+                                toggleProjectSkill(skill.name, next)}
+                            />
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    {#if skillToggleSections.bundled.length > 0}
+                      <span class="projects-view__sublabel">
+                        {t('projects.manage.bundledSkills', 'Bundled skills')}
+                      </span>
+                      <ul class="projects-view__file-list">
+                        {#each skillToggleSections.bundled as skill (skill.name)}
+                          <li class="projects-view__file-row">
+                            <span class="projects-view__file-name">
+                              {skill.name}
+                            </span>
+                            <Toggle
+                              size="sm"
+                              checked={skill.enabled}
+                              disabled={editSaving}
+                              ariaLabel={t(
+                                'projects.manage.toggleSkill',
+                                'Toggle skill {name}',
+                                { name: skill.name },
+                              )}
+                              onChange={(next) =>
+                                toggleBundledSkill(skill.name, next)}
+                            />
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    {#if skillToggleSections.project.length === 0 && skillToggleSections.bundled.length === 0}
+                      <p class="projects-view__file-empty">
+                        {t(
+                          'projects.manage.skillsEmpty',
+                          'No skills available',
+                        )}
+                      </p>
+                    {/if}
+                  </div>
+
                   {#if editError}
                     <p
                       class="projects-view__notice projects-view__notice--error"
@@ -1399,10 +1622,26 @@
     gap: 6px;
   }
 
+  .projects-view__field-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
   .projects-view__label {
     color: var(--text-med);
     font-size: 12px;
     font-weight: 500;
+  }
+
+  .projects-view__sublabel {
+    margin-top: 4px;
+    color: var(--text-lo);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .projects-view__help {

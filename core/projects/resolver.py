@@ -105,7 +105,9 @@ class RuntimeAgent(Protocol):
     - ``fallback_model`` — secondary model (empty for a config agent in v1).
     - ``workspace`` — identity/memory home; **empty** for a config agent.
     - ``temperature`` / ``thinking_effort`` — run knobs (may be ``None``).
-    - ``allowed_tools`` / ``allowed_skills`` — allow-lists (``["*"]`` for config).
+    - ``allowed_tools`` / ``allowed_skills`` — allow-lists (for a config agent the
+      project Tool Whitelist minus the agent's denials, and the project-derived
+      skills, respectively).
     - ``memory_prompt_mode`` — pinned-memory selection (``"off"`` for config).
     - ``custom_system_prompt_enabled`` — private prompt scope (``False`` for config).
     - ``current_session_id`` — the agent's active session (empty for config; the
@@ -149,8 +151,9 @@ class ConfigAgent:
 
     Field set mirrors the store :class:`Agent` so it satisfies
     :class:`RuntimeAgent`; the values come from the :class:`ScannedAgent` profile
-    (verbatim ``body`` becomes the system prompt later, tools/skills are ``*``)
-    plus the model resolved through the chain. It carries the scanned ``body`` and
+    (verbatim ``body`` becomes the system prompt later) plus the model resolved
+    through the chain and the project-derived ``allowed_tools``/``allowed_skills``.
+    It carries the scanned ``body`` and
     ``source_path`` so the prompt builder (a later task) can insert the body
     verbatim and so callers can point at the source repo file.
     """
@@ -218,6 +221,23 @@ class GlobalAgentDefaultsProvider(Protocol):
     a valid answer (nothing configured globally)."""
 
     def __call__(self) -> Mapping[str, Any]: ...
+
+
+class ProjectSkillNamesProvider(Protocol):
+    """Returns the names of a project's own scanned skills, by project id.
+
+    The skill-side counterpart to the model/credential probes: it lets the resolver
+    compute a config agent's effective skills without importing ``core.runtime`` or
+    the skills module. The runtime wires it to its cached project-skill scan; an
+    unknown project yields an empty set (the agent then has only its opted-in
+    bundled skills)."""
+
+    def __call__(self, project_id: str) -> frozenset[str]: ...
+
+
+def _no_project_skills(_project_id: str) -> frozenset[str]:
+    """Default project-skill probe: a project with no own skills (bundled-only)."""
+    return frozenset()
 
 
 def _bad_model_finding(member: ScannedAgent) -> ScanFinding:
@@ -317,6 +337,7 @@ class AgentResolver:
         global_agent_defaults: GlobalAgentDefaultsProvider,
         *,
         detector_registry: list[DetectorRegistration] | None = None,
+        project_skill_names: ProjectSkillNamesProvider | None = None,
     ) -> None:
         self._agents = agents
         self._projects = projects
@@ -325,6 +346,10 @@ class AgentResolver:
         # Captured once; ``scan_project`` falls back to its own default registry
         # when this is ``None``, so tests can inject a custom registry.
         self._detector_registry = detector_registry
+        # Project-skill probe for config-agent skill resolution; defaults to "no
+        # project skills" so a resolver built without it degrades to bundled-only
+        # rather than failing (the runtime always wires the real probe).
+        self._project_skill_names = project_skill_names or _no_project_skills
         # Team-scan cache keyed by project id. A run reads from here; an explicit
         # re-scan / project-open repopulates it via ``rescan_project``.
         self._team_cache: dict[str, ScanResult] = {}
@@ -368,11 +393,15 @@ class AgentResolver:
         resolved_model = self._resolve_model_or_raise(scanned, project, global_defaults)
         resolved_temperature = _resolve_temperature(scanned, project, global_defaults)
         resolved_thinking_effort = _resolve_thinking_effort(scanned, project, global_defaults)
+        allowed_tools = _effective_allowed_tools(project, scanned)
+        allowed_skills = _effective_allowed_skills(project, self._project_skill_names(project_id))
         return _build_config_agent(
             scanned,
             resolved_model,
             resolved_temperature,
             resolved_thinking_effort,
+            allowed_tools,
+            allowed_skills,
         )
 
     def scan_project_report(self, project: Project) -> ScanResult:
@@ -488,11 +517,39 @@ def runtime_agent_body(agent: RuntimeAgent) -> str:
     return agent.body if isinstance(agent, ConfigAgent) else ""
 
 
+def _effective_allowed_tools(project: Project, scanned: ScannedAgent) -> list[str]:
+    """Return the config agent's tools: the project ceiling minus the agent's denials.
+
+    The Project Tool Whitelist (``project.allowed_tools``) is the hard ceiling; the
+    agent's scanned ``denied_tools`` can only remove from it, never add. Order
+    follows the project list so the result is deterministic, and an empty ceiling
+    yields no tools regardless of what the agent denies.
+    """
+    return [tool for tool in project.allowed_tools if tool not in scanned.denied_tools]
+
+
+def _effective_allowed_skills(project: Project, project_skill_names: frozenset[str]) -> list[str]:
+    """Return the config agent's skills from the project Skill Whitelist rule.
+
+    ``(project skills − skills_project_disabled) ∪ skills_bundled_enabled`` — the
+    project's own scanned skills are active by default, the named ones turned off,
+    plus any bundled skills explicitly opted in (decision 3). OpenCode does not
+    narrow skills per agent in v1, so this is purely project-derived. The result is
+    sorted for determinism; ``filter_allowed`` harmlessly ignores any name that no
+    longer resolves to a loadable skill.
+    """
+    disabled = set(project.skills_project_disabled)
+    enabled_bundled = set(project.skills_bundled_enabled)
+    return sorted((project_skill_names - disabled) | enabled_bundled)
+
+
 def _build_config_agent(
     scanned: ScannedAgent,
     resolved_model: str,
     resolved_temperature: float | None,
     resolved_thinking_effort: str | None,
+    allowed_tools: list[str],
+    allowed_skills: list[str],
 ) -> ConfigAgent:
     return ConfigAgent(
         id=scanned.agent_id,
@@ -503,8 +560,8 @@ def _build_config_agent(
         body=scanned.body,
         source_path=scanned.source_path,
         source_format=scanned.source_format,
-        allowed_tools=list(scanned.tools),
-        allowed_skills=list(scanned.skills),
+        allowed_tools=allowed_tools,
+        allowed_skills=allowed_skills,
     )
 
 
@@ -563,13 +620,16 @@ def build_agent_resolver(
     global_agent_defaults: Callable[[], Mapping[str, Any]],
     *,
     detector_registry: list[DetectorRegistration] | None = None,
+    project_skill_names: ProjectSkillNamesProvider | None = None,
 ) -> AgentResolver:
     """Assemble an :class:`AgentResolver` from the runtime services.
 
     The runtime wiring point: it adapts the concrete registries to the resolver's
     local probe protocols and builds the shared model-configuration checker, so
     the runtime only hands over the services it already owns. ``global_agent_defaults``
-    returns the live ``defaults.agent`` map (the global tier of every chain).
+    returns the live ``defaults.agent`` map (the global tier of every chain), and
+    ``project_skill_names`` returns a project's own scanned skills (the project-skill
+    tier of config-agent skill resolution).
     """
     checker = ModelConfigurationChecker(models, providers, provider_credentials)
     return AgentResolver(
@@ -578,4 +638,5 @@ def build_agent_resolver(
         checker,
         global_agent_defaults,
         detector_registry=detector_registry,
+        project_skill_names=project_skill_names,
     )

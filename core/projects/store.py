@@ -183,6 +183,9 @@ class ProjectStore:
             "default_temperature",
             "default_thinking_effort",
             "auto_load",
+            "allowed_tools",
+            "skills_bundled_enabled",
+            "skills_project_disabled",
         }
         unknown_fields = sorted(set(changes) - allowed_fields)
         if unknown_fields:
@@ -201,6 +204,13 @@ class ProjectStore:
                 "default_thinking_effort", project.default_thinking_effort
             ),
             auto_load=changes.get("auto_load", list(project.auto_load)),
+            allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
+            skills_bundled_enabled=changes.get(
+                "skills_bundled_enabled", list(project.skills_bundled_enabled)
+            ),
+            skills_project_disabled=changes.get(
+                "skills_project_disabled", list(project.skills_project_disabled)
+            ),
             created_at=project.created_at,
         )
 

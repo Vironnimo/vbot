@@ -80,6 +80,9 @@ _SET_MUTABLE_FIELDS = frozenset(
         "default_temperature",
         "default_thinking_effort",
         "auto_load",
+        "allowed_tools",
+        "skills_bundled_enabled",
+        "skills_project_disabled",
     }
 )
 
@@ -198,9 +201,14 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
     # A cwd change re-points the repo, so the live Team can change — drop the
-    # cached scan and return a fresh report so the caller sees the new Team.
+    # cached scan and return a fresh report so the caller sees the new Team. The
+    # project's cached skills (own ``.opencode/skills`` + bundled merge) hang off
+    # the cwd too, so drop them on the same trigger.
     if "cwd" in changes:
         _agent_resolver(state).invalidate_team_cache(project_id)
+        invalidate_project_skills = getattr(state.runtime, "invalidate_project_skills", None)
+        if callable(invalidate_project_skills):
+            invalidate_project_skills(project_id)
     scan = _scan_preview(state, project)
     return {"project": _project_response(project), "scan": scan}
 
@@ -282,7 +290,32 @@ def _cron_targets_project_agent(job: Any, project_id: str) -> bool:
 def _scan_preview(state: Any, project: Project) -> JsonObject:
     """Scan one project into the agent-facing Team + report preview."""
     result = _agent_resolver(state).scan_project_report(project)
-    return _scan_response(result)
+    response = _scan_response(result)
+    response["skills"] = _project_skill_pool(state, project.project_id)
+    return response
+
+
+def _project_skill_pool(state: Any, project_id: str) -> JsonObject:
+    """Return the project's skill pool for the whitelist editor.
+
+    ``project`` is the project's own scanned skills (auto-on, off-exception list);
+    ``bundled`` is the global bundled pool minus any name a project skill shadows
+    (project wins the collision), the opt-in list. Both sorted. Guarded with
+    ``getattr`` so a minimal test runtime without the skill seams degrades to empty
+    pools rather than raising.
+    """
+    runtime = state.runtime
+    project_skill_names = getattr(runtime, "project_skill_names", None)
+    project_skills = (
+        sorted(project_skill_names(project_id)) if callable(project_skill_names) else []
+    )
+    skills_registry = getattr(runtime, "skills", None)
+    bundled_all = (
+        sorted(skill.name for skill in skills_registry.list_all()) if skills_registry else []
+    )
+    project_set = set(project_skills)
+    bundled = [name for name in bundled_all if name not in project_set]
+    return {"project": project_skills, "bundled": bundled}
 
 
 def _set_changes(params: JsonObject) -> JsonObject:
@@ -308,6 +341,12 @@ def _set_changes(params: JsonObject) -> JsonObject:
         )
     if "auto_load" in params:
         changes["auto_load"] = _optional_auto_load(params)
+    # The Tool/Skill Whitelist fields are lists of non-empty strings; an explicit
+    # empty list is a real value (e.g. every tool off), so presence in params — not
+    # truthiness — decides whether the field changes.
+    for list_field in ("allowed_tools", "skills_bundled_enabled", "skills_project_disabled"):
+        if list_field in params:
+            changes[list_field] = _string_list_field(params, list_field)
     return changes
 
 
@@ -321,6 +360,19 @@ def _optional_auto_load(params: JsonObject) -> list[str]:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             "params.auto_load must be a list of non-empty strings",
+        )
+    return list(value)
+
+
+def _string_list_field(params: JsonObject, key: str) -> list[str]:
+    """Validate a list-of-non-empty-strings param (an empty list is allowed)."""
+    value = params.get(key)
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.{key} must be a list of non-empty strings",
         )
     return list(value)
 
@@ -380,6 +432,9 @@ def _project_response(project: Project) -> JsonObject:
         "default_temperature": project.default_temperature,
         "default_thinking_effort": project.default_thinking_effort,
         "auto_load": list(project.auto_load),
+        "allowed_tools": list(project.allowed_tools),
+        "skills_bundled_enabled": list(project.skills_bundled_enabled),
+        "skills_project_disabled": list(project.skills_project_disabled),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
     }
@@ -402,6 +457,10 @@ def _team_member_response(member: ScannedAgent) -> JsonObject:
         "thinking_effort": member.thinking_effort,
         "source_format": member.source_format,
         "source_path": str(member.source_path),
+        # The vBot tools this agent turns off via its OpenCode permissions, sorted.
+        # The editor pairs this with the project Tool Whitelist (the ceiling) to show
+        # that an individual agent may use less than the project maximum.
+        "denied_tools": sorted(member.denied_tools),
     }
 
 

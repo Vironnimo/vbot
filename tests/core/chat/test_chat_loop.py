@@ -190,6 +190,7 @@ class StubPrompts:
         *,
         agent_body: str = "",
         project_context: Any = None,
+        skill_registry: Any = None,
     ) -> str:
         self.build_calls.append((agent.id, agent_body, project_context))
         # Echo the body and rendered project files so chat tests can assert what
@@ -212,7 +213,9 @@ class StubPrompts:
                 blocks.append(f'<file name="{name}">\n{file_path.read_text()}\n</file>')
         return "\n".join(blocks)
 
-    def provider_tool_definitions(self, agent: StubAgent) -> list[JsonObject]:
+    def provider_tool_definitions(
+        self, agent: StubAgent, *, skill_registry: Any = None
+    ) -> list[JsonObject]:
         self.agent_for_tools = agent
         return [
             {
@@ -489,6 +492,15 @@ class StubRuntime:
             return self.adapters_by_connection[connection_id]
         return self.adapter
 
+    def skills_for(self, _project_id: str | None = None) -> Any:
+        # The stub holds one skill registry; project scoping is exercised by the
+        # runtime tests. Read ``self.skills`` dynamically so tests that reassign it
+        # after construction still take effect.
+        return self.skills
+
+    def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
+        return frozenset()
+
 
 class StubProviderCredentials:
     def __init__(self, usable_connection_ids: set[str]) -> None:
@@ -635,6 +647,7 @@ async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
             *,
             agent_body: str = "",
             project_context: Any = None,
+            skill_registry: Any = None,
         ) -> str:
             return "\n"
 

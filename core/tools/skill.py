@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -16,6 +16,12 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+
+# Resolves the skill registry a call should use from its run's ``project_id``
+# (``None`` → the global/identity registry). The runtime wires this to
+# ``Runtime.skills_for`` so the ``skill`` tool activates project skills in a
+# project run and global skills everywhere else, without re-registering per run.
+SkillRegistryResolver = Callable[[str | None], SkillRegistry]
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
@@ -36,8 +42,13 @@ SKILL_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-def make_skill_handler(skill_registry: SkillRegistry) -> Any:
-    """Return a skill handler bound to a skill registry."""
+def make_skill_handler(resolve_registry: SkillRegistryResolver) -> Any:
+    """Return a skill handler that resolves its registry per call from the project.
+
+    ``resolve_registry`` maps a run's ``project_id`` (``None`` for identity) to the
+    skill registry to activate against, so a project run loads project skills and an
+    identity run loads global skills through the same handler.
+    """
 
     def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         skill_name = arguments.get("name")
@@ -49,6 +60,7 @@ def make_skill_handler(skill_registry: SkillRegistry) -> Any:
             names = ", ".join(sorted(unknown_arguments))
             return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
+        skill_registry = resolve_registry(context.project_id)
         try:
             skill = skill_registry.get(skill_name)
         except KeyError:
@@ -86,13 +98,13 @@ def make_skill_handler(skill_registry: SkillRegistry) -> Any:
     return skill_handler
 
 
-def register_skill_tool(registry: ToolRegistry, skill_registry: SkillRegistry) -> None:
-    """Register the internal skill activation tool."""
+def register_skill_tool(registry: ToolRegistry, resolve_registry: SkillRegistryResolver) -> None:
+    """Register the internal skill activation tool with a per-project registry resolver."""
     registry.register(
         SKILL_TOOL_NAME,
         SKILL_TOOL_DESCRIPTION,
         SKILL_TOOL_PARAMETERS,
-        make_skill_handler(skill_registry),
+        make_skill_handler(resolve_registry),
         internal=True,
         display=ToolDisplay(summary_fields=("name",)),
     )

@@ -7,6 +7,7 @@ all core services and manages the application lifecycle.
 import asyncio
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -52,7 +53,11 @@ from core.runtime.interfaces import (
     ProviderCredentialResolverProtocol,
 )
 from core.sessions import ChatSessionManager
-from core.skills.skills import SkillRegistry
+from core.skills.skills import (
+    SkillRegistry,
+    load_project_skill_registry,
+    scan_project_skill_names,
+)
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
@@ -90,6 +95,23 @@ _DEFAULT_RESOURCES_DIR = _PROJECT_ROOT / "resources"
 _DEFAULT_APP_VERSION = "0.1.0"
 _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES = 20_971_520
 _DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 20_971_520
+_SKILLS_DIRNAME = "skills"
+
+
+@dataclass(frozen=True)
+class _ProjectSkillBundle:
+    """A project's merged skill registry plus the names of its own skills.
+
+    Cached per ``project_id`` on the runtime, like the resolver's Team cache: built
+    once at project open / first use and dropped on the same triggers (cwd change,
+    global skill reload). ``registry`` is the project-first merge of project +
+    bundled skills (the ``skills_for`` answer); ``names`` is the project-owned skill
+    set the resolver subtracts ``skills_project_disabled`` from.
+    """
+
+    registry: SkillRegistry
+    names: frozenset[str]
+
 
 # ---------------------------------------------------------------------------
 # Adapter factory mapping
@@ -159,6 +181,10 @@ class Runtime:
         self._memory_service: MemoryService | None = None
         self._process_manager: ProcessManager | None = None
         self._skills: SkillRegistry | None = None
+        # Per-project merged skill registries + project-skill names, cached by
+        # project id like the resolver's Team cache; ``skills_for`` / project skill
+        # resolution build on miss and drop on cwd change or global skill reload.
+        self._project_skills: dict[str, _ProjectSkillBundle] = {}
         self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._projects: ProjectStore | None = None
@@ -266,10 +292,10 @@ class Runtime:
         register_process_tool(self._tools, self._process_manager)
         register_text_to_speech_tool(self._tools, self._speech)
         register_image_generation_tool(self._tools, self._image)
-        skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
+        skill_scan_roots = self._skill_scan_roots(settings, resources_path)
         self._skills = SkillRegistry.load(
-            self._storage.data_dir / "skills",
-            extra_dirs=skill_directories,
+            skill_scan_roots[0],
+            extra_dirs=skill_scan_roots[1:],
             environment=self._skill_environment(data_dir_credentials),
         )
         invalid_skill_count = len(self._skills.invalid_diagnostics())
@@ -279,7 +305,7 @@ class Runtime:
                 "see vbot.skills warnings for details",
                 invalid_skill_count,
             )
-        register_skill_tool(self._tools, self._skills)
+        register_skill_tool(self._tools, self.skills_for)
         extension_dirs = self._extra_extension_directories(settings)
         disabled_extensions, extension_config = self._extension_load_options(settings)
         self._extensions = ExtensionRegistry.load(
@@ -304,6 +330,7 @@ class Runtime:
             self._providers,
             self._provider_credentials,
             self._global_agent_defaults,
+            project_skill_names=self.project_skill_names,
         )
         self._ensure_bootstrap_agent()
         recall_registry = self._build_recall_backend_registry()
@@ -463,6 +490,7 @@ class Runtime:
         self._memory_service = None
         self._process_manager = None
         self._skills = None
+        self._project_skills = {}
         self._extensions = None
         self._chat_sessions = None
         self._projects = None
@@ -687,6 +715,75 @@ class Runtime:
         environment.update(os.environ)
         return environment
 
+    def _skill_scan_roots(self, settings: dict[str, object], resources_path: Path) -> list[Path]:
+        """Return the ordered bundled skill scan roots, data dir first.
+
+        One source of the bundled skill roots so the global registry and every
+        project-scoped registry scan exactly the same directories
+        (``<data_dir>/skills``, the bundled ``resources/skills``, then the
+        settings-configured extras). A project registry prepends its own
+        ``.opencode/skills`` ahead of these.
+        """
+        if self._storage is None:
+            raise RuntimeError("Storage service not available")
+        return [
+            self._storage.data_dir / _SKILLS_DIRNAME,
+            resources_path / _SKILLS_DIRNAME,
+            *self._extra_skill_directories(settings),
+        ]
+
+    def skills_for(self, project_id: str | None) -> SkillRegistry:
+        """Return the skill registry a run should use, scoped to its project.
+
+        ``project_id is None`` (identity run) returns the global registry
+        byte-for-byte. A set ``project_id`` returns the project's merged registry —
+        the project's own ``.opencode/skills`` first, then the bundled pool — cached
+        per project like the Team. This is the single seam every run-time skill
+        consumer (prompt assembly, triggers, the ``skill`` tool, autocomplete)
+        resolves through, so project scoping lives in exactly one place.
+        """
+        self._ensure_started()
+        if project_id is None:
+            return self.skills
+        return self._project_skill_bundle(project_id).registry
+
+    def project_skill_names(self, project_id: str | None) -> frozenset[str]:
+        """Return the names of a project's own scanned skills (empty for identity).
+
+        The resolver uses this to compute a config agent's effective skills
+        ``(project skills − disabled) ∪ enabled-bundled``. Cached with the project's
+        merged registry so it does not re-scan the repo every resolve.
+        """
+        self._ensure_started()
+        if project_id is None:
+            return frozenset()
+        return self._project_skill_bundle(project_id).names
+
+    def invalidate_project_skills(self, project_id: str | None = None) -> None:
+        """Drop the cached project skills for one project, or for all when ``None``."""
+        if project_id is None:
+            self._project_skills.clear()
+            return
+        self._project_skills.pop(project_id, None)
+
+    def _project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
+        cached = self._project_skills.get(project_id)
+        if cached is not None:
+            return cached
+        bundle = self._build_project_skill_bundle(project_id)
+        self._project_skills[project_id] = bundle
+        return bundle
+
+    def _build_project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
+        project = self.projects.get(project_id)
+        project_cwd = Path(project.cwd)
+        settings = self.storage.load_settings()
+        scan_roots = self._skill_scan_roots(settings, self._resolve_resources_path())
+        environment = self._skill_environment(self.storage.load_environment())
+        registry = load_project_skill_registry(project_cwd, scan_roots, environment)
+        names = scan_project_skill_names(project_cwd, environment)
+        return _ProjectSkillBundle(registry=registry, names=names)
+
     def _reload_channel_tool_if_started(self) -> None:
         if not self._started:
             return
@@ -788,12 +885,16 @@ class Runtime:
         self._ensure_started()
         settings = self.storage.load_settings()
         resources_path = self._resolve_resources_path()
-        skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
+        skill_scan_roots = self._skill_scan_roots(settings, resources_path)
         self._skills = SkillRegistry.load(
-            self.storage.data_dir / "skills",
-            extra_dirs=skill_directories,
+            skill_scan_roots[0],
+            extra_dirs=skill_scan_roots[1:],
             environment=self._skill_environment(self.storage.load_environment()),
         )
+        # Project-scoped registries merge in the same bundled roots, so a global
+        # skill reload makes every cached project registry stale — drop them all so
+        # the next project run rebuilds against the fresh pool.
+        self.invalidate_project_skills()
         invalid_skill_count = len(self._skills.invalid_diagnostics())
         if self.logger is not None:
             self.logger.info("Reloaded skill registry")
@@ -805,7 +906,7 @@ class Runtime:
                 )
         if self._tools is not None:
             self._tools.unregister("skill")
-            register_skill_tool(self._tools, self._skills)
+            register_skill_tool(self._tools, self.skills_for)
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
 

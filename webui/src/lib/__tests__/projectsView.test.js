@@ -10,12 +10,16 @@ import {
   buildDefaultAgentOptions,
   buildManageProjectPayload,
   buildRePointPayload,
+  buildSkillToggleSections,
+  buildToolToggleList,
   hasManageChanges,
   needsRePoint,
   normalizeProject,
   normalizeProjects,
   normalizeScanReport,
+  normalizeScanSkills,
   projectTeam,
+  setListMembership,
 } from '../projectsView.js';
 
 describe('buildAddProjectPayload', () => {
@@ -319,6 +323,9 @@ describe('normalizeProject / normalizeProjects', () => {
       default_temperature: 0.4,
       default_thinking_effort: 'high',
       auto_load: ['AGENTS.md'],
+      allowed_tools: [],
+      skills_bundled_enabled: [],
+      skills_project_disabled: [],
       created_at: '2026-06-18T00:00:00Z',
       updated_at: '2026-06-18T01:00:00Z',
     });
@@ -377,6 +384,7 @@ describe('projectTeam', () => {
         thinking_effort: 'high',
         source_format: 'opencode',
         source_path: '.opencode/agents/builder.md',
+        denied_tools: [],
       },
       {
         agent_id: 'planner',
@@ -387,6 +395,7 @@ describe('projectTeam', () => {
         thinking_effort: null,
         source_format: '',
         source_path: '',
+        denied_tools: [],
       },
     ]);
   });
@@ -454,5 +463,131 @@ describe('normalizeScanReport', () => {
       findings: [{ type: FINDING_TYPE_BAD_MODEL, detail: 'x' }],
     });
     expect(report.clean).toBe(false);
+  });
+});
+
+describe('buildToolToggleList', () => {
+  it('marks catalog tools enabled when in the whitelist and drops memory', () => {
+    const rows = buildToolToggleList({
+      catalog: [{ name: 'read' }, { name: 'edit' }, { name: 'memory' }],
+      allowedTools: ['read'],
+    });
+
+    expect(rows).toEqual([
+      { name: 'edit', enabled: false },
+      { name: 'read', enabled: true },
+    ]);
+  });
+
+  it('accepts a catalog of bare names and sorts the rows', () => {
+    const rows = buildToolToggleList({
+      catalog: ['grep', 'bash'],
+      allowedTools: ['bash'],
+    });
+
+    expect(rows.map((row) => row.name)).toEqual(['bash', 'grep']);
+  });
+});
+
+describe('buildSkillToggleSections', () => {
+  it('defaults project skills on (off when disabled) and bundled off (on when enabled)', () => {
+    const sections = buildSkillToggleSections({
+      projectSkills: ['refactoring', 'debugging'],
+      bundledSkills: ['pdf', 'xlsx'],
+      skillsBundledEnabled: ['pdf'],
+      skillsProjectDisabled: ['debugging'],
+    });
+
+    expect(sections.project).toEqual([
+      { name: 'refactoring', enabled: true },
+      { name: 'debugging', enabled: false },
+    ]);
+    expect(sections.bundled).toEqual([
+      { name: 'pdf', enabled: true },
+      { name: 'xlsx', enabled: false },
+    ]);
+  });
+
+  it('drops a bundled skill shadowed by a project skill of the same name', () => {
+    const sections = buildSkillToggleSections({
+      projectSkills: ['glossary'],
+      bundledSkills: ['glossary', 'pdf'],
+    });
+
+    expect(sections.bundled.map((row) => row.name)).toEqual(['pdf']);
+  });
+});
+
+describe('setListMembership', () => {
+  it('adds, removes, and is a no-op when already in the desired state', () => {
+    expect(setListMembership(['read'], 'edit', true)).toEqual(['read', 'edit']);
+    expect(setListMembership(['read', 'edit'], 'edit', false)).toEqual([
+      'read',
+    ]);
+    expect(setListMembership(['read'], 'read', true)).toEqual(['read']);
+    expect(setListMembership(['read'], 'edit', false)).toEqual(['read']);
+  });
+});
+
+describe('normalizeScanSkills', () => {
+  it('extracts the project and bundled skill pools', () => {
+    expect(
+      normalizeScanSkills({ skills: { project: ['a', ' '], bundled: ['b'] } }),
+    ).toEqual({ project: ['a'], bundled: ['b'] });
+    expect(normalizeScanSkills(undefined)).toEqual({
+      project: [],
+      bundled: [],
+    });
+  });
+});
+
+describe('buildManageProjectPayload whitelist fields', () => {
+  const project = {
+    display_name: 'Demo',
+    allowed_tools: ['read', 'edit'],
+    skills_bundled_enabled: [],
+    skills_project_disabled: [],
+  };
+
+  it('sends a whitelist field only when its set changed (order-insensitive)', () => {
+    // Same set, different order → no change.
+    const unchanged = buildManageProjectPayload(
+      { display_name: 'Demo', allowed_tools: ['edit', 'read'] },
+      project,
+    );
+    expect(unchanged.allowed_tools).toBeUndefined();
+
+    // A real membership change is sent.
+    const changed = buildManageProjectPayload(
+      { display_name: 'Demo', allowed_tools: ['read'] },
+      project,
+    );
+    expect(changed).toEqual({ allowed_tools: ['read'] });
+  });
+
+  it('sends an empty allowed_tools as a real "every tool off" change', () => {
+    const changes = buildManageProjectPayload(
+      { display_name: 'Demo', allowed_tools: [] },
+      project,
+    );
+    expect(changes).toEqual({ allowed_tools: [] });
+  });
+
+  it('diffs the skill rule fields', () => {
+    // The form always carries every whitelist field (seeded from the project), so
+    // allowed_tools matches and only the skill fields differ here.
+    const changes = buildManageProjectPayload(
+      {
+        display_name: 'Demo',
+        allowed_tools: ['read', 'edit'],
+        skills_bundled_enabled: ['pdf'],
+        skills_project_disabled: ['debugging'],
+      },
+      project,
+    );
+    expect(changes).toEqual({
+      skills_bundled_enabled: ['pdf'],
+      skills_project_disabled: ['debugging'],
+    });
   });
 });

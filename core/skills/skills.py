@@ -40,6 +40,11 @@ FRONT_MATTER_DELIMITER = "---"
 WILDCARD_ALLOWLIST = "*"
 SKILL_FILENAME = "SKILL.md"
 RESOURCE_DIRECTORIES = ("scripts", "references")
+# A project's own skills live beside its OpenCode agents, under
+# ``<repo>/.opencode/skills/`` (the v1 project-skill location). Scanned per project
+# and merged with the bundled skills, project-first so a project skill wins a name
+# collision with a bundled one (decision 3/4 in the whitelist plan).
+PROJECT_SKILLS_SUBPATH = (".opencode", "skills")
 
 _LOGGER = get_logger("skills")
 
@@ -466,6 +471,48 @@ def _optional_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def project_skills_dir(project_cwd: Path) -> Path:
+    """Return a project's own skill directory (``<cwd>/.opencode/skills/``)."""
+    return project_cwd.joinpath(*PROJECT_SKILLS_SUBPATH)
+
+
+def load_project_skill_registry(
+    project_cwd: Path,
+    bundled_scan_roots: Sequence[Path],
+    environment: Mapping[str, str] | None = None,
+) -> SkillRegistry:
+    """Build a project-scoped registry: the project's own skills, then the bundled ones.
+
+    The project skill directory is scanned **first** so a project skill wins a name
+    collision with a bundled skill of the same name (one slot, the project's own
+    playbook wins). ``bundled_scan_roots`` must be the same ordered roots the global
+    registry scans, so a project run sees exactly the bundled pool plus its own
+    skills — nothing leaks between projects. A missing project skill directory is
+    treated as empty, so a project without ``.opencode/skills/`` simply gets the
+    bundled pool.
+    """
+    return SkillRegistry.load(
+        project_skills_dir(project_cwd),
+        extra_dirs=list(bundled_scan_roots),
+        environment=environment,
+    )
+
+
+def scan_project_skill_names(
+    project_cwd: Path,
+    environment: Mapping[str, str] | None = None,
+) -> frozenset[str]:
+    """Return the names of the skills defined in a project's own skill directory.
+
+    Scans only ``<cwd>/.opencode/skills/`` (not the bundled roots), so the result is
+    exactly the project-owned skills — the set the resolver subtracts
+    ``skills_project_disabled`` from when computing a config agent's effective
+    skills. A missing directory yields an empty set.
+    """
+    project_only = SkillRegistry.load(project_skills_dir(project_cwd), environment=environment)
+    return frozenset(skill.name for skill in project_only.list_all())
 
 
 def _log_validation_warnings(skill_name: str, warnings: list[str]) -> None:

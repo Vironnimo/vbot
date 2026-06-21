@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.projects.projects import (
+    PROJECT_DEFAULT_ALLOWED_TOOLS,
     InvalidProjectIdError,
     Project,
     ProjectError,
@@ -37,6 +38,42 @@ def test_build_project_minimal_just_cwd_defaults_optionals(tmp_path: Path) -> No
     assert project.default_temperature is None
     assert project.default_thinking_effort is None
     assert project.auto_load == []
+    # An unspecified Tool Whitelist falls back to the base list; skill lists empty.
+    assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert project.skills_bundled_enabled == []
+    assert project.skills_project_disabled == []
+
+
+def test_build_project_keeps_explicit_empty_allowed_tools(tmp_path: Path) -> None:
+    # [] is a real value (every tool off), distinct from None (seed the base list).
+    project = build_project("vbot", "vBot", tmp_path, allowed_tools=[])
+
+    assert project.allowed_tools == []
+
+
+def test_build_project_accepts_whitelist_fields(tmp_path: Path) -> None:
+    project = build_project(
+        "vbot",
+        "vBot",
+        tmp_path,
+        allowed_tools=["read", "grep"],
+        skills_bundled_enabled=["frontend-design"],
+        skills_project_disabled=["debugging"],
+    )
+
+    assert project.allowed_tools == ["read", "grep"]
+    assert project.skills_bundled_enabled == ["frontend-design"]
+    assert project.skills_project_disabled == ["debugging"]
+
+
+def test_build_project_rejects_non_string_allowed_tool(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError):
+        build_project("vbot", "vBot", tmp_path, allowed_tools=["read", 7])  # type: ignore[list-item]
+
+
+def test_build_project_rejects_non_list_skills_bundled(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError):
+        build_project("vbot", "vBot", tmp_path, skills_bundled_enabled="frontend")  # type: ignore[arg-type]
 
 
 def test_build_project_accepts_default_temperature_and_thinking(tmp_path: Path) -> None:
@@ -131,6 +168,9 @@ def test_to_dict_round_trips_through_project_from_dict(tmp_path: Path) -> None:
         default_temperature=0.4,
         default_thinking_effort="high",
         auto_load=["AGENTS.md"],
+        allowed_tools=["read", "grep"],
+        skills_bundled_enabled=["frontend-design"],
+        skills_project_disabled=["debugging"],
     )
 
     restored = project_from_dict(project.to_dict())
@@ -150,6 +190,9 @@ def test_to_dict_has_stable_field_set(tmp_path: Path) -> None:
         "default_temperature",
         "default_thinking_effort",
         "auto_load",
+        "allowed_tools",
+        "skills_bundled_enabled",
+        "skills_project_disabled",
         "created_at",
         "updated_at",
     }
@@ -171,6 +214,28 @@ def test_project_from_dict_defaults_optional_fields() -> None:
     assert project.default_temperature is None
     assert project.default_thinking_effort is None
     assert project.auto_load == []
+    # An old project.json without the whitelist fields loads at the same defaults a
+    # new project is seeded with: base tool list, empty skill lists (decision 10).
+    assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert project.skills_bundled_enabled == []
+    assert project.skills_project_disabled == []
+
+
+def test_project_from_dict_preserves_explicit_empty_allowed_tools() -> None:
+    # A persisted empty Tool Whitelist (user turned every tool off) must survive a
+    # reload — only an *absent* field falls back to the base list.
+    data = {
+        "project_id": "vbot",
+        "display_name": "vBot",
+        "cwd": "/srv/repos/vbot",
+        "allowed_tools": [],
+        "created_at": "2026-06-18T10:00:00Z",
+        "updated_at": "2026-06-18T10:00:00Z",
+    }
+
+    project = project_from_dict(data)
+
+    assert project.allowed_tools == []
 
 
 def test_project_is_frozen(tmp_path: Path) -> None:

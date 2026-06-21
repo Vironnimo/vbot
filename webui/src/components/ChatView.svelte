@@ -158,6 +158,11 @@
   let projectAgentSessions = $state({});
   // Guards repeated project-show side effects for the same chosen project.
   let lastLoadedProjectId = '';
+  // The agent address the command/skill suggestions were last loaded for. Starts
+  // as `undefined` (distinct from any real address, including the empty one) so the
+  // first effect run always loads; reloaded whenever the active agent changes so
+  // autocomplete reflects that agent's effective skills, not the global list.
+  let lastCommandsAddress = undefined;
 
   // Whether the active agent is a project (config) team agent. When false the
   // chat is on an identity agent and every RPC payload is byte-identical to
@@ -430,8 +435,20 @@
 
   onMount(() => {
     loadAgents({ preferredAgentId: sharedSelectedAgentId });
-    loadCommands();
     return () => runStream.closeSubscriptions();
+  });
+
+  // Reload command/skill suggestions whenever the active agent address changes, so
+  // autocomplete reflects that agent's effective skills (project-scoped for a
+  // project agent). Guarded by `lastCommandsAddress` so unrelated reactive churn
+  // does not re-fetch; the empty address loads the global list.
+  $effect(() => {
+    const { agentAddress } = activeAddressing();
+    if (agentAddress === lastCommandsAddress) {
+      return;
+    }
+    lastCommandsAddress = agentAddress;
+    loadCommands(agentAddress);
   });
 
   onDestroy(() => {
@@ -536,9 +553,13 @@
     return null;
   };
 
-  const loadCommands = async () => {
+  const loadCommands = async (agentAddress) => {
     try {
-      const result = await rpc('chat.commands');
+      // Pass the active agent address so the server returns that agent's effective
+      // skills (project-scoped when it is a project agent); omit it for the global
+      // list when no agent is active yet.
+      const params = agentAddress ? { agent_id: agentAddress } : {};
+      const result = await rpc('chat.commands', params);
       const items = Array.isArray(result?.items) ? result.items : [];
       availableSkills = items
         .filter(

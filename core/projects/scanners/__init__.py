@@ -7,7 +7,6 @@ the provider adapters — a new format is a new detector, not a rewrite.
 """
 
 from core.projects.scanners.base import (
-    ALLOW_ALL,
     OPENCODE_FORMAT_RANK,
     AgentDetector,
     DetectedFile,
@@ -25,7 +24,6 @@ from core.projects.scanners.opencode import (
 )
 
 __all__ = [
-    "ALLOW_ALL",
     "OPENCODE_AGENTS_SUBPATH",
     "OPENCODE_FORMAT_KEY",
     "OPENCODE_FORMAT_RANK",
