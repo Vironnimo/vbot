@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -181,6 +182,78 @@ def test_main_rejects_unknown_input_path(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "ERROR: path not found under webui/: src/components/Missing.svelte" in captured.out
+
+
+def _full_scan_run_factory(build_returncode, build_stdout, build_stderr):
+    """Return a fake ``subprocess.run`` for a full-scan gate run.
+
+    Every step passes except the build, which is given the supplied result so a
+    test can exercise a clean build, a warning-emitting build, or a failing one.
+    """
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        if cmd[:3] == ["npm", "run", "build"]:
+            return subprocess.CompletedProcess(
+                cmd, build_returncode, stdout=build_stdout, stderr=build_stderr
+            )
+        if cmd[1] == "vitest":
+            return subprocess.CompletedProcess(cmd, 0, stdout="Tests  1 passed (1)\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    return fake_run
+
+
+def test_main_surfaces_build_warnings_on_success(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(module.sys, "argv", ["quality-frontend.py"])
+
+    # vite routes the asset list to stdout and warnings to stderr; the build
+    # still exits 0. The warning carries ANSI color codes, like the real tool.
+    build_stdout = "dist/assets/index.js  701.14 kB\n✓ built in 2.0s\n"
+    build_stderr = "\x1b[33m\n(!) Some chunks are larger than 800 kB after minification.\x1b[39m"
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        _full_scan_run_factory(0, build_stdout, build_stderr),
+    )
+
+    assert module.main() == 0
+
+    captured = capsys.readouterr()
+    assert "build" in captured.out
+    assert "PASS" in captured.out and "warnings" in captured.out
+    assert "--- build (warnings) ---" in captured.out
+    assert "(!) Some chunks are larger than 800 kB after minification." in captured.out
+    # ANSI codes are stripped from the surfaced warning.
+    assert "\x1b[33m" not in captured.out
+    # Warnings do not fail the gate, and the asset-list noise stays hidden.
+    assert "All gates passed" in captured.out
+    assert "701.14 kB" not in captured.out
+
+
+def test_main_hides_build_output_on_clean_success(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(module.sys, "argv", ["quality-frontend.py"])
+
+    build_stdout = "dist/assets/index.js  701.14 kB\n✓ built in 2.0s\n"
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        _full_scan_run_factory(0, build_stdout, ""),
+    )
+
+    assert module.main() == 0
+
+    captured = capsys.readouterr()
+    assert "All gates passed" in captured.out
+    assert "warnings" not in captured.out
+    assert "--- build (warnings) ---" not in captured.out
+    # A clean build prints only its PASS line, no asset-list noise.
+    assert "701.14 kB" not in captured.out
 
 
 def test_main_fails_when_fix_step_crashes(monkeypatch, capsys):
