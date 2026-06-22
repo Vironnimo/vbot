@@ -17,6 +17,7 @@ import {
   subAgentRunDurationMs,
   subAgentShouldFetchResult,
   subAgentToolStatusLabel,
+  takeoverSeparatorLabel,
   toolArgumentSummary,
   visibleRunChildren,
 } from '../chatTimelinePresentation.js';
@@ -671,5 +672,44 @@ describe('errorMessagePresentation', () => {
     };
 
     expect(labelForEvent(event)).toBe('YOU');
+  });
+});
+
+describe('takeoverSeparatorLabel', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  it('composes the label from the parsed from/to addresses', () => {
+    const label = takeoverSeparatorLabel({
+      content: JSON.stringify({ from: 'assistant', to: 'builder@vbot' }),
+    });
+    expect(label).toBe('Taken over by assistant → builder@vbot');
+  });
+
+  it('keeps the raw addresses verbatim (identity and project forms)', () => {
+    const label = takeoverSeparatorLabel({
+      content: JSON.stringify({ from: 'reviewer@vbot', to: 'assistant' }),
+    });
+    expect(label).toContain('reviewer@vbot');
+    expect(label).toContain('assistant');
+  });
+
+  it('falls back to a generic label when the content is malformed', () => {
+    expect(takeoverSeparatorLabel({ content: 'not json' })).toBe(
+      'Session taken over',
+    );
+    expect(takeoverSeparatorLabel({ content: '' })).toBe('Session taken over');
+    expect(takeoverSeparatorLabel({})).toBe('Session taken over');
+    expect(takeoverSeparatorLabel(null)).toBe('Session taken over');
+  });
+
+  it('falls back to generic when one address is missing', () => {
+    expect(
+      takeoverSeparatorLabel({ content: JSON.stringify({ from: 'a' }) }),
+    ).toBe('Session taken over');
+    expect(
+      takeoverSeparatorLabel({ content: JSON.stringify({ to: 'b' }) }),
+    ).toBe('Session taken over');
   });
 });

@@ -431,6 +431,62 @@ class ChatSessionManager:
         finally:
             temp_path.unlink(missing_ok=True)
 
+    async def move(
+        self,
+        source_agent_id: str,
+        session_id: str,
+        target_agent_id: str,
+        *,
+        source_project_id: str | None = None,
+        target_project_id: str | None = None,
+        strip_meta_keys: frozenset[str] = frozenset(),
+    ) -> ChatSession:
+        """Relocate a session's two files from one (agent, project) home to another.
+
+        Storage-only: this neither resets any "current" pointer nor touches
+        derived indexes — the caller owns those, so the sessions domain stays
+        free of chat/recall imports. ``strip_meta_keys`` is taken as a parameter
+        for the same reason: the caller passes chat-owned keys (e.g. the
+        visited-projects key) without this module importing a chat constant.
+
+        Ordering is crash-safe. The transcript (``.jsonl``, which alone defines a
+        session's existence to :meth:`list`) is relocated first with
+        :func:`os.replace` (atomic per file on one filesystem); then the sidecar
+        is written at the destination with ``strip_meta_keys`` removed; then the
+        source sidecar remnant is deleted. A crash between steps never loses the
+        conversation — the worst case is an orphan source sidecar, invisible to
+        :meth:`list`. The source ``write_lock`` is held so an in-flight contiguous
+        append cannot interleave, but the real guarantee that nothing recreates
+        the source file is the caller's quiescence precondition (no active or
+        queued run), not this lock.
+        """
+        _validate_session_id(session_id)
+        async with self.write_lock(source_agent_id, session_id, source_project_id):
+            source = self.get(source_agent_id, session_id, source_project_id)
+            destination_dir = self.sessions_dir(target_agent_id, target_project_id)
+            destination_path = destination_dir / f"{session_id}{SESSION_FILE_EXTENSION}"
+            if destination_path.exists():
+                raise ChatSessionError(f"destination session already exists: {session_id}")
+
+            source_sidecar = source.sidecar_path
+            had_sidecar = source_sidecar.exists()
+            sidecar_data = self._load_sidecar(source)
+
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.replace(source.path, destination_path)
+            except OSError as exc:
+                raise ChatSessionError(f"failed to move session transcript: {session_id}") from exc
+
+            if had_sidecar:
+                stripped = {
+                    key: value for key, value in sidecar_data.items() if key not in strip_meta_keys
+                }
+                self.set_metadata(target_agent_id, session_id, stripped, target_project_id)
+                source_sidecar.unlink(missing_ok=True)
+
+            return ChatSession(destination_path)
+
     def list(self, agent_id: str, project_id: str | None = None) -> list[ChatSession]:
         """List session handles for an agent sorted by filename."""
         sessions_dir = self.sessions_dir(agent_id, project_id)

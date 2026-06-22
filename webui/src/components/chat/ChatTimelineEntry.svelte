@@ -30,6 +30,7 @@
     metaForEvent,
     shouldRenderMessage,
     speechArtifactFromResult,
+    takeoverSeparatorLabel,
     textFromEvent,
     textFromMessage,
     toolArgumentForEvent,
@@ -244,6 +245,10 @@
 {:else if item.type === 'compaction_separator'}
   <div class="date-sep compaction-sep">
     {t('chat.compacted', 'Context compacted')}
+  </div>
+{:else if item.type === 'takeover_separator'}
+  <div class="date-sep takeover-sep">
+    {takeoverSeparatorLabel(item.message)}
   </div>
 {:else if item.type === 'event'}
   {#if isToolEvent(item.event)}

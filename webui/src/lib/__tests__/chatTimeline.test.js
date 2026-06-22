@@ -310,3 +310,80 @@ describe('interrupted assistant turn projection', () => {
     expect(output.interrupted).toBe(true);
   });
 });
+
+describe('agent_takeover timeline projection', () => {
+  it('projects a persisted agent_takeover message as a takeover_separator item', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-takeover',
+    );
+    loadHistory(sessionState, [
+      { id: 'u1', role: 'user', content: 'Do the thing' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'On it',
+        run_id: 'run-1',
+      },
+      {
+        id: 'takeover-1',
+        role: 'agent_takeover',
+        content: JSON.stringify({ from: 'assistant', to: 'builder@vbot' }),
+        timestamp: '2026-06-22T10:00:00+00:00',
+      },
+      { id: 'u2', role: 'user', content: 'Continue' },
+    ]);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const separator = items.find((item) => item.type === 'takeover_separator');
+    expect(separator).toBeTruthy();
+    expect(separator.id).toBe('takeover-takeover-1');
+    expect(separator.timestamp).toBe('2026-06-22T10:00:00+00:00');
+    // The original message rides on the item so the presentation layer can
+    // parse from/to from its content.
+    expect(separator.message.content).toContain('builder@vbot');
+
+    // It is a real divider between turns, not folded into an assistant run.
+    const separatorIndex = items.indexOf(separator);
+    expect(items[separatorIndex - 1].type).toBe('assistant_run');
+    expect(items[separatorIndex + 1].type).toBe('message');
+    expect(items[separatorIndex + 1].message.role).toBe('user');
+  });
+
+  it('breaks an assistant run at the takeover so it is not swallowed', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-takeover-break',
+    );
+    loadHistory(sessionState, [
+      { id: 'u1', role: 'user', content: 'before turn' },
+      { id: 'a1', role: 'assistant', content: 'before', run_id: 'run-1' },
+      {
+        id: 't1',
+        role: 'agent_takeover',
+        content: JSON.stringify({ from: 'a', to: 'b' }),
+        timestamp: '2026-06-22T10:05:00+00:00',
+      },
+      { id: 'u2', role: 'user', content: 'after turn' },
+      { id: 'a2', role: 'assistant', content: 'after', run_id: 'run-2' },
+    ]);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const separatorIndex = items.findIndex(
+      (item) => item.type === 'takeover_separator',
+    );
+    expect(separatorIndex).toBeGreaterThan(0);
+    // The assistant turn before the takeover is closed off at the divider, and
+    // the turn after starts fresh — the takeover is never folded into a run.
+    const beforeRun = items[separatorIndex - 1];
+    expect(beforeRun.type).toBe('assistant_run');
+    expect((beforeRun.outputs ?? []).map((output) => output.content)).toEqual([
+      'before',
+    ]);
+    const afterUser = items[separatorIndex + 1];
+    expect(afterUser.type).toBe('message');
+    expect(afterUser.message.role).toBe('user');
+  });
+});

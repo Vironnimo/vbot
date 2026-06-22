@@ -348,6 +348,7 @@ class Runtime:
             started_at=self._started_at,
             providers=self._providers,
             projects=self._projects,
+            agents=self._agents,
         )
         self.chat_runs = self._chat_run_manager
         if self._attachment_store is None:

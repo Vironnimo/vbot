@@ -308,6 +308,15 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
         "result": {
             "items": [
                 {
+                    "name": "agent",
+                    "description": (
+                        "Move this session to another agent; no argument lists the directory."
+                    ),
+                    "type": "command",
+                    "argument": "optional",
+                    "output": "action",
+                },
+                {
                     "name": "compact",
                     "description": "Compact the current session's context immediately.",
                     "type": "command",

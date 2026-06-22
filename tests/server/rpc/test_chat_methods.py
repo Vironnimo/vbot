@@ -14,17 +14,20 @@ Coverage (AAA):
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from core.chat import ChatMessage, CommandAction
+from core.projects import AgentResolutionError, format_agent_address
 from core.runs import ActiveRunError
 from server.events import ServerEventBus
 from server.rpc.chat_methods import (
     _chat_queue_remove,
     _chat_queue_update,
+    _handle_move_session_command,
     _send_chat,
     _stream_chat,
 )
@@ -364,3 +367,338 @@ def test_queue_update_scopes_on_resolved_session_id() -> None:
     assert _queue_resource_events(state) == [
         {"kind": "queue", "scope": {"agent_id": "builder", "session_id": "resolved-s1"}}
     ]
+
+
+# ---------------------------------------------------------------------------
+# /agent move: relocate the current session (full history) to another agent.
+# ---------------------------------------------------------------------------
+
+
+class _FakeMovedSession:
+    def __init__(self) -> None:
+        self.appended: list[ChatMessage] = []
+        self.notes: list[str] = []
+
+    def append(self, message: ChatMessage) -> None:
+        self.appended.append(message)
+
+    def add_note(self, content: str) -> None:
+        self.notes.append(content)
+
+
+class _FakeWriteLock:
+    async def __aenter__(self) -> _FakeWriteLock:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _FakeMoveSessions:
+    """Records the move call and serves the relocated session's two writers."""
+
+    def __init__(self, metadata: dict[str, Any] | None = None) -> None:
+        self._metadata = metadata or {}
+        self.move_calls: list[dict[str, Any]] = []
+        self.destination = _FakeMovedSession()
+
+    async def move(
+        self,
+        source_agent_id: str,
+        session_id: str,
+        target_agent_id: str,
+        *,
+        source_project_id: str | None = None,
+        target_project_id: str | None = None,
+        strip_meta_keys: Any = frozenset(),
+    ) -> _FakeMovedSession:
+        self.move_calls.append(
+            {
+                "source_agent_id": source_agent_id,
+                "session_id": session_id,
+                "target_agent_id": target_agent_id,
+                "source_project_id": source_project_id,
+                "target_project_id": target_project_id,
+                "strip_meta_keys": set(strip_meta_keys),
+            }
+        )
+        return self.destination
+
+    def get_metadata(self, agent_id: str, session_id: str, project_id: str | None = None) -> dict:
+        return dict(self._metadata)
+
+    def write_lock(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> _FakeWriteLock:
+        return _FakeWriteLock()
+
+    def get(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> _FakeMovedSession:
+        return self.destination
+
+
+class _FakeMoveAgents:
+    def __init__(self) -> None:
+        self.reset_calls: list[tuple[str, str]] = []
+        self.update_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def reset_current_after_move(self, agent_id: str, moved_session_id: str) -> None:
+        self.reset_calls.append((agent_id, moved_session_id))
+
+    def update(self, agent_id: str, **changes: Any) -> None:
+        self.update_calls.append((agent_id, changes))
+
+
+class _FakeMoveRuns:
+    def __init__(self, active: Any = None, queued: list[Any] | None = None) -> None:
+        self._active = active
+        self._queued = queued or []
+
+    def active_run(self, *, agent_id: str, session_id: str) -> Any:
+        return self._active
+
+    def list_queued(self, agent_id: str, session_id: str) -> list[Any]:
+        return list(self._queued)
+
+
+class _ConfigurableResolver:
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error
+        self.resolved: list[tuple[str | None, str]] = []
+
+    def resolve_agent(self, project_id: str | None, agent_id: str) -> Any:
+        self.resolved.append((project_id, agent_id))
+        if self._error is not None:
+            raise self._error
+        return SimpleNamespace(id=agent_id)
+
+
+def _make_move_state(
+    *,
+    metadata: dict[str, Any] | None = None,
+    active: Any = None,
+    queued: list[Any] | None = None,
+    resolver_error: Exception | None = None,
+) -> SimpleNamespace:
+    sessions = _FakeMoveSessions(metadata)
+    agents = _FakeMoveAgents()
+    task_loop = _RecordingLoop()  # project-target task run path (chat_loop.start_run)
+    trigger_calls: list[dict[str, Any]] = []
+
+    async def trigger_run(agent_id: str, message: Any, **kwargs: Any) -> _FakeRun:
+        trigger_calls.append({"agent_id": agent_id, "message": message, **kwargs})
+        return _FakeRun()
+
+    runtime = SimpleNamespace(
+        chat_sessions=sessions,
+        agents=agents,
+        agent_resolver=_ConfigurableResolver(resolver_error),
+        trigger_service=SimpleNamespace(trigger_run=trigger_run),
+    )
+    state = SimpleNamespace(
+        chat_loop=task_loop,
+        streaming_chat_loop=task_loop,
+        runtime=runtime,
+        chat_runs=_FakeMoveRuns(active, queued),
+        event_bus=SimpleNamespace(publish=lambda *a, **k: None),
+        command_dispatcher=_NoCommandDispatcher(),
+    )
+    state._sessions = sessions  # type: ignore[attr-defined]
+    state._agents = agents  # type: ignore[attr-defined]
+    state._trigger_calls = trigger_calls  # type: ignore[attr-defined]
+    state._task_loop = task_loop  # type: ignore[attr-defined]
+    return state
+
+
+@pytest.mark.parametrize(
+    ("source_project", "target_address", "target_agent", "target_project", "reset", "update"),
+    [
+        (None, "planner", "planner", None, True, True),  # identity -> identity
+        (None, "planner@vbot", "planner", "vbot", True, False),  # identity -> project
+        ("vbot", "assistant", "assistant", None, False, True),  # project -> identity
+        ("vbot", "planner@acme", "planner", "acme", False, False),  # project -> project
+    ],
+)
+@pytest.mark.asyncio
+async def test_move_directions_relocate_and_re_home_pointers(
+    source_project: str | None,
+    target_address: str,
+    target_agent: str,
+    target_project: str | None,
+    reset: bool,
+    update: bool,
+) -> None:
+    state = _make_move_state()
+
+    result = await _handle_move_session_command(
+        state, "builder", "s1", target_address, project_id=source_project
+    )
+
+    move_call = state._sessions.move_calls[0]
+    assert move_call["source_agent_id"] == "builder"
+    assert move_call["source_project_id"] == source_project
+    assert move_call["target_agent_id"] == target_agent
+    assert move_call["target_project_id"] == target_project
+    # Cross-world identity residue is stripped on the move.
+    assert "visited_projects" in move_call["strip_meta_keys"]
+
+    # The "current" pointer follows the session on each identity side only.
+    assert (state._agents.reset_calls == [("builder", "s1")]) is reset
+    if update:
+        assert state._agents.update_calls == [(target_agent, {"current_session_id": "s1"})]
+    else:
+        assert state._agents.update_calls == []
+
+    # A visible takeover divider and the silent note are persisted at the destination.
+    assert len(state._sessions.destination.appended) == 1
+    divider = state._sessions.destination.appended[0]
+    assert divider.role == "agent_takeover"
+    assert json.loads(divider.content)["to"] == target_address
+    assert state._sessions.destination.notes  # silent takeover note added
+
+    # No task → the target waits; payload lands the accessor on the same session.
+    assert state._trigger_calls == []
+    assert state._task_loop.start_calls == []
+    assert result["output"] == "action"
+    assert result["data"] == {
+        "command": "agent",
+        "session_id": "s1",
+        "agent_id": target_address,
+    }
+
+
+@pytest.mark.asyncio
+async def test_move_to_same_pair_is_a_no_op_hint() -> None:
+    state = _make_move_state()
+
+    result = await _handle_move_session_command(state, "builder", "s1", "builder", project_id=None)
+
+    assert "already belongs" in result["reply"]
+    assert state._sessions.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_move_refused_while_run_active() -> None:
+    state = _make_move_state(active=_FakeRun())
+
+    result = await _handle_move_session_command(state, "builder", "s1", "planner", project_id=None)
+
+    assert "current run" in result["reply"]
+    assert state._sessions.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_move_refused_while_run_queued() -> None:
+    state = _make_move_state(queued=[SimpleNamespace(item_id="q-1")])
+
+    result = await _handle_move_session_command(state, "builder", "s1", "planner", project_id=None)
+
+    assert "queued run" in result["reply"]
+    assert state._sessions.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_move_refused_for_unknown_target() -> None:
+    state = _make_move_state(resolver_error=AgentResolutionError("no such agent"))
+
+    result = await _handle_move_session_command(
+        state, "builder", "s1", "ghost@vbot", project_id=None
+    )
+
+    assert "unknown agent" in result["reply"]
+    assert state._sessions.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_move_refused_for_invalid_address() -> None:
+    state = _make_move_state()
+
+    result = await _handle_move_session_command(
+        state, "builder", "s1", "agent:planner", project_id=None
+    )
+
+    assert "invalid agent address" in result["reply"]
+    assert state._sessions.move_calls == []
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"source_channel_id": "telegram-1"},
+        {"is_subagent_session": True},
+        {"subagent_parent": "parent-run-1"},
+    ],
+)
+@pytest.mark.asyncio
+async def test_move_refused_for_excluded_sessions(metadata: dict[str, Any]) -> None:
+    state = _make_move_state(metadata=metadata)
+
+    result = await _handle_move_session_command(state, "builder", "s1", "planner", project_id=None)
+
+    assert "cannot be moved" in result["reply"]
+    assert state._sessions.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_move_with_task_auto_runs_identity_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _make_move_state()
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    result = await _handle_move_session_command(
+        state, "builder", "s1", "planner do the thing", project_id=None
+    )
+
+    # The task rides as the receiving agent's first visible turn (identity → trigger).
+    assert state._trigger_calls == [
+        {"agent_id": "planner", "message": "do the thing", "session_id": "s1", "internal": False}
+    ]
+    assert "running your task" in result["reply"]
+
+
+@pytest.mark.asyncio
+async def test_move_with_task_auto_runs_project_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _make_move_state()
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    await _handle_move_session_command(
+        state, "builder", "s1", "planner@vbot ship it", project_id=None
+    )
+
+    # A project target has no trigger service yet → it runs through the chat loop.
+    assert state._trigger_calls == []
+    call = state._task_loop.start_calls[-1]
+    assert call["agent_id"] == "planner"
+    assert call["content"] == "ship it"
+    assert call["project_id"] == "vbot"
+    assert call["internal"] is False
+
+
+@pytest.mark.asyncio
+async def test_move_without_task_waits() -> None:
+    state = _make_move_state()
+
+    result = await _handle_move_session_command(state, "builder", "s1", "planner", project_id=None)
+
+    assert "waiting" in result["reply"]
+    assert state._trigger_calls == []
+    assert state._task_loop.start_calls == []
+
+
+@pytest.mark.asyncio
+async def test_move_divider_and_note_carry_both_addresses() -> None:
+    state = _make_move_state()
+
+    await _handle_move_session_command(state, "builder", "s1", "planner@vbot", project_id="acme")
+
+    divider = state._sessions.destination.appended[0]
+    assert json.loads(divider.content) == {
+        "from": format_agent_address("builder", "acme"),
+        "to": format_agent_address("planner", "vbot"),
+    }
+    # The silent note names the source so the receiver knows who it took over from.
+    assert "builder@acme" in state._sessions.destination.notes[0]
