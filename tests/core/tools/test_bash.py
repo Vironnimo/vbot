@@ -49,6 +49,7 @@ def make_context(
     cancel_registration_hook: Any = None,
     cancel_check_hook: Any = None,
     nesting_depth: int = 0,
+    project_id: str | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id=AGENT_ID,
@@ -66,6 +67,7 @@ def make_context(
         cancel_registration_hook=cancel_registration_hook,
         cancel_check_hook=cancel_check_hook,
         nesting_depth=nesting_depth,
+        project_id=project_id,
     )
 
 
@@ -155,6 +157,7 @@ async def test_background_trigger_fires_when_trigger_service_provided(
             *,
             session_id: str,
             internal: bool,
+            project_id: str | None = None,
         ) -> None:
             calls.append(
                 {
@@ -233,6 +236,7 @@ async def test_yield_after_expiry_triggers_background_completion_when_trigger_se
             *,
             session_id: str,
             internal: bool,
+            project_id: str | None = None,
         ) -> None:
             calls.append(
                 {
@@ -285,6 +289,7 @@ async def test_background_trigger_message_contains_command_exit_code_and_output(
             *,
             session_id: str,
             internal: bool,
+            project_id: str | None = None,
         ) -> None:
             messages.append(message)
             assert session_id
@@ -313,6 +318,47 @@ async def test_background_trigger_message_contains_command_exit_code_and_output(
 
 
 @pytest.mark.asyncio
+async def test_background_completion_trigger_carries_project_id(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A project-scoped background completion wakes the parent run under its project."""
+    captured: list[str | None] = []
+    trigger_called = asyncio.Event()
+
+    class MockTriggerService:
+        async def trigger_run(
+            self,
+            _agent_id: str,
+            _message: str,
+            *,
+            session_id: str,
+            internal: bool,
+            project_id: str | None = None,
+        ) -> None:
+            assert session_id
+            assert internal is True
+            captured.append(project_id)
+            trigger_called.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path, project_id="acme")
+
+    result = await bash_handler(
+        context,
+        {"command": "import sys; sys.exit(0)", "background": True},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
+    assert captured == ["acme"]
+
+
+@pytest.mark.asyncio
 async def test_background_watcher_does_not_consume_process_poll_output(
     manager: ProcessManager,
     tmp_path: Path,
@@ -328,6 +374,7 @@ async def test_background_watcher_does_not_consume_process_poll_output(
             *,
             session_id: str,
             internal: bool,
+            project_id: str | None = None,
         ) -> None:
             assert session_id
             assert internal is True
@@ -940,6 +987,7 @@ async def test_background_watcher_reports_aborted_by_user_when_session_is_user_c
             *,
             session_id: str,
             internal: bool,
+            project_id: str | None = None,
         ) -> None:
             assert session_id
             assert internal is True
@@ -997,6 +1045,7 @@ async def test_background_watcher_keeps_completion_wording_for_natural_exit(
             *,
             session_id: str,
             internal: bool,
+            project_id: str | None = None,
         ) -> None:
             assert session_id
             assert internal is True
@@ -1046,6 +1095,7 @@ async def test_background_watcher_discards_user_cancelled_session_id_after_consu
             *,
             session_id: str,
             internal: bool,
+            project_id: str | None = None,
         ) -> None:
             assert session_id
             assert internal is True
