@@ -180,6 +180,29 @@ def test_validate_project_data_rejects_empty_skill_entry() -> None:
     ) in _diagnostics(data)
 
 
+def test_validate_project_data_accepts_model_overrides() -> None:
+    data = _valid_project_data()
+    data["model_overrides"] = {"builder": "openai/gpt-5", "planner": "anthropic/claude-sonnet-4"}
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_non_object_model_overrides() -> None:
+    data = _valid_project_data()
+    data["model_overrides"] = ["builder"]
+
+    assert ("error", "$.model_overrides", "must be an object") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_empty_model_override_value() -> None:
+    data = _valid_project_data()
+    data["model_overrides"] = {"builder": "  "}
+
+    assert ("error", "$.model_overrides.builder", "must be a non-empty string") in _diagnostics(
+        data
+    )
+
+
 def test_validate_project_data_warns_on_unknown_field() -> None:
     data = _valid_project_data()
     data["team"] = ["builder"]
