@@ -48,6 +48,7 @@ def make_context(
     cancellation_hook: Any = None,
     cancel_registration_hook: Any = None,
     cancel_check_hook: Any = None,
+    nesting_depth: int = 0,
 ) -> ToolContext:
     return ToolContext(
         agent_id=AGENT_ID,
@@ -64,6 +65,7 @@ def make_context(
         cancellation_hook=cancellation_hook,
         cancel_registration_hook=cancel_registration_hook,
         cancel_check_hook=cancel_check_hook,
+        nesting_depth=nesting_depth,
     )
 
 
@@ -375,6 +377,144 @@ async def test_yield_after_expiry_backgrounds_running_process(
     assert result["data"]["status"] == "running"
 
     await kill_background(manager, result)
+
+
+@pytest.mark.asyncio
+async def test_explicit_background_at_depth_is_rejected_without_spawning(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sub-agent's explicit background request fails before any process spawns."""
+    watcher_calls: list[Any] = []
+    trigger_calls: list[str] = []
+
+    def record_watcher(*args: Any, **kwargs: Any) -> None:
+        watcher_calls.append((args, kwargs))
+
+    class RecordingTriggerService:
+        async def trigger_run(self, *_args: Any, **_kwargs: Any) -> None:
+            trigger_calls.append("called")
+
+    monkeypatch.setattr(bash_module, "_maybe_spawn_completion_watcher", record_watcher)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path, nesting_depth=1)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "background": True},
+        manager,
+        trigger_service=RecordingTriggerService(),
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == bash_module.BACKGROUND_AT_DEPTH_FAILURE_CODE
+    assert watcher_calls == []
+    await asyncio.sleep(0)
+    assert trigger_calls == []
+
+
+@pytest.mark.asyncio
+async def test_automatic_background_at_depth_kills_process_and_fails(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At depth a foreground command that outruns yield_after is killed, not backgrounded."""
+    watcher_calls: list[Any] = []
+    kill_calls: list[tuple[str, str]] = []
+
+    def record_watcher(*args: Any, **kwargs: Any) -> None:
+        watcher_calls.append((args, kwargs))
+
+    original_kill = manager.kill
+
+    async def tracking_kill(session_id: str, agent_id: str) -> None:
+        kill_calls.append((session_id, agent_id))
+        await original_kill(session_id, agent_id)
+
+    monkeypatch.setattr(bash_module, "_maybe_spawn_completion_watcher", record_watcher)
+    monkeypatch.setattr(manager, "kill", tracking_kill)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path, nesting_depth=1)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "yield_after": 0.01},
+        manager,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == bash_module.BACKGROUND_AT_DEPTH_FAILURE_CODE
+    assert "did not finish" in result["error"]["message"]
+    assert watcher_calls == []
+    assert kill_calls, "the still-running process should have been killed"
+
+
+@pytest.mark.asyncio
+async def test_fast_foreground_command_at_depth_succeeds(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sub-agent command finishing within yield_after still succeeds synchronously."""
+    watcher_calls: list[Any] = []
+
+    def record_watcher(*args: Any, **kwargs: Any) -> None:
+        watcher_calls.append((args, kwargs))
+
+    monkeypatch.setattr(bash_module, "_maybe_spawn_completion_watcher", record_watcher)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path, nesting_depth=1)
+
+    result = await bash_handler(
+        context,
+        {"command": "print('quick')"},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert "quick" in result["data"]["output"]
+    assert watcher_calls == []
+
+
+@pytest.mark.asyncio
+async def test_background_at_top_level_is_not_blocked(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: at depth 0 an explicit background request still backgrounds and watches."""
+    trigger_called = asyncio.Event()
+
+    class MockTriggerService:
+        async def trigger_run(
+            self,
+            _agent_id: str,
+            _message: str,
+            *,
+            session_id: str,
+            internal: bool,
+            project_id: str | None = None,
+        ) -> None:
+            assert session_id
+            assert internal is True
+            trigger_called.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path, nesting_depth=0)
+
+    result = await bash_handler(
+        context,
+        {"command": "import sys; sys.exit(0)", "background": True},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
 
 
 @pytest.mark.asyncio
