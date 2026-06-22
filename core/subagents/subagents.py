@@ -64,6 +64,25 @@ SUBAGENT_USER_CANCEL_MESSAGE = "Cancelled by the user"
 # FLIP-BACK: set CASCADE_NON_BLOCKING_CHILDREN = True to restore the old behaviour.
 CASCADE_NON_BLOCKING_CHILDREN = False
 
+# Forced-blocking-at-depth switch: a sub-agent (nesting depth >= 1) runs in an
+# ephemeral session nobody reads once it returns its single result, so it cannot
+# park work for a later run the way the top level can — a non-blocking spawn there
+# would strand the child's result one level down (the completion hand-off reaches
+# only one level up). When True, a spawn at depth >= 1 is forced to run blocking
+# regardless of the requested mode, so the sub-agent's run ends only once its work
+# is truly done. The top level (depth 0) is unaffected.
+# FLIP-BACK: set FORCE_BLOCKING_AT_DEPTH = False to allow non-blocking spawns at depth.
+FORCE_BLOCKING_AT_DEPTH = True
+
+# Appended to a forced-blocking spawn's success result so the sub-agent learns why
+# it blocked and how to still parallelise. Expendable guidance, not load-bearing:
+# the result payload is complete with or without it.
+FORCED_BLOCKING_NOTE = (
+    "Ran blocking: as a sub-agent you cannot spawn non-blocking work, because your "
+    "session ends with this run. To run several sub-agents in parallel, make all "
+    "subagent calls in a single turn — sibling calls in one turn execute concurrently."
+)
+
 
 def _should_register_parent_cascade(blocking: bool) -> bool:
     """Return whether a spawn should register a parent-cancel cascade callback.
@@ -131,6 +150,15 @@ async def _handle_subagent(
         session_id = optional_string(arguments.get("session_id"), field_name="session_id")
     except ToolArgumentError as error:
         return tool_failure("invalid_arguments", str(error))
+
+    # A sub-agent (depth >= 1) cannot park work for a later run, so force its spawns
+    # to block regardless of the requested mode; the top level keeps the requested
+    # mode. See FORCE_BLOCKING_AT_DEPTH. ``forced_blocking`` is true only when an
+    # explicit non-blocking request was overridden, and tags the success result.
+    forced_blocking = FORCE_BLOCKING_AT_DEPTH and context.nesting_depth >= 1 and not blocking
+    if forced_blocking:
+        blocking = True
+
     if (
         session_id is not None
         and target_agent_id == context.agent_id
@@ -310,6 +338,8 @@ async def _handle_subagent(
 
         batch_tracker.mark_fetched(parent_key, session.id, sub_run.id)
         batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
+        if forced_blocking:
+            result = {**result, "spawn_note": FORCED_BLOCKING_NOTE}
         return tool_success(result)
     finally:
         if not slot_registered:

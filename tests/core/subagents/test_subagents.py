@@ -19,7 +19,11 @@ from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.projects import AgentResolutionError
 from core.runs import ActiveRunError, Run, RunNotFoundError
-from core.subagents.subagents import SubAgentBatchTracker, _handle_subagent
+from core.subagents.subagents import (
+    FORCED_BLOCKING_NOTE,
+    SubAgentBatchTracker,
+    _handle_subagent,
+)
 from core.tools.tools import ToolContext
 
 pytestmark = pytest.mark.asyncio
@@ -34,6 +38,7 @@ def make_context(
     session_id: str = "parent-session",
     run_id: str = "parent-run",
     project_id: str | None = None,
+    nesting_depth: int = 0,
 ) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
@@ -46,6 +51,7 @@ def make_context(
         app_root=Path("app"),
         data_root=Path("data"),
         project_id=project_id,
+        nesting_depth=nesting_depth,
     )
 
 
@@ -501,6 +507,43 @@ async def test_subagent_blank_agent_id_falls_back_to_calling_agent(tmp_path: Pat
     started_run = manager.started[0]["run"]
     started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
     await asyncio.sleep(0)
+
+
+async def test_project_subagent_forced_blocking_at_depth_stays_project_scoped(
+    tmp_path: Path,
+) -> None:
+    # Option A composes with project inheritance: a depth >= 1 spawn is forced
+    # blocking (returns the finished child payload plus the forced-blocking note)
+    # while the child run still carries the parent's project end-to-end.
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id="acme", nesting_depth=1)
+
+    # Act: a non-blocking request that Option A forces to block. Drive the started
+    # run to completion so the blocking wait resolves.
+    task = asyncio.create_task(
+        _handle_subagent(
+            context,
+            {"content": "spawn", "agent_id": "worker"},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+    )
+    await asyncio.sleep(0)
+    started_run = manager.started[0]["run"]
+    started_run.mark_completed(
+        ChatMessage.assistant(model="openai/gpt-5.2", content="child done")
+    )
+    result = await task
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["result"] == "child done"
+    assert result["data"]["spawn_note"] == FORCED_BLOCKING_NOTE
+    assert manager.started[0]["project_id"] == "acme"
+    assert started_run.project_id == "acme"
 
 
 async def test_subagent_non_string_session_id_is_rejected(tmp_path: Path) -> None:
