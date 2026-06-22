@@ -794,10 +794,38 @@ export function timestampForItem(item) {
   if (item.type === 'assistant_run') {
     return item.timestamp ?? item.startTimestamp ?? item.endTimestamp;
   }
-  if (item.type === 'compaction_separator') {
+  if (
+    item.type === 'compaction_separator' ||
+    item.type === 'takeover_separator'
+  ) {
     return item.timestamp;
   }
   return item.event?.timestamp;
+}
+
+// Compose the label for an `agent_takeover` divider. The persisted message's
+// `content` is a JSON string `{"from":"<address>","to":"<address>"}` where each
+// address is a bare id (identity agent) or `agent@projekt` (team agent). The
+// addresses are raw data, not translatable strings — only the surrounding
+// phrase is localized, with the two addresses woven in. Falls back to a plain
+// label when either address is missing so a malformed entry still renders.
+export const takeoverSeparatorLabel = (message) => {
+  const { from, to } = parseTakeoverContent(message?.content);
+  if (from && to) {
+    return t('chat.takenOver', 'Taken over by {from} → {to}', { from, to });
+  }
+  return t('chat.takenOverGeneric', 'Session taken over');
+};
+
+function parseTakeoverContent(content) {
+  const parsed = parseJsonValue(content);
+  if (!isPlainObject(parsed)) {
+    return { from: '', to: '' };
+  }
+  return {
+    from: trimmedString(parsed.from),
+    to: trimmedString(parsed.to),
+  };
 }
 
 export const avatarForItem = (item) => {

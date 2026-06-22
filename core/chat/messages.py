@@ -46,6 +46,7 @@ MessageRole = Literal[
     "error",
     "compaction_checkpoint",
     "run_summary",
+    "agent_takeover",
 ]
 InputOrigin = Literal["speech_transcription"]
 JsonObject = dict[str, Any]
@@ -313,6 +314,33 @@ class ChatMessage:
             tail_boundary_id=tail_boundary_id,
         )
 
+    @classmethod
+    def agent_takeover(
+        cls,
+        *,
+        from_address: str,
+        to_address: str,
+        timestamp: datetime | None = None,
+    ) -> ChatMessage:
+        """Create a persisted takeover divider marking a session move between agents.
+
+        Both endpoints are stored as a compact JSON object in ``content``
+        (``{"from": ..., "to": ...}``) using the raw ``agent@projekt`` addresses;
+        the accessor composes the localized label from them. Like ``run_summary``
+        it is skipped from provider requests, but it stays visible in loaded
+        history so the WebUI renders it as a timeline divider.
+        """
+        return cls(
+            id=_new_message_id(),
+            timestamp=_format_timestamp(timestamp),
+            role="agent_takeover",
+            content=json.dumps(
+                {"from": from_address, "to": to_address},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+
     def to_dict(self) -> JsonObject:
         """Return a canonical JSON-serializable message dictionary."""
         self.validate()
@@ -411,6 +439,8 @@ class ChatMessage:
                 _validate_compaction_checkpoint_message(self)
             case "run_summary":
                 _validate_run_summary_message(self)
+            case "agent_takeover":
+                _validate_agent_takeover_message(self)
 
 
 def error_kind_llm_visible(kind: str) -> bool:
@@ -703,6 +733,9 @@ def _assemble_request_history(
         if message.role == "run_summary":
             continue
 
+        if message.role == "agent_takeover":
+            continue
+
         if message.role == "tool":
             if pending_notes:
                 deferred_until_after_tools.extend(pending_notes)
@@ -959,10 +992,11 @@ def _require_role(data: JsonObject) -> MessageRole:
         "error",
         "compaction_checkpoint",
         "run_summary",
+        "agent_takeover",
     ):
         raise ChatMessageValidationError(
             "role must be system, user, assistant, tool, note, error, "
-            "compaction_checkpoint, or run_summary"
+            "compaction_checkpoint, run_summary, or agent_takeover"
         )
     return cast(MessageRole, role)
 
@@ -1250,6 +1284,31 @@ def _validate_run_summary_message(message: ChatMessage) -> None:
         "name",
         "error_kind",
         "tail_boundary_id",
+        "sender",
+    )
+
+
+def _validate_agent_takeover_message(message: ChatMessage) -> None:
+    if message.content is None:
+        raise ChatMessageValidationError("agent takeover messages require content")
+    if not isinstance(message.content, str) or not message.content:
+        raise ChatMessageValidationError(
+            "agent takeover messages content must be a non-empty string"
+        )
+    _reject_fields(
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "timing",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "error_kind",
+        "tail_boundary_id",
+        "run_id",
+        "status",
         "sender",
     )
 

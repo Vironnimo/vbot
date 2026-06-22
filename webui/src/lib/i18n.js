@@ -134,6 +134,8 @@ export const englishCatalog = Object.freeze({
   'chat.runError': 'Run failed.',
   'chat.errorDetails': 'Details',
   'chat.compacted': 'Context compacted',
+  'chat.takenOver': 'Taken over by {from} → {to}',
+  'chat.takenOverGeneric': 'Session taken over',
   'chat.transientCard.label': 'Command output',
   'chat.project.none': 'No project',
   'chat.project.selectAria': 'Select project',
