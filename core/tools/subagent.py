@@ -14,7 +14,9 @@ SUBAGENT_TOOL_DESCRIPTION = (
     "After a non-blocking spawn, end your turn instead of polling: when every "
     "sub-agent in the batch finishes, their complete final outputs are delivered "
     "to you automatically. Only check on a running sub-agent before then if the "
-    "user explicitly asks for its status."
+    "user explicitly asks for its status. When you are yourself a sub-agent, spawns "
+    "always run blocking regardless of this setting; to run several in parallel, "
+    "make all subagent calls in a single turn."
 )
 SUBAGENT_RESULT_TOOL_DESCRIPTION = (
     "Fetch the latest result from a spawned sub-agent session and mark it as "

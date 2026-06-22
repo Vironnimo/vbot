@@ -1019,13 +1019,16 @@ async def test_subagent_tool_rejects_parent_session_reuse(tmp_path: Path) -> Non
 async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
     tmp_path: Path,
 ) -> None:
+    # Non-blocking only happens at the top level (depth 0); a depth >= 1 spawn is
+    # forced blocking. A top-level self-spawn returns "running" and the child loop
+    # carries depth + 1.
     # Arrange
     FakeChatLoop.seen_depths = []
     FakeChatLoop.seen_streaming = []
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context(nesting_depth=3)
+    context = make_context(nesting_depth=0)
 
     # Act
     result = await _handle_subagent(
@@ -1044,8 +1047,117 @@ async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
     assert result["data"]["agent_id"] == "parent"
     assert result["data"]["status"] == "running"
     assert manager.started[0][0] == "parent"
-    assert FakeChatLoop.seen_depths == [4]
+    assert FakeChatLoop.seen_depths == [1]
     assert FakeChatLoop.seen_streaming == [True]
+
+
+async def test_subagent_tool_forces_blocking_at_depth(tmp_path: Path) -> None:
+    # A sub-agent (depth >= 1) cannot park non-blocking work, so an omitted blocking
+    # flag is forced to blocking: the tool returns the finished child result payload
+    # (not a "running" descriptor) and tags it with the forced-blocking note.
+    assistant = ChatMessage.assistant(
+        model="openai/gpt-5.2",
+        content="child done",
+        usage={"input_tokens": 1, "output_tokens": 2},
+    )
+    manager = FakeRunManager()
+    manager.next_result = assistant
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(nesting_depth=1)
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "do work"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["result"] == "child done"
+    assert result["data"]["spawn_note"] == subagent_module.FORCED_BLOCKING_NOTE
+    # The forced-blocking child is fully fetched, so the batch drains with no note.
+    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
+
+
+async def test_subagent_tool_forces_blocking_at_depth_when_blocking_false(tmp_path: Path) -> None:
+    # An explicit blocking=false at depth is overridden too, not just an omitted flag.
+    assistant = ChatMessage.assistant(model="openai/gpt-5.2", content="child done")
+    manager = FakeRunManager()
+    manager.next_result = assistant
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(nesting_depth=1)
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "do work", "blocking": False},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["spawn_note"] == subagent_module.FORCED_BLOCKING_NOTE
+
+
+async def test_subagent_tool_explicit_blocking_at_depth_has_no_forced_note(
+    tmp_path: Path,
+) -> None:
+    # Explicit blocking at depth is honored as-is, with no forced-blocking note:
+    # the caller already asked to block, nothing was overridden.
+    assistant = ChatMessage.assistant(model="openai/gpt-5.2", content="child done")
+    manager = FakeRunManager()
+    manager.next_result = assistant
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(nesting_depth=1)
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "do work", "blocking": True},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert "spawn_note" not in result["data"]
+
+
+async def test_subagent_tool_top_level_non_blocking_keeps_running_descriptor(
+    tmp_path: Path,
+) -> None:
+    # Regression: at depth 0 an omitted blocking flag stays non-blocking and returns
+    # the "running" descriptor with no forced-blocking note.
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(nesting_depth=0)
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "do work"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    assert "spawn_note" not in result["data"]
+    # Settle the non-blocking completion tracker task before the loop closes.
+    sub_run = manager.started[0][3]
+    sub_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
+    await asyncio.sleep(0)
 
 
 async def test_make_subagent_executor_inherits_live_run_loop_wiring() -> None:
