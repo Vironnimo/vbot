@@ -654,3 +654,100 @@ class TestChatSessionManager:
 
         roles = [message.role for message in manager.get("coder", "session-one").load()]
         assert roles == ["assistant", "tool", "note"]
+
+
+class TestChatSessionManagerMove:
+    """Relocating a session's two files between any (agent, project) homes."""
+
+    @staticmethod
+    def _populate(manager, agent_id, session_id, *, project_id=None):
+        session = manager.create(agent_id, session_id=session_id, project_id=project_id)
+        session.append(ChatMessage.user("hello", timestamp=FIXED_TIMESTAMP))
+        session.append(
+            ChatMessage.assistant(
+                model="openai/gpt-4.1", content="hi there", timestamp=FIXED_TIMESTAMP
+            )
+        )
+        return session
+
+    @pytest.mark.parametrize(
+        ("source_project_id", "target_project_id"),
+        [
+            (None, None),  # personal -> personal
+            (None, "acme"),  # personal -> project
+            ("acme", None),  # project -> personal
+            ("acme", "acme"),  # project -> project (same project, different agent)
+        ],
+    )
+    def test_move_relocates_both_files_in_every_direction(
+        self, tmp_path, source_project_id, target_project_id
+    ):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess", project_id=source_project_id)
+        manager.set_metadata("alpha", "sess", {"platform": "telegram"}, source_project_id)
+        original = [message.to_dict() for message in source.load()]
+
+        destination = asyncio.run(
+            manager.move(
+                "alpha",
+                "sess",
+                "beta",
+                source_project_id=source_project_id,
+                target_project_id=target_project_id,
+            )
+        )
+
+        # Source home is empty afterwards (both files gone).
+        assert manager.exists("alpha", "sess", source_project_id) is False
+        assert not source.sidecar_path.exists()
+        # Destination owns the session with identical history, ids, and timestamps.
+        assert manager.exists("beta", "sess", target_project_id) is True
+        assert destination.path == manager.sessions_dir("beta", target_project_id) / "sess.jsonl"
+        assert [message.to_dict() for message in destination.load()] == original
+        assert manager.get_metadata("beta", "sess", target_project_id) == {"platform": "telegram"}
+
+    def test_move_tolerates_missing_sidecar(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        self._populate(manager, "alpha", "sess")
+
+        destination = asyncio.run(manager.move("alpha", "sess", "beta"))
+
+        assert manager.exists("beta", "sess") is True
+        assert not destination.sidecar_path.exists()
+        assert manager.get_metadata("beta", "sess") == {}
+
+    def test_move_strips_requested_meta_keys(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        self._populate(manager, "alpha", "sess")
+        manager.set_metadata(
+            "alpha",
+            "sess",
+            {"visited_projects": ["acme"], "platform": "telegram"},
+        )
+
+        asyncio.run(
+            manager.move(
+                "alpha",
+                "sess",
+                "beta",
+                target_project_id="acme",
+                strip_meta_keys=frozenset({"visited_projects"}),
+            )
+        )
+
+        assert manager.get_metadata("beta", "sess", "acme") == {"platform": "telegram"}
+
+    def test_move_fails_cleanly_on_destination_collision(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess")
+        manager.set_metadata("alpha", "sess", {"platform": "telegram"})
+        # An (improbable) id collision already occupies the destination home.
+        manager.create("beta", session_id="sess")
+
+        with pytest.raises(ChatSessionError, match="destination session already exists"):
+            asyncio.run(manager.move("alpha", "sess", "beta"))
+
+        # No partial move: the source keeps both of its files.
+        assert manager.exists("alpha", "sess") is True
+        assert source.sidecar_path.exists()
+        assert [message.role for message in source.load()] == ["user", "assistant"]

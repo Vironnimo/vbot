@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.projects import format_agent_address
 from core.providers.providers import resolve_context_window
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
@@ -20,6 +21,7 @@ from core.runs import ChatRunManager, RunNotFoundError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.agents import AgentStore
     from core.chat.chat import ChatMessage
     from core.models.models import ModelRegistry
     from core.projects import AgentResolver, ProjectStore, RuntimeAgent
@@ -27,6 +29,7 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
 else:
     AgentResolver = Any
+    AgentStore = Any
     ChatMessage = Any
     ChatSessionManager = Any
     ModelRegistry = Any
@@ -34,7 +37,7 @@ else:
     ProviderRegistry = Any
     RuntimeAgent = Any
 
-CommandActionName = Literal["compact", "handoff", "new_session", "retry_last_turn"]
+CommandActionName = Literal["compact", "handoff", "move_session", "new_session", "retry_last_turn"]
 StatusActivityName = Literal["idle", "running"]
 
 # Argument mode drives the autocomplete trigger behavior: ``none`` commands run
@@ -133,6 +136,30 @@ def parse_handoff_argument(argument: str | None) -> HandoffArgument:
 
 
 @dataclass(frozen=True)
+class AgentArgument:
+    """Parsed ``/agent`` argument: a target address and an optional task."""
+
+    address: str
+    task: str | None
+
+
+def parse_agent_argument(argument: str) -> AgentArgument:
+    """Split a raw ``/agent`` argument into a target address and an optional task.
+
+    The grammar is ``/agent``-specific and deliberately *not*
+    ``parse_handoff_argument``: the first whitespace-separated token *is* the
+    target address, and the trimmed remainder is an optional task. Address
+    validation (the ``agent@projekt`` split) happens later through
+    ``parse_agent_address`` — the one address seam — so a stray
+    ``/agent agent:planner`` (a ``/handoff`` reflex) is rejected as a malformed
+    address rather than silently reinterpreted as task text.
+    """
+    text = argument.strip()
+    first_token, _, remainder = text.partition(" ")
+    return AgentArgument(address=first_token, task=remainder.strip() or None)
+
+
+@dataclass(frozen=True)
 class StatusActivity:
     """Run activity summary for one Session."""
 
@@ -154,6 +181,12 @@ class CommandDispatcher:
     """Dispatches built-in slash commands before run startup."""
 
     BUILT_IN_COMMANDS: dict[str, CommandSpec] = {
+        "agent": CommandSpec(
+            "agent",
+            "Move this session to another agent; no argument lists the directory.",
+            argument="optional",
+            output="action",
+        ),
         "compact": CommandSpec(
             "compact",
             "Compact the current session's context immediately.",
@@ -207,6 +240,7 @@ class CommandDispatcher:
         started_at: datetime | None = None,
         providers: ProviderRegistry | None = None,
         projects: ProjectStore | None = None,
+        agents: AgentStore | None = None,
     ) -> None:
         self._chat_runs = chat_runs
         self._agent_resolver = agent_resolver
@@ -215,7 +249,9 @@ class CommandDispatcher:
         self._started_at = started_at
         self._providers = providers
         self._projects = projects
+        self._agents = agents
         self._commands: dict[str, CommandHandler] = {
+            "agent": self._handle_agent,
             "compact": self._handle_compact,
             "handoff": self._handle_handoff,
             "help": self._handle_help,
@@ -285,6 +321,60 @@ class CommandDispatcher:
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandAction:
         return CommandAction(name="handoff", argument=argument)
+
+    def _handle_agent(
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
+    ) -> CommandHandled | CommandAction:
+        """Argument-dependent: no argument lists the directory, otherwise move.
+
+        ``/agent`` (no argument) returns a transient, non-persisted directory card
+        — a real choice with no side effect. ``/agent <addr> [task]`` returns a
+        ``move_session`` action carrying the raw argument; the orchestrator owns
+        the parse, the guards, and the relocation, so the command layer stays a
+        thin trigger. This makes ``/agent`` the first built-in with an
+        argument-dependent output channel (transient card vs. action).
+        """
+        if argument is None:
+            return CommandHandled(reply=self._build_agent_directory(), output="transient")
+        return CommandAction(name="move_session", argument=argument)
+
+    def _build_agent_directory(self) -> str:
+        """List the move targets: personal agents plus every project's team.
+
+        Bare ids are personal agents; team agents are shown project-qualified as
+        ``name@projekt`` through the one address seam, so the card itself teaches
+        the addressing the move expects. A project whose scan fails is skipped
+        rather than failing the whole card.
+        """
+        lines = ["Move this session to another agent with /agent <id> [task].", ""]
+
+        personal = sorted(agent.id for agent in self._agents.list()) if self._agents else []
+        lines.append("Personal agents:")
+        if personal:
+            lines.extend(f"  {format_agent_address(agent_id, None)}" for agent_id in personal)
+        else:
+            lines.append("  (none)")
+
+        if self._projects is not None and self._agent_resolver is not None:
+            for project in self._projects.list():
+                try:
+                    team = self._agent_resolver.scan_project_report(project).team
+                except Exception:
+                    _LOGGER.warning(
+                        "Failed to scan project %r while building the /agent directory",
+                        project.project_id,
+                        exc_info=True,
+                    )
+                    continue
+                if not team:
+                    continue
+                lines.append("")
+                lines.append(f"Team — {project.display_name} ({project.project_id}):")
+                lines.extend(
+                    f"  {format_agent_address(member.agent_id, project.project_id)}"
+                    for member in sorted(team, key=lambda member: member.agent_id)
+                )
+        return "\n".join(lines)
 
     def _handle_help(
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
