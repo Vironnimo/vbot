@@ -127,6 +127,13 @@ class Project:
     # Both empty by default → only the project's own scanned skills are active.
     skills_bundled_enabled: list[str] = field(default_factory=list)
     skills_project_disabled: list[str] = field(default_factory=list)
+    # Per-agent model overrides keyed by scanned ``agent_id`` → user-facing
+    # ``<provider>/<model-id>[::connection]`` (GLOSSARY → Model). vBot-owned and
+    # data-dir-only (never the repo); the resolver applies it as the **top** tier of
+    # a config agent's model chain, so it wins over the repo-declared model. Empty by
+    # default. Set/cleared per entry through the store (``set_model_override`` /
+    # ``clear_model_override``), not the generic ``project.set`` field surface.
+    model_overrides: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable mapping persisted to ``project.json``."""
@@ -142,6 +149,7 @@ class Project:
             "allowed_tools": list(self.allowed_tools),
             "skills_bundled_enabled": list(self.skills_bundled_enabled),
             "skills_project_disabled": list(self.skills_project_disabled),
+            "model_overrides": dict(self.model_overrides),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -160,6 +168,7 @@ def build_project(
     allowed_tools: list[str] | None = None,
     skills_bundled_enabled: list[str] | None = None,
     skills_project_disabled: list[str] | None = None,
+    model_overrides: dict[str, str] | None = None,
     created_at: str | None = None,
     updated_at: str | None = None,
 ) -> Project:
@@ -187,6 +196,7 @@ def build_project(
     validated_skills_disabled = _validate_string_list(
         "skills_project_disabled", skills_project_disabled
     )
+    validated_model_overrides = _validate_model_overrides(model_overrides)
     now = _utc_now()
     return Project(
         project_id=validated_id,
@@ -200,6 +210,7 @@ def build_project(
         allowed_tools=validated_allowed_tools,
         skills_bundled_enabled=validated_skills_bundled,
         skills_project_disabled=validated_skills_disabled,
+        model_overrides=validated_model_overrides,
         created_at=created_at or now,
         updated_at=updated_at or now,
     )
@@ -226,6 +237,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
         skills_project_disabled=list(cast("list[str]", data.get("skills_project_disabled") or [])),
+        model_overrides=dict(cast("dict[str, str]", data.get("model_overrides") or {})),
         created_at=data["created_at"],
         updated_at=data["updated_at"],
     )
@@ -334,6 +346,28 @@ def _validate_string_list(field_name: str, values: list[str] | None) -> list[str
         if not isinstance(item, str) or not item.strip():
             raise ProjectError(f"{field_name} entries must be non-empty strings")
     return list(values)
+
+
+def _validate_model_overrides(value: dict[str, str] | None) -> dict[str, str]:
+    """Validate the per-agent model-override map; ``None`` → ``{}``.
+
+    Shape-only, exactly like ``default_model``: each key is a non-empty ``agent_id``
+    string and each value a non-empty model string. The model's *configured-ness*
+    (provider registered, in catalog, usable credential) is deliberately **not**
+    checked here — that is the set-time gate in the ``/model`` command path, not a
+    file-load concern, so a credential going away never makes an existing
+    ``project.json`` fail to load.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ProjectError("model_overrides must be an object")
+    for agent_id, model in value.items():
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ProjectError("model_overrides keys must be non-empty agent id strings")
+        if not isinstance(model, str) or not model.strip():
+            raise ProjectError("model_overrides values must be non-empty model strings")
+    return dict(value)
 
 
 def _utc_now() -> str:

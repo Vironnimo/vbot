@@ -437,6 +437,17 @@ class AgentResolver:
             return
         self._team_cache.pop(project_id, None)
 
+    def is_model_configured(self, model: str) -> bool:
+        """Return whether *model* can actually run in this instance.
+
+        The single public seam over the shared :class:`ModelConfigurationChecker`
+        rule (provider registered, model in catalog, usable credential), reused by
+        the ``/model`` command's set-time validation so the accepted-model rule and
+        the scan's ``BAD_MODEL`` rule (and the resolver chain's per-tier gate) can
+        never drift. An empty/malformed string is not configured.
+        """
+        return self._model_checker.is_configured(model)
+
     def _project_team(self, project: Project) -> list[ScannedAgent]:
         cached = self._team_cache.get(project.project_id)
         if cached is not None:
@@ -474,18 +485,22 @@ class AgentResolver:
     ) -> str:
         """Run the model chain and return the first usable model, or raise.
 
-        Chain: agent model → project default → global default. Each candidate
-        counts only when it exists/is configured in this instance; an unconfigured
-        candidate is skipped as if absent. Falling all the way through is a clear
-        "cannot run" error.
+        Chain: per-agent override → agent model → project default → global default.
+        The override (``project.model_overrides[agent_id]`` — vBot-owned, data-dir
+        only) is the **top** tier, so a pinned model wins over the repo-declared one.
+        Each candidate counts only when it exists/is configured in this instance, so
+        an override whose credential later vanished degrades to the repo value rather
+        than erroring (same ``is_configured`` gate as every tier). Falling all the
+        way through is a clear "cannot run" error.
         """
+        override = project.model_overrides.get(scanned.agent_id, "")
         global_model = global_defaults.get("model", "")
-        for candidate in (scanned.model, project.default_model, global_model):
+        for candidate in (override, scanned.model, project.default_model, global_model):
             if candidate and self._model_checker.is_configured(candidate):
                 return candidate
         raise AgentResolutionError(
-            f"agent '{scanned.agent_id}' has no usable model: declared "
-            f"{scanned.model!r}, project default {project.default_model!r}, "
+            f"agent '{scanned.agent_id}' has no usable model: override {override!r}, "
+            f"declared {scanned.model!r}, project default {project.default_model!r}, "
             f"and the global default are all missing or unconfigured"
         )
 

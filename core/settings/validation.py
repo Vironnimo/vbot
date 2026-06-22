@@ -158,6 +158,7 @@ PROJECT_FIELDS = frozenset(
         "default_temperature",
         "default_thinking_effort",
         "display_name",
+        "model_overrides",
         "project_id",
         "skills_bundled_enabled",
         "skills_project_disabled",
@@ -547,6 +548,11 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     _validate_optional_string_list(
         diagnostics, "$.skills_project_disabled", data.get("skills_project_disabled")
     )
+    # Per-agent model overrides (vBot-owned, data-dir only). Optional — an old
+    # project.json omits it and defaults to {} at load. Shape only: a string→string
+    # object with non-empty keys/values. The model value is NOT checked against the
+    # catalog here (that is the /model set-time gate), exactly like default_model.
+    _validate_optional_string_dict(diagnostics, "$.model_overrides", data.get("model_overrides"))
     _validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
     _validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
     return diagnostics
@@ -1099,6 +1105,29 @@ def _validate_optional_string_list(
     for index, item in enumerate(value):
         if not isinstance(item, str) or not item.strip():
             _error(diagnostics, f"{path}[{index}]", "must be a non-empty string")
+
+
+def _validate_optional_string_dict(
+    diagnostics: list[JsonDiagnostic], path: str, value: Any
+) -> None:
+    """Validate an optional string→non-empty-string object, tolerating absence.
+
+    ``None`` (absent field or explicit ``null``) is accepted as "use the default
+    empty map"; any present value must be an object whose keys and values are all
+    non-empty strings. Shape only — the values are not checked against any registry
+    here (an unconfigured model is the set-time concern, mirroring ``default_model``).
+    """
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, path, "must be an object")
+        return
+    for key, item in value.items():
+        if not isinstance(key, str) or not key.strip():
+            _error(diagnostics, path, "keys must be non-empty strings")
+            continue
+        if not isinstance(item, str) or not item.strip():
+            _error(diagnostics, _child_path(path, key), "must be a non-empty string")
 
 
 def _validate_regex_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:

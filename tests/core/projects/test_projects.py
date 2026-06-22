@@ -42,6 +42,7 @@ def test_build_project_minimal_just_cwd_defaults_optionals(tmp_path: Path) -> No
     assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     assert project.skills_bundled_enabled == []
     assert project.skills_project_disabled == []
+    assert project.model_overrides == {}
 
 
 def test_build_project_keeps_explicit_empty_allowed_tools(tmp_path: Path) -> None:
@@ -74,6 +75,35 @@ def test_build_project_rejects_non_string_allowed_tool(tmp_path: Path) -> None:
 def test_build_project_rejects_non_list_skills_bundled(tmp_path: Path) -> None:
     with pytest.raises(ProjectError):
         build_project("vbot", "vBot", tmp_path, skills_bundled_enabled="frontend")  # type: ignore[arg-type]
+
+
+def test_build_project_accepts_model_overrides(tmp_path: Path) -> None:
+    project = build_project(
+        "vbot",
+        "vBot",
+        tmp_path,
+        model_overrides={"builder": "openai/gpt-5", "planner": "anthropic/claude-sonnet-4"},
+    )
+
+    assert project.model_overrides == {
+        "builder": "openai/gpt-5",
+        "planner": "anthropic/claude-sonnet-4",
+    }
+
+
+def test_build_project_rejects_non_dict_model_overrides(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError):
+        build_project("vbot", "vBot", tmp_path, model_overrides=["builder"])  # type: ignore[arg-type]
+
+
+def test_build_project_rejects_empty_model_override_key(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError):
+        build_project("vbot", "vBot", tmp_path, model_overrides={"  ": "openai/gpt-5"})
+
+
+def test_build_project_rejects_empty_model_override_value(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError):
+        build_project("vbot", "vBot", tmp_path, model_overrides={"builder": "  "})
 
 
 def test_build_project_accepts_default_temperature_and_thinking(tmp_path: Path) -> None:
@@ -171,6 +201,7 @@ def test_to_dict_round_trips_through_project_from_dict(tmp_path: Path) -> None:
         allowed_tools=["read", "grep"],
         skills_bundled_enabled=["frontend-design"],
         skills_project_disabled=["debugging"],
+        model_overrides={"builder": "openai/gpt-mini"},
     )
 
     restored = project_from_dict(project.to_dict())
@@ -193,6 +224,7 @@ def test_to_dict_has_stable_field_set(tmp_path: Path) -> None:
         "allowed_tools",
         "skills_bundled_enabled",
         "skills_project_disabled",
+        "model_overrides",
         "created_at",
         "updated_at",
     }
@@ -219,6 +251,8 @@ def test_project_from_dict_defaults_optional_fields() -> None:
     assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     assert project.skills_bundled_enabled == []
     assert project.skills_project_disabled == []
+    # An old project.json without model_overrides loads at the empty map.
+    assert project.model_overrides == {}
 
 
 def test_project_from_dict_preserves_explicit_empty_allowed_tools() -> None:

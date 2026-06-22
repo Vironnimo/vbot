@@ -211,12 +211,73 @@ class ProjectStore:
             skills_project_disabled=changes.get(
                 "skills_project_disabled", list(project.skills_project_disabled)
             ),
+            # model_overrides is not a generic update field (it has its own atomic
+            # set/clear seam below); always carry the current map through so an
+            # unrelated edit never drops a pinned override.
+            model_overrides=dict(project.model_overrides),
             created_at=project.created_at,
         )
 
         if "cwd" in changes and rebuilt.cwd != project.cwd:
             self._reject_duplicate_cwd(rebuilt.cwd, exclude_project_id=project_id)
 
+        updated = replace(rebuilt, updated_at=_utc_now())
+        self._write_project(updated)
+        return updated
+
+    def set_model_override(self, project_id: str, agent_id: str, model: str) -> Project:
+        """Pin a per-agent model override, replacing any existing entry for that agent.
+
+        Atomic read-modify-write over ``project.json``: load the project, copy its
+        override map, set ``agent_id → model``, and rewrite — leaving every other
+        entry and field intact. The id/model shape is validated through
+        ``build_project``; whether the model is *configured in this instance* is the
+        caller's gate (the ``/model`` command path), not enforced here. Returns the
+        updated project.
+        """
+        project = self.get(project_id)
+        overrides = dict(project.model_overrides)
+        overrides[agent_id] = model
+        return self._rewrite_with_model_overrides(project, overrides)
+
+    def clear_model_override(self, project_id: str, agent_id: str) -> Project:
+        """Remove one agent's model override; clearing an absent entry is a no-op success.
+
+        The config agent then falls back to its repo-declared model (or the
+        project/global default). When the agent has no override, the project is
+        returned unchanged without a write; otherwise exactly that one entry is
+        dropped and the rest of the map is preserved.
+        """
+        project = self.get(project_id)
+        if agent_id not in project.model_overrides:
+            return project
+        overrides = dict(project.model_overrides)
+        del overrides[agent_id]
+        return self._rewrite_with_model_overrides(project, overrides)
+
+    def _rewrite_with_model_overrides(self, project: Project, overrides: dict[str, str]) -> Project:
+        """Rebuild a project with a new override map and persist it atomically.
+
+        Carries every other field unchanged through ``build_project`` (the single
+        validation path), refreshes ``updated_at``, and writes via the atomic
+        replace. The cwd re-normalization is idempotent on an already-stored project,
+        exactly as in :meth:`update`.
+        """
+        rebuilt = build_project(
+            project.project_id,
+            project.display_name,
+            project.cwd,
+            default_agent=project.default_agent,
+            default_model=project.default_model,
+            default_temperature=project.default_temperature,
+            default_thinking_effort=project.default_thinking_effort,
+            auto_load=list(project.auto_load),
+            allowed_tools=list(project.allowed_tools),
+            skills_bundled_enabled=list(project.skills_bundled_enabled),
+            skills_project_disabled=list(project.skills_project_disabled),
+            model_overrides=overrides,
+            created_at=project.created_at,
+        )
         updated = replace(rebuilt, updated_at=_utc_now())
         self._write_project(updated)
         return updated

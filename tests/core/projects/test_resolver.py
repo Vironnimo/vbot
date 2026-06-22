@@ -419,6 +419,66 @@ def test_unconfigured_agent_model_falls_through_to_default(
 
 
 # ---------------------------------------------------------------------------
+# Per-agent model override: the top tier of the config-agent model chain.
+# ---------------------------------------------------------------------------
+
+
+def test_model_override_wins_over_repo_model(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # The repo declares gpt-5.2; a vBot-owned override pins gpt-mini → override wins.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    projects.set_model_override("vbot", "builder", "openai/gpt-mini")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent("vbot", "builder")
+
+    assert runtime_agent.model == "openai/gpt-mini"
+
+
+def test_model_override_applies_only_to_its_agent(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # An override keyed on builder must not bleed onto another agent.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _write_agent(repo, "planner.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    projects.set_model_override("vbot", "builder", "openai/gpt-mini")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    assert resolver.resolve_agent("vbot", "builder").model == "openai/gpt-mini"
+    assert resolver.resolve_agent("vbot", "planner").model == "openai/gpt-5.2"
+
+
+def test_unconfigured_override_degrades_to_repo_model(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # An override that is not configured in this instance (e.g. credential removed)
+    # falls through the same is_configured gate to the repo-declared model.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    projects.set_model_override("vbot", "builder", "openai/ghost-model")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent("vbot", "builder")
+
+    assert runtime_agent.model == "openai/gpt-5.2"
+
+
+def test_is_model_configured_matches_checker(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # The public seam the /model command reuses delegates to the same rule as the
+    # scan's BAD_MODEL check, so accepted models and clean-scan models cannot drift.
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    assert resolver.is_model_configured("openai/gpt-5.2") is True
+    assert resolver.is_model_configured("openai/ghost-model") is False
+    assert resolver.is_model_configured("") is False
+
+
+# ---------------------------------------------------------------------------
 # Temperature chain: agent → project default → global default → None.
 # ---------------------------------------------------------------------------
 
