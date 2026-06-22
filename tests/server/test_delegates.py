@@ -340,6 +340,15 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "output": "transient",
                 },
                 {
+                    "name": "model",
+                    "description": (
+                        "Show, set, or reset this session's model (/model reset to clear)."
+                    ),
+                    "type": "command",
+                    "argument": "optional",
+                    "output": "action",
+                },
+                {
                     "name": "new",
                     "description": "Start a new session for the current agent.",
                     "type": "command",
