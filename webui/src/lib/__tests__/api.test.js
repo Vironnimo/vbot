@@ -17,6 +17,7 @@ import {
   addProject,
   cancelRun,
   cancelToolCall,
+  clearModelOverride,
   createRpcEnvelope,
   listProjects,
   removeProject,
@@ -439,6 +440,37 @@ describe('project.* wrappers', () => {
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
         method: 'project.rm',
+      }),
+    );
+  });
+
+  it('clears a model override through project.clear_model_override', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { project: { project_id: 'demo' }, scan: { team: [] } },
+      }),
+    );
+
+    await clearModelOverride('demo', 'builder', { fetch: fetchFunction });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'project.clear_model_override',
+      params: { project_id: 'demo', agent_id: 'builder' },
+    });
+  });
+
+  it('rejects an empty project or agent id before sending clear_model_override', () => {
+    expect(() => clearModelOverride('', 'builder')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.clear_model_override',
+      }),
+    );
+    expect(() => clearModelOverride('demo', '')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.clear_model_override',
       }),
     );
   });
