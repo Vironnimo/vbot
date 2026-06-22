@@ -355,6 +355,9 @@ export function projectTeam(scan) {
     source_format: asText(member?.source_format),
     source_path: asText(member?.source_path),
     denied_tools: normalizeStringList(member?.denied_tools),
+    // The per-agent model override (vBot-owned, top model-chain tier), or null.
+    // The team row shows it with an `x` to clear; it is set only via /model.
+    model_override: stringOrNull(member?.model_override),
   }));
 }
 
