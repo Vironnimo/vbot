@@ -68,7 +68,7 @@ the only coupling is the WebUI Limits subtab that surfaces it (see `statistics.m
 ## Specific Specs
 
 - `providers/openai.md` - Direct OpenAI Platform access and ChatGPT subscription access as one provider with two connections (`api-key`, `subscription`); single `OpenAIAdapter` branches on connection `mode`.
-- `providers/anthropic.md` - Anthropic Messages adapter.
+- `providers/anthropic.md` - Anthropic Messages adapter, `/models` catalog discovery, per-model reasoning control and sampling-parameter support.
 - `providers/openrouter.md` - OpenRouter runtime, reasoning, and multi-modality catalog discovery.
 - `providers/opencode-go.md` - OpenCode Go routing and reasoning replay behavior.
 - `providers/mistral.md` - Mistral-specific reasoning and catalog normalization.
