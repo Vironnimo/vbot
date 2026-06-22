@@ -4848,6 +4848,7 @@ async def test_chat_commands_returns_normalized_built_in_command_names(
         "compact",
         "handoff",
         "help",
+        "model",
         "new",
         "retry",
         "status",
