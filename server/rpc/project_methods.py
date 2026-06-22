@@ -233,6 +233,33 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
     return {"project": _project_response(project), "scan": scan}
 
 
+def _clear_model_override(state: Any, params: JsonObject) -> JsonObject:
+    """Clear one agent's per-agent model override and return the refreshed project.
+
+    The set side is command-only (``/model``); the UI only ever *clears* an
+    override (the Projects-tab ``x``). Clearing an absent entry is a no-op success.
+    No cache invalidation is needed — ``project.json`` is read fresh on every
+    resolve, so the dropped override takes effect on the next run with no resolver
+    or skill cache to clear.
+    """
+    unsupported_fields = sorted(set(params) - {"project_id", "agent_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported project.clear_model_override fields: {', '.join(unsupported_fields)}",
+        )
+
+    project_id = _required_string(params, "project_id")
+    agent_id = _required_string(params, "agent_id")
+    try:
+        project = _projects(state).clear_model_override(project_id, agent_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    scan = _scan_preview(state, project)
+    return {"project": _project_response(project), "scan": scan}
+
+
 async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
     unsupported_fields = sorted(set(params) - {"project_id"})
     if unsupported_fields:
@@ -316,7 +343,7 @@ def _cron_targets_project_agent(job: Any, project_id: str) -> bool:
 def _scan_preview(state: Any, project: Project) -> JsonObject:
     """Scan one project into the agent-facing Team + report preview."""
     result = _agent_resolver(state).scan_project_report(project)
-    response = _scan_response(result)
+    response = _scan_response(result, project)
     response["skills"] = _project_skill_pool(state, project.project_id)
     return response
 
@@ -466,14 +493,14 @@ def _project_response(project: Project) -> JsonObject:
     }
 
 
-def _scan_response(result: ScanResult) -> JsonObject:
+def _scan_response(result: ScanResult, project: Project) -> JsonObject:
     return {
-        "team": [_team_member_response(member) for member in result.team],
+        "team": [_team_member_response(member, project) for member in result.team],
         "report": _report_response(result.report),
     }
 
 
-def _team_member_response(member: ScannedAgent) -> JsonObject:
+def _team_member_response(member: ScannedAgent, project: Project) -> JsonObject:
     return {
         "agent_id": member.agent_id,
         "display_name": member.display_name,
@@ -487,6 +514,9 @@ def _team_member_response(member: ScannedAgent) -> JsonObject:
         # The editor pairs this with the project Tool Whitelist (the ceiling) to show
         # that an individual agent may use less than the project maximum.
         "denied_tools": sorted(member.denied_tools),
+        # The per-agent model override (vBot-owned, the top model-chain tier), or
+        # null when this agent has none — the Projects tab renders/clears it per row.
+        "model_override": project.model_overrides.get(member.agent_id),
     }
 
 
@@ -514,5 +544,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "project.list": _list_projects,
         "project.show": _show_project,
         "project.set": _set_project,
+        "project.clear_model_override": _clear_model_override,
         "project.rm": _remove_project,
     }
