@@ -3,6 +3,7 @@
   "name": "Anthropic",
   "adapter": "anthropic",
   "base_url": "https://api.anthropic.com/v1",
+  "models_endpoint": "/models",
   "connections": [
     {
       "id": "api-key",
@@ -16,7 +17,6 @@
     }
   ],
   "defaults": {
-    "max_tokens": 8192,
-    "temperature": 0.7
+    "max_tokens": 8192
   }
 }

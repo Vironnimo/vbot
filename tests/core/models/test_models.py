@@ -1352,28 +1352,31 @@ class TestModelRegistryRealResources:
         tts = registry.get("openai", "tts-1")
         assert tts.capabilities.task_types == ("text_to_speech", "audio_generation")
 
-    def test_anthropic_budget_override_seeds_budget_max(self):
-        """``anthropic.overrides.json`` seeds ``budget`` control + a ``budget_max``
-        for the reachable budget Claudes, so the native ``budget_tokens`` render
-        scales with the hand-seeded ceiling instead of the absolute fallback."""
+    def test_anthropic_opus_4_5_override_pins_budget_control(self):
+        """``anthropic.overrides.json`` pins Opus 4.5 to ``budget`` control.
+
+        Opus 4.5 exposes an effort ladder (so the canonical layer labels it
+        ``levels``) but does not support adaptive thinking — the ``levels`` render
+        (``thinking: {type: adaptive}``) 400s there. The override forces native
+        ``budget`` rendering, which the model accepts. With no ``budget_max`` to
+        seed, a ``high`` effort derives the absolute fallback budget (16384)."""
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
-        opus = registry.get("anthropic", "claude-opus-4-20250219")
-        assert opus.capabilities.reasoning.control == "budget"
-        assert opus.capabilities.reasoning.budget_max == 32000
+        opus45 = registry.get("anthropic", "claude-opus-4-5-20251101")
+        assert opus45.capabilities.reasoning.supported is True
+        assert opus45.capabilities.reasoning.control == "budget"
+        assert opus45.capabilities.reasoning.budget_max is None
 
-        # high → 0.75 * 32000 = 24000, proving the budget scales with budget_max
-        # (the absolute fallback ladder would give 16384 instead).
         intent = resolve_reasoning_intent(
-            supported=opus.capabilities.reasoning.supported,
-            control=opus.capabilities.reasoning.control,
-            levels=opus.capabilities.reasoning.levels,
+            supported=opus45.capabilities.reasoning.supported,
+            control=opus45.capabilities.reasoning.control,
+            levels=opus45.capabilities.reasoning.levels,
             effort="high",
-            budget_max=opus.capabilities.reasoning.budget_max,
+            budget_max=opus45.capabilities.reasoning.budget_max,
         )
         assert intent.kind == "budget"
-        assert intent.budget_tokens == 24000
+        assert intent.budget_tokens == 16384
 
     @pytest.mark.parametrize(
         "provider_id",
