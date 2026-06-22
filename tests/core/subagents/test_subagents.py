@@ -532,9 +532,7 @@ async def test_project_subagent_forced_blocking_at_depth_stays_project_scoped(
     )
     await asyncio.sleep(0)
     started_run = manager.started[0]["run"]
-    started_run.mark_completed(
-        ChatMessage.assistant(model="openai/gpt-5.2", content="child done")
-    )
+    started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="child done"))
     result = await task
 
     # Assert
