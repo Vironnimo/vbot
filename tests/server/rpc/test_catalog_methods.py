@@ -109,6 +109,7 @@ def test_commands_are_always_present() -> None:
         "compact",
         "handoff",
         "help",
+        "model",
         "new",
         "retry",
         "status",
