@@ -74,6 +74,23 @@ USER_CANCELLED_FAILURE_CODE = "cancelled_by_user"
 USER_CANCELLED_FAILURE_MESSAGE = "Command aborted by the user"
 BACKGROUND_USER_CANCELLED_MESSAGE = "Background process was aborted by the user."
 
+# Background-at-depth block: a sub-agent (nesting depth >= 1) runs in an ephemeral
+# session that nobody reads once it returns its single result, so a backgrounded
+# process there would fire its completion wake-up into a session no caller is
+# listening on — the result strands. When True, both explicit (``background: true``)
+# and automatic (a foreground command still running at the yield_after threshold)
+# backgrounding are blocked at depth >= 1: no process is left running, no completion
+# watcher is spawned, and the call fails with a bounded message. The top level
+# (depth 0) is unaffected.
+# FLIP-BACK: set BLOCK_BACKGROUND_AT_DEPTH = False to allow background bash at depth.
+BLOCK_BACKGROUND_AT_DEPTH = True
+BACKGROUND_AT_DEPTH_FAILURE_CODE = "background_unavailable_in_subagent"
+BACKGROUND_AT_DEPTH_EXPLICIT_MESSAGE = (
+    "Background execution is not available inside a sub-agent: a sub-agent's session "
+    "ends with this run, so a background process could not report back. Run the command "
+    "in the foreground (it must finish within yield_after), or set a timeout to bound it."
+)
+
 _LOGGER = get_logger("tools.bash")
 
 _cached_shell_env: dict[str, str] | None = None
@@ -82,6 +99,20 @@ _cached_shell_env: dict[str, str] | None = None
 # completion watcher reads this set to distinguish user-killed sessions from
 # natural completion and tool-enforced timeouts.
 _user_cancelled_session_ids: set[str] = set()
+
+
+def _background_blocked_at_depth(context: ToolContext) -> bool:
+    """Return whether backgrounding is blocked for this call (sub-agent at depth)."""
+    return BLOCK_BACKGROUND_AT_DEPTH and context.nesting_depth >= 1
+
+
+def _background_at_depth_timeout_message(yield_after: float) -> str:
+    """Build the failure message for a sub-agent command that outran yield_after."""
+    return (
+        f"Command did not finish within {yield_after:g}s, and background execution is not "
+        "available inside a sub-agent. Make sure the command terminates, or set a timeout "
+        "to bound it."
+    )
 
 
 async def bash_handler(
@@ -94,6 +125,14 @@ async def bash_handler(
     parsed = _parse_arguments(arguments)
     if isinstance(parsed, str):
         return tool_failure("invalid_arguments", parsed)
+
+    # A sub-agent cannot park a background process for a later run, so reject an
+    # explicit background request before spawning anything (no process, no watcher).
+    if parsed["background"] and _background_blocked_at_depth(context):
+        return tool_failure(
+            BACKGROUND_AT_DEPTH_FAILURE_CODE,
+            BACKGROUND_AT_DEPTH_EXPLICIT_MESSAGE,
+        )
 
     command = parsed["command"]
     workdir = _resolve_workdir(context, parsed.get("workdir"))
@@ -145,6 +184,14 @@ async def bash_handler(
         return tool_failure(USER_CANCELLED_FAILURE_CODE, USER_CANCELLED_FAILURE_MESSAGE)
 
     if result["data"] is not None and result["data"].get("status") == "running":
+        # At depth the foreground command outran yield_after but a sub-agent cannot
+        # background it: kill the process and fail instead of spawning a watcher.
+        if _background_blocked_at_depth(context):
+            await process_manager.kill(session_id, context.agent_id)
+            return tool_failure(
+                BACKGROUND_AT_DEPTH_FAILURE_CODE,
+                _background_at_depth_timeout_message(parsed["yield_after"]),
+            )
         _maybe_spawn_completion_watcher(
             process_manager,
             context,
