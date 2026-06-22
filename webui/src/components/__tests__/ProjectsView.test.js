@@ -11,6 +11,7 @@ const listProjectsMock = vi.fn();
 const showProjectMock = vi.fn();
 const setProjectMock = vi.fn();
 const removeProjectMock = vi.fn();
+const clearModelOverrideMock = vi.fn();
 const rpcMock = vi.fn();
 
 vi.mock('svelte', async () => {
@@ -23,6 +24,7 @@ vi.mock('$lib/api.js', () => ({
   showProject: (...args) => showProjectMock(...args),
   setProject: (...args) => setProjectMock(...args),
   removeProject: (...args) => removeProjectMock(...args),
+  clearModelOverride: (...args) => clearModelOverrideMock(...args),
   rpc: (...args) => rpcMock(...args),
 }));
 
@@ -45,6 +47,7 @@ describe('ProjectsView', () => {
     showProjectMock.mockReset();
     setProjectMock.mockReset();
     removeProjectMock.mockReset();
+    clearModelOverrideMock.mockReset();
     rpcMock.mockReset();
 
     rpcMock.mockImplementation((method) => {
@@ -71,6 +74,10 @@ describe('ProjectsView', () => {
       scan: { team: [], report: { clean: true, findings: [] } },
     });
     removeProjectMock.mockResolvedValue({ project_id: 'demo', archived: true });
+    clearModelOverrideMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: { team: [], report: { clean: true, findings: [] } },
+    });
   });
 
   afterEach(async () => {
@@ -486,6 +493,68 @@ describe('ProjectsView', () => {
     expect(setProjectMock).toHaveBeenCalledWith('demo', {
       display_name: 'Renamed',
     });
+  });
+
+  it('shows a model-override badge and clears it through project.clear_model_override', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          {
+            agent_id: 'builder',
+            display_name: 'Builder',
+            model: 'openai/gpt-5.2',
+            model_override: 'openai/gpt-mini',
+          },
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    // After clearing, the refreshed scan drops the override so the badge vanishes.
+    clearModelOverrideMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          {
+            agent_id: 'builder',
+            display_name: 'Builder',
+            model: 'openai/gpt-5.2',
+            model_override: null,
+          },
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await expandDemo();
+    await waitForCondition(() =>
+      document.body.textContent.includes('Model override'),
+    );
+    expect(document.body.textContent).toContain('openai/gpt-mini');
+
+    await waitForCondition(() =>
+      document.querySelector(
+        '[data-testid="project-model-override-clear-builder"]',
+      ),
+    );
+    buttonByTestId('project-model-override-clear-builder').click();
+
+    await waitForCondition(
+      () => clearModelOverrideMock.mock.calls.length === 1,
+    );
+    expect(clearModelOverrideMock).toHaveBeenCalledWith('demo', 'builder');
+
+    // The refreshed team drops the badge (the row falls back to its repo model).
+    await waitForCondition(
+      () => !document.body.textContent.includes('Model override'),
+    );
+    expect(document.body.textContent).not.toContain('Model override');
   });
 
   it('re-points a project with a missing cwd through project.set with the new cwd', async () => {

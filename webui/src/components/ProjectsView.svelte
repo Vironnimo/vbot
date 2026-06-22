@@ -10,6 +10,7 @@
   import Toggle from './ui/Toggle.svelte';
   import {
     addProject,
+    clearModelOverride,
     listProjects,
     removeProject,
     rpc,
@@ -95,6 +96,10 @@
   let activeScanSkills = $state({ project: [], bundled: [] });
   let scanLoading = $state(false);
   let removingProjectId = $state('');
+  // The team agent whose model override is being cleared, so its `x` disables
+  // while the clear RPC is in flight (empty = none clearing). Setting an override
+  // is command-only (/model); the tab only clears.
+  let clearingOverrideAgentId = $state('');
 
   // The toggleable tool catalog and the base Tool Whitelist (reset target), both
   // from the tool-catalog RPC so new tools appear without hardcoding names.
@@ -639,6 +644,42 @@
     } finally {
       if (!destroyed) {
         editSaving = false;
+      }
+    }
+  }
+
+  // Clear one team agent's model override (the Projects-tab `x`). The override is
+  // set only via the /model command; the tab is display + clear. On success the
+  // returned scan re-seeds the team/report so the row drops back to its repo model.
+  async function clearOverride(agentId) {
+    const project = expandedProject;
+    if (!project || clearingOverrideAgentId) {
+      return;
+    }
+
+    clearingOverrideAgentId = agentId;
+    editError = '';
+
+    try {
+      const result = await clearModelOverride(project.project_id, agentId);
+      if (destroyed) {
+        return;
+      }
+      activeTeam = projectTeam(result?.scan);
+      activeReport = normalizeScanReport(result?.scan?.report);
+      activeScanSkills = normalizeScanSkills(result?.scan);
+      onToast({
+        title: t('projects.team.overrideCleared', 'Model override cleared.'),
+        variant: 'success',
+      });
+    } catch (error) {
+      if (destroyed) {
+        return;
+      }
+      editError = `${t('projects.team.overrideClearError', 'The model override could not be cleared.')} ${errorText(error)}`;
+    } finally {
+      if (!destroyed) {
+        clearingOverrideAgentId = '';
       }
     }
   }
@@ -1291,9 +1332,39 @@
                           <span class="projects-view__team-name">
                             {member.display_name}
                           </span>
-                          <span class="projects-view__team-model">
-                            {member.model ||
-                              t('projects.team.noModel', 'No model')}
+                          <span class="projects-view__team-meta">
+                            <span class="projects-view__team-model">
+                              {member.model ||
+                                t('projects.team.noModel', 'No model')}
+                            </span>
+                            {#if member.model_override}
+                              <span class="projects-view__team-override">
+                                <span
+                                  class="projects-view__team-override-label"
+                                >
+                                  {t(
+                                    'projects.team.modelOverride',
+                                    'Model override: {model}',
+                                    { model: member.model_override },
+                                  )}
+                                </span>
+                                <button
+                                  type="button"
+                                  class="projects-view__team-override-clear"
+                                  data-testid={`project-model-override-clear-${member.agent_id}`}
+                                  disabled={clearingOverrideAgentId ===
+                                    member.agent_id}
+                                  aria-label={t(
+                                    'projects.team.modelOverrideClear',
+                                    'Clear model override for {agent}',
+                                    { agent: member.display_name },
+                                  )}
+                                  onclick={() => clearOverride(member.agent_id)}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            {/if}
                           </span>
                         </li>
                       {/each}
@@ -1906,6 +1977,49 @@
     color: var(--text-med);
     font-family: var(--font-mono);
     font-size: 11px;
+  }
+
+  .projects-view__team-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .projects-view__team-override {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 1px 2px 1px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: rgba(255, 255, 255, 0.02);
+    color: var(--text-med);
+    font-size: 10.5px;
+  }
+
+  .projects-view__team-override-label {
+    font-family: var(--font-mono);
+  }
+
+  .projects-view__team-override-clear {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text-med);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .projects-view__team-override-clear:hover:not(:disabled) {
+    background: rgba(252, 129, 129, 0.12);
+    color: var(--red);
   }
 
   .projects-view__team-empty {

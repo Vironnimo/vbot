@@ -370,6 +370,7 @@ describe('projectTeam', () => {
             thinking_effort: 'high',
             source_format: 'opencode',
             source_path: '.opencode/agents/builder.md',
+            model_override: 'openai/gpt-mini',
           },
           { agent_id: 'planner' },
         ],
@@ -385,6 +386,8 @@ describe('projectTeam', () => {
         source_format: 'opencode',
         source_path: '.opencode/agents/builder.md',
         denied_tools: [],
+        // The per-agent override is carried through for the team-row badge.
+        model_override: 'openai/gpt-mini',
       },
       {
         agent_id: 'planner',
@@ -396,6 +399,8 @@ describe('projectTeam', () => {
         source_format: '',
         source_path: '',
         denied_tools: [],
+        // No override → null (an agent without a pinned model shows no badge).
+        model_override: null,
       },
     ]);
   });
