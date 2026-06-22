@@ -236,12 +236,12 @@ def test_runtime_models_populated(runtime: Runtime) -> None:
 def test_runtime_model_fields(runtime: Runtime) -> None:
     """Model entries have the expected field values."""
     # Act
-    model = runtime.models.get("anthropic", "claude-sonnet-4-20250219")
+    model = runtime.models.get("anthropic", "claude-sonnet-4-6")
 
     # Assert
-    assert model.model_id == "claude-sonnet-4-20250219"
-    assert model.name == "Claude Sonnet 4"
-    assert model.context_window == 200000
+    assert model.model_id == "claude-sonnet-4-6"
+    assert model.name == "Claude Sonnet 4.6"
+    assert model.context_window == 1000000
     assert model.capabilities.vision is True
     assert model.capabilities.reasoning.supported is True
 

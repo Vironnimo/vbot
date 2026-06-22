@@ -31,6 +31,7 @@ from core.models.models_dev import (
     reasoning_response_field,
 )
 from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.minimax import MiniMaxAdapter
@@ -698,6 +699,7 @@ def _append_query_params(url: str, params: dict[str, str]) -> str:
 _DISCOVERY_ADAPTER_MAP = {
     "openai_compatible": OpenAICompatibleAdapter,
     "openai": OpenAIAdapter,
+    "anthropic": AnthropicAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "openrouter": OpenRouterAdapter,
     "minimax": MiniMaxAdapter,

@@ -530,14 +530,14 @@ def test_get_model_openrouter_claude_opus_47(runtime: Runtime) -> None:
 
 
 def test_get_model_anthropic_claude_sonnet(runtime: Runtime) -> None:
-    """Runtime.get_model('anthropic', 'claude-sonnet-4-20250219') returns correct data."""
+    """Runtime.get_model('anthropic', 'claude-sonnet-4-6') returns correct data."""
     # Act
-    model = runtime.get_model("anthropic", "claude-sonnet-4-20250219")
+    model = runtime.get_model("anthropic", "claude-sonnet-4-6")
 
     # Assert
-    assert model.model_id == "claude-sonnet-4-20250219"
-    assert model.name == "Claude Sonnet 4"
-    assert model.context_window == 200000
+    assert model.model_id == "claude-sonnet-4-6"
+    assert model.name == "Claude Sonnet 4.6"
+    assert model.context_window == 1000000
 
 
 def test_get_model_openai_gpt52(runtime: Runtime) -> None:

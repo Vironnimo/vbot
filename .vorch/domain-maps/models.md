@@ -133,10 +133,9 @@ so the canonical ladder is inherited at load.
 via `resolve_reasoning_intent(...)` and each adapter renders it: `levels` snaps
 the effort against `capabilities.reasoning.levels` (via `model_reasoning_levels`,
 falling back to the adapter floor for an empty ladder), `on_off` toggles, and
-`budget` derives a native token budget scaled by `budget_max`
-(`model_reasoning_control` / `model_reasoning_budget_max` are the accessors). The
-hand-seeded budget Claudes carry `budget_max` in
-`resources/models/anthropic.overrides.json`. Full wiring in `providers.md` →
+`budget` derives a native token budget scaled by `budget_max` when known, else via
+the absolute fallback ladder (`model_reasoning_control` /
+`model_reasoning_budget_max` are the accessors). Full wiring in `providers.md` →
 "Reasoning is one policy, many renders".
 
 ## Wire selectors as data

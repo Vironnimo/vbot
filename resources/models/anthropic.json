@@ -1,19 +1,20 @@
 {
+  "fetched_at": "2026-06-22T21:36:03.974749+00:00",
   "models": {
-    "claude-opus-4-20250219": {
+    "claude-fable-5": {
+      "canonical": "anthropic/claude-fable-5",
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -23,24 +24,33 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 200000,
-      "max_output_tokens": 32000,
-      "name": "Claude Opus 4"
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-fable",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": false
+        }
+      },
+      "name": "Claude Fable 5"
     },
-    "claude-sonnet-4-20250219": {
+    "claude-haiku-4-5-20251001": {
+      "canonical": "anthropic/claude-haiku-4-5-20251001",
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -50,10 +60,272 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 200000,
+      "family": "claude-haiku",
       "max_output_tokens": 64000,
-      "name": "Claude Sonnet 4"
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": true
+        }
+      },
+      "name": "Claude Haiku 4.5"
+    },
+    "claude-opus-4-1-20250805": {
+      "canonical": "anthropic/claude-opus-4-1-20250805",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "family": "claude-opus",
+      "max_output_tokens": 32000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": true
+        }
+      },
+      "name": "Claude Opus 4.1"
+    },
+    "claude-opus-4-5-20251101": {
+      "canonical": "anthropic/claude-opus-4-5-20251101",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "family": "claude-opus",
+      "max_output_tokens": 64000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": true
+        }
+      },
+      "name": "Claude Opus 4.5"
+    },
+    "claude-opus-4-6": {
+      "canonical": "anthropic/claude-opus-4-6",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-opus",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": true
+        }
+      },
+      "name": "Claude Opus 4.6"
+    },
+    "claude-opus-4-7": {
+      "canonical": "anthropic/claude-opus-4-7",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-opus",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": false
+        }
+      },
+      "name": "Claude Opus 4.7"
+    },
+    "claude-opus-4-8": {
+      "canonical": "anthropic/claude-opus-4-8",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-opus",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": false
+        }
+      },
+      "name": "Claude Opus 4.8"
+    },
+    "claude-sonnet-4-5-20250929": {
+      "canonical": "anthropic/claude-sonnet-4-5-20250929",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-sonnet",
+      "max_output_tokens": 64000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": true
+        }
+      },
+      "name": "Claude Sonnet 4.5"
+    },
+    "claude-sonnet-4-6": {
+      "canonical": "anthropic/claude-sonnet-4-6",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-sonnet",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": true
+        }
+      },
+      "name": "Claude Sonnet 4.6"
     }
   },
-  "provider_id": "anthropic"
+  "provider_id": "anthropic",
+  "source": "discovery"
 }
