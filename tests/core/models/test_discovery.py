@@ -1810,3 +1810,11 @@ class TestRefreshModelsDevEnrichment:
         assert "openrouter" not in metadata or "reasoning_response_field" not in metadata.get(
             "openrouter", {}
         )
+
+
+def test_anthropic_adapter_registered_for_discovery() -> None:
+    """The Anthropic adapter is wired into the refresh pipeline like every other."""
+    from core.providers.anthropic import AnthropicAdapter
+
+    assert discovery_module._DISCOVERY_ADAPTER_MAP["anthropic"] is AnthropicAdapter
+    assert discovery_module._adapter_class_for_discovery("anthropic") is AnthropicAdapter

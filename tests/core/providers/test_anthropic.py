@@ -14,9 +14,20 @@ import httpx
 import pytest
 import respx
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import (
+    REASONING_CONTROL_BUDGET,
+    REASONING_CONTROL_LEVELS,
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+)
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
-from core.providers.anthropic import AnthropicAdapter, _to_anthropic_user_content_block
+from core.providers.anthropic import (
+    ANTHROPIC_METADATA_KEY,
+    SUPPORTS_TEMPERATURE_METADATA_FIELD,
+    AnthropicAdapter,
+    _to_anthropic_user_content_block,
+)
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -3404,3 +3415,236 @@ class TestLifecycle:
         """The context manager yields the adapter instance."""
         async with AnthropicAdapter(ANTHROPIC_CONFIG, API_KEY) as adapter:
             assert isinstance(adapter, AnthropicAdapter)
+
+
+# ---------------------------------------------------------------------------
+# Catalog discovery (normalize_catalog_entry, discovery headers/params)
+# ---------------------------------------------------------------------------
+
+
+def _anthropic_catalog_entry(
+    model_id: str,
+    *,
+    adaptive: bool,
+    enabled: bool,
+    efforts: tuple[str, ...] = (),
+    thinking: bool = True,
+    image: bool = True,
+    pdf: bool = True,
+    structured: bool = True,
+    context_window: int = 200000,
+    max_output_tokens: int = 64000,
+) -> dict:
+    """Build a raw ``/models`` entry mirroring the live Anthropic catalog shape."""
+
+    capabilities: dict = {
+        "image_input": {"supported": image},
+        "pdf_input": {"supported": pdf},
+        "structured_outputs": {"supported": structured},
+        "thinking": {
+            "supported": thinking,
+            "types": {
+                "enabled": {"supported": enabled},
+                "adaptive": {"supported": adaptive},
+            },
+        },
+        "effort": {
+            "supported": bool(efforts),
+            **{level: {"supported": True} for level in efforts},
+        },
+    }
+    return {
+        "type": "model",
+        "id": model_id,
+        "display_name": f"Display {model_id}",
+        "max_input_tokens": context_window,
+        "max_tokens": max_output_tokens,
+        "capabilities": capabilities,
+    }
+
+
+class TestCatalogDiscovery:
+    """The discovery normalizer maps the live ``/models`` caps onto a vBot Model."""
+
+    def test_adaptive_only_model_maps_to_levels_and_drops_sampling(self):
+        """An adaptive-only model (Opus 4.7+/Fable) → levels control, no temperature."""
+        model = AnthropicAdapter.normalize_catalog_entry(
+            _anthropic_catalog_entry(
+                "claude-opus-4-8",
+                adaptive=True,
+                enabled=False,
+                efforts=("low", "medium", "high", "xhigh", "max"),
+                context_window=1000000,
+                max_output_tokens=128000,
+            )
+        )
+
+        assert model.model_id == "claude-opus-4-8"
+        assert model.name == "Display claude-opus-4-8"
+        assert model.context_window == 1000000
+        assert model.max_output_tokens == 128000
+        assert model.capabilities.vision is True
+        assert model.capabilities.tools is True
+        assert model.capabilities.json_mode is True
+        assert model.capabilities.input_modalities == ("text", "image", "pdf")
+        assert model.capabilities.reasoning == ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_LEVELS,
+            levels=("low", "medium", "high", "xhigh", "max"),
+        )
+        assert model.metadata[ANTHROPIC_METADATA_KEY][SUPPORTS_TEMPERATURE_METADATA_FIELD] is False
+
+    def test_budget_model_maps_to_budget_control_and_keeps_sampling(self):
+        """A native-thinking model with no adaptive (Haiku 4.5) → budget control."""
+        model = AnthropicAdapter.normalize_catalog_entry(
+            _anthropic_catalog_entry("claude-haiku-4-5", adaptive=False, enabled=True)
+        )
+
+        assert model.capabilities.reasoning == ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_BUDGET,
+            levels=(),
+        )
+        assert model.metadata[ANTHROPIC_METADATA_KEY][SUPPORTS_TEMPERATURE_METADATA_FIELD] is True
+
+    def test_effort_ladder_without_adaptive_maps_to_budget(self):
+        """Opus 4.5 exposes an effort ladder but no adaptive thinking → budget (not levels).
+
+        Sending adaptive thinking to such a model is a wire error; budget control
+        renders the native ``thinking: {type: enabled, budget_tokens}`` it accepts.
+        """
+        model = AnthropicAdapter.normalize_catalog_entry(
+            _anthropic_catalog_entry(
+                "claude-opus-4-5",
+                adaptive=False,
+                enabled=True,
+                efforts=("low", "medium", "high"),
+            )
+        )
+
+        assert model.capabilities.reasoning.control == REASONING_CONTROL_BUDGET
+        assert model.capabilities.reasoning.levels == ()
+        assert model.metadata[ANTHROPIC_METADATA_KEY][SUPPORTS_TEMPERATURE_METADATA_FIELD] is True
+
+    def test_non_reasoning_model_has_no_control_and_keeps_sampling(self):
+        """A model the catalog marks reasoning-unsupported carries no control."""
+        model = AnthropicAdapter.normalize_catalog_entry(
+            _anthropic_catalog_entry("claude-legacy", adaptive=False, enabled=False, thinking=False)
+        )
+
+        assert model.capabilities.reasoning == ReasoningCapabilities(supported=False)
+        assert model.metadata[ANTHROPIC_METADATA_KEY][SUPPORTS_TEMPERATURE_METADATA_FIELD] is True
+
+    def test_display_name_falls_back_to_id(self):
+        entry = _anthropic_catalog_entry("claude-x", adaptive=True, enabled=False)
+        del entry["display_name"]
+
+        model = AnthropicAdapter.normalize_catalog_entry(entry)
+
+        assert model.name == "claude-x"
+
+    def test_discovery_headers_add_version_and_keep_auth(self):
+        headers = AnthropicAdapter.discovery_headers(
+            ANTHROPIC_CONFIG, API_KEY, {"x-api-key": "secret"}
+        )
+
+        assert headers["anthropic-version"] == "2023-06-01"
+        assert headers["x-api-key"] == "secret"
+
+    def test_discovery_params_pages_the_listing(self):
+        assert AnthropicAdapter.discovery_params() == {"limit": "1000"}
+
+
+# ---------------------------------------------------------------------------
+# Sampling-parameter dropping for adaptive-only models
+# ---------------------------------------------------------------------------
+
+
+def _anthropic_sampling_model(model_id: str, *, supports_temperature: bool) -> Model:
+    """A reasoning Claude carrying the discovery-derived temperature-support flag."""
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(
+                supported=True,
+                control=REASONING_CONTROL_LEVELS,
+                levels=("low", "medium", "high"),
+            ),
+        ),
+        context_window=1000000,
+        max_output_tokens=128000,
+        metadata={
+            ANTHROPIC_METADATA_KEY: {SUPPORTS_TEMPERATURE_METADATA_FIELD: supports_temperature}
+        },
+    )
+
+
+class TestSamplingParameterDropping:
+    """Sampling params are dropped for models that reject them, even without thinking."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_drops_sampling_for_unsupported_model_without_thinking(self):
+        """An adaptive-only model with no effort still must not receive temperature."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            ANTHROPIC_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_sampling_model(
+                model_id, supports_temperature=False
+            ),
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-opus-4-8",
+            temperature=0.5,
+            top_p=0.9,
+            top_k=10,
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert "temperature" not in request_body
+        assert "top_p" not in request_body
+        assert "top_k" not in request_body
+        assert "thinking" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_keeps_sampling_for_supported_model(self):
+        """A sampling-capable model keeps temperature when thinking is inactive."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            ANTHROPIC_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_sampling_model(
+                model_id, supports_temperature=True
+            ),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-6", temperature=0.5)
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.5
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_keeps_sampling_when_lookup_absent(self):
+        """With no catalog lookup the flag is unknown, so sampling is left alone."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(ANTHROPIC_CONFIG, API_KEY)
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-8", temperature=0.5)
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.5

@@ -20,7 +20,7 @@ Key differences from the OpenAI-compatible adapter:
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -28,6 +28,13 @@ import httpx
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
+from core.models.models import (
+    REASONING_CONTROL_BUDGET,
+    REASONING_CONTROL_LEVELS,
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+)
 from core.providers._http_shared import (
     build_async_client,
     classify_http_status,
@@ -100,6 +107,20 @@ ANTHROPIC_STOP_REASONS = {
     "refusal",
     "stop_sequence",
 }
+
+# Discovery: the Messages catalog lives at ``/models`` and pages at up to 1000
+# entries; one page covers the full Claude lineup with room to spare.
+MODELS_DISCOVERY_PAGE_SIZE = "1000"
+# Sampling parameters Anthropic removed on the adaptive-only generation
+# (Opus 4.7+, Fable 5) — these 400 there but are accepted on 4.6 and earlier.
+ANTHROPIC_SAMPLING_PARAMETER_NAMES = ("temperature", "top_p", "top_k")
+# Provider-scoped per-model metadata: whether the model accepts sampling params.
+# Derived at discovery from the live caps (see ``normalize_catalog_entry``) and
+# read by ``_model_supports_temperature`` to drop sampling for models that reject it.
+ANTHROPIC_METADATA_KEY = "anthropic"
+SUPPORTS_TEMPERATURE_METADATA_FIELD = "supports_temperature"
+# Stable effort-ladder order for projecting the catalog's ``effort`` capability.
+ANTHROPIC_EFFORT_LEVEL_ORDER = ("low", "medium", "high", "xhigh", "max")
 
 
 class AnthropicAdapter(ProviderAdapter):
@@ -180,6 +201,100 @@ class AnthropicAdapter(ProviderAdapter):
         """
         del model_id
         return IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"}
+
+    # ------------------------------------------------------------------
+    # Catalog discovery
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def discovery_headers(
+        cls,
+        _provider_config: ProviderConfig,
+        credential_value: str,
+        headers: Mapping[str, str],
+    ) -> dict[str, str]:
+        """Add the required ``anthropic-version`` header for ``/models`` discovery.
+
+        The auth header (``x-api-key``) is already supplied by the discovery
+        pipeline from the connection config; the Messages API additionally
+        requires a version header on every request, listing included.
+        """
+
+        del credential_value
+        return {**headers, "anthropic-version": ANTHROPIC_VERSION}
+
+    @classmethod
+    def discovery_params(cls) -> dict[str, str]:
+        """Page the ``/models`` listing large enough to return the full lineup."""
+
+        return {"limit": MODELS_DISCOVERY_PAGE_SIZE}
+
+    @classmethod
+    def normalize_catalog_entry(
+        cls,
+        raw: Mapping[str, Any],
+        defaults: Mapping[str, Any] | None = None,
+    ) -> Model:
+        """Normalize one Anthropic ``/models`` entry into a vBot :class:`Model`.
+
+        The live ``/models`` endpoint is authoritative and rich: it carries the
+        context window, output limit, input modalities, structured-output and
+        reasoning support, and the per-model ``effort`` ladder. Provider request
+        defaults are not model facts and are ignored here.
+        """
+
+        del defaults
+        model_id = _read_catalog_string(raw, "id")
+        name = _read_catalog_string(raw, "display_name") or model_id
+        caps = _catalog_mapping(raw, "capabilities")
+        thinking = _catalog_mapping(caps, "thinking")
+        thinking_types = _catalog_mapping(thinking, "types")
+
+        # ``thinking.supported`` is a direct boolean; the per-type and other
+        # capability nodes are ``{supported: bool}`` objects (``_catalog_supported``).
+        reasoning_supported = thinking.get("supported") is True
+        adaptive = _catalog_supported(thinking_types, "adaptive")
+        enabled = _catalog_supported(thinking_types, "enabled")
+        effort_levels = tuple(
+            level
+            for level in ANTHROPIC_EFFORT_LEVEL_ORDER
+            if _catalog_supported(_catalog_mapping(caps, "effort"), level)
+        )
+        control, levels = _anthropic_reasoning_control(
+            reasoning_supported, adaptive=adaptive, enabled=enabled, effort_levels=effort_levels
+        )
+
+        image = _catalog_supported(caps, "image_input")
+        pdf = _catalog_supported(caps, "pdf_input")
+        input_modalities = ("text", *(("image",) if image else ()), *(("pdf",) if pdf else ()))
+
+        return Model(
+            model_id=model_id,
+            name=name,
+            capabilities=Capabilities(
+                vision=image,
+                # The catalog has no per-model tool flag; every Claude model
+                # supports tool use, so this is a safe provider-wide constant.
+                tools=True,
+                json_mode=_catalog_supported(caps, "structured_outputs"),
+                reasoning=ReasoningCapabilities(
+                    supported=reasoning_supported,
+                    control=control,
+                    levels=levels,
+                ),
+                input_modalities=input_modalities,
+                output_modalities=("text",),
+            ),
+            context_window=_read_catalog_int(raw, "max_input_tokens"),
+            max_output_tokens=_read_catalog_int(raw, "max_tokens"),
+            metadata={
+                ANTHROPIC_METADATA_KEY: {
+                    SUPPORTS_TEMPERATURE_METADATA_FIELD: _anthropic_supports_temperature(
+                        reasoning_supported, adaptive=adaptive, enabled=enabled
+                    )
+                }
+            },
+        )
 
     # ------------------------------------------------------------------
     # Header / payload helpers
@@ -266,12 +381,17 @@ class AnthropicAdapter(ProviderAdapter):
             reasoning_supported=reasoning_supported,
         )
 
-        # Anthropic rejects a sampling temperature when thinking is active
-        # (only the default is accepted), so the pair must never reach the
-        # wire — drop the caller value and skip the provider default.
+        # Sampling parameters must never reach the wire in two cases: when
+        # thinking is active (Anthropic rejects a sampling temperature alongside
+        # thinking), or when the model is from the adaptive-only generation
+        # (Opus 4.7+, Fable 5) that removed sampling entirely. Both drop the
+        # caller value and skip the provider default below.
+        supports_sampling = self._model_supports_temperature(model_id)
         thinking_active = _anthropic_thinking_active(payload, request_kwargs)
-        if thinking_active:
-            request_kwargs.pop("temperature", None)
+        drop_sampling = thinking_active or not supports_sampling
+        if drop_sampling:
+            for sampling_key in ANTHROPIC_SAMPLING_PARAMETER_NAMES:
+                request_kwargs.pop(sampling_key, None)
 
         # Replayed thinking blocks must not be sent when the outgoing request
         # explicitly disables thinking or the model cannot reason; with the
@@ -289,7 +409,7 @@ class AnthropicAdapter(ProviderAdapter):
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
-                if thinking_active and key == "temperature":
+                if drop_sampling and key in ANTHROPIC_SAMPLING_PARAMETER_NAMES:
                     continue
                 payload.setdefault(key, value)
         # Apply caller overrides (highest priority)
@@ -298,6 +418,27 @@ class AnthropicAdapter(ProviderAdapter):
 
     def _model_reasoning_supported(self, model_id: str) -> bool | None:
         return model_reasoning_supported(self._model_lookup, model_id)
+
+    def _model_supports_temperature(self, model_id: str) -> bool:
+        """Whether ``model_id`` accepts sampling parameters (temperature/top_p/top_k).
+
+        Reads the discovery-derived ``metadata.anthropic.supports_temperature``
+        flag through the injected catalog lookup. Defaults to ``True`` (don't
+        drop) when there is no lookup, no model, or no flag — the conservative
+        "unknown means leave it alone" stance; runtime always wires the lookup.
+        """
+
+        if self._model_lookup is None:
+            return True
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return True
+        provider_metadata = model.metadata.get(ANTHROPIC_METADATA_KEY)
+        if isinstance(provider_metadata, Mapping):
+            value = provider_metadata.get(SUPPORTS_TEMPERATURE_METADATA_FIELD)
+            if isinstance(value, bool):
+                return value
+        return True
 
     def _apply_reasoning(
         self,
@@ -606,6 +747,74 @@ class AnthropicAdapter(ProviderAdapter):
             raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
+
+
+def _anthropic_reasoning_control(
+    supported: bool,
+    *,
+    adaptive: bool,
+    enabled: bool,
+    effort_levels: tuple[str, ...],
+) -> tuple[str | None, tuple[str, ...]]:
+    """Map the live thinking capabilities to a vBot reasoning ``(control, levels)``.
+
+    The render the adapter performs decides the mapping (not the lab's marketing):
+
+    * ``adaptive`` supported → ``levels``: the effort path renders adaptive
+      thinking + ``output_config.effort`` against the catalog's effort ladder.
+    * else ``enabled`` (native budget thinking, no adaptive) → ``budget``: the
+      budget path renders native ``thinking: {type: enabled, budget_tokens}``.
+      This covers the older models and the hybrids that expose an effort ladder
+      but not adaptive thinking (where sending adaptive would 400).
+    * supported but neither knob known → no control (effort snaps against the
+      adapter floor).
+    """
+
+    if not supported:
+        return None, ()
+    if adaptive:
+        return REASONING_CONTROL_LEVELS, effort_levels
+    if enabled:
+        return REASONING_CONTROL_BUDGET, ()
+    return None, ()
+
+
+def _anthropic_supports_temperature(supported: bool, *, adaptive: bool, enabled: bool) -> bool:
+    """Whether the model accepts sampling parameters, from its thinking caps.
+
+    Anthropic removed sampling (temperature/top_p/top_k) on the adaptive-only
+    generation (Opus 4.7+, Fable 5) — exactly the models that expose adaptive
+    thinking but no native ``enabled`` thinking. Every model that still offers
+    ``enabled`` thinking (4.6 and earlier) keeps sampling. Verified live on
+    2026-06-22 against ``/v1/messages``; the live ``/models`` caps expose the
+    distinction as ``thinking.types.enabled.supported``.
+    """
+
+    return not (supported and adaptive and not enabled)
+
+
+def _read_catalog_string(raw: Mapping[str, Any], key: str) -> str:
+    value = raw.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _read_catalog_int(raw: Mapping[str, Any], key: str) -> int | None:
+    value = raw.get(key)
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _catalog_mapping(raw: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = raw.get(key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _catalog_supported(raw: Mapping[str, Any], key: str) -> bool:
+    """Read a capability node's ``supported`` flag (catalog shape ``{key: {supported: bool}}``)."""
+
+    node = raw.get(key)
+    return isinstance(node, Mapping) and node.get("supported") is True
 
 
 def _normalize_anthropic_stream_event(
