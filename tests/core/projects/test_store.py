@@ -141,6 +141,92 @@ def test_load_falls_back_to_base_tools_for_old_config(data_dir: Path, repo: Path
     assert reloaded.skills_project_disabled == []
 
 
+def test_set_model_override_persists_one_entry(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    updated = store.set_model_override("vbot", "builder", "openai/gpt-5")
+
+    assert updated.model_overrides == {"builder": "openai/gpt-5"}
+    payload = json.loads((data_dir / "projects" / "vbot" / "project.json").read_text("utf-8"))
+    assert payload["model_overrides"] == {"builder": "openai/gpt-5"}
+
+
+def test_set_model_override_replaces_existing_leaves_others(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_model_override("vbot", "builder", "openai/gpt-5")
+    store.set_model_override("vbot", "planner", "anthropic/claude-sonnet-4")
+
+    updated = store.set_model_override("vbot", "builder", "openai/gpt-mini")
+
+    # Exactly the targeted entry changed; the other agent's override is intact.
+    assert updated.model_overrides == {
+        "builder": "openai/gpt-mini",
+        "planner": "anthropic/claude-sonnet-4",
+    }
+
+
+def test_clear_model_override_removes_only_target(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_model_override("vbot", "builder", "openai/gpt-5")
+    store.set_model_override("vbot", "planner", "anthropic/claude-sonnet-4")
+
+    updated = store.clear_model_override("vbot", "builder")
+
+    assert updated.model_overrides == {"planner": "anthropic/claude-sonnet-4"}
+    assert store.get("vbot").model_overrides == {"planner": "anthropic/claude-sonnet-4"}
+
+
+def test_clear_model_override_absent_entry_is_noop(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_model_override("vbot", "planner", "anthropic/claude-sonnet-4")
+
+    # Clearing an agent that has no override succeeds and changes nothing.
+    updated = store.clear_model_override("vbot", "builder")
+
+    assert updated.model_overrides == {"planner": "anthropic/claude-sonnet-4"}
+
+
+def test_set_model_override_rejects_empty_model(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    with pytest.raises(ProjectError):
+        store.set_model_override("vbot", "builder", "  ")
+
+
+def test_set_model_override_raises_for_unknown_project(data_dir: Path) -> None:
+    store = ProjectStore(data_dir)
+
+    with pytest.raises(ProjectNotFoundError):
+        store.set_model_override("missing", "builder", "openai/gpt-5")
+
+
+def test_update_preserves_model_overrides_across_unrelated_edit(
+    data_dir: Path, repo: Path
+) -> None:
+    # model_overrides is carried through an unrelated update, never dropped.
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_model_override("vbot", "builder", "openai/gpt-5")
+
+    updated = store.update("vbot", display_name="vBot Renamed")
+
+    assert updated.model_overrides == {"builder": "openai/gpt-5"}
+
+
+def test_update_rejects_model_overrides_as_generic_field(data_dir: Path, repo: Path) -> None:
+    # model_overrides has its own set/clear seam; it is not a generic update field.
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    with pytest.raises(ProjectError):
+        store.update("vbot", model_overrides={"builder": "openai/gpt-5"})
+
+
 def test_update_does_not_reseed_agents_file(data_dir: Path, repo: Path) -> None:
     # Seeding is creation-only: clearing the list through update keeps it cleared,
     # so a user who removes AGENTS.md is not fought by a re-seed.
