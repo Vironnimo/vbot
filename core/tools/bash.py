@@ -256,6 +256,7 @@ async def _watch_background_process(
     chat_session_id: str,
     command: str,
     trigger_service: Any,
+    project_id: str | None = None,
 ) -> None:
     try:
         session = process_manager.get_session(process_session_id, agent_id)
@@ -309,6 +310,7 @@ async def _watch_background_process(
         message,
         session_id=chat_session_id,
         internal=True,
+        project_id=project_id,
     )
 
 
@@ -330,6 +332,7 @@ def _maybe_spawn_completion_watcher(
             context.session_id,
             command,
             trigger_service,
+            project_id=context.project_id,
         )
     )
     task.add_done_callback(
