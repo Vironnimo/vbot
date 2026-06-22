@@ -610,6 +610,32 @@
       "release_date": "2026-02-15",
       "temperature": true
     },
+    "alibaba/qwen3.5-9b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2026-02-23",
+      "max_output_tokens": 65536,
+      "name": "Qwen3.5 9B",
+      "release_date": "2026-02-23",
+      "temperature": true
+    },
     "alibaba/qwen3.5-plus": {
       "capabilities": {
         "input_modalities": [
@@ -2532,7 +2558,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -2561,7 +2586,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -3490,6 +3514,32 @@
       "last_updated": "2026-06-12",
       "max_output_tokens": 262144,
       "name": "Kimi K2.7 Code",
+      "release_date": "2026-06-12",
+      "temperature": false
+    },
+    "moonshotai/kimi-k2.7-code-highspeed": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "kimi-k2",
+      "knowledge": "2025-01",
+      "last_updated": "2026-06-12",
+      "max_output_tokens": 262144,
+      "name": "Kimi K2.7 Code Highspeed",
       "release_date": "2026-06-12",
       "temperature": false
     },
@@ -5069,6 +5119,79 @@
       "release_date": "2026-04-23",
       "temperature": false
     },
+    "openai/gpt-image-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "gpt-image",
+      "last_updated": "2025-04-24",
+      "max_output_tokens": 0,
+      "name": "GPT-Image-1",
+      "release_date": "2025-04-24",
+      "temperature": false
+    },
+    "openai/gpt-image-1.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "gpt-image",
+      "last_updated": "2025-11-25",
+      "max_output_tokens": 0,
+      "name": "GPT-Image-1.5",
+      "release_date": "2025-11-25",
+      "temperature": false
+    },
+    "openai/gpt-image-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "gpt-image",
+      "last_updated": "2026-04-21",
+      "max_output_tokens": 0,
+      "name": "GPT-Image-2",
+      "release_date": "2026-04-21",
+      "temperature": false
+    },
     "openai/o1": {
       "capabilities": {
         "input_modalities": [
@@ -6149,10 +6272,10 @@
       },
       "context_window": 204800,
       "family": "glm",
-      "last_updated": "2026-02-11",
+      "last_updated": "2026-02-12",
       "max_output_tokens": 131072,
       "name": "GLM-5",
-      "release_date": "2026-02-11",
+      "release_date": "2026-02-12",
       "temperature": true
     },
     "zhipuai/glm-5-turbo": {
@@ -6202,10 +6325,10 @@
       },
       "context_window": 200000,
       "family": "glm",
-      "last_updated": "2026-03-27",
+      "last_updated": "2026-04-07",
       "max_output_tokens": 131072,
       "name": "GLM-5.1",
-      "release_date": "2026-03-27",
+      "release_date": "2026-04-07",
       "temperature": true
     },
     "zhipuai/glm-5.2": {
@@ -6218,6 +6341,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [

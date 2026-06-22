@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-15T23:24:24.029319+00:00",
+  "fetched_at": "2026-06-22T22:00:04.569466+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -572,6 +572,7 @@
           "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_a",
           "top_k",
@@ -643,51 +644,6 @@
       },
       "name": "Anthropic: Claude 3 Haiku"
     },
-    "anthropic/claude-3.5-haiku": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "max_tokens",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 200000,
-      "family": "claude",
-      "max_output_tokens": 8192,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "Anthropic: Claude 3.5 Haiku"
-    },
     "anthropic/claude-fable-5": {
       "capabilities": {
         "input_modalities": [
@@ -699,17 +655,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "supported": true
-        },
         "supported_parameters": [
           "include_reasoning",
           "max_completion_tokens",
@@ -738,7 +683,6 @@
         "api-key"
       ],
       "context_window": 1000000,
-      "family": "claude-fable",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -1573,7 +1517,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1581,17 +1525,9 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "max_tokens",
-          "presence_penalty",
           "reasoning",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -1611,7 +1547,7 @@
       ],
       "context_window": 262144,
       "family": "trinity",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 80000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -1633,6 +1569,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "logprobs",
           "max_completion_tokens",
           "max_tokens",
           "reasoning",
@@ -1642,6 +1579,8 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -2405,7 +2344,7 @@
           "image",
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2415,13 +2354,16 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "repetition_penalty",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -2718,6 +2660,53 @@
       },
       "name": "Cohere: Command R7B (12-2024)"
     },
+    "cohere/north-mini-code:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "seed",
+          "stop",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 256000,
+      "family": "north",
+      "max_output_tokens": 64000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Cohere: North Mini Code (free)"
+    },
     "deepcogito/cogito-v2.1-671b": {
       "capabilities": {
         "input_modalities": [
@@ -2829,6 +2818,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -2841,6 +2831,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -2881,6 +2872,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -2894,6 +2886,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -2981,6 +2974,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -2994,6 +2988,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -3062,55 +3057,6 @@
         }
       },
       "name": "DeepSeek: R1 Distill Llama 70B"
-    },
-    "deepseek/deepseek-r1-distill-qwen-32b": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 128000,
-      "family": "deepseek",
-      "max_output_tokens": 32768,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "DeepSeek: R1 Distill Qwen 32B"
     },
     "deepseek/deepseek-v3.1-terminus": {
       "capabilities": {
@@ -3182,6 +3128,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -3195,6 +3142,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -3235,6 +3183,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -3248,6 +3197,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -3576,7 +3526,7 @@
       ],
       "context_window": 32768,
       "family": "gemini-flash",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text+image"
@@ -3938,7 +3888,7 @@
       ],
       "context_window": 1048576,
       "family": "gemini-flash",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 65535,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file+audio+video->text",
@@ -3946,6 +3896,57 @@
         }
       },
       "name": "Google: Gemini 3 Flash Preview"
+    },
+    "google/gemini-3-pro-image": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image",
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "image_generation"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "family": "gemini",
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text+image"
+        }
+      },
+      "name": "Google: Nano Banana Pro (Gemini 3 Pro Image)"
     },
     "google/gemini-3-pro-image-preview": {
       "capabilities": {
@@ -3993,6 +3994,54 @@
       },
       "name": "Google: Nano Banana Pro (Gemini 3 Pro Image Preview)"
     },
+    "google/gemini-3.1-flash-image": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image",
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 131072,
+      "family": "gemini",
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text+image"
+        }
+      },
+      "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)"
+    },
     "google/gemini-3.1-flash-image-preview": {
       "capabilities": {
         "input_modalities": [
@@ -4018,7 +4067,6 @@
           "reasoning",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "top_p"
@@ -4039,7 +4087,7 @@
       ],
       "context_window": 131072,
       "family": "gemini-flash",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text+image"
@@ -4340,7 +4388,6 @@
           "reasoning",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
@@ -4683,6 +4730,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -4695,6 +4743,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -4776,7 +4825,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -4790,7 +4839,9 @@
           "min_p",
           "presence_penalty",
           "repetition_penalty",
+          "response_format",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_k",
           "top_p"
@@ -5012,6 +5063,7 @@
         "supported_parameters": [
           "include_reasoning",
           "max_tokens",
+          "min_p",
           "reasoning",
           "response_format",
           "seed",
@@ -5019,6 +5071,8 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_a",
+          "top_k",
           "top_p"
         ],
         "supported_voices": [],
@@ -5038,7 +5092,7 @@
       ],
       "context_window": 262144,
       "family": "gemma",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -5411,7 +5465,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -5421,14 +5475,17 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
           "repetition_penalty",
+          "response_format",
           "seed",
           "stop",
           "temperature",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -5466,6 +5523,7 @@
         },
         "supported_parameters": [
           "frequency_penalty",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "repetition_penalty",
@@ -5477,6 +5535,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -5558,6 +5617,7 @@
         },
         "supported_parameters": [
           "frequency_penalty",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "repetition_penalty",
@@ -5569,6 +5629,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -5606,6 +5667,7 @@
         },
         "supported_parameters": [
           "frequency_penalty",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "repetition_penalty",
@@ -5617,6 +5679,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -5912,6 +5975,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -5924,6 +5988,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -6066,7 +6131,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -6080,6 +6145,7 @@
           "min_p",
           "presence_penalty",
           "repetition_penalty",
+          "response_format",
           "stop",
           "temperature",
           "top_k",
@@ -6111,7 +6177,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -6126,6 +6192,7 @@
           "repetition_penalty",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_k",
           "top_p"
@@ -6156,7 +6223,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -6173,7 +6240,10 @@
           "repetition_penalty",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
+          "tool_choice",
+          "tools",
           "top_k",
           "top_p"
         ],
@@ -6182,7 +6252,7 @@
           "chat",
           "text_output"
         ],
-        "tools": false,
+        "tools": true,
         "vision": false
       },
       "connections": [
@@ -6221,6 +6291,7 @@
           "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_a",
           "top_k",
@@ -6248,7 +6319,7 @@
       },
       "name": "Mancer: Weaver (alpha)"
     },
-    "meta-llama/llama-3-70b-instruct": {
+    "meta-llama/llama-3-8b-instruct": {
       "capabilities": {
         "input_modalities": [
           "text"
@@ -6262,57 +6333,14 @@
         },
         "supported_parameters": [
           "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 8192,
-      "family": "llama",
-      "max_output_tokens": 8000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Meta: Llama 3 70B Instruct"
-    },
-    "meta-llama/llama-3-8b-instruct": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
           "logit_bias",
           "max_tokens",
           "min_p",
           "presence_penalty",
           "repetition_penalty",
+          "response_format",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_k",
           "top_p"
@@ -6353,6 +6381,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -6365,6 +6394,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -6403,6 +6433,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -6415,6 +6446,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -6549,6 +6581,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -6557,6 +6590,7 @@
           "stop",
           "temperature",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -6637,6 +6671,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -6649,6 +6684,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -6732,6 +6768,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -6744,6 +6781,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -7098,6 +7136,7 @@
         },
         "supported_parameters": [
           "frequency_penalty",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "repetition_penalty",
@@ -7107,6 +7146,7 @@
           "structured_outputs",
           "temperature",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -7317,6 +7357,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -7330,6 +7371,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -8277,6 +8319,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -8289,6 +8332,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -8477,6 +8521,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -8485,6 +8530,7 @@
           "stop",
           "temperature",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -8526,6 +8572,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -8538,6 +8585,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -8891,6 +8939,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -8904,6 +8953,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -9003,7 +9053,6 @@
           "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
-          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",
@@ -9031,7 +9080,7 @@
       ],
       "context_window": 262144,
       "family": "kimi-k2",
-      "max_output_tokens": 262142,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text",
@@ -9095,8 +9144,10 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
+          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",
@@ -9175,7 +9226,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -9183,9 +9234,13 @@
           "supported": false
         },
         "supported_parameters": [
+          "logprobs",
           "max_tokens",
+          "response_format",
           "stop",
-          "temperature"
+          "structured_outputs",
+          "temperature",
+          "top_logprobs"
         ],
         "supported_voices": [],
         "task_types": [
@@ -9248,13 +9303,13 @@
       },
       "name": "Nex AGI: DeepSeek V3.1 Nex N1"
     },
-    "nex-agi/nex-n2-pro:free": {
+    "nex-agi/nex-n2-pro": {
       "capabilities": {
         "input_modalities": [
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9262,17 +9317,13 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
           "logprobs",
           "max_tokens",
           "reasoning",
-          "response_format",
-          "structured_outputs",
           "temperature",
-          "tool_choice",
-          "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -9282,20 +9333,21 @@
           "image_input",
           "image_understanding"
         ],
-        "tools": true,
+        "tools": false,
         "vision": true
       },
       "connections": [
         "api-key"
       ],
       "context_window": 262144,
+      "family": "agi",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
         }
       },
-      "name": "Nex AGI: Nex-N2-Pro (free)"
+      "name": "Nex AGI: Nex-N2-Pro"
     },
     "nousresearch/hermes-3-llama-3.1-405b": {
       "capabilities": {
@@ -9627,6 +9679,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -9640,6 +9693,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -12804,12 +12858,16 @@
         "supported_parameters": [
           "include_reasoning",
           "max_tokens",
+          "min_p",
           "reasoning",
           "seed",
           "stop",
           "temperature",
           "tool_choice",
-          "tools"
+          "tools",
+          "top_a",
+          "top_k",
+          "top_p"
         ],
         "supported_voices": [],
         "task_types": [
@@ -12914,6 +12972,7 @@
           "frequency_penalty",
           "include_reasoning",
           "max_tokens",
+          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
@@ -12924,6 +12983,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_a",
           "top_k",
           "top_p"
         ],
@@ -12940,7 +13000,7 @@
       ],
       "context_window": 131072,
       "family": "gpt-oss",
-      "max_output_tokens": 8192,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -12973,6 +13033,7 @@
           "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -13866,6 +13927,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_a",
           "top_k",
           "top_logprobs",
           "top_p",
@@ -13950,7 +14012,6 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -13963,6 +14024,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_a",
           "top_k",
           "top_p"
         ],
@@ -14451,6 +14513,46 @@
       },
       "name": "Perplexity: Sonar Reasoning Pro"
     },
+    "poolside/laguna-m.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "temperature",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Poolside: Laguna M.1"
+    },
     "poolside/laguna-m.1:free": {
       "capabilities": {
         "input_modalities": [
@@ -14491,6 +14593,46 @@
         }
       },
       "name": "Poolside: Laguna M.1 (free)"
+    },
+    "poolside/laguna-xs.2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "temperature",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Poolside: Laguna XS.2"
     },
     "poolside/laguna-xs.2:free": {
       "capabilities": {
@@ -14548,11 +14690,14 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logit_bias",
           "max_tokens",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
           "response_format",
+          "seed",
+          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
@@ -14636,7 +14781,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -14646,14 +14791,20 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
           "repetition_penalty",
+          "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
+          "tool_choice",
+          "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -14661,7 +14812,7 @@
           "chat",
           "text_output"
         ],
-        "tools": false,
+        "tools": true,
         "vision": false
       },
       "connections": [
@@ -14736,13 +14887,16 @@
           "supported": false
         },
         "supported_parameters": [
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "response_format",
           "seed",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -14779,6 +14933,7 @@
           "supported": false
         },
         "supported_parameters": [
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "response_format",
@@ -14787,6 +14942,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -14874,6 +15030,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "repetition_penalty",
@@ -14883,6 +15040,7 @@
           "structured_outputs",
           "temperature",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15025,6 +15183,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -15037,6 +15196,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15076,6 +15236,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -15089,6 +15250,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15182,6 +15344,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -15194,6 +15357,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15233,6 +15397,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -15246,6 +15411,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15286,6 +15452,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -15299,6 +15466,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15431,6 +15599,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -15443,6 +15612,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15480,6 +15650,7 @@
         },
         "supported_parameters": [
           "frequency_penalty",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "repetition_penalty",
@@ -15491,6 +15662,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15527,6 +15699,7 @@
           "supported": false
         },
         "supported_parameters": [
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "response_format",
@@ -15534,6 +15707,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15572,6 +15746,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -15584,6 +15759,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15620,6 +15796,7 @@
           "supported": false
         },
         "supported_parameters": [
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "response_format",
@@ -15628,6 +15805,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15799,13 +15977,16 @@
           "supported": false
         },
         "supported_parameters": [
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "response_format",
           "seed",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15845,6 +16026,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -15854,6 +16036,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15991,6 +16174,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -16004,6 +16188,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16043,6 +16228,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -16055,6 +16241,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16096,6 +16283,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -16103,10 +16291,12 @@
           "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16148,6 +16338,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -16160,6 +16351,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16201,6 +16393,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -16213,6 +16406,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16252,13 +16446,16 @@
           "supported": false
         },
         "supported_parameters": [
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "response_format",
           "seed",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16300,6 +16497,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -16312,6 +16510,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16352,6 +16551,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -16361,6 +16561,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16561,7 +16762,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 81920,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -16620,7 +16821,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 262144,
+      "context_window": 256000,
       "family": "qwen",
       "max_output_tokens": 65536,
       "metadata": {
@@ -16682,7 +16883,7 @@
         "api-key"
       ],
       "context_window": 262144,
-      "family": "qwen3.5",
+      "family": "qwen",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -16763,6 +16964,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -16772,6 +16974,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16817,6 +17020,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -16826,6 +17030,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16933,6 +17138,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -16946,6 +17152,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -16991,6 +17198,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -17000,6 +17208,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -17095,6 +17304,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -17104,6 +17314,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -17624,6 +17835,7 @@
         },
         "supported_parameters": [
           "frequency_penalty",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "seed",
@@ -17633,6 +17845,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -17665,7 +17878,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -17680,6 +17893,7 @@
           "reasoning",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_k",
           "top_p"
@@ -17747,7 +17961,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -17756,6 +17970,7 @@
         },
         "supported_parameters": [
           "max_tokens",
+          "response_format",
           "seed",
           "stop",
           "temperature",
@@ -17836,7 +18051,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -17852,6 +18067,7 @@
           "repetition_penalty",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_k",
           "top_p"
@@ -18629,14 +18845,21 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logit_bias",
           "logprobs",
           "max_tokens",
+          "min_p",
+          "presence_penalty",
           "reasoning",
+          "repetition_penalty",
           "response_format",
+          "seed",
           "stop",
           "structured_outputs",
           "temperature",
+          "tool_choice",
           "tools",
+          "top_k",
           "top_logprobs",
           "top_p"
         ],
@@ -18669,7 +18892,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -18680,6 +18903,7 @@
           "include_reasoning",
           "max_tokens",
           "reasoning",
+          "response_format",
           "seed",
           "stop",
           "temperature",
@@ -18808,7 +19032,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -18818,13 +19042,17 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "repetition_penalty",
+          "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -18903,7 +19131,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -18913,13 +19141,17 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "repetition_penalty",
+          "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -19573,54 +19805,6 @@
       },
       "name": "xAI: Grok Voice TTS 1.0"
     },
-    "xiaomi/mimo-v2-flash": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "response_format",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "mimo",
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_details"
-        }
-      },
-      "name": "Xiaomi: MiMo-V2-Flash"
-    },
     "xiaomi/mimo-v2.5": {
       "capabilities": {
         "input_modalities": [
@@ -19640,6 +19824,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -19649,6 +19834,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -19696,6 +19882,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -19709,6 +19896,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -19783,15 +19971,10 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
           "max_tokens",
-          "presence_penalty",
           "reasoning",
-          "repetition_penalty",
           "response_format",
-          "seed",
-          "stop",
           "temperature",
           "tool_choice",
           "tools",
@@ -19824,7 +20007,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -19839,7 +20022,6 @@
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
-          "response_format",
           "seed",
           "stop",
           "temperature",
@@ -19861,7 +20043,7 @@
       ],
       "context_window": 131072,
       "family": "glm-air",
-      "max_output_tokens": 131070,
+      "max_output_tokens": 98304,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -20138,6 +20320,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -20151,6 +20334,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -20191,6 +20375,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -20204,6 +20389,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -20299,8 +20485,10 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
+          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",
@@ -20326,7 +20514,7 @@
       ],
       "context_window": 202752,
       "family": "glm",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 65535,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -20334,6 +20522,61 @@
         }
       },
       "name": "Z.ai: GLM 5.1"
+    },
+    "z-ai/glm-5.2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "glm",
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text",
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
+      "name": "Z.ai: GLM 5.2"
     },
     "z-ai/glm-5v-turbo": {
       "capabilities": {
@@ -20357,6 +20600,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_k",
           "top_p"
         ],
         "supported_voices": [],
@@ -20371,6 +20615,9 @@
         "tools": true,
         "vision": true
       },
+      "connections": [
+        "api-key"
+      ],
       "context_window": 202752,
       "max_output_tokens": 131072,
       "metadata": {
@@ -20866,7 +21113,6 @@
           "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
-          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",
@@ -20894,7 +21140,7 @@
       ],
       "context_window": 262144,
       "family": "kimi",
-      "max_output_tokens": 262142,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"

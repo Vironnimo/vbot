@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-15T23:24:23.386367+00:00",
+  "fetched_at": "2026-06-22T22:00:03.890110+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -146,6 +146,40 @@
         }
       },
       "name": "glm-5.1"
+    },
+    "glm-5.2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "glm",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
+      "name": "glm-5.2"
     },
     "hy3-preview": {
       "capabilities": {
