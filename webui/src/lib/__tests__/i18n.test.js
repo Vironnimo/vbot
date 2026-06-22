@@ -140,6 +140,16 @@ describe('i18n t()', () => {
     expect(t('chat.interrupted').toLowerCase()).toContain('interrupted');
   });
 
+  it('contains the agent takeover divider labels', () => {
+    expect(englishCatalog['chat.takenOver']).toBeTruthy();
+    expect(englishCatalog['chat.takenOverGeneric']).toBeTruthy();
+    // The composed label weaves the two raw addresses into the localized phrase.
+    expect(
+      t('chat.takenOver', undefined, { from: 'assistant', to: 'builder@vbot' }),
+    ).toBe('Taken over by assistant → builder@vbot');
+    expect(t('chat.takenOverGeneric')).toBe('Session taken over');
+  });
+
   it('contains Toasted design labels for Agents placeholders', () => {
     const requiredKeys = [
       'agents.detail.identity',

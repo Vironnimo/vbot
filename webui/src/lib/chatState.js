@@ -4,6 +4,7 @@ import {
   RUN_EVENT_TOOL_CALL_DELTA,
 } from './api.js';
 
+import { parseAgentAddress } from './agentAddress.js';
 import { pruneRunEventsPersistedInHistory } from './chatTimeline.js';
 
 export {
@@ -517,6 +518,7 @@ function isVisibleHistoryMessage(message) {
     'tool',
     'error',
     'compaction_checkpoint',
+    'agent_takeover',
     'run_summary',
   ].includes(message?.role);
 }
@@ -804,4 +806,52 @@ function parseSessionTimestamp(value) {
   }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+// --- /agent move-action routing -------------------------------------------
+//
+// `/agent <addr> [task]` MOVES the current session (same session id) to another
+// agent. The command response carries `{ command: "agent", session_id, agent_id }`
+// where `agent_id` is the target's outside address: a bare id (identity target)
+// or `agent@projekt` (project/team target). The presence of `@` is the single
+// signal that decides which world the target lives in — parsed through the one
+// shared `agentAddress.js` seam, never a hand-rolled split.
+//
+// Returns the decision the accessor needs to open the SAME session under the
+// target, for all four directions (identity↔project, both ways): the world
+// (`'identity'` | `'project'`), the bare agent id, the project id (null for
+// identity), and the full address to key project session state by. Returns null
+// when the response is not a usable move (missing command/session/agent).
+
+// Build the move decision from a command-handled response. Null when the
+// response is not a `/agent` move or is missing the session/target.
+export function resolveMoveActionFromResponse(response) {
+  const data = response?.data;
+  if (!data || data.command !== 'agent') {
+    return null;
+  }
+  const sessionId =
+    typeof data.session_id === 'string' ? data.session_id.trim() : '';
+  const targetAddress =
+    typeof data.agent_id === 'string' ? data.agent_id.trim() : '';
+  if (!sessionId || !targetAddress) {
+    return null;
+  }
+  return { ...resolveMoveTarget(targetAddress), sessionId };
+}
+
+// Decide the target world for a `/agent` move from its outside address.
+// `agent@projekt` → project world; a bare id → identity world. The split uses
+// the shared `parseAgentAddress` seam so the `@` grammar is never re-derived.
+export function resolveMoveTarget(targetAddress) {
+  const address = typeof targetAddress === 'string' ? targetAddress.trim() : '';
+  const { agentId, projectId } = parseAgentAddress(address);
+  const isProjectTarget = typeof projectId === 'string' && projectId.length > 0;
+  return {
+    isProjectTarget,
+    world: isProjectTarget ? 'project' : 'identity',
+    bareAgentId: agentId,
+    projectId: isProjectTarget ? projectId : null,
+    agentAddress: address,
+  };
 }

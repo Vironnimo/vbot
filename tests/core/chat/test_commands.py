@@ -18,8 +18,10 @@ from core.chat import (
 )
 from core.chat.commands import (
     STATUS_PLACEHOLDER,
+    AgentArgument,
     HandoffArgument,
     build_status_text,
+    parse_agent_argument,
     parse_handoff_argument,
     resolve_actual_thinking_effort,
     resolve_status_model_details,
@@ -104,6 +106,44 @@ class _StubProjects:
         if project_id != self._project.project_id:
             raise KeyError(project_id)
         return self._project
+
+    def list(self) -> list[_StubProject]:
+        return [self._project]
+
+
+class _StubStoredAgent:
+    def __init__(self, agent_id: str) -> None:
+        self.id = agent_id
+
+
+class _StubAgentStore:
+    """Agent store stub exposing only the directory card's ``list`` seam."""
+
+    def __init__(self, agent_ids: list[str]) -> None:
+        self._agents = [_StubStoredAgent(agent_id) for agent_id in agent_ids]
+
+    def list(self) -> list[_StubStoredAgent]:
+        return list(self._agents)
+
+
+class _StubScannedAgent:
+    def __init__(self, agent_id: str) -> None:
+        self.agent_id = agent_id
+
+
+class _StubScanReport:
+    def __init__(self, team: list[_StubScannedAgent]) -> None:
+        self.team = team
+
+
+class _StubTeamResolver:
+    """Resolver stub returning a fixed team for the directory card."""
+
+    def __init__(self, team: list[str]) -> None:
+        self._team = [_StubScannedAgent(agent_id) for agent_id in team]
+
+    def scan_project_report(self, project: Any) -> _StubScanReport:
+        return _StubScanReport(self._team)
 
 
 class _StubSession:
@@ -211,6 +251,7 @@ def test_dispatch_non_command_message_returns_not_a_command() -> None:
 
 def test_built_in_commands_include_current_catalog() -> None:
     assert set(CommandDispatcher.BUILT_IN_COMMANDS) == {
+        "agent",
         "compact",
         "handoff",
         "help",
@@ -227,6 +268,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
     output_channels = {name: spec.output for name, spec in specs.items()}
 
     assert argument_modes == {
+        "agent": "optional",
         "compact": "optional",
         "handoff": "optional",
         "help": "none",
@@ -236,6 +278,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "stop": "none",
     }
     assert output_channels == {
+        "agent": "action",
         "compact": "toast",
         "handoff": "action",
         "help": "transient",
@@ -313,6 +356,53 @@ def test_dispatch_handoff_takes_full_remainder_as_argument() -> None:
     result = dispatcher.dispatch("coder", "session-one", "/handoff agent:main do not forget")
 
     assert result == CommandAction(name="handoff", argument="agent:main do not forget")
+
+
+def test_dispatch_agent_without_argument_lists_personal_and_team_directory() -> None:
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agent_resolver=cast(AgentResolver, _StubTeamResolver(["builder", "planner"])),
+        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+        agents=cast(Any, _StubAgentStore(["assistant", "coder"])),
+    )
+
+    result = dispatcher.dispatch("assistant", "session-one", "/agent")
+
+    assert isinstance(result, CommandHandled)
+    assert result.output == "transient"
+    assert result.data is None  # a transient card, never persisted and not an action
+    reply = result.reply or ""
+    assert "assistant" in reply
+    assert "coder" in reply
+    # Team agents are shown project-qualified, teaching the address the move expects.
+    assert "builder@vbot" in reply
+    assert "planner@vbot" in reply
+
+
+def test_dispatch_agent_with_address_returns_move_action() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/agent planner")
+
+    assert result == CommandAction(name="move_session", argument="planner")
+
+
+def test_dispatch_agent_keeps_task_in_raw_argument() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/agent builder@vbot ship the fix")
+
+    assert result == CommandAction(name="move_session", argument="builder@vbot ship the fix")
+
+
+def test_parse_agent_argument_splits_first_token_as_address() -> None:
+    assert parse_agent_argument("planner") == AgentArgument(address="planner", task=None)
+    assert parse_agent_argument("builder@vbot do X") == AgentArgument(
+        address="builder@vbot", task="do X"
+    )
+    assert parse_agent_argument("  planner   ship it  ") == AgentArgument(
+        address="planner", task="ship it"
+    )
 
 
 def test_parse_handoff_argument_empty_is_neither_target_nor_instruction() -> None:

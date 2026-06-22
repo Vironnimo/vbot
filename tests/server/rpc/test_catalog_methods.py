@@ -104,7 +104,16 @@ def test_commands_are_always_present() -> None:
     result = _list_commands(state, {})
 
     command_names = [item["name"] for item in result["items"] if item["type"] == "command"]
-    assert command_names == ["compact", "handoff", "help", "new", "retry", "status", "stop"]
+    assert command_names == [
+        "agent",
+        "compact",
+        "handoff",
+        "help",
+        "new",
+        "retry",
+        "status",
+        "stop",
+    ]
 
 
 def test_unsupported_field_is_rejected() -> None:

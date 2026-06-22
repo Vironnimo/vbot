@@ -1175,6 +1175,14 @@ textarea::placeholder {
   content: '';
 }
 
+/* A session takeover is a deliberate human action (the /agent move), so its
+   divider carries the accent the design reserves for human decisions — set
+   apart from the muted compaction separator while sharing the same divider
+   geometry from `.date-sep`. */
+.takeover-sep {
+  color: var(--accent);
+}
+
 .msg {
   display: flex;
   flex-direction: column;

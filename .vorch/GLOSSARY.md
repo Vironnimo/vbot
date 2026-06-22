@@ -86,6 +86,10 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 **Definition:** One active execution inside a Session: a user turn plus all model output, visible thinking blocks, tool calls, tool results, and follow-up assistant output until the work completes, fails, or is cancelled.
 **Not:** The Agent, the Session, or a single provider HTTP request. A Run can span multiple model/tool steps.
 
+## Agent Takeover
+**Definition:** Moving the current running Session — full verbatim history, same id — from one Agent to another (personal or team) via `/agent <addr> [task]`, so it afterwards belongs only to the target. A persisted `agent_takeover` divider and a silent note mark the boundary; the target then waits, or runs the optional task immediately.
+**Not:** A Handoff or a copy. `/handoff` writes a *summary* into a **fresh** Session; an Agent Takeover relocates the **same** Session with the literal history and no summary, and the source no longer holds it.
+
 ## Accessor
 **Definition:** An external interface to the same vBot system, such as the WebUI, Desktop app, CLI, or later other channels. Accessors talk to the vBot server; they do not call providers directly.
 **Not:** A Provider or Adapter. An Accessor is a client-facing entry point into vBot.

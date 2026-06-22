@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.chat import CommandAction, CommandHandled, parse_handoff_argument
+from core.chat import (
+    ChatMessage,
+    CommandAction,
+    CommandHandled,
+    parse_agent_argument,
+    parse_handoff_argument,
+)
+from core.chat.chat import VISITED_PROJECTS_META_KEY
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.projects import (
     AgentResolutionError,
@@ -13,6 +20,10 @@ from core.projects import (
     parse_agent_address,
 )
 from core.runs import ActiveRunError, ChatRunManager
+from core.subagents.subagents import (
+    SUBAGENT_PARENT_METADATA_KEY,
+    SUBAGENT_SESSION_METADATA_FLAG,
+)
 from server.events import RESOURCE_KIND_QUEUE
 from server.rpc.agent_methods import _create_session
 from server.rpc.dispatcher import RpcMethodHandler
@@ -71,6 +82,21 @@ HANDOFF_INSTRUCTION = (
     "Write it as a briefing to the next agent, in the language of this conversation, "
     "and output only the handoff itself, with no preamble and no sign-off, because "
     "your reply becomes their first message."
+)
+
+# Sidecar marker on a channel-bound session; such sessions are excluded from
+# ``/agent`` moves so the channel pointer is never left dangling.
+CHANNEL_SOURCE_META_KEY = "source_channel_id"
+
+# Silent takeover note delivered to the receiving agent on its next request as a
+# <system-reminder>. Plain text, not i18n — an internal note to the model, never
+# shown to the user. The wording is deliberate; do not paraphrase.
+AGENT_TAKEOVER_NOTE = (
+    "You are taking over an in-progress session that was just moved to you from "
+    "{source}. The earlier turns were produced by a different agent and appear above "
+    "as verbatim context. Continue as yourself: your own role, tools, and memory apply "
+    "from here. Do not adopt the previous agent's identity or re-run its past tool "
+    "calls — treat them as history."
 )
 
 
@@ -256,6 +282,10 @@ async def _handle_command_action(
             )
         case "handoff":
             return await _handle_handoff_command(
+                state, agent_id, session_id, command_action.argument, project_id=project_id
+            )
+        case "move_session":
+            return await _handle_move_session_command(
                 state, agent_id, session_id, command_action.argument, project_id=project_id
             )
         case "new_session":
@@ -455,6 +485,121 @@ def _extract_handoff_text(content: str | list[ContentBlock] | None) -> str:
     if isinstance(content, list):
         return "\n".join(block.text for block in content if isinstance(block, TextBlock)).strip()
     return ""
+
+
+def _session_move_block_reason(metadata: JsonObject) -> str | None:
+    """Return why a session may not be moved, or ``None`` when it may.
+
+    Channel- and sub-agent-bound sessions are excluded in v1: moving a
+    channel-bound session would orphan its channel pointer, and moving a
+    sub-agent session would break its parent linkage.
+    """
+    if metadata.get(CHANNEL_SOURCE_META_KEY):
+        return "A channel-bound session cannot be moved to another agent."
+    if metadata.get(SUBAGENT_SESSION_METADATA_FLAG) or metadata.get(SUBAGENT_PARENT_METADATA_KEY):
+        return "A sub-agent session cannot be moved to another agent."
+    return None
+
+
+async def _handle_move_session_command(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    argument: str | None,
+    *,
+    project_id: str | None = None,
+) -> JsonObject:
+    """Relocate the current session to another agent (the ``/agent`` move).
+
+    Unlike ``/handoff`` (a summary into a fresh session), this moves the **same**
+    session with its full verbatim history. Every guard refuses cleanly *before*
+    any relocation, so a refused move never leaves partial state. After the move a
+    visible takeover divider and a silent takeover note are persisted at the
+    destination, the "current" pointers follow the session on each identity side,
+    and an optional task auto-runs the receiving agent.
+    """
+    parsed = parse_agent_argument(argument or "")
+    source_display = format_agent_address(agent_id, project_id)
+    try:
+        target_agent_id, target_project_id = parse_agent_address(parsed.address)
+    except InvalidAgentAddressError:
+        return _command_handled_response(f"Cannot move to invalid agent address: {parsed.address}")
+
+    target_display = format_agent_address(target_agent_id, target_project_id)
+    if (target_agent_id, target_project_id) == (agent_id, project_id):
+        return _command_handled_response(f"This session already belongs to {target_display}.")
+
+    chat_runs = _state_chat_runs(state)
+    if chat_runs.active_run(agent_id=agent_id, session_id=session_id) is not None:
+        return _command_handled_response("This session can be moved once its current run finishes.")
+    if chat_runs.list_queued(agent_id, session_id):
+        return _command_handled_response("This session can be moved once its queued run finishes.")
+
+    chat_sessions = state.runtime.chat_sessions
+    try:
+        state.runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
+    except AgentResolutionError:
+        return _command_handled_response(f"Cannot move to unknown agent: {target_display}")
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    try:
+        metadata = chat_sessions.get_metadata(agent_id, session_id, project_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    refusal = _session_move_block_reason(metadata)
+    if refusal is not None:
+        return _command_handled_response(refusal)
+
+    try:
+        await chat_sessions.move(
+            agent_id,
+            session_id,
+            target_agent_id,
+            source_project_id=project_id,
+            target_project_id=target_project_id,
+            strip_meta_keys=frozenset({VISITED_PROJECTS_META_KEY}),
+        )
+        async with chat_sessions.write_lock(target_agent_id, session_id, target_project_id):
+            destination = chat_sessions.get(target_agent_id, session_id, target_project_id)
+            destination.append(
+                ChatMessage.agent_takeover(from_address=source_display, to_address=target_display)
+            )
+            destination.add_note(AGENT_TAKEOVER_NOTE.format(source=source_display))
+
+        # "Current" pointers follow the session on each identity side; a project
+        # config agent carries no server-side current (the accessor picks locally).
+        if project_id is None:
+            state.runtime.agents.reset_current_after_move(agent_id, session_id)
+        if target_project_id is None:
+            state.runtime.agents.update(target_agent_id, current_session_id=session_id)
+
+        run = None
+        if parsed.task is not None:
+            run = await _start_handoff_run(
+                state,
+                target_agent_id,
+                parsed.task,
+                session_id=session_id,
+                project_id=target_project_id,
+                internal=False,
+            )
+            _bridge_run_to_event_bus(state, run)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    reply = (
+        f"Session moved to {target_display}; it is now running your task."
+        if run is not None
+        else f"Session moved to {target_display}; it is waiting."
+    )
+    return _command_handled_response(
+        CommandHandled(
+            reply=reply,
+            data={"command": "agent", "session_id": session_id, "agent_id": target_display},
+        ),
+        output="action",
+    )
 
 
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:

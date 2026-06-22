@@ -173,6 +173,19 @@ function historyTimelineItems(messages) {
       continue;
     }
 
+    if (message?.role === 'agent_takeover') {
+      pushActiveAssistantRun(timelineItems, activeAssistantRun);
+      activeAssistantRun = null;
+      timelineItems.push({
+        id: `takeover-${message.id ?? message.timestamp}`,
+        type: 'takeover_separator',
+        timestamp: message.timestamp,
+        message,
+      });
+      previousVisibleRole = 'agent_takeover';
+      continue;
+    }
+
     if (message?.role === 'run_summary') {
       if (activeAssistantRun) {
         appendHistoryRunSummary(activeAssistantRun, message);

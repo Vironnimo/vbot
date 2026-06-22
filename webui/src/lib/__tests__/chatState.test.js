@@ -22,6 +22,8 @@ import {
   removeQueuedMessage,
   resetStaleRun,
   resolveAgentAddressing,
+  resolveMoveActionFromResponse,
+  resolveMoveTarget,
   selectedAgent,
   setAgents,
   syncQueueFromServer,
@@ -3699,6 +3701,102 @@ describe('project chat addressing helpers (RPC-contract traps)', () => {
     expect(pickProjectAgentSessionId([])).toBe('');
     expect(pickProjectAgentSessionId(null)).toBe('');
     expect(pickProjectAgentSessionId([{ created_at: 'x' }])).toBe('');
+  });
+});
+
+describe('resolveMoveTarget (/agent move-action routing decision)', () => {
+  it('routes a bare-id target to the identity world', () => {
+    expect(resolveMoveTarget('assistant')).toEqual({
+      isProjectTarget: false,
+      world: 'identity',
+      bareAgentId: 'assistant',
+      projectId: null,
+      agentAddress: 'assistant',
+    });
+  });
+
+  it('routes an agent@projekt target to the project world', () => {
+    expect(resolveMoveTarget('builder@vbot')).toEqual({
+      isProjectTarget: true,
+      world: 'project',
+      bareAgentId: 'builder',
+      projectId: 'vbot',
+      agentAddress: 'builder@vbot',
+    });
+  });
+
+  it('treats a malformed address defensively as identity (lossless split)', () => {
+    // Empty parts around the `@` are not a valid project address; the client
+    // splitter falls back to identity (the server is the real validator).
+    expect(resolveMoveTarget('@vbot').world).toBe('identity');
+    expect(resolveMoveTarget('builder@').world).toBe('identity');
+    expect(resolveMoveTarget('a@b@c').world).toBe('identity');
+  });
+});
+
+describe('resolveMoveActionFromResponse (all four move directions)', () => {
+  const moveResponse = (agentId) => ({
+    command_handled: true,
+    reply: 'Moved.',
+    output: 'action',
+    data: { command: 'agent', session_id: 'session-keep', agent_id: agentId },
+  });
+
+  it('decodes an identity target (identity → identity, project → identity)', () => {
+    expect(resolveMoveActionFromResponse(moveResponse('assistant'))).toEqual({
+      isProjectTarget: false,
+      world: 'identity',
+      bareAgentId: 'assistant',
+      projectId: null,
+      agentAddress: 'assistant',
+      sessionId: 'session-keep',
+    });
+  });
+
+  it('decodes a project target (identity → project, project → project)', () => {
+    expect(resolveMoveActionFromResponse(moveResponse('builder@vbot'))).toEqual(
+      {
+        isProjectTarget: true,
+        world: 'project',
+        bareAgentId: 'builder',
+        projectId: 'vbot',
+        agentAddress: 'builder@vbot',
+        sessionId: 'session-keep',
+      },
+    );
+  });
+
+  it('keeps the SAME session id (a move never invents a new session)', () => {
+    const action = resolveMoveActionFromResponse(moveResponse('reviewer@vbot'));
+    expect(action.sessionId).toBe('session-keep');
+  });
+
+  it('returns null for non-move command responses', () => {
+    expect(
+      resolveMoveActionFromResponse({
+        data: { command: 'handoff', session_id: 's', agent_id: 'beta' },
+      }),
+    ).toBeNull();
+    expect(
+      resolveMoveActionFromResponse({
+        data: { command: 'new', session_id: 's' },
+      }),
+    ).toBeNull();
+    expect(resolveMoveActionFromResponse({ output: 'transient' })).toBeNull();
+    expect(resolveMoveActionFromResponse(null)).toBeNull();
+  });
+
+  it('returns null when the move is missing its session or target', () => {
+    expect(
+      resolveMoveActionFromResponse({
+        data: { command: 'agent', agent_id: 'beta' },
+      }),
+    ).toBeNull();
+    expect(
+      resolveMoveActionFromResponse({
+        data: { command: 'agent', session_id: 's', agent_id: '' },
+      }),
+    ).toBeNull();
   });
 });
 

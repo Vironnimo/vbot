@@ -40,6 +40,7 @@
     removeQueuedMessage,
     resetStaleRun,
     resolveAgentAddressing,
+    resolveMoveActionFromResponse,
     selectAgent,
     selectedAgent,
     setAgents,
@@ -1318,6 +1319,90 @@
     await loadHistoryForSession(agentId, normalizedSessionId);
   };
 
+  // `/agent <addr>` move: relocate the CURRENT session (same session id) to the
+  // target agent's home and open it there. Unlike `/handoff` (which summarizes
+  // into a NEW session), the session id is unchanged — the move happened on the
+  // backend already; the accessor just opens it under the target. The target's
+  // outside address decides the world (the one signal: presence of `@`), so the
+  // same handler crosses every direction (identity↔project, both ways). It
+  // reuses the two-bar machinery: an identity target goes through the bare-id
+  // current-session path, a project target through the project-bar path.
+  const moveSessionToAgent = async (move) => {
+    if (!move?.sessionId || !move?.bareAgentId) {
+      return;
+    }
+    if (move.isProjectTarget) {
+      await moveToProjectAgent(move);
+      return;
+    }
+    moveToIdentityAgent(move);
+    await switchToCurrentSession(move.bareAgentId, move.sessionId);
+  };
+
+  // Identity target: drop any active project-agent bar so the chat returns to
+  // the identity world (the project stays chosen in the dropdown, but the active
+  // chat is the identity agent), then select the target identity agent. The
+  // session switch itself is `switchToCurrentSession` (caller).
+  const moveToIdentityAgent = (move) => {
+    selectedProjectAgentId = '';
+    onProjectAgentSelected?.('');
+    if (move.bareAgentId !== chatState.selectedAgentId) {
+      selectAgent(chatState, move.bareAgentId);
+      onAgentSelected?.(move.bareAgentId);
+    }
+  };
+
+  // Project target: open the SAME session under the project team agent. The
+  // project context is set locally (so the second bar reflects it immediately,
+  // crossing the agent/project boundary) and reported up so App persists it for
+  // the next reload — mirroring `openProjectAgent`, but the session is the moved
+  // one, pre-seeded into `projectAgentSessions` so `ensureProjectAgentSession`
+  // reuses it instead of picking/creating.
+  //
+  // The move owns the transition imperatively rather than waiting on the
+  // dropdown-driven effect: `lastLoadedProjectId` is set to the target up front
+  // so the `selectedProjectId`-watching effect treats it as already-loaded and
+  // never re-runs `loadProjectTeam` with the project default (which would
+  // clobber the moved agent/session). `selectedProjectAgentId` makes
+  // `projectAgentActive`/`activeAddressing` resolve to the target before the
+  // round-tripped `selectedProjectId` prop has flushed, so the chat does not
+  // depend on that flush timing.
+  const moveToProjectAgent = async (move) => {
+    clearSessionOverride();
+    const { projectId, bareAgentId, agentAddress, sessionId } = move;
+    projectAgentSessions = {
+      ...projectAgentSessions,
+      [agentAddress]: sessionId,
+    };
+    initialProjectRestoreDone = true;
+    lastLoadedProjectId = projectId;
+    selectedProjectAgentId = bareAgentId;
+    onProjectSelected?.(projectId);
+    onProjectAgentSelected?.(bareAgentId);
+    await loadProjectTeamForMove(projectId);
+    await ensureProjectAgentSession(
+      resolveAgentAddressing(bareAgentId, projectId, true),
+    );
+  };
+
+  // Load just the team + report for a move target (no agent auto-selection —
+  // the move picks the agent itself). Errors surface as the scan error notice.
+  const loadProjectTeamForMove = async (projectId) => {
+    loadingProjectTeam = true;
+    projectScanError = '';
+    try {
+      const result = await showProject(projectId);
+      projectTeam = normalizeProjectTeam(result?.scan);
+      projectReport = normalizeScanReport(result?.scan?.report);
+    } catch (error) {
+      projectTeam = [];
+      projectReport = null;
+      projectScanError = `${t('chat.project.loadError', 'The project team could not be loaded.')} ${error.message}`;
+    } finally {
+      loadingProjectTeam = false;
+    }
+  };
+
   const handleSendMessage = async (content, options = {}) => {
     const agent = activeAgent;
     const sessionState = activeSessionState;
@@ -1360,6 +1445,15 @@
       }
       const run = await rpc('chat.stream', params);
       if (run?.command_handled) {
+        // `/agent` MOVES this session (same id) to another agent. Unlike
+        // /new and /handoff (identity-only), a move can target either world
+        // and can be issued from either world, so it is handled before — and
+        // independently of — the identity-only switch path.
+        const moveAction = resolveMoveActionFromResponse(run);
+        if (moveAction) {
+          await moveSessionToAgent(moveAction);
+          return true;
+        }
         const commandSwitch = commandSwitchFromResponse(run);
         if (commandSwitch && !isProjectAgentSend) {
           // `action` channel: a session switch (/new, /handoff). When the switch

@@ -3,6 +3,7 @@
 import json
 import shutil
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +18,12 @@ from core.agents import (
     InvalidAgentIdError,
 )
 from core.agents import agents as agents_module
+from core.chat import ChatMessage
+from core.sessions import ChatSessionManager
 
 TEMPLATE_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
+EARLY_TIMESTAMP = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+LATE_TIMESTAMP = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -350,6 +355,50 @@ def test_update_rejects_missing_current_session_id(store: AgentStore) -> None:
 
     with pytest.raises(AgentError, match="current session does not exist"):
         store.update("coder", current_session_id="missing")
+
+
+def test_reset_current_after_move_lands_on_newest_remaining(store: AgentStore) -> None:
+    agent = store.create("alpha", "Alpha")
+    manager = ChatSessionManager(store.data_dir)
+    manager.get("alpha", agent.current_session_id).append(
+        ChatMessage.user("old", timestamp=EARLY_TIMESTAMP)
+    )
+    manager.create("alpha", session_id="newer").append(
+        ChatMessage.user("recent", timestamp=LATE_TIMESTAMP)
+    )
+    manager.create("alpha", session_id="moved")
+    store.update("alpha", current_session_id="moved")
+    # Simulate the move: the current session's files leave the source home.
+    manager.delete("alpha", "moved")
+
+    result = store.reset_current_after_move("alpha", "moved")
+
+    assert result.current_session_id == "newer"
+
+
+def test_reset_current_after_move_creates_fresh_when_none_remain(store: AgentStore) -> None:
+    agent = store.create("solo", "Solo")
+    manager = ChatSessionManager(store.data_dir)
+    moved_id = agent.current_session_id
+    manager.delete("solo", moved_id)  # the only session is moved away
+
+    result = store.reset_current_after_move("solo", moved_id)
+
+    assert result.current_session_id != moved_id
+    assert manager.exists("solo", result.current_session_id) is True
+    assert [session.id for session in manager.list("solo")] == [result.current_session_id]
+
+
+def test_reset_current_after_move_leaves_pointer_when_not_current(store: AgentStore) -> None:
+    agent = store.create("beta", "Beta")
+    manager = ChatSessionManager(store.data_dir)
+    current_id = agent.current_session_id
+    manager.create("beta", session_id="other")
+    manager.delete("beta", "other")  # a non-current session was moved away
+
+    result = store.reset_current_after_move("beta", "other")
+
+    assert result.current_session_id == current_id
 
 
 def test_temperature_and_thinking_effort_none_round_trip_as_json_null(

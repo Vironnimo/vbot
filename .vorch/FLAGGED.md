@@ -214,3 +214,15 @@ on, so it is **not** a pure "longer load time" change. Fix carefully when backgr
 use makes it matter: cap per-session `runEvents`, and LRU-evict non-displayed session
 states, releasing their status-verification guards like the existing
 `subAgentGuardKeysForEvictedStatuses` path already does for evicted status keys.
+
+## 2026-06-22 — `/agent` session move: deferred scope (v1)
+
+The new `/agent` command moves a running session (full verbatim history, same session id) to another agent. Consciously out of scope for v1, recorded here:
+
+1. **No channel support.** `/agent` is WebUI-only; channel-bound sessions are explicitly *refused* (they carry `source_channel_id`, which a move would orphan). When channels can retarget their own session pointer, lift the refusal in `_handle_move_session_command` (`server/rpc/chat_methods.py`) and let channel sessions move.
+
+2. **No CLI support, and no argument autocomplete/picker.** The target address is free-typed (like `/handoff`); there is no `/agent ` autocomplete. Deferred with the rest of the CLI accessor work.
+
+3. **No live cross-window update, no undo.** A second window parked on the source agent sees the move only on its next load (no WS broadcast in v1 — consistent with the rest of the system).
+
+4. **Recall reconcile hook intentionally NOT built — the plan's sanctioned fallback.** The plan defaulted to a targeted source-scope delete of the moved session's derived-index rows, with an explicit "fall back if the hook turns out heavier than a nudge." Verified against the source: it is heavier **and** unnecessary. Both derived backends already scope search results to the source agent's *active* candidate summaries (`SqliteFtsRecallBackend`: query `session_id IN (active)` + `_cleanup_missing_sessions`; `VectorRecallBackend`: `(agent_id, project_id)` + active-summary filter + `_ensure_fresh_index` drop). A moved session can never surface under the old agent, and stale rows self-heal on the next source-scope search. A `drop_session`/reconcile method would have to be added to the `RecallBackend` Protocol and all four implementations plus a runtime hook and orchestrator wiring — a real interface widening for zero correctness gain. So the fallback was taken (see `recall.md` → Cross-Domain Rules). Only residue: dead index rows linger until the next source search lazily clears them (harmless; indexes are disposable).

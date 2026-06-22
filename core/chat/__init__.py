@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from core.chat.chat import MessageSender as MessageSender
     from core.chat.chat import ToolCall as ToolCall
     from core.chat.chat import parse_bare_model as parse_bare_model
+    from core.chat.commands import AgentArgument as AgentArgument
     from core.chat.commands import CommandAction as CommandAction
     from core.chat.commands import CommandDispatcher as CommandDispatcher
     from core.chat.commands import CommandHandled as CommandHandled
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from core.chat.commands import DispatchResult as DispatchResult
     from core.chat.commands import HandoffArgument as HandoffArgument
     from core.chat.commands import NotACommand as NotACommand
+    from core.chat.commands import parse_agent_argument as parse_agent_argument
     from core.chat.commands import parse_handoff_argument as parse_handoff_argument
     from core.chat.errors import ChatError as ChatError
     from core.chat.errors import ChatMessageValidationError as ChatMessageValidationError
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager as ChatSessionManager
 
 _EXPORT_MODULES = {
+    "AgentArgument": "core.chat.commands",
     "ChatError": "core.chat.errors",
     "ChatLoop": "core.chat.chat",
     "ChatMessage": "core.chat.chat",
@@ -50,6 +53,7 @@ _EXPORT_MODULES = {
     "MAX_TOOL_ITERATIONS": "core.chat.chat",
     "MessageSender": "core.chat.chat",
     "NotACommand": "core.chat.commands",
+    "parse_agent_argument": "core.chat.commands",
     "parse_bare_model": "core.chat.chat",
     "parse_handoff_argument": "core.chat.commands",
     "ToolCall": "core.chat.chat",
