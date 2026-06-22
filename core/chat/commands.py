@@ -37,7 +37,9 @@ else:
     ProviderRegistry = Any
     RuntimeAgent = Any
 
-CommandActionName = Literal["compact", "handoff", "move_session", "new_session", "retry_last_turn"]
+CommandActionName = Literal[
+    "compact", "handoff", "move_session", "new_session", "retry_last_turn", "set_model"
+]
 StatusActivityName = Literal["idle", "running"]
 
 # Argument mode drives the autocomplete trigger behavior: ``none`` commands run
@@ -205,6 +207,12 @@ class CommandDispatcher:
             argument="none",
             output="transient",
         ),
+        "model": CommandSpec(
+            "model",
+            "Show, set, or reset this session's model (/model reset to clear).",
+            argument="optional",
+            output="action",
+        ),
         "new": CommandSpec(
             "new",
             "Start a new session for the current agent.",
@@ -255,6 +263,7 @@ class CommandDispatcher:
             "compact": self._handle_compact,
             "handoff": self._handle_handoff,
             "help": self._handle_help,
+            "model": self._handle_model,
             "new": self._handle_new,
             "retry": self._handle_retry,
             "status": self._handle_status,
@@ -375,6 +384,76 @@ class CommandDispatcher:
                     for member in sorted(team, key=lambda member: member.agent_id)
                 )
         return "\n".join(lines)
+
+    def _handle_model(
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
+    ) -> CommandHandled | CommandAction:
+        """Argument-dependent: no argument shows the current model, otherwise set it.
+
+        Bare ``/model`` returns a transient card naming the session's current model
+        and where it comes from (a per-agent local override, the project
+        configuration, or the agent's own configuration) — a read with no side
+        effect. ``/model <value>`` and ``/model reset`` return a ``set_model``
+        action carrying the raw text; the accessor layer owns validation,
+        identity-vs-project routing, and the persistent write, so the command stays
+        a thin trigger (mirroring ``/agent``).
+        """
+        if argument is None:
+            return CommandHandled(
+                reply=self._build_model_summary(agent_id, project_id),
+                output="transient",
+            )
+        return CommandAction(name="set_model", argument=argument)
+
+    def _build_model_summary(self, agent_id: str, project_id: str | None) -> str:
+        """Describe the session's current model and where it resolves from.
+
+        Cheap, fresh reads only (no model-chain replication): the resolved model is
+        what the next run would use (already post-override), and the origin is read
+        straight off the project's override map. None-guarded like ``/status`` so a
+        minimally constructed dispatcher degrades to a placeholder instead of
+        crashing.
+        """
+        model = STATUS_PLACEHOLDER
+        if self._agent_resolver is not None:
+            try:
+                model = self._agent_resolver.resolve_agent(project_id, agent_id).model.strip()
+                model = model or STATUS_PLACEHOLDER
+            except Exception as error:
+                log = (
+                    _LOGGER.warning
+                    if _has_exception_name(error, "AgentResolutionError")
+                    else _LOGGER.error
+                )
+                log(
+                    "Failed to resolve agent %r while building /model reply",
+                    agent_id,
+                    exc_info=True,
+                )
+        return f"Current model: {model}\nSource: {self._model_origin(agent_id, project_id)}"
+
+    def _model_origin(self, agent_id: str, project_id: str | None) -> str:
+        """Return where the session's current model comes from, in plain English.
+
+        Identity session (``project_id is None``) → the agent's own configuration.
+        Project session → a per-agent local override when one is pinned (the top
+        model-chain tier), otherwise the project configuration (the repo-declared
+        model or a project/global default). None-guarded; an unreadable project
+        degrades to the project-configuration label.
+        """
+        if project_id is None:
+            return "agent configuration"
+        if self._projects is not None:
+            try:
+                if self._projects.get(project_id).model_overrides.get(agent_id):
+                    return "local override"
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to load project %r while building /model reply",
+                    project_id,
+                    exc_info=True,
+                )
+        return "project configuration"
 
     def _handle_help(
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None

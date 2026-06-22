@@ -83,4 +83,4 @@ The anchor holds **no run config** — only Sessions ownership and the local age
 
 ## Scope boundary (what is *not* here)
 
-The project RPC surface (`project.*`, `server/rpc/project_methods.py`) and the CLI `project` area (`cli/`) live outside this module and call into it — they are not in this domain. Channels on project agents and a project-local memory tool are deferred.
+The project RPC surface (`project.*`, `server/rpc/project_methods.py`) and the CLI `project` area (`cli/`) live outside this module and call into it — they are not in this domain. The model-override surface there: `project.clear_model_override` (params `project_id`, `agent_id`) wraps the store's `clear_model_override` and returns the updated project + a fresh scan (no cache invalidation — `project.json` is read fresh per resolve); the scan's team-member response carries a `model_override` field (the per-agent value, or `null`). There is **no** `project.set_model_override` RPC — setting is command-only via `/model` (see `chat.md`); the UI only clears. Channels on project agents and a project-local memory tool are deferred.

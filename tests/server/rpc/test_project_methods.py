@@ -41,6 +41,7 @@ from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.project_methods import (
     _add_project,
+    _clear_model_override,
     _list_projects,
     _remove_project,
     _set_project,
@@ -499,6 +500,75 @@ def test_team_member_reports_denied_tools(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Per-agent model override: team response field + clear handler.
+# ---------------------------------------------------------------------------
+
+
+def test_team_member_reports_null_model_override_by_default(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    result = _show_project(state, {"project_id": "vbot"})
+
+    member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
+    assert member["model_override"] is None
+
+
+def test_team_member_reports_model_override_value(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    state.runtime.projects.set_model_override("vbot", "builder", "openai/gpt-mini")
+
+    result = _show_project(state, {"project_id": "vbot"})
+
+    member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
+    assert member["model_override"] == "openai/gpt-mini"
+
+
+def test_clear_model_override_removes_entry_and_returns_scan(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    state.runtime.projects.set_model_override("vbot", "builder", "openai/gpt-mini")
+
+    result = _clear_model_override(state, {"project_id": "vbot", "agent_id": "builder"})
+
+    member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
+    assert member["model_override"] is None
+    assert state.runtime.projects.get("vbot").model_overrides == {}
+
+
+def test_clear_model_override_absent_entry_is_noop(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    result = _clear_model_override(state, {"project_id": "vbot", "agent_id": "builder"})
+
+    assert result["project"]["project_id"] == "vbot"
+
+
+def test_clear_model_override_rejects_unknown_field(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    with pytest.raises(RpcError, match="unsupported project.clear_model_override fields: bogus"):
+        _clear_model_override(state, {"project_id": "vbot", "agent_id": "builder", "bogus": 1})
+
+
+def test_clear_model_override_unknown_project_raises(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+
+    with pytest.raises(RpcError) as exc_info:
+        _clear_model_override(state, {"project_id": "missing", "agent_id": "builder"})
+
+    assert exc_info.value.code == "project_not_found"
+
+
+# ---------------------------------------------------------------------------
 # Default temperature / thinking effort: add, set, show, validation.
 # ---------------------------------------------------------------------------
 
@@ -764,5 +834,12 @@ async def test_rm_unknown_project_errors(tmp_path: Path) -> None:
 def test_project_methods_are_registered() -> None:
     handlers = build_method_handlers()
 
-    for method in ("project.add", "project.list", "project.show", "project.set", "project.rm"):
+    for method in (
+        "project.add",
+        "project.list",
+        "project.show",
+        "project.set",
+        "project.clear_model_override",
+        "project.rm",
+    ):
         assert method in handlers

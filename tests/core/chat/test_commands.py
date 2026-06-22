@@ -91,9 +91,15 @@ class _StubResolver:
 
 
 class _StubProject:
-    def __init__(self, project_id: str, display_name: str) -> None:
+    def __init__(
+        self,
+        project_id: str,
+        display_name: str,
+        model_overrides: dict[str, str] | None = None,
+    ) -> None:
         self.project_id = project_id
         self.display_name = display_name
+        self.model_overrides = model_overrides or {}
 
 
 class _StubProjects:
@@ -255,6 +261,7 @@ def test_built_in_commands_include_current_catalog() -> None:
         "compact",
         "handoff",
         "help",
+        "model",
         "new",
         "retry",
         "status",
@@ -272,6 +279,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "compact": "optional",
         "handoff": "optional",
         "help": "none",
+        "model": "optional",
         "new": "none",
         "retry": "none",
         "status": "none",
@@ -282,6 +290,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "compact": "toast",
         "handoff": "action",
         "help": "transient",
+        "model": "action",
         "new": "action",
         "retry": "action",
         "status": "transient",
@@ -393,6 +402,82 @@ def test_dispatch_agent_keeps_task_in_raw_argument() -> None:
     result = dispatcher.dispatch("coder", "session-one", "/agent builder@vbot ship the fix")
 
     assert result == CommandAction(name="move_session", argument="builder@vbot ship the fix")
+
+
+def test_dispatch_model_with_value_returns_set_model_action() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/model openai/gpt-5")
+
+    assert result == CommandAction(name="set_model", argument="openai/gpt-5")
+
+
+def test_dispatch_model_reset_returns_set_model_action() -> None:
+    # The reset token is passed through verbatim; the accessor layer interprets it.
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/model reset")
+
+    assert result == CommandAction(name="set_model", argument="reset")
+
+
+def test_dispatch_model_without_argument_shows_identity_source() -> None:
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent())),
+    )
+
+    result = dispatcher.dispatch("coder", "session-one", "/model")
+
+    assert isinstance(result, CommandHandled)
+    assert result.output == "transient"
+    assert result.data is None  # a transient card, never persisted and not an action
+    reply = result.reply or ""
+    assert "openai/gpt-5.2" in reply
+    assert "agent configuration" in reply
+
+
+def test_dispatch_model_project_override_shows_local_override() -> None:
+    # A project session with a pinned override resolves to it and labels the source.
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent(model="openai/gpt-mini"))),
+        projects=cast(
+            ProjectStore,
+            _StubProjects(_StubProject("vbot", "vBot", {"coder": "openai/gpt-mini"})),
+        ),
+    )
+
+    result = dispatcher.dispatch("coder", "session-one", "/model", "vbot")
+
+    assert isinstance(result, CommandHandled)
+    reply = result.reply or ""
+    assert "openai/gpt-mini" in reply
+    assert "local override" in reply
+
+
+def test_dispatch_model_project_without_override_shows_project_source() -> None:
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent())),
+        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+    )
+
+    result = dispatcher.dispatch("coder", "session-one", "/model", "vbot")
+
+    assert isinstance(result, CommandHandled)
+    assert "project configuration" in (result.reply or "")
+
+
+def test_dispatch_model_without_services_degrades_to_placeholder() -> None:
+    # A minimally constructed dispatcher (no resolver/projects) must not crash.
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/model")
+
+    assert isinstance(result, CommandHandled)
+    assert result.output == "transient"
+    assert STATUS_PLACEHOLDER in (result.reply or "")
 
 
 def test_parse_agent_argument_splits_first_token_as_address() -> None:

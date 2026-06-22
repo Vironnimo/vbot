@@ -28,6 +28,7 @@ from server.rpc.chat_methods import (
     _chat_queue_remove,
     _chat_queue_update,
     _handle_move_session_command,
+    _handle_set_model_command,
     _send_chat,
     _stream_chat,
 )
@@ -247,6 +248,155 @@ async def test_handoff_bare_target_stays_in_source_scope(
     assert loop.calls[-1]["agent_id"] == "builder"
     assert loop.calls[-1]["project_id"] == "vbot"
     assert state._created_sessions[-1] == "builder@vbot"
+
+
+# ---------------------------------------------------------------------------
+# /model set: identity vs project routing + usable-model validation.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingAgents:
+    def __init__(self) -> None:
+        self.updates: list[tuple[str, dict[str, Any]]] = []
+
+    def update(self, agent_id: str, **changes: Any) -> Any:
+        self.updates.append((agent_id, changes))
+        return SimpleNamespace(id=agent_id, **changes)
+
+
+class _RecordingProjects:
+    def __init__(self) -> None:
+        self.set_calls: list[tuple[str, str, str]] = []
+        self.clear_calls: list[tuple[str, str]] = []
+
+    def set_model_override(self, project_id: str, agent_id: str, model: str) -> Any:
+        self.set_calls.append((project_id, agent_id, model))
+        return SimpleNamespace(project_id=project_id)
+
+    def clear_model_override(self, project_id: str, agent_id: str) -> Any:
+        self.clear_calls.append((project_id, agent_id))
+        return SimpleNamespace(project_id=project_id)
+
+
+class _ModelResolver:
+    """``is_model_configured`` stub: only the configured set is usable."""
+
+    def __init__(self, configured: set[str]) -> None:
+        self._configured = configured
+
+    def is_model_configured(self, model: str) -> bool:
+        return model in self._configured
+
+
+def _make_model_state(
+    *, configured: set[str], agents: _RecordingAgents, projects: _RecordingProjects, models: Any
+) -> SimpleNamespace:
+    runtime = SimpleNamespace(
+        agent_resolver=_ModelResolver(configured),
+        agents=agents,
+        projects=projects,
+        models=models,
+    )
+    return SimpleNamespace(runtime=runtime)
+
+
+def test_set_model_identity_updates_agent_model() -> None:
+    agents = _RecordingAgents()
+    projects = _RecordingProjects()
+    state = _make_model_state(
+        configured={"openai/gpt-5"}, agents=agents, projects=projects, models=SimpleNamespace()
+    )
+
+    result = _handle_set_model_command(state, "coder", "s1", "openai/gpt-5", project_id=None)
+
+    # Identity session writes the agent's own model; the project store is untouched.
+    assert agents.updates == [("coder", {"model": "openai/gpt-5"})]
+    assert projects.set_calls == []
+    assert result["data"] == {"command": "model", "agent_id": "coder", "model": "openai/gpt-5"}
+    assert result["output"] == "toast"
+
+
+def test_set_model_identity_reset_clears_model() -> None:
+    agents = _RecordingAgents()
+    projects = _RecordingProjects()
+    state = _make_model_state(
+        configured=set(), agents=agents, projects=projects, models=SimpleNamespace()
+    )
+
+    result = _handle_set_model_command(state, "coder", "s1", "reset", project_id=None)
+
+    # reset writes an empty model (falls to the global default) and skips validation.
+    assert agents.updates == [("coder", {"model": ""})]
+    assert result["data"]["model"] == ""
+
+
+def test_set_model_project_writes_override() -> None:
+    agents = _RecordingAgents()
+    projects = _RecordingProjects()
+    state = _make_model_state(
+        configured={"openai/gpt-mini"}, agents=agents, projects=projects, models=SimpleNamespace()
+    )
+
+    _handle_set_model_command(state, "builder", "s1", "openai/gpt-mini", project_id="vbot")
+
+    # Project session writes a per-agent override; the identity store is untouched.
+    assert projects.set_calls == [("vbot", "builder", "openai/gpt-mini")]
+    assert agents.updates == []
+
+
+def test_set_model_project_reset_clears_override() -> None:
+    agents = _RecordingAgents()
+    projects = _RecordingProjects()
+    state = _make_model_state(
+        configured=set(), agents=agents, projects=projects, models=SimpleNamespace()
+    )
+
+    # The reset token is case-insensitive.
+    _handle_set_model_command(state, "builder", "s1", "RESET", project_id="vbot")
+
+    assert projects.clear_calls == [("vbot", "builder")]
+    assert projects.set_calls == []
+
+
+def test_set_model_rejects_unusable_model() -> None:
+    agents = _RecordingAgents()
+    projects = _RecordingProjects()
+    state = _make_model_state(
+        configured={"openai/gpt-5"}, agents=agents, projects=projects, models=SimpleNamespace()
+    )
+
+    with pytest.raises(RpcError) as exc_info:
+        _handle_set_model_command(state, "coder", "s1", "openai/ghost", project_id=None)
+
+    assert exc_info.value.code == "invalid_request"
+    assert agents.updates == []  # nothing is written when the model is rejected
+
+
+def test_set_model_rejects_forbidden_pinned_connection() -> None:
+    agents = _RecordingAgents()
+    projects = _RecordingProjects()
+
+    class _Model:
+        connections = ["api-key"]
+
+        def allows_connection(self, connection_id: str) -> bool:
+            return connection_id in self.connections
+
+    models = SimpleNamespace(get=lambda _provider, _model: _Model())
+    state = _make_model_state(
+        configured={"openai/gpt-5::subscription"},
+        agents=agents,
+        projects=projects,
+        models=models,
+    )
+
+    with pytest.raises(RpcError) as exc_info:
+        _handle_set_model_command(
+            state, "coder", "s1", "openai/gpt-5::subscription", project_id=None
+        )
+
+    assert exc_info.value.code == "invalid_request"
+    assert agents.updates == []
 
 
 # ---------------------------------------------------------------------------
