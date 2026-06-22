@@ -28,6 +28,8 @@ Between the last two, disclose whenever you actively picked among options with n
 ## Discuss vs. Act
 When the user asks to discuss, audit, explain, or think through something, DO NOT start writing files or generating plans. Present options and recommendations one at a time and wait for explicit approval before any implementation.
 
+During such a walk-through, take one decision per message and wait for the answer before the next; present each as 2–4 labeled, mutually exclusive options (A/B/…) inline as text (never a picker overlay), add a one-line concrete example only when the difference isn't self-evident, and mark a clear recommendation with a one-line why — so a single letter (or "go with your recommendation") settles it. Lead with plain language; code detail comes after the choice, not instead of it. Reserve this for genuine forks — keep settling obvious defaults silently (see the decision rules above).
+
 ## Architecture & code
 
 **Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget; the system must stay small enough to hold in your head. Default to extending an existing module — a new module, layer, or abstraction needs explicit justification. Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around. Expose what callers need, hide the rest.
