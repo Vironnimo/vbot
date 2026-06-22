@@ -48,7 +48,12 @@ BASH_TOOL_PARAMETERS: JsonObject = {
         },
         "yield_after": {
             "type": "number",
-            "description": "Seconds to wait for foreground completion before backgrounding.",
+            "description": (
+                "Seconds to wait for foreground completion before backgrounding "
+                "(default 30). Inside a sub-agent, where backgrounding is unavailable, "
+                "this caps foreground runtime before the command is killed and defaults "
+                "to a much longer window; use timeout for a precise cap."
+            ),
             "default": 30,
         },
         "background": {
@@ -66,6 +71,12 @@ BASH_TOOL_PARAMETERS: JsonObject = {
 
 BLOCKED_ENV_KEYS = {"PATH", "LD_PRELOAD", "BASH_ENV", "DYLD_INSERT_LIBRARIES"}
 DEFAULT_YIELD_AFTER_SECONDS = 30.0
+# Inside a sub-agent a foreground command cannot be backgrounded, so its yield_after
+# window doubles as the kill deadline. Default it generously there: a 30s hand-off
+# default would kill a normal pytest/build. An explicit yield_after or timeout still
+# overrides, and the sub-agent run timeout (subagent_timeout_minutes, default 60) is
+# the outer bound.
+DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS = 1800.0
 FOREGROUND_POLL_INTERVAL_SECONDS = 0.05
 SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
 SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS = 1.0
@@ -113,6 +124,21 @@ def _background_at_depth_timeout_message(yield_after: float) -> str:
         "available inside a sub-agent. Make sure the command terminates, or set a timeout "
         "to bound it."
     )
+
+
+def _resolve_yield_after(context: ToolContext, explicit: float | None) -> float:
+    """Resolve the foreground window: an explicit value wins, else a per-context default.
+
+    Inside a sub-agent the command cannot be backgrounded, so the window is the max
+    foreground runtime before a kill; default it generously there (the 30s top-level
+    hand-off default would kill a normal pytest/build). The top level keeps the short
+    background-hand-off default.
+    """
+    if explicit is not None:
+        return explicit
+    if _background_blocked_at_depth(context):
+        return DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS
+    return DEFAULT_YIELD_AFTER_SECONDS
 
 
 async def bash_handler(
@@ -170,11 +196,12 @@ async def bash_handler(
         )
         return result
 
+    yield_after = _resolve_yield_after(context, parsed["yield_after"])
     result = await _run_foreground_phase(
         process_manager,
         context,
         session_id,
-        parsed["yield_after"],
+        yield_after,
     )
 
     if timeout_task is not None:
@@ -190,7 +217,7 @@ async def bash_handler(
             await process_manager.kill(session_id, context.agent_id)
             return tool_failure(
                 BACKGROUND_AT_DEPTH_FAILURE_CODE,
-                _background_at_depth_timeout_message(parsed["yield_after"]),
+                _background_at_depth_timeout_message(yield_after),
             )
         _maybe_spawn_completion_watcher(
             process_manager,
@@ -403,7 +430,7 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         yield_after = optional_number(
             arguments.get("yield_after"),
             field_name="yield_after",
-            default=DEFAULT_YIELD_AFTER_SECONDS,
+            default=None,
             minimum=0,
         )
         timeout = optional_number(
