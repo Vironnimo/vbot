@@ -16,6 +16,7 @@ import core.tools.bash as bash_module
 from core.tools.bash import (
     BASH_TOOL_PARAMETERS,
     _resolve_workdir,
+    _resolve_yield_after,
     bash_handler,
     register_bash_tool,
 )
@@ -619,6 +620,23 @@ def test_resolve_workdir_defaults_to_workspace_without_cwd(tmp_path: Path) -> No
     context = make_context(workspace)
 
     assert _resolve_workdir(context, None) == workspace.resolve()
+
+
+def test_resolve_yield_after_uses_generous_default_inside_subagent(tmp_path: Path) -> None:
+    # Top level: an omitted yield_after keeps the short background-hand-off default.
+    top = make_context(tmp_path, nesting_depth=0)
+    assert _resolve_yield_after(top, None) == bash_module.DEFAULT_YIELD_AFTER_SECONDS
+    # Sub-agent: an omitted yield_after gets the generous foreground window instead of
+    # the 30s default, so a normal pytest/build is not killed before it finishes.
+    sub = make_context(tmp_path, nesting_depth=1)
+    assert _resolve_yield_after(sub, None) == bash_module.DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS
+    assert bash_module.DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS >= 600.0
+
+
+def test_resolve_yield_after_honors_explicit_value_at_any_depth(tmp_path: Path) -> None:
+    # An explicit yield_after wins at both levels, so the caller can still bound tighter.
+    assert _resolve_yield_after(make_context(tmp_path, nesting_depth=0), 5.0) == 5.0
+    assert _resolve_yield_after(make_context(tmp_path, nesting_depth=1), 5.0) == 5.0
 
 
 def test_resolve_workdir_resolves_relative_workdir_against_cwd(tmp_path: Path) -> None:
