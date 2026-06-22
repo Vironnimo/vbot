@@ -381,6 +381,11 @@ export const englishCatalog = Object.freeze({
   'projects.team.empty':
     'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
   'projects.team.noModel': 'No model',
+  'projects.team.modelOverride': 'Model override: {model}',
+  'projects.team.modelOverrideClear': 'Clear model override for {agent}',
+  'projects.team.overrideCleared': 'Model override cleared.',
+  'projects.team.overrideClearError':
+    'The model override could not be cleared.',
   'projects.report.title': 'Scan report',
   'projects.report.findingCount': '{count} issues found',
   'projects.report.group.slug_collision': 'Name collisions',

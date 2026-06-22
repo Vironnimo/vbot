@@ -205,9 +205,7 @@ def test_set_model_override_raises_for_unknown_project(data_dir: Path) -> None:
         store.set_model_override("missing", "builder", "openai/gpt-5")
 
 
-def test_update_preserves_model_overrides_across_unrelated_edit(
-    data_dir: Path, repo: Path
-) -> None:
+def test_update_preserves_model_overrides_across_unrelated_edit(data_dir: Path, repo: Path) -> None:
     # model_overrides is carried through an unrelated update, never dropped.
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)

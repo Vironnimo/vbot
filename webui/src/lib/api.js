@@ -517,6 +517,34 @@ export function setProject(projectId, changes = {}, options = {}) {
   return rpc('project.set', { ...changes, project_id: projectId }, options);
 }
 
+export function clearModelOverride(projectId, agentId, options = {}) {
+  if (!isNonEmptyString(projectId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project id must be a non-empty string',
+      {
+        method: 'project.clear_model_override',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(agentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent id must be a non-empty string',
+      {
+        method: 'project.clear_model_override',
+      },
+    );
+  }
+
+  return rpc(
+    'project.clear_model_override',
+    { project_id: projectId, agent_id: agentId },
+    options,
+  );
+}
+
 export function removeProject(projectId, options = {}) {
   if (!isNonEmptyString(projectId)) {
     throw new ApiClientError(
