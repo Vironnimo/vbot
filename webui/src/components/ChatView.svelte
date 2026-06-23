@@ -1212,6 +1212,45 @@
     await loadHistoryForSession(agent.id, normalizedSessionId);
   };
 
+  // A session was deleted from the drawer. If this window was viewing it (the
+  // current session, or an explicit override on it), navigate to the landing the
+  // server chose (#2: most-recently-active remaining, else a fresh session);
+  // otherwise stay put and let the list refresh. The server re-aims the identity
+  // current pointer and emits resource_changed(agents), so the current marking
+  // converges across windows and the override below reconciles to it.
+  const handleSessionDeleted = async ({
+    deletedSessionId,
+    nextSessionId,
+  } = {}) => {
+    const removedId = String(deletedSessionId ?? '').trim();
+    const landingId = String(nextSessionId ?? '').trim();
+    if (!removedId) {
+      return;
+    }
+    const agent = activeAgent;
+    const viewedSessionId = viewingSessionId || agent?.current_session_id || '';
+    if (viewedSessionId === removedId && landingId) {
+      await handleSessionSelected(landingId);
+    }
+  };
+
+  // When the active agent's current session catches up to a same-agent override
+  // that now points at it — e.g. the server re-aimed current after we deleted the
+  // session we were viewing (#2) — the override is redundant. Drop it so the view
+  // reads as "on current" with no leftover return banner. Sub-agent session views
+  // (viewingSessionAgentId set) are deliberately excluded.
+  $effect(() => {
+    if (
+      viewingSessionId &&
+      !viewingSessionAgentId &&
+      activeAgent?.current_session_id === viewingSessionId
+    ) {
+      viewingSessionId = '';
+      viewingSessionAgentId = '';
+      viewingSubAgentSession = false;
+    }
+  });
+
   const clearSessionOverride = () => {
     viewingSessionId = '';
     viewingSessionAgentId = '';
@@ -1758,6 +1797,7 @@
           agentCurrentSessionId={activeAgent.current_session_id}
           reloadToken={sessionsRefreshToken}
           onSessionSelected={handleSessionSelected}
+          onSessionDeleted={handleSessionDeleted}
         />
       {/if}
       <div class="chat-view__surface">

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from core.sessions import ChatSessionManager
 
@@ -75,6 +75,24 @@ class RecallBackend(Protocol):
 
     def scroll(self, request: RecallRequest) -> JsonObject:
         """Return an anchored context view for a recall request."""
+
+
+@runtime_checkable
+class SupportsSessionRemoval(Protocol):
+    """Optional backend capability: drop one session from a derived index.
+
+    Recall is otherwise read-only (:class:`RecallBackend`). Backends that keep a
+    derived index (SQLite FTS, vector) implement this so session deletion can
+    evict a removed session immediately instead of waiting for the next
+    self-healing reconcile on search. The JSONL live-scan backend has no derived
+    index and deliberately does not implement it — an archived session is already
+    absent from the live directory it scans. The runtime checks ``isinstance``
+    before calling, so a backend without removal simply falls back to
+    self-healing rather than erroring.
+    """
+
+    def remove_session(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
+        """Remove all index entries for one session in the given project scope."""
 
 
 RecallBackendFactory = Callable[[RecallBackendContext], RecallBackend]
