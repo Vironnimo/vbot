@@ -92,13 +92,7 @@ CHANNEL_SOURCE_META_KEY = "source_channel_id"
 # Silent takeover note delivered to the receiving agent on its next request as a
 # <system-reminder>. Plain text, not i18n — an internal note to the model, never
 # shown to the user. The wording is deliberate; do not paraphrase.
-AGENT_TAKEOVER_NOTE = (
-    "You are taking over an in-progress session that was just moved to you from "
-    "{source}. The earlier turns were produced by a different agent and appear above "
-    "as verbatim context. Continue as yourself: your own role, tools, and memory apply "
-    "from here. Do not adopt the previous agent's identity or re-run its past tool "
-    "calls — treat them as history."
-)
+AGENT_TAKEOVER_NOTE = "This session was just moved to you from {source}."
 
 
 def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
