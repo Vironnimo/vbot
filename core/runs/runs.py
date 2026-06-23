@@ -593,6 +593,22 @@ class ChatRunManager:
             for (queued_agent_id, _session_id), queue in self._queues.items()
         )
 
+    def has_activity_for_session(self, agent_id: str, session_id: str) -> bool:
+        """Return whether one session owns a running run or any queued run item.
+
+        The session-scoped counterpart to :meth:`has_activity_for_agent`, keyed
+        on the exact ``(agent_id, session_id)`` pair both the active-run and the
+        queue maps use, so it answers "is this one session busy?" without
+        scanning the agent's other sessions. Session deletion calls it to refuse
+        removing a session with work in flight, the way agent deletion uses the
+        per-agent check.
+        """
+        session_key: SessionKey = (agent_id, session_id)
+        active_run = self._active_by_session.get(session_key)
+        if active_run is not None and active_run.status == RunStatus.RUNNING:
+            return True
+        return bool(self._queues.get(session_key))
+
     async def _execute(
         self,
         run: Run,

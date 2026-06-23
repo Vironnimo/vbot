@@ -66,6 +66,7 @@ PROJECT_HELP = {
 SESSION_HELP = {
     "list": "List one agent's chat sessions",
     "create": "Create a new chat session for one agent",
+    "delete": "Delete (archive) one agent's chat session",
     "link-channel": "Link a session to a channel conversation for outbound replies",
 }
 CHANNEL_HELP = {
@@ -419,6 +420,22 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "--make-current",
         action="store_true",
         help="Switch the agent's current session to the new session",
+    )
+
+    delete_parser = _add_command_parser(
+        session_subparsers,
+        "delete",
+        SESSION_HELP["delete"],
+        example="session delete assistant <session-id> --yes",
+    )
+    delete_parser.add_argument(
+        "agent", metavar="<agent>", help="Agent owning the session, as agent or agent@projekt"
+    )
+    delete_parser.add_argument("session", metavar="<session-id>", help="Session id to delete")
+    delete_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm deletion; the session is archived (recoverable), not erased",
     )
 
     link_parser = _add_command_parser(

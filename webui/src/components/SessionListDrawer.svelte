@@ -1,6 +1,6 @@
 <script>
   import Button from './ui/Button.svelte';
-  import { listSessions, renameSession } from '$lib/api.js';
+  import { deleteSession, listSessions, renameSession } from '$lib/api.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
     applySessionList,
@@ -18,6 +18,9 @@
     // pressing Refresh.
     reloadToken = 0,
     onSessionSelected = () => {},
+    // Called after a successful delete with { deletedSessionId, nextSessionId }
+    // so ChatView can navigate if it was viewing the removed session (#2).
+    onSessionDeleted = () => {},
   } = $props();
 
   const timestampFormatter = new Intl.DateTimeFormat(activeLocaleTag(), {
@@ -35,6 +38,10 @@
   let editValue = $state('');
   let renameError = $state(null);
   let renameSaving = $state(false);
+  // Row-delete state: a transient error surfaced when a delete is refused (for
+  // example a busy session, #4) and an in-flight guard against double-clicks.
+  let actionError = $state(null);
+  let deleting = $state(false);
 
   const SESSION_TITLE_MAX_LENGTH = 200;
 
@@ -185,6 +192,58 @@
     }
   };
 
+  // Delete (archive) a session from the row menu. A confirmation dialog guards
+  // the click (#3); for a channel-bound session the message also notes it will
+  // resume empty on the next inbound message (#5a). The server returns where to
+  // land, which ChatView uses to navigate if it was viewing the removed session.
+  const requestDelete = async (session) => {
+    closeMenu();
+    const targetAgentId = asText(agentId);
+    if (!targetAgentId || deleting) {
+      return;
+    }
+
+    const name = session.display_name || sessionDisplayName(session);
+    const message = session.is_channel_session
+      ? t(
+          'sessions.delete_confirm_channel',
+          'Delete session "{name}"? It is archived and can be restored. The channel ' +
+            'conversation will start fresh on the next incoming message.',
+          { name },
+        )
+      : t(
+          'sessions.delete_confirm',
+          'Delete session "{name}"? It is archived and can be restored.',
+          { name },
+        );
+    const confirmed =
+      typeof globalThis.confirm === 'function'
+        ? globalThis.confirm(message)
+        : true;
+    if (!confirmed) {
+      return;
+    }
+
+    deleting = true;
+    actionError = null;
+    try {
+      const result = await deleteSession(targetAgentId, session.id);
+      onSessionDeleted?.({
+        deletedSessionId: session.id,
+        nextSessionId: asText(result?.next_session_id),
+      });
+      // Re-fetch so the deleted row disappears immediately, without waiting for
+      // the resource_changed round-trip.
+      await loadSessions(targetAgentId);
+    } catch (error) {
+      actionError =
+        error.message ||
+        t('sessions.delete_error', 'The session could not be deleted.');
+    } finally {
+      deleting = false;
+    }
+  };
+
   const handleRenameKeydown = (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -270,6 +329,12 @@
       {t('common.refresh', 'Refresh')}
     </Button>
   </div>
+
+  {#if actionError}
+    <p class="session-drawer__state session-drawer__state--error" role="alert">
+      {actionError}
+    </p>
+  {/if}
 
   {#if sessionState.error}
     <p class="session-drawer__state session-drawer__state--error">
@@ -389,6 +454,14 @@
                     onclick={() => startRename(session)}
                   >
                     {t('sessions.rename', 'Rename')}
+                  </button>
+                  <button
+                    type="button"
+                    class="session-row__menu-item session-row__menu-item--danger"
+                    role="menuitem"
+                    onclick={() => requestDelete(session)}
+                  >
+                    {t('sessions.delete', 'Delete')}
                   </button>
                 </div>
               {/if}
@@ -574,6 +647,15 @@
   .session-row__menu-item:focus-visible {
     outline: none;
     background: rgba(232, 135, 10, 0.12);
+  }
+
+  .session-row__menu-item--danger {
+    color: var(--red);
+  }
+
+  .session-row__menu-item--danger:hover,
+  .session-row__menu-item--danger:focus-visible {
+    background: rgba(239, 68, 68, 0.14);
   }
 
   .session-row__edit {

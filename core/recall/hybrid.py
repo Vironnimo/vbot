@@ -73,6 +73,11 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
     def describe_search(self) -> str:
         return _HYBRID_SEARCH_GUIDANCE
 
+    def remove_session(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
+        """Evict one session from both fused arms' derived indexes."""
+        self._fts.remove_session(agent_id, session_id, project_id)
+        self._vector.remove_session(agent_id, session_id, project_id)
+
     def search(self, request: RecallRequest) -> JsonObject:
         # ``browse`` and ``scroll`` keep the canonical JSONL behavior
         # (nothing to fuse). Only ``search`` is hybrid.

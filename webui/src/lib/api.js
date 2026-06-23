@@ -603,6 +603,34 @@ export function renameSession(agentId, sessionId, title, options = {}) {
   );
 }
 
+export function deleteSession(agentId, sessionId, options = {}) {
+  if (!isNonEmptyString(agentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent id must be a non-empty string',
+      {
+        method: 'session.delete',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(sessionId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Session id must be a non-empty string',
+      {
+        method: 'session.delete',
+      },
+    );
+  }
+
+  return rpc(
+    'session.delete',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
 export function listQueue(agentId, sessionId, options = {}) {
   if (!isNonEmptyString(agentId)) {
     throw new ApiClientError(

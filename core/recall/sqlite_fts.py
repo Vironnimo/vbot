@@ -324,6 +324,22 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             (agent_id, scope, session_id),
         )
 
+    def remove_session(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
+        """Evict one session's rows from the FTS index (delete-time cleanup).
+
+        Active counterpart to ``_cleanup_missing_sessions`` (the on-search
+        staleness drop): session deletion calls it so a removed session leaves
+        keyword search immediately. Mirrors the index path's transaction shape
+        (``_connect`` → ensure schema → ``with connection:`` →
+        ``_delete_session_rows``); deleting from a freshly initialized or empty
+        index is a harmless no-op.
+        """
+        scope = _scope(project_id)
+        with closing(self._connect()) as connection:
+            self._initialize_schema(connection)
+            with connection:
+                self._delete_session_rows(connection, agent_id, scope, session_id)
+
     def _query_matches(
         self,
         connection: sqlite3.Connection,
