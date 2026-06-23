@@ -9,18 +9,18 @@ SUBAGENT_TOOL_NAME = "subagent"
 SUBAGENT_RESULT_TOOL_NAME = "subagent_result"
 
 SUBAGENT_TOOL_DESCRIPTION = (
-    "Spawn a sub-agent run in a persisted session. Use non-blocking mode for "
-    "parallel work, or blocking mode when the caller must wait for the result. "
-    "After a non-blocking spawn, end your turn instead of polling: when every "
-    "sub-agent in the batch finishes, their complete final outputs are delivered "
-    "to you automatically. Only check on a running sub-agent before then if the "
-    "user explicitly asks for its status. When you are yourself a sub-agent, spawns "
-    "always run blocking regardless of this setting; to run several in parallel, "
-    "make all subagent calls in a single turn."
+    "Spawn a sub-agent run in a persisted session. Runs in the background by "
+    "default so you can fan out parallel work; set background:false to wait for "
+    "the result. After a background spawn, end your turn instead of polling: when "
+    "every sub-agent in the batch finishes, their complete final outputs are "
+    "delivered to you automatically. Only check on a running sub-agent before then "
+    "if the user explicitly asks for its status. When you are yourself a sub-agent, "
+    "spawns always run in the foreground regardless of this setting; to run several "
+    "in parallel, make all subagent calls in a single turn."
 )
 SUBAGENT_RESULT_TOOL_DESCRIPTION = (
     "Fetch the latest result from a spawned sub-agent session and mark it as "
-    "retrieved. You normally do not need this: completed non-blocking batches are "
+    "retrieved. You normally do not need this: completed background batches are "
     "delivered to you automatically. Use it only when the user explicitly asks to "
     "check a sub-agent's status or result before the batch finishes."
 )
@@ -36,9 +36,14 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": "Target agent id. Defaults to the calling agent.",
         },
-        "blocking": {
+        "background": {
             "type": "boolean",
-            "description": "When true, wait for the sub-agent to finish and return its result.",
+            "description": (
+                "Run in the background and return immediately so you can fan out "
+                "parallel work (default true). Set false to wait for the sub-agent "
+                "to finish and return its result."
+            ),
+            "default": True,
         },
         "session_id": {
             "type": "string",

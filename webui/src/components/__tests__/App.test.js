@@ -876,7 +876,7 @@ function createSubAgentNavigationRpcMock(agents) {
             name: 'subagent',
             arguments: {
               agent_id: 'alpha',
-              blocking: false,
+              background: true,
               content: 'Inspect again',
             },
           },
@@ -980,7 +980,7 @@ function createRunningSubAgentRpcMock(agents) {
                       name: 'subagent',
                       arguments: {
                         agent_id: 'alpha',
-                        blocking: false,
+                        background: true,
                         content: 'Inspect in the background',
                       },
                     },
