@@ -37,7 +37,7 @@ from core.runs import (
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
 )
-from core.sessions.sessions import SESSION_ID_PATTERN
+from core.sessions.sessions import CHANNEL_MESSAGE_NOTE_PREFIX, SESSION_ID_PATTERN
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -54,7 +54,6 @@ _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text 
 _UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
 _FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
 _MEDIA_FAILED_REPLY = "Sorry, I couldn't process the attached file. Please try again."
-_OBSERVED_MESSAGE_PREFIX = "[channel-message]"
 _SENDER_TAG_UNSAFE_CHARACTERS = str.maketrans("", "", "[]|\r\n")
 
 # Metadata-sidecar key on a conversation anchor that points at the chat's currently
@@ -875,7 +874,7 @@ def _command_text_from_content(content: str | list[ContentBlock]) -> str | None:
 def _format_observed_message(conversation: ConversationFacts, text: str) -> str:
     display_name = _sanitize_sender_tag_part(conversation.user_display_name or conversation.user_id)
     sender_id = _sanitize_sender_tag_part(conversation.user_id)
-    return f"{_OBSERVED_MESSAGE_PREFIX} {display_name} ({sender_id}): {text}"
+    return f"{CHANNEL_MESSAGE_NOTE_PREFIX}{display_name} ({sender_id}): {text}"
 
 
 def _sanitize_sender_tag_part(value: str) -> str:
