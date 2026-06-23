@@ -573,6 +573,36 @@ export function listSessions(agentId, options = {}) {
   return rpc('session.list', { agent_id: agentId }, options);
 }
 
+export function renameSession(agentId, sessionId, title, options = {}) {
+  if (!isNonEmptyString(agentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent id must be a non-empty string',
+      {
+        method: 'session.rename',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(sessionId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Session id must be a non-empty string',
+      {
+        method: 'session.rename',
+      },
+    );
+  }
+
+  // An empty title is the explicit "clear the name" signal, so the title is
+  // sent as-is (coerced to a string) rather than validated as non-empty.
+  return rpc(
+    'session.rename',
+    { agent_id: agentId, session_id: sessionId, title: String(title ?? '') },
+    options,
+  );
+}
+
 export function listQueue(agentId, sessionId, options = {}) {
   if (!isNonEmptyString(agentId)) {
     throw new ApiClientError(

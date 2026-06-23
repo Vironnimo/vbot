@@ -6,6 +6,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 
 const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
+const renameSessionMock = vi.fn(async () => ({ title: 'Release planning' }));
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -13,6 +14,7 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/api.js', () => ({
   listSessions: (...args) => listSessionsMock(...args),
+  renameSession: (...args) => renameSessionMock(...args),
 }));
 
 const { default: SessionListDrawer } =
@@ -28,6 +30,8 @@ describe('SessionListDrawer', () => {
     listSessionsMock.mockResolvedValue({
       sessions: [{ id: 'session-1', created_at: '2026-05-09T00:00:00+00:00' }],
     });
+    renameSessionMock.mockReset();
+    renameSessionMock.mockResolvedValue({ title: 'Release planning' });
     mountedComponent = null;
   });
 
@@ -96,6 +100,78 @@ describe('SessionListDrawer', () => {
     // The initial token value must not trigger a second load on its own.
     flushSync();
     expect(listSessionsMock.mock.calls.length).toBe(1);
+  });
+
+  it('renames a session through the row menu and reloads the list', async () => {
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        agentCurrentSessionId: 'session-1',
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+    const loadsBefore = listSessionsMock.mock.calls.length;
+
+    // Open the "…" menu, then choose Rename to enter inline edit.
+    document.querySelector('.session-row__menu-trigger').click();
+    flushSync();
+    document.querySelector('.session-row__menu-item').click();
+    flushSync();
+
+    const input = document.querySelector('.session-row__edit-input');
+    expect(input).not.toBeNull();
+    input.value = 'Release planning';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    flushSync();
+
+    await waitForCondition(() => renameSessionMock.mock.calls.length === 1);
+    expect(renameSessionMock).toHaveBeenCalledWith(
+      'alpha',
+      'session-1',
+      'Release planning',
+    );
+    // A successful rename re-fetches so the row shows the server-stored title.
+    await waitForCondition(
+      () => listSessionsMock.mock.calls.length === loadsBefore + 1,
+    );
+  });
+
+  it('cancels inline rename on Escape without calling the API', async () => {
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        agentCurrentSessionId: 'session-1',
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+
+    document.querySelector('.session-row__menu-trigger').click();
+    flushSync();
+    document.querySelector('.session-row__menu-item').click();
+    flushSync();
+
+    const input = document.querySelector('.session-row__edit-input');
+    expect(input).not.toBeNull();
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    flushSync();
+
+    expect(document.querySelector('.session-row__edit-input')).toBeNull();
+    expect(renameSessionMock).not.toHaveBeenCalled();
   });
 });
 

@@ -28,6 +28,7 @@ from server.rpc.chat_methods import (
     _chat_queue_remove,
     _chat_queue_update,
     _handle_move_session_command,
+    _handle_rename_session_command,
     _handle_set_model_command,
     _send_chat,
     _stream_chat,
@@ -342,6 +343,65 @@ def test_set_model_project_writes_override() -> None:
     # Project session writes a per-agent override; the identity store is untouched.
     assert projects.set_calls == [("vbot", "builder", "openai/gpt-mini")]
     assert agents.updates == []
+
+
+# ---------------------------------------------------------------------------
+# /rename command -> rename_session action
+# ---------------------------------------------------------------------------
+
+
+class _RecordingTitleSessions:
+    def __init__(self) -> None:
+        self.renamed: list[tuple[str, str, str, str | None]] = []
+
+    def set_title(
+        self, agent_id: str, session_id: str, title: str, project_id: str | None = None
+    ) -> str | None:
+        self.renamed.append((agent_id, session_id, title, project_id))
+        normalized = " ".join(title.split())
+        return normalized or None
+
+
+def _make_rename_state(sessions: _RecordingTitleSessions) -> SimpleNamespace:
+    runtime = SimpleNamespace(chat_sessions=sessions)
+    return SimpleNamespace(runtime=runtime, event_bus=ServerEventBus())
+
+
+def test_rename_command_sets_title_with_toast() -> None:
+    sessions = _RecordingTitleSessions()
+    state = _make_rename_state(sessions)
+
+    result = _handle_rename_session_command(state, "coder", "s1", "Release planning")
+
+    assert sessions.renamed == [("coder", "s1", "Release planning", None)]
+    assert result["output"] == "toast"
+    assert "Release planning" in result["reply"]
+    assert result["data"] == {
+        "command": "rename",
+        "session_id": "s1",
+        "title": "Release planning",
+    }
+
+
+def test_rename_command_without_argument_clears() -> None:
+    sessions = _RecordingTitleSessions()
+    state = _make_rename_state(sessions)
+
+    result = _handle_rename_session_command(state, "coder", "s1", None)
+
+    # No argument clears: the handler passes "" and reports the cleared name.
+    assert sessions.renamed == [("coder", "s1", "", None)]
+    assert result["data"]["title"] is None
+    assert "cleared" in result["reply"].lower()
+
+
+def test_rename_command_project_session_scopes_to_project() -> None:
+    sessions = _RecordingTitleSessions()
+    state = _make_rename_state(sessions)
+
+    _handle_rename_session_command(state, "builder", "s1", "Docs", project_id="vbot")
+
+    assert sessions.renamed == [("builder", "s1", "Docs", "vbot")]
 
 
 def test_set_model_project_reset_clears_override() -> None:

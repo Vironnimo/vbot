@@ -263,6 +263,7 @@ def test_built_in_commands_include_current_catalog() -> None:
         "help",
         "model",
         "new",
+        "rename",
         "retry",
         "status",
         "stop",
@@ -281,6 +282,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "help": "none",
         "model": "optional",
         "new": "none",
+        "rename": "optional",
         "retry": "none",
         "status": "none",
         "stop": "none",
@@ -292,6 +294,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "help": "transient",
         "model": "action",
         "new": "action",
+        "rename": "toast",
         "retry": "action",
         "status": "transient",
         "stop": "toast",
@@ -561,6 +564,7 @@ def test_dispatch_no_argument_command_with_trailing_text_is_not_a_command() -> N
     [
         ("/compact", "compact"),
         ("/new", "new_session"),
+        ("/rename", "rename_session"),
         ("/retry", "retry_last_turn"),
     ],
 )
@@ -573,6 +577,24 @@ def test_dispatch_accessor_commands_return_actions(message: str, action_name: st
     assert result.name == action_name
 
 
+def test_dispatch_rename_with_value_threads_title_argument() -> None:
+    # The raw title travels verbatim; the accessor owns normalization and the write.
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/rename Release planning")
+
+    assert result == CommandAction(name="rename_session", argument="Release planning")
+
+
+def test_dispatch_rename_without_argument_clears_via_none() -> None:
+    # No argument is the clear signal: it reaches the accessor as ``None``.
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/rename")
+
+    assert result == CommandAction(name="rename_session", argument=None)
+
+
 @pytest.mark.parametrize(
     ("message", "expected"),
     [
@@ -582,6 +604,8 @@ def test_dispatch_accessor_commands_return_actions(message: str, action_name: st
         ("/handoff coder", True),
         ("/handoff a b", True),
         ("/compact keep the design", True),
+        ("/rename", True),
+        ("/rename Release planning", True),
         ("/bogus", False),
         ("/stop now", False),
         ("hello", False),

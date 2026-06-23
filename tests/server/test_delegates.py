@@ -356,6 +356,13 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "output": "action",
                 },
                 {
+                    "name": "rename",
+                    "description": "Rename this session; no argument clears the name.",
+                    "type": "command",
+                    "argument": "optional",
+                    "output": "toast",
+                },
+                {
                     "name": "retry",
                     "description": "Retry the last user turn in this session.",
                     "type": "command",

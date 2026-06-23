@@ -229,6 +229,50 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
     return {"ok": True}
 
 
+def _rename_session(state: Any, params: JsonObject) -> JsonObject:
+    """Set or clear a session's display title (the WebUI rename and ``/rename``).
+
+    Thin over the single titling seam ``chat_sessions.set_title``: an empty (or
+    absent) title clears it, so the session reverts to its automatic display.
+    The response carries the stored title (``None`` when cleared) so the caller
+    can confirm what was applied after normalization.
+    """
+    supported_fields = {"agent_id", "session_id", "title"}
+    unsupported_fields = sorted(set(params) - supported_fields)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported session.rename fields: {', '.join(unsupported_fields)}",
+        )
+
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    title = _session_title_param(params)
+    try:
+        stored_title = state.runtime.chat_sessions.set_title(
+            agent_id, session_id, title, project_id
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    # A rename changes the session's list display, so other windows on this agent
+    # refresh their session list — scoped to the agent like session.create.
+    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+    return {"agent_id": agent_id, "session_id": session_id, "title": stored_title}
+
+
+def _session_title_param(params: JsonObject) -> str:
+    """Read the rename title: any string, empty allowed (an empty title clears).
+
+    Unlike ``_required_string``/``_optional_string`` this accepts the empty
+    string, which is the explicit "clear the title" signal; an absent field is
+    treated the same way.
+    """
+    value = params.get("title", "")
+    if not isinstance(value, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.title must be a string")
+    return value
+
+
 def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -> JsonObject:
     public_fields = {
         "name",
@@ -349,5 +393,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent.delete": _delete_agent,
         "session.create": _create_session,
         "session.list": _list_sessions,
+        "session.rename": _rename_session,
         "session.link_channel": _link_session_to_channel,
     }
