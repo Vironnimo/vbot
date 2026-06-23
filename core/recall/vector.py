@@ -116,13 +116,12 @@ _SEMANTIC_SEARCH_GUIDANCE = (
 # Prepended to ``content`` (the model-facing tool output) and also exposed as a
 # structured ``notice`` field so a composing backend (hybrid) can re-surface it.
 _SEMANTIC_UNAVAILABLE_NOTICE = (
-    "Semantic search is unavailable: no embedding model is configured. Configure a "
-    "text_embedding model in Settings to enable meaning-based recall. Showing literal "
-    "keyword matches instead."
+    "Semantic search unavailable (no embedding model configured); showing literal "
+    "keyword matches. Configure a text_embedding model in Settings to enable it."
 )
 _SEMANTIC_FAILED_NOTICE = (
-    "Semantic search failed for this query and fell back to literal keyword matching. "
-    "Results may miss meaning-related sessions; retry, or check the embedding provider."
+    "Semantic search failed; showing literal keyword matches instead. Results may "
+    "miss meaning-related sessions — retry or check the embedding provider."
 )
 # Sentinel stored for the identity/global scope (``project_id is None``) in the
 # chunk-key tuple. An empty string keeps the store's UNIQUE constraint reliable —
