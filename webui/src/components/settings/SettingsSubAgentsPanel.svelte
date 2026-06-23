@@ -190,7 +190,7 @@
     <div class="s-row-desc">
       {t(
         'settings.subagents.timeoutMinutesDescription',
-        'Maximum wait time for blocking sub-agent calls before they fail.',
+        'Maximum wait time for foreground sub-agent calls before they fail.',
       )}
     </div>
   </div>

@@ -734,7 +734,7 @@ describe('ChatTimeline', () => {
           {
             id: 'call-subagent',
             name: 'subagent',
-            arguments: { agent_id: 'tester', blocking: false },
+            arguments: { agent_id: 'tester', background: true },
           },
         ],
       },
@@ -3837,7 +3837,7 @@ describe('ChatTimeline', () => {
           name: 'subagent',
           arguments: {
             agent_id: 'beta',
-            blocking: false,
+            background: true,
             content: 'Inspect in the background',
           },
         },
@@ -3900,7 +3900,7 @@ describe('ChatTimeline', () => {
           name: 'subagent',
           arguments: {
             agent_id: 'beta',
-            blocking: false,
+            background: true,
             content: 'Inspect in the background',
           },
         },
@@ -3966,7 +3966,7 @@ describe('ChatTimeline', () => {
           name: 'subagent',
           arguments: {
             agent_id: 'beta',
-            blocking: false,
+            background: true,
             content: 'Inspect in the background',
           },
         },
@@ -4146,7 +4146,7 @@ describe('ChatTimeline', () => {
           name: 'subagent',
           arguments: {
             agent_id: 'beta',
-            blocking: true,
+            background: false,
             content: 'Inspect slowly',
           },
         },
@@ -4211,7 +4211,7 @@ describe('ChatTimeline', () => {
           name: 'subagent',
           arguments: {
             agent_id: 'beta',
-            blocking: true,
+            background: false,
             content: 'Inspect slowly',
           },
         },
@@ -4251,7 +4251,7 @@ describe('ChatTimeline', () => {
           name: 'subagent',
           arguments: {
             agent_id: 'beta',
-            blocking: false,
+            background: true,
             content: 'Inspect in the background',
           },
         },

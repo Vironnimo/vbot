@@ -299,7 +299,7 @@ describe('chat state helpers', () => {
           {
             id: 'call-subagent',
             name: 'subagent',
-            arguments: { agent_id: 'tester', blocking: false },
+            arguments: { agent_id: 'tester', background: true },
           },
         ],
       },
@@ -980,7 +980,7 @@ describe('chat state helpers', () => {
           {
             id: 'call-subagent',
             name: 'subagent',
-            arguments: { agent_id: 'tester', blocking: false },
+            arguments: { agent_id: 'tester', background: true },
           },
         ],
       },
@@ -1125,7 +1125,7 @@ describe('chat state helpers', () => {
           {
             id: 'call-subagent',
             name: 'subagent',
-            arguments: { agent_id: 'tester', blocking: false },
+            arguments: { agent_id: 'tester', background: true },
           },
         ],
       },

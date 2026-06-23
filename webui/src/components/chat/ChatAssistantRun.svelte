@@ -6,7 +6,7 @@
     compactToolValue,
     formatTime,
     isRowCancellable,
-    isStartingBlockingSubAgent,
+    isStartingForegroundSubAgent,
     isSubAgentTool,
     isTextToSpeechTool,
     runMetaParts,
@@ -79,7 +79,7 @@
     onCancelSubAgent({ tool });
   }
 
-  // Once a non-blocking sub-agent run finishes (dot flips to success) and we have
+  // Once a background sub-agent run finishes (dot flips to success) and we have
   // no fetched result yet, request its final output so it appears automatically.
   // The cache key is run-scoped when the child run id is known, so repeated
   // spawns into the same child session each fetch their own result.
@@ -272,7 +272,7 @@
                 >
                   {t('chat.subagent.viewSession', 'view session')}
                 </button>
-              {:else if isStartingBlockingSubAgent(child)}
+              {:else if isStartingForegroundSubAgent(child)}
                 <span class="subagent-state">
                   {t('chat.subagent.starting', 'starting')}
                 </span>

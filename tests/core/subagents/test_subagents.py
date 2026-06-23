@@ -20,7 +20,7 @@ from core.chat import ChatMessage, ChatSessionManager
 from core.projects import AgentResolutionError
 from core.runs import ActiveRunError, Run, RunNotFoundError
 from core.subagents.subagents import (
-    FORCED_BLOCKING_NOTE,
+    FORCED_FOREGROUND_NOTE,
     SubAgentBatchTracker,
     _handle_subagent,
 )
@@ -382,7 +382,7 @@ async def test_subagent_self_spawn_inherits_parent_project(tmp_path: Path) -> No
     )
     assert project_session.exists()
     assert manager.started[0]["project_id"] == "acme"
-    # Settle the non-blocking completion tracker task before the loop closes.
+    # Settle the background completion tracker task before the loop closes.
     started_run = manager.started[0]["run"]
     started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
     await asyncio.sleep(0)
@@ -478,7 +478,7 @@ async def test_subagent_blank_session_id_creates_new_session(tmp_path: Path) -> 
         / f"{child_session_id}.jsonl"
     )
     assert project_session.exists()
-    # Settle the non-blocking completion tracker task before the loop closes.
+    # Settle the background completion tracker task before the loop closes.
     started_run = manager.started[0]["run"]
     started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
     await asyncio.sleep(0)
@@ -503,25 +503,25 @@ async def test_subagent_blank_agent_id_falls_back_to_calling_agent(tmp_path: Pat
     # Assert
     assert result["ok"] is True
     assert result["data"]["agent_id"] == "parent"
-    # Settle the non-blocking completion tracker task before the loop closes.
+    # Settle the background completion tracker task before the loop closes.
     started_run = manager.started[0]["run"]
     started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
     await asyncio.sleep(0)
 
 
-async def test_project_subagent_forced_blocking_at_depth_stays_project_scoped(
+async def test_project_subagent_forced_foreground_at_depth_stays_project_scoped(
     tmp_path: Path,
 ) -> None:
-    # Option A composes with project inheritance: a depth >= 1 spawn is forced
-    # blocking (returns the finished child payload plus the forced-blocking note)
-    # while the child run still carries the parent's project end-to-end.
+    # Option A composes with project inheritance: a depth >= 1 spawn is forced to
+    # the foreground (returns the finished child payload plus the forced-foreground
+    # note) while the child run still carries the parent's project end-to-end.
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(project_id="acme", nesting_depth=1)
 
-    # Act: a non-blocking request that Option A forces to block. Drive the started
-    # run to completion so the blocking wait resolves.
+    # Act: a background request that Option A forces to the foreground. Drive the
+    # started run to completion so the foreground wait resolves.
     task = asyncio.create_task(
         _handle_subagent(
             context,
@@ -539,7 +539,7 @@ async def test_project_subagent_forced_blocking_at_depth_stays_project_scoped(
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
     assert result["data"]["result"] == "child done"
-    assert result["data"]["spawn_note"] == FORCED_BLOCKING_NOTE
+    assert result["data"]["spawn_note"] == FORCED_FOREGROUND_NOTE
     assert manager.started[0]["project_id"] == "acme"
     assert started_run.project_id == "acme"
 

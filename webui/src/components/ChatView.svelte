@@ -858,7 +858,7 @@
     }
   };
 
-  // Non-blocking sub-agent spawns only return a "running" descriptor, so once the
+  // Background sub-agent spawns only return a "running" descriptor, so once the
   // child run finishes the timeline asks for its final output here. We fetch the
   // child session's last assistant message and cache it under the row's cache
   // key (run-scoped when the child run id is known, so repeated spawns into the

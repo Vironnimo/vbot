@@ -304,8 +304,8 @@ def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
 
 def _batch_completion_message(entries: list[_SubAgentEntry]) -> str:
     lines = [
-        "Sub-agent batch completed. The complete final output of each sub-agent is "
-        "included below. Do not call subagent_result to fetch these again.",
+        "Sub-agent batch complete. Each sub-agent's full output is below — "
+        "don't call subagent_result for these again.",
         "",
         "Results:",
     ]
