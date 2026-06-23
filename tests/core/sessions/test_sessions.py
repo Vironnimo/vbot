@@ -567,6 +567,58 @@ class TestChatSessionManager:
         with pytest.raises(ChatSessionError, match="session id"):
             manager.delete("coder", "../outside")
 
+    def test_archive_moves_files_out_of_live_dir(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        session = manager.create("coder", session_id="session-one")
+        manager.set_metadata("coder", "session-one", {"title": "Keep me"})
+
+        archive_dir = asyncio.run(manager.archive("coder", "session-one"))
+
+        # Gone from the live location, so list() no longer sees it.
+        assert not session.path.exists()
+        assert not session.sidecar_path.exists()
+        assert manager.list("coder") == []
+        # Both files preserved under the archive (recoverable by hand).
+        assert (archive_dir / session.path.name).exists()
+        assert (archive_dir / session.sidecar_path.name).exists()
+
+    def test_archive_lands_under_sessions_archive_root(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+
+        archive_dir = asyncio.run(manager.archive("coder", "session-one"))
+
+        assert archive_dir == tmp_path / "archive" / "sessions" / "agents" / "coder"
+
+    def test_archive_project_session_uses_project_archive_layout(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="shared", project_id="acme")
+
+        archive_dir = asyncio.run(manager.archive("coder", "shared", project_id="acme"))
+
+        assert (
+            archive_dir
+            == tmp_path / "archive" / "sessions" / "projects" / "acme" / "agents" / "coder"
+        )
+        assert (archive_dir / "shared.jsonl").exists()
+
+    def test_archive_missing_session_raises(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        with pytest.raises(ChatSessionError, match="session does not exist"):
+            asyncio.run(manager.archive("coder", "ghost"))
+
+    def test_archive_replaces_prior_archive_for_same_id(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="dup")
+        first_dir = asyncio.run(manager.archive("coder", "dup"))
+        # Re-create and re-archive the same id; the prior archive is replaced.
+        manager.create("coder", session_id="dup")
+        second_dir = asyncio.run(manager.archive("coder", "dup"))
+
+        assert first_dir == second_dir
+        assert (second_dir / "dup.jsonl").exists()
+
     def test_rejects_empty_agent_id(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 

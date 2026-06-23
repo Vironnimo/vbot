@@ -24,6 +24,7 @@ from server.rpc.errors import (
     RPC_ERROR_AGENT_IN_USE,
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_LAST_AGENT,
+    RPC_ERROR_SESSION_BUSY,
     RpcError,
 )
 from server.rpc.event_bridge import publish_resource_changed
@@ -161,6 +162,85 @@ def _create_session(state: Any, params: JsonObject) -> JsonObject:
     # on a different agent ignore it.
     publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
     return {"agent_id": agent_id, "session_id": session.id}
+
+
+async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
+    """Archive one session and report where the viewing accessor should land.
+
+    Decisions baked in: the session is archived, not hard-deleted (#1,
+    recoverable); deletion is refused while a run is active or queued on it (#4);
+    the response carries ``next_session_id`` for #2 navigation; and the removed
+    session is dropped from the active recall index immediately (#6). Channel-
+    bound and sub-agent sessions need no special handling — a channel session
+    simply resumes empty on the next inbound message, and an active sub-agent
+    child is already covered by the per-session busy guard.
+    """
+    supported_fields = {"agent_id", "session_id"}
+    unsupported_fields = sorted(set(params) - supported_fields)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported session.delete fields: {', '.join(unsupported_fields)}",
+        )
+
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    deleting_current = False
+    try:
+        # One resolver seam validates both agent sources, exactly like
+        # session.create, so an unknown agent fails before any file work.
+        state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        if _state_chat_runs(state).has_activity_for_session(agent_id, session_id):
+            raise RpcError(
+                RPC_ERROR_SESSION_BUSY,
+                f"cannot delete session with an active or queued run: {session_id}",
+            )
+        chat_sessions = state.runtime.chat_sessions
+        # Existence check first: a missing session raises ChatSessionError, which
+        # maps to a domain error (mirrors session.rename / link_channel).
+        chat_sessions.get(agent_id, session_id, project_id)
+        # An identity agent tracks a current-session pointer; note when we are
+        # deleting it so the re-aim is broadcast as an agent-config change below.
+        if project_id is None:
+            deleting_current = state.runtime.agents.get(agent_id).current_session_id == session_id
+        await chat_sessions.archive(agent_id, session_id, project_id)
+        next_session_id = _resolve_post_delete_landing(state, agent_id, session_id, project_id)
+        state.runtime.remove_session_from_recall(agent_id, session_id, project_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    # Same emit point as session.create/rename: other windows on this agent
+    # refresh their list (and the current marking), scoped to the agent.
+    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+    # Re-aiming the identity current pointer is an agent-config change, so refresh
+    # agent state in other windows (the current marking + return-to-current path).
+    if deleting_current:
+        publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    return {"agent_id": agent_id, "session_id": session_id, "next_session_id": next_session_id}
+
+
+def _resolve_post_delete_landing(
+    state: Any, agent_id: str, session_id: str, project_id: str | None
+) -> str:
+    """Return the session a viewing accessor should switch to after a delete (#2).
+
+    The most-recently-active remaining session, or a fresh empty one when none
+    remain. For an identity agent this goes through the shared
+    ``reset_current_after_session_removed`` seam, which re-aims the current
+    pointer when the deleted session was the current one and creates the fresh
+    session when none remain — so the landing is that agent's resulting current
+    and no session is ever created twice. A project config agent has no
+    server-side current pointer, so the landing is derived directly from the
+    remaining sessions (creating a fresh one when none remain).
+    """
+    chat_sessions = state.runtime.chat_sessions
+    if project_id is None:
+        agent = state.runtime.agents.reset_current_after_session_removed(agent_id, session_id)
+        return str(agent.current_session_id)
+    remaining = chat_sessions.list_with_metadata(agent_id, project_id)
+    if remaining:
+        newest = max(remaining, key=lambda session: session["last_active_at"])
+        return str(newest["id"])
+    return str(chat_sessions.create(agent_id, project_id=project_id).id)
 
 
 def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
@@ -393,6 +473,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent.delete": _delete_agent,
         "session.create": _create_session,
         "session.list": _list_sessions,
+        "session.delete": _delete_session,
         "session.rename": _rename_session,
         "session.link_channel": _link_session_to_channel,
     }

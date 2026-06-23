@@ -550,8 +550,68 @@ class ChatSessionManager:
         return sessions_with_metadata
 
     def delete(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
-        """Delete one agent session file."""
+        """Hard-delete one agent session's two files.
+
+        Low-level primitive (unlink transcript + sidecar). The session-deletion
+        feature does not call this — it archives via :meth:`archive` so a
+        removed session stays recoverable. Kept as the genuine "remove the
+        files" capability that tests and staleness cleanup use.
+        """
         self.get(agent_id, session_id, project_id).delete()
+
+    async def archive(self, agent_id: str, session_id: str, project_id: str | None = None) -> Path:
+        """Archive one session's two files instead of hard-deleting them.
+
+        The deletion feature's storage step: mirrors ``AgentStore``/
+        ``ProjectStore`` by moving the transcript and sidecar under
+        ``<data_dir>/archive/sessions/`` (recoverable by hand, no in-app
+        restore) rather than unlinking them. An existing archive for the same id
+        is replaced. Returns the archive directory.
+
+        Crash-safety mirrors :meth:`move`: holds the source ``write_lock`` and
+        moves the transcript first with :func:`os.replace` (atomic per file), so
+        an out-of-band note append cannot interleave. The caller's quiescence
+        precondition (no active or queued run on the session) is the real guard
+        that nothing recreates the file mid-archive.
+        """
+        _validate_session_id(session_id)
+        async with self.write_lock(agent_id, session_id, project_id):
+            source = self.get(agent_id, session_id, project_id)
+            archive_dir = self._archive_dir(agent_id, project_id)
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            archived_transcript = archive_dir / source.path.name
+            archived_sidecar = archive_dir / source.sidecar_path.name
+
+            # Replace any prior archive for the same id (mirrors agent/project).
+            archived_transcript.unlink(missing_ok=True)
+            archived_sidecar.unlink(missing_ok=True)
+
+            had_sidecar = source.sidecar_path.exists()
+            try:
+                os.replace(source.path, archived_transcript)
+            except OSError as exc:
+                raise ChatSessionError(
+                    f"failed to archive session transcript: {session_id}"
+                ) from exc
+            if had_sidecar:
+                os.replace(source.sidecar_path, archived_sidecar)
+            return archive_dir
+
+    def _archive_dir(self, agent_id: str, project_id: str | None) -> Path:
+        """Return the archive directory for one agent's deleted sessions.
+
+        Mirrors the live layout beneath a dedicated archive root so a hand
+        restore knows the origin, and so it never collides with the agent
+        archive (``archive/<agent-id>/``) or the project archive
+        (``archive/projects/<project-id>/``):
+
+        - identity: ``archive/sessions/agents/<agent-id>/``
+        - project:  ``archive/sessions/projects/<project-id>/agents/<agent-id>/``
+        """
+        root = self.data_dir / "archive" / "sessions"
+        if project_id is None:
+            return root / "agents" / agent_id
+        return root / "projects" / project_id / "agents" / agent_id
 
     def _load_sidecar(self, session: ChatSession) -> JsonObject:
         sidecar_path = session.sidecar_path

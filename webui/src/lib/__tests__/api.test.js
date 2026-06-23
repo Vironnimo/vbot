@@ -21,6 +21,7 @@ import {
   createRpcEnvelope,
   listProjects,
   removeProject,
+  deleteSession,
   renameSession,
   setProject,
   showProject,
@@ -525,6 +526,49 @@ describe('renameSession()', () => {
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
         method: 'session.rename',
+      }),
+    );
+  });
+});
+
+describe('deleteSession()', () => {
+  it('deletes a session through session.delete', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: {
+          agent_id: 'alpha',
+          session_id: 'session-1',
+          next_session_id: 'session-2',
+        },
+      }),
+    );
+
+    await expect(
+      deleteSession('alpha', 'session-1', { fetch: fetchFunction }),
+    ).resolves.toEqual({
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      next_session_id: 'session-2',
+    });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'session.delete',
+      params: { agent_id: 'alpha', session_id: 'session-1' },
+    });
+  });
+
+  it('rejects an empty agent or session id before sending', () => {
+    expect(() => deleteSession('', 'session-1')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'session.delete',
+      }),
+    );
+    expect(() => deleteSession('alpha', '')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'session.delete',
       }),
     );
   });

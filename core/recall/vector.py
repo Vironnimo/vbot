@@ -179,6 +179,16 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
     def describe_search(self) -> str:
         return _SEMANTIC_SEARCH_GUIDANCE
 
+    def remove_session(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
+        """Evict one session's chunk vectors from the store (delete-time cleanup).
+
+        Active counterpart to the on-search staleness drop in
+        ``_ensure_fresh_index``: session deletion calls it so a removed session
+        leaves semantic search immediately. ``project_id`` maps through
+        ``_project_scope`` to match how chunks are keyed in the store.
+        """
+        self.store.delete_session(agent_id, _project_scope(project_id), session_id)
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
