@@ -237,3 +237,11 @@ An Anthropic API key was added, unblocking the deferred Anthropic work. Built an
 - **Edge handled — Opus 4.5.** Exposes an effort ladder but not adaptive thinking, so canonical's `levels` would render adaptive and 400. Pinned to `control: budget` in `anthropic.overrides.json` (live-verified). The override file now carries only this one durable correction.
 
 **Still open (niche, now unblocked):** API tolerance for replayed opaque thinking blocks under *explicitly disabled* thinking was not re-probed this round (separate from the catalog/reasoning/sampling work). The conservative strip-guard stands; credentials now exist to verify it if it ever bites (see `providers/anthropic.md`).
+
+---
+
+## 2026-06-23 — Observed channel messages: grouped reminder lacks channel identity
+
+When the chat layer groups passively observed channel messages into the single "Messages in the channel since your last turn:" reminder (`core/chat/messages.py` → `_channel_messages_reminder_block`; see `chat.md` → observed channel context), it works only from the per-message notes, which carry the **sender** but not the **channel**. The header is therefore generic.
+
+**What would be better:** carry the channel name and channel id alongside each observed message (the listening side in `core/channels/` already has both when it writes the note) so the grouped reminder can name the source — e.g. "Messages in <channel> since your last turn:" — giving the agent richer context about where the messages came from. Deferred deliberately (user decision 2026-06-23); the generic header is the current behavior.
