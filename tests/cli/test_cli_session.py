@@ -283,3 +283,70 @@ def test_run_dispatches_session_list(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == ["no sessions for assistant"]
+
+
+def test_parse_args_supports_session_delete() -> None:
+    args = cli_main.parse_args(["session", "delete", "assistant", "session-one", "--yes"])
+
+    assert args.area == "session"
+    assert args.command == "delete"
+    assert args.agent == "assistant"
+    assert args.session == "session-one"
+    assert args.yes is True
+
+
+def test_session_delete_requires_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    monkeypatch.setattr(session_management.httpx, "post", fake_post)
+
+    result = session_management.session_delete(instance, "assistant", "session-one", False)
+
+    assert result.ok is False
+    assert "--yes" in result.message
+    # Refuses before any RPC call — nothing is deleted without confirmation.
+    assert calls == []
+
+
+def test_session_delete_posts_rpc_when_confirmed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "agent_id": "assistant",
+                    "session_id": "session-one",
+                    "next_session_id": "session-two",
+                },
+            },
+        )
+
+    monkeypatch.setattr(session_management.httpx, "post", fake_post)
+
+    result = session_management.session_delete(instance, "assistant", "session-one", True)
+
+    assert result.ok is True
+    assert "archived" in result.message
+    assert "session-two" in result.message
+    assert calls == [
+        {
+            "method": "session.delete",
+            "params": {"agent_id": "assistant", "session_id": "session-one"},
+        }
+    ]

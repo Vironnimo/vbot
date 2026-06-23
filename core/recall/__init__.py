@@ -17,6 +17,7 @@ from core.recall.recall import (
     RecallMatchMode,
     RecallRequest,
     RecallSortMode,
+    SupportsSessionRemoval,
 )
 from core.recall.sqlite_fts import SqliteFtsRecallBackend
 from core.recall.vector import VectorRecallBackend
@@ -44,6 +45,7 @@ __all__ = [
     "RecallMatchMode",
     "RecallRequest",
     "RecallSortMode",
+    "SupportsSessionRemoval",
     "ChunkVectorRecord",
     "SqliteFtsRecallBackend",
     "VectorHeader",

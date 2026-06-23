@@ -6,6 +6,7 @@ all core services and manages the application lifecycle.
 
 import asyncio
 import os
+import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,6 +46,7 @@ from core.recall import (
     RecallBackend,
     RecallBackendContext,
     RecallBackendRegistry,
+    SupportsSessionRemoval,
 )
 from core.runs import ChatRunManager
 from core.runtime.interfaces import (
@@ -882,6 +884,33 @@ class Runtime:
         if self._recall_backend_registry is None:
             raise RuntimeError("Recall backend registry not available")
         return self._recall_backend_registry.names()
+
+    def remove_session_from_recall(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> None:
+        """Evict a removed session from the active recall index (best-effort).
+
+        Session deletion calls this so a deleted session stops surfacing in
+        search immediately, rather than waiting for the next self-healing
+        reconcile. Backends without a derived index (the JSONL live scan) do not
+        implement removal and are skipped. Index cleanup is non-fatal — the index
+        is disposable and reconciles on the next search — so an index I/O error is
+        logged and swallowed instead of failing the delete.
+        """
+        self._ensure_started()
+        backend = self._recall_backend
+        if not isinstance(backend, SupportsSessionRemoval):
+            return
+        try:
+            backend.remove_session(agent_id, session_id, project_id)
+        except (OSError, sqlite3.Error) as error:
+            if self.logger is not None:
+                self.logger.warning(
+                    "Recall index cleanup failed for session %s/%s: %s",
+                    agent_id,
+                    session_id,
+                    error,
+                )
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""

@@ -15,6 +15,7 @@ from core.recall import (
     RecallBackendContext,
     RecallBackendRegistry,
     SqliteFtsRecallBackend,
+    SupportsSessionRemoval,
     VectorRecallBackend,
 )
 from core.sessions import ChatSessionManager
@@ -66,6 +67,20 @@ def test_registry_create_returns_expected_backend_type(
     assert isinstance(registry.create(RECALL_BACKEND_SQLITE_FTS, context), SqliteFtsRecallBackend)
     assert isinstance(registry.create(RECALL_BACKEND_VECTOR, context), VectorRecallBackend)
     assert isinstance(registry.create(RECALL_BACKEND_HYBRID, context), HybridRecallBackend)
+
+
+def test_session_removal_capability_is_opt_in_for_indexed_backends(
+    context: RecallBackendContext,
+) -> None:
+    """The runtime's recall cleanup relies on this membership: the live-scan
+    backend has no derived index and opts out, while the FTS, vector, and hybrid
+    backends opt in. ``remove_session_from_recall`` checks ``isinstance`` before
+    calling, so an opt-out backend simply falls back to self-healing."""
+
+    assert not isinstance(JsonlSessionRecallBackend(context.sessions), SupportsSessionRemoval)
+    assert isinstance(SqliteFtsRecallBackend(context), SupportsSessionRemoval)
+    assert isinstance(VectorRecallBackend(context), SupportsSessionRemoval)
+    assert isinstance(HybridRecallBackend(context), SupportsSessionRemoval)
 
 
 def test_registry_create_unknown_backend_raises_key_error(

@@ -653,8 +653,8 @@ class _FakeMoveAgents:
         self.reset_calls: list[tuple[str, str]] = []
         self.update_calls: list[tuple[str, dict[str, Any]]] = []
 
-    def reset_current_after_move(self, agent_id: str, moved_session_id: str) -> None:
-        self.reset_calls.append((agent_id, moved_session_id))
+    def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> None:
+        self.reset_calls.append((agent_id, removed_session_id))
 
     def update(self, agent_id: str, **changes: Any) -> None:
         self.update_calls.append((agent_id, changes))

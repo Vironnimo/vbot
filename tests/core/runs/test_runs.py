@@ -421,6 +421,43 @@ async def test_has_activity_for_agent_reports_active_and_queued_work() -> None:
     assert manager.has_activity_for_agent("coder") is False
 
 
+async def test_has_activity_for_session_is_scoped_to_one_session() -> None:
+    manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def active_execute(_run: Run) -> str:
+        await active_release.wait()
+        return "active"
+
+    async def queued_execute(_run: Run) -> str:
+        return "queued"
+
+    active_run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_execute,
+    )
+    queued_item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=queued_execute,
+        display_content="Queued next",
+    )
+
+    # Busy on the exact session, but not on the agent's other sessions nor on
+    # the same session id under a different agent.
+    assert manager.has_activity_for_session("coder", "session-one") is True
+    assert manager.has_activity_for_session("coder", "session-two") is False
+    assert manager.has_activity_for_session("writer", "session-one") is False
+
+    active_release.set()
+    assert await active_run.wait() == "active"
+    queued_run = await queued_item.future
+    assert await queued_run.wait() == "queued"
+
+    assert manager.has_activity_for_session("coder", "session-one") is False
+
+
 async def test_multiple_enqueued_items_drain_in_fifo_order() -> None:
     manager = ChatRunManager()
     active_release = asyncio.Event()

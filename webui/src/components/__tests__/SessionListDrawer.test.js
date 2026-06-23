@@ -7,6 +7,11 @@ import { init } from '../../lib/i18n.js';
 
 const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
 const renameSessionMock = vi.fn(async () => ({ title: 'Release planning' }));
+const deleteSessionMock = vi.fn(async () => ({
+  agent_id: 'alpha',
+  session_id: 'session-1',
+  next_session_id: 'session-2',
+}));
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -15,6 +20,7 @@ vi.mock('svelte', async () => {
 vi.mock('$lib/api.js', () => ({
   listSessions: (...args) => listSessionsMock(...args),
   renameSession: (...args) => renameSessionMock(...args),
+  deleteSession: (...args) => deleteSessionMock(...args),
 }));
 
 const { default: SessionListDrawer } =
@@ -32,6 +38,12 @@ describe('SessionListDrawer', () => {
     });
     renameSessionMock.mockReset();
     renameSessionMock.mockResolvedValue({ title: 'Release planning' });
+    deleteSessionMock.mockReset();
+    deleteSessionMock.mockResolvedValue({
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      next_session_id: 'session-2',
+    });
     mountedComponent = null;
   });
 
@@ -40,6 +52,7 @@ describe('SessionListDrawer', () => {
       await unmount(mountedComponent);
       mountedComponent = null;
     }
+    vi.unstubAllGlobals();
     document.body.innerHTML = '';
   });
 
@@ -172,6 +185,144 @@ describe('SessionListDrawer', () => {
 
     expect(document.querySelector('.session-row__edit-input')).toBeNull();
     expect(renameSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('deletes a session through the row menu after confirmation', async () => {
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+    const onSessionDeleted = vi.fn();
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        agentCurrentSessionId: 'session-1',
+        onSessionDeleted,
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+    const loadsBefore = listSessionsMock.mock.calls.length;
+
+    document.querySelector('.session-row__menu-trigger').click();
+    flushSync();
+    document.querySelector('.session-row__menu-item--danger').click();
+    flushSync();
+
+    // Wait on the downstream callback so the delete promise has resolved (the
+    // mock's call count flips the moment it is invoked, before onSessionDeleted).
+    await waitForCondition(() => onSessionDeleted.mock.calls.length === 1);
+    expect(deleteSessionMock).toHaveBeenCalledWith('alpha', 'session-1');
+    expect(onSessionDeleted).toHaveBeenCalledWith({
+      deletedSessionId: 'session-1',
+      nextSessionId: 'session-2',
+    });
+    // A successful delete re-fetches so the removed row disappears.
+    await waitForCondition(
+      () => listSessionsMock.mock.calls.length === loadsBefore + 1,
+    );
+  });
+
+  it('does not delete when the confirmation is declined', async () => {
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => false),
+    );
+    const onSessionDeleted = vi.fn();
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        agentCurrentSessionId: 'session-1',
+        onSessionDeleted,
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+
+    document.querySelector('.session-row__menu-trigger').click();
+    flushSync();
+    document.querySelector('.session-row__menu-item--danger').click();
+    flushSync();
+
+    expect(deleteSessionMock).not.toHaveBeenCalled();
+    expect(onSessionDeleted).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a delete failure as an inline error', async () => {
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+    deleteSessionMock.mockRejectedValueOnce(
+      new Error('cannot delete session with an active or queued run'),
+    );
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        agentCurrentSessionId: 'session-1',
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+
+    document.querySelector('.session-row__menu-trigger').click();
+    flushSync();
+    document.querySelector('.session-row__menu-item--danger').click();
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelector('.session-drawer__state--error') !== null,
+    );
+    expect(
+      document.querySelector('.session-drawer__state--error').textContent,
+    ).toContain('active or queued run');
+  });
+
+  it('warns that a channel session resumes empty in the confirm prompt', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          created_at: '2026-05-09T00:00:00+00:00',
+          platform: 'telegram',
+          platform_conv_id: '12345',
+        },
+      ],
+    });
+    const confirmSpy = vi.fn(() => false);
+    vi.stubGlobal('confirm', confirmSpy);
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        agentCurrentSessionId: 'session-1',
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+
+    document.querySelector('.session-row__menu-trigger').click();
+    flushSync();
+    document.querySelector('.session-row__menu-item--danger').click();
+    flushSync();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toContain('channel');
   });
 });
 

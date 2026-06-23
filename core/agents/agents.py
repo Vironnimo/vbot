@@ -265,18 +265,19 @@ class AgentStore:
 
         return archive_dir
 
-    def reset_current_after_move(self, agent_id: str, moved_session_id: str) -> Agent:
-        """Re-point an identity agent's current session after one was moved away.
+    def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> Agent:
+        """Re-point an identity agent's current session after one is gone.
 
-        Invoked as the final step of a session move when the **source** is an
-        identity agent. If the moved session was this agent's current session, the
-        pointer lands on the most recently active *remaining* session (max
-        ``last_active_at``), or a fresh empty session when none remain. If the
-        moved session was not the current one, the pointer is left untouched.
+        Invoked as the final step of removing a session from this home — a move
+        to another agent, or a deletion. If the removed session was this agent's
+        current session, the pointer lands on the most recently active
+        *remaining* session (max ``last_active_at``), or a fresh empty session
+        when none remain. If the removed session was not the current one, the
+        pointer is left untouched.
 
         Reads the stored config side-effect-free (not through :meth:`get`):
         ``get`` would auto-create a fresh empty current session the instant it
-        sees the pointer dangling at the just-moved id, preempting the
+        sees the pointer dangling at the just-removed id, preempting the
         last-active landing this method exists to provide.
         """
         self._validate_agent_id(agent_id)
@@ -285,7 +286,7 @@ class AgentStore:
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
 
         agent = self._read_agent_config(agent_path)
-        if agent.current_session_id != moved_session_id:
+        if agent.current_session_id != removed_session_id:
             return self._apply_defaults(agent, self._agent_defaults())
 
         remaining = self._session_manager().list_with_metadata(agent_id)

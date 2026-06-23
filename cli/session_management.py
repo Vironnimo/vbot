@@ -51,6 +51,45 @@ def session_create(
     )
 
 
+def session_delete(
+    instance: ServerInstance,
+    agent_id: str,
+    session_id: str,
+    confirm: bool,
+) -> CommandResult:
+    """Delete (archive) a session via `session.delete` RPC.
+
+    A typed command is already deliberate, but the destructive call still
+    requires an explicit ``--yes`` so a stray invocation cannot drop a
+    conversation. Without it the command refuses and explains how to proceed.
+    The session is archived (recoverable by hand), not erased.
+    """
+
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"refusing to delete session {session_id} for {agent_id} without confirmation; "
+                "re-run with --yes (the session is archived, not erased)"
+            ),
+            instance=instance,
+        )
+
+    params = {"agent_id": agent_id, "session_id": session_id}
+    payload = _rpc_call(instance, "session.delete", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    next_session_id = _string_or_default(payload.data.get("next_session_id"), "?")
+    return CommandResult(
+        ok=True,
+        message=(
+            f"deleted session {session_id} for {agent_id} (archived, recoverable); "
+            f"next session: {next_session_id}"
+        ),
+        instance=instance,
+    )
+
+
 def session_link_channel(
     instance: ServerInstance,
     agent_id: str,

@@ -71,7 +71,12 @@ from cli.server_management import (
     start_server,
     stop_server,
 )
-from cli.session_management import session_create, session_link_channel, session_list
+from cli.session_management import (
+    session_create,
+    session_delete,
+    session_link_channel,
+    session_list,
+)
 from cli.skill_management import skill_list
 from cli.task_model_management import (
     task_model_clear,
@@ -443,6 +448,7 @@ def dispatch_session_command(
     create_session_fn: Callable[
         [ServerInstance, str, str | None, bool], CommandResult
     ] = session_create,
+    delete_session_fn: Callable[[ServerInstance, str, str, bool], CommandResult] = session_delete,
     link_session_fn: Callable[
         [ServerInstance, str, str, str, str], CommandResult
     ] = session_link_channel,
@@ -453,6 +459,8 @@ def dispatch_session_command(
         return list_sessions_fn(instance, args.agent)
     if args.command == "create":
         return create_session_fn(instance, args.agent, args.id, args.make_current)
+    if args.command == "delete":
+        return delete_session_fn(instance, args.agent, args.session, args.yes)
     if args.command == "link-channel":
         return link_session_fn(instance, args.agent, args.session, args.channel, args.conversation)
     raise ValueError(f"Unsupported session command: {args.command}")

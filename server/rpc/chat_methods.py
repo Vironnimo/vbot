@@ -676,7 +676,7 @@ async def _handle_move_session_command(
         # "Current" pointers follow the session on each identity side; a project
         # config agent carries no server-side current (the accessor picks locally).
         if project_id is None:
-            state.runtime.agents.reset_current_after_move(agent_id, session_id)
+            state.runtime.agents.reset_current_after_session_removed(agent_id, session_id)
         if target_project_id is None:
             state.runtime.agents.update(target_agent_id, current_session_id=session_id)
 
