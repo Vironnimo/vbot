@@ -204,6 +204,15 @@
   let sessionOverrideActive = $derived(Boolean(viewingSessionId));
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(!activeAgent || loadingHistory);
+  // The composer's per-session draft is keyed by the full displayed-session key;
+  // its per-agent input history is keyed by the agent part alone (bare id for an
+  // identity agent, `agent@projekt` for a project agent), so sessions of the
+  // same agent share one history.
+  let composerDraftKey = $derived(displayedSessionKey());
+  let composerHistoryKey = $derived.by(() => {
+    const separator = composerDraftKey.indexOf('::');
+    return separator >= 0 ? composerDraftKey.slice(0, separator) : '';
+  });
   let lastSharedSelectedAgentId = '';
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
@@ -1905,6 +1914,8 @@
             <ChatComposer
               disabled={composerDisabled}
               isRunning={isRunActive(activeSessionState)}
+              draftKey={composerDraftKey}
+              historyKey={composerHistoryKey}
               {availableSkills}
               onSendMessage={handleSendMessage}
               onTranscriptionError={handleTranscriptionError}

@@ -3,6 +3,14 @@
 
   import { transcribeSpeech, uploadAttachment } from '$lib/api.js';
   import { createAudioRecorder } from '$lib/audioRecorder.js';
+  import {
+    clearDraft,
+    flushComposerMemory,
+    getDraft,
+    getHistory,
+    pushHistory,
+    setDraft,
+  } from '$lib/composerMemory.js';
   import { t } from '$lib/i18n.js';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
   import Button from './ui/Button.svelte';
@@ -15,10 +23,20 @@
     disabled = false,
     isRunning = false,
     availableSkills = [],
+    draftKey = '',
+    historyKey = '',
     onSendMessage,
     onTranscriptionError,
   } = $props();
   let content = $state('');
+  // Input-history navigation. `historyCursor` is -1 while editing the live draft
+  // (the "bottom" slot) and 0..n-1 when a sent message is recalled (newest
+  // first). `navWorkingCopies` keeps a per-slot working copy for the duration of
+  // one navigation session, so editing a recalled message and arrowing away then
+  // back restores the edit instead of discarding it (readline-style).
+  let historyCursor = -1;
+  let navWorkingCopies = {};
+  let lastDraftKey = null;
   let inputElement = $state(null);
   let autocompleteElement = $state(null);
   let fileInputElement = $state(null);
@@ -63,6 +81,46 @@
     }
     cancelActiveRecording();
     clearPendingAttachments();
+    // Leaving the Chat tab tears this component down; make sure the latest
+    // debounced draft reaches durable storage before it goes.
+    flushComposerMemory();
+  });
+
+  // Load the draft for the displayed session whenever the session changes (and
+  // on first mount). The outgoing session's draft is already persisted on each
+  // edit, so switching never loses it — we only swap in the incoming one and
+  // reset history navigation to its draft slot.
+  $effect(() => {
+    const key = draftKey;
+    if (key === lastDraftKey) {
+      return;
+    }
+    lastDraftKey = key;
+    historyCursor = -1;
+    navWorkingCopies = {};
+    inputOrigin = '';
+    triggerContext = null;
+    activeSkillIndex = 0;
+    _triggerClosed = false;
+    content = getDraft(key);
+    tick().then(() => {
+      if (content) {
+        resizeInput();
+      } else {
+        resetInputHeight();
+      }
+    });
+  });
+
+  // A reload fires `beforeunload` while this component is still mounted; flush so
+  // an in-progress draft survives it. The listener is removed on unmount.
+  $effect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const handleBeforeUnload = () => flushComposerMemory();
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   });
 
   const safeRevokeObjectUrl = (objectUrl) => {
@@ -283,6 +341,7 @@
     }
     content = content.trim() ? `${content.trimEnd()}\n${text}` : text;
     inputOrigin = 'speech_transcription';
+    noteContentEdited();
     triggerContext = null;
     activeSkillIndex = 0;
     await tick();
@@ -365,6 +424,9 @@
     }
 
     cancelActiveRecording();
+    // Record the typed text (if any) so it can be recalled later from any of
+    // this agent's sessions. Attachment-only sends contribute no history entry.
+    pushHistory(historyKey, content);
     const sendOptions = inputOrigin ? { inputOrigin } : null;
 
     if (!hasPendingAttachments) {
@@ -427,6 +489,9 @@
     triggerContext = null;
     activeSkillIndex = 0;
     isDragOver = false;
+    clearDraft(draftKey);
+    historyCursor = -1;
+    navWorkingCopies = {};
     resetInputHeight();
   };
 
@@ -470,6 +535,95 @@
     inputElement.scrollTop = 0;
   };
 
+  // Record the current text into the active navigation slot. While editing the
+  // live draft (cursor -1) that also persists it; edits to a recalled history
+  // entry stay a transient working copy that never overwrites the draft.
+  const noteContentEdited = () => {
+    navWorkingCopies[historyCursor] = content;
+    if (historyCursor === -1) {
+      setDraft(draftKey, content);
+    }
+  };
+
+  // Up recalls history only when the caret sits on the first logical line, so a
+  // multi-line draft can still be navigated normally before the first line
+  // hands off to history ("keep going up").
+  const caretOnFirstLine = () => {
+    if (!inputElement) {
+      return true;
+    }
+    const start = inputElement.selectionStart ?? 0;
+    if (start !== (inputElement.selectionEnd ?? start)) {
+      return false;
+    }
+    return !content.slice(0, start).includes('\n');
+  };
+
+  const caretOnLastLine = () => {
+    if (!inputElement) {
+      return true;
+    }
+    const end = inputElement.selectionEnd ?? content.length;
+    if ((inputElement.selectionStart ?? end) !== end) {
+      return false;
+    }
+    return !content.slice(end).includes('\n');
+  };
+
+  const applyNavSlot = (history) => {
+    const slotText =
+      historyCursor in navWorkingCopies
+        ? navWorkingCopies[historyCursor]
+        : historyCursor === -1
+          ? getDraft(draftKey)
+          : (history[historyCursor] ?? '');
+    content = slotText;
+    triggerContext = null;
+    activeSkillIndex = 0;
+    // Don't auto-open the skill popup from recalled text that begins with `/`.
+    _triggerClosed = true;
+    if (historyCursor === -1) {
+      setDraft(draftKey, content);
+    }
+    tick().then(() => {
+      if (!inputElement) {
+        return;
+      }
+      const caret = content.length;
+      inputElement.setSelectionRange(caret, caret);
+      if (content) {
+        resizeInput();
+      } else {
+        resetInputHeight();
+      }
+    });
+  };
+
+  // Returns true when the key was consumed (caller prevents the default caret
+  // move). Going older stashes the slot we leave so nothing is lost on return.
+  const recallOlderMessage = () => {
+    const history = getHistory(historyKey);
+    if (history.length === 0) {
+      return false;
+    }
+    navWorkingCopies[historyCursor] = content;
+    if (historyCursor >= history.length - 1) {
+      // Already at the oldest entry: hold position, but still swallow the key.
+      return true;
+    }
+    historyCursor += 1;
+    applyNavSlot(history);
+    return true;
+  };
+
+  const recallNewerMessage = () => {
+    const history = getHistory(historyKey);
+    navWorkingCopies[historyCursor] = content;
+    historyCursor -= 1;
+    applyNavSlot(history);
+    return true;
+  };
+
   const handleKeydown = (event) => {
     if (showSkillAutocomplete) {
       if (event.key === 'ArrowDown') {
@@ -505,6 +659,29 @@
       }
     }
 
+    // Input history — only when the skill/command popup isn't already using the
+    // arrow keys. Up walks into older sent messages from the first line; Down
+    // walks back toward (and finally into) the live draft.
+    if (!showSkillAutocomplete) {
+      if (
+        event.key === 'ArrowUp' &&
+        caretOnFirstLine() &&
+        recallOlderMessage()
+      ) {
+        event.preventDefault();
+        return;
+      }
+      if (
+        event.key === 'ArrowDown' &&
+        historyCursor !== -1 &&
+        caretOnLastLine() &&
+        recallNewerMessage()
+      ) {
+        event.preventDefault();
+        return;
+      }
+    }
+
     if (event.key !== 'Enter' || event.shiftKey) {
       return;
     }
@@ -523,6 +700,7 @@
     if (!content.trim()) {
       inputOrigin = '';
     }
+    noteContentEdited();
     resizeInput();
     updateTriggerContext();
   };
@@ -639,6 +817,9 @@
     activeSkillIndex = 0;
     _triggerClosed = true;
     isDragOver = false;
+    clearDraft(draftKey);
+    historyCursor = -1;
+    navWorkingCopies = {};
     resetInputHeight();
     onSendMessage?.(`/${normalizedName}`);
   };
@@ -668,6 +849,7 @@
     const insertedToken = `${marker}${normalizedSkillName}`;
     const nextCursorPosition = prefix.length + insertedToken.length;
     content = `${prefix}${insertedToken}${suffix}`;
+    noteContentEdited();
     triggerContext = null;
     activeSkillIndex = 0;
     _triggerClosed = true;
