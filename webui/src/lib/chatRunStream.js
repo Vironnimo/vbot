@@ -256,7 +256,7 @@ export function createChatRunStream({
       }
 
       // Terminal events carry the run's real wall-clock duration. A
-      // non-blocking sub-agent spawn returns immediately, so the parent's
+      // background sub-agent spawn returns immediately, so the parent's
       // spawn tool call has a ~0s duration; the child run's duration is the
       // meaningful runtime to show.
       const durationMs = runEventDurationMs(event);

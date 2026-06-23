@@ -499,7 +499,7 @@ export const englishCatalog = Object.freeze({
     'Maximum number of sub-agent sessions one parent run may spawn.',
   'settings.subagents.timeoutMinutes': 'Timeout minutes',
   'settings.subagents.timeoutMinutesDescription':
-    'Maximum wait time for blocking sub-agent calls before they fail.',
+    'Maximum wait time for foreground sub-agent calls before they fail.',
   'settings.subagents.saveSuccess': 'Sub-agent settings updated.',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.subtitle': 'Automatic context window management.',

@@ -323,7 +323,7 @@ function selectTrackedRunTimelineSource(
 
 // An active run without a user_message_persisted event cannot be spliced into
 // history by its user message. This happens for internal/automation runs — most
-// notably the follow-up run a non-blocking sub-agent completion spawns, whose
+// notably the follow-up run a background sub-agent completion spawns, whose
 // trigger is a hidden note, not a user message. When every assistant/tool
 // message the live run produced is already persisted in history, the persisted
 // copy is authoritative, so we drop the replayed live run to avoid rendering the
@@ -390,7 +390,7 @@ function runOutputPersistedInHistory(events, messages) {
 // next to the new active run's events. The snapshot model removes the original
 // trigger (the WS replay-from-0 that re-injected already-completed runs on
 // refresh), but this natural-flow case can still surface — most visibly the
-// parent run that spawned a non-blocking sub-agent, whose events stay in
+// parent run that spawned a background sub-agent, whose events stay in
 // `runEvents` until the next history load. liveTimelineItems builds a live
 // block (plus user_message_persisted item) for every run_id, but
 // selectTrackedRunTimelineSource only reconciles the single active run against

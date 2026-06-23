@@ -317,7 +317,7 @@ async def test_batch_tracker_triggers_once_when_all_sub_agents_complete() -> Non
     assert agent_id == "parent"
     assert session_id == "parent-session"
     assert internal is True
-    assert "Sub-agent batch completed." in message
+    assert "Sub-agent batch complete." in message
     assert "### worker (session session-one) — completed" in message
     assert "First result" in message
     assert "### worker (session session-two) — completed" in message
@@ -567,7 +567,7 @@ async def test_subagent_tool_marks_created_session_with_parent_metadata(
     }
 
 
-async def test_subagent_tool_emits_session_started_before_blocking_result(
+async def test_subagent_tool_emits_session_started_before_foreground_result(
     tmp_path: Path,
 ) -> None:
     # Arrange
@@ -583,7 +583,7 @@ async def test_subagent_tool_emits_session_started_before_blocking_result(
     task = asyncio.create_task(
         _handle_subagent(
             context,
-            {"content": "spawn", "blocking": True},
+            {"content": "spawn", "background": False},
             runtime=runtime,
             batch_tracker=tracker,
         )
@@ -827,7 +827,7 @@ async def test_subagent_tool_counts_queued_run_against_per_turn_limit(
         await asyncio.sleep(0)
 
 
-async def test_parent_cancellation_removes_blocking_queued_subagent(tmp_path: Path) -> None:
+async def test_parent_cancellation_removes_foreground_queued_subagent(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()
     manager.hold_enqueued_starts = True
@@ -849,7 +849,7 @@ async def test_parent_cancellation_removes_blocking_queued_subagent(tmp_path: Pa
             {
                 "content": "spawn",
                 "session_id": "cancel-sub-session",
-                "blocking": True,
+                "background": False,
             },
             runtime=runtime,
             batch_tracker=tracker,
@@ -868,7 +868,7 @@ async def test_parent_cancellation_removes_blocking_queued_subagent(tmp_path: Pa
         await task
 
 
-async def test_parent_cancellation_does_not_remove_non_blocking_queued_subagent(
+async def test_parent_cancellation_does_not_remove_background_queued_subagent(
     tmp_path: Path,
 ) -> None:
     # Arrange
@@ -953,7 +953,7 @@ async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
         await asyncio.sleep(0)
 
 
-async def test_subagent_tool_blocking_waits_for_queued_run_to_complete(
+async def test_subagent_tool_foreground_waits_for_queued_run_to_complete(
     tmp_path: Path,
 ) -> None:
     # Arrange
@@ -967,11 +967,11 @@ async def test_subagent_tool_blocking_waits_for_queued_run_to_complete(
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context()
-    runtime.chat_sessions.create(context.agent_id, session_id="queued-blocking-sub-session")
-    manager.busy_sessions[(context.agent_id, "queued-blocking-sub-session")] = Run(
+    runtime.chat_sessions.create(context.agent_id, session_id="queued-foreground-sub-session")
+    manager.busy_sessions[(context.agent_id, "queued-foreground-sub-session")] = Run(
         run_id="busy-run",
         agent_id=context.agent_id,
-        session_id="queued-blocking-sub-session",
+        session_id="queued-foreground-sub-session",
     )
 
     # Act
@@ -979,8 +979,8 @@ async def test_subagent_tool_blocking_waits_for_queued_run_to_complete(
         context,
         {
             "content": "spawn",
-            "session_id": "queued-blocking-sub-session",
-            "blocking": True,
+            "session_id": "queued-foreground-sub-session",
+            "background": False,
         },
         runtime=runtime,
         batch_tracker=tracker,
@@ -1016,12 +1016,12 @@ async def test_subagent_tool_rejects_parent_session_reuse(tmp_path: Path) -> Non
     assert manager.started == []
 
 
-async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
+async def test_subagent_tool_self_spawns_background_and_propagates_depth(
     tmp_path: Path,
 ) -> None:
-    # Non-blocking only happens at the top level (depth 0); a depth >= 1 spawn is
-    # forced blocking. A top-level self-spawn returns "running" and the child loop
-    # carries depth + 1.
+    # Background only happens at the top level (depth 0); a depth >= 1 spawn is
+    # forced to the foreground. A top-level self-spawn returns "running" and the
+    # child loop carries depth + 1.
     # Arrange
     FakeChatLoop.seen_depths = []
     FakeChatLoop.seen_streaming = []
@@ -1051,10 +1051,10 @@ async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
     assert FakeChatLoop.seen_streaming == [True]
 
 
-async def test_subagent_tool_forces_blocking_at_depth(tmp_path: Path) -> None:
-    # A sub-agent (depth >= 1) cannot park non-blocking work, so an omitted blocking
-    # flag is forced to blocking: the tool returns the finished child result payload
-    # (not a "running" descriptor) and tags it with the forced-blocking note.
+async def test_subagent_tool_forces_foreground_at_depth(tmp_path: Path) -> None:
+    # A sub-agent (depth >= 1) cannot park background work, so an omitted background
+    # flag is forced to the foreground: the tool returns the finished child result
+    # payload (not a "running" descriptor) and tags it with the forced-foreground note.
     assistant = ChatMessage.assistant(
         model="openai/gpt-5.2",
         content="child done",
@@ -1078,13 +1078,15 @@ async def test_subagent_tool_forces_blocking_at_depth(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
     assert result["data"]["result"] == "child done"
-    assert result["data"]["spawn_note"] == subagent_module.FORCED_BLOCKING_NOTE
-    # The forced-blocking child is fully fetched, so the batch drains with no note.
+    assert result["data"]["spawn_note"] == subagent_module.FORCED_FOREGROUND_NOTE
+    # The forced-foreground child is fully fetched, so the batch drains with no note.
     assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
 
 
-async def test_subagent_tool_forces_blocking_at_depth_when_blocking_false(tmp_path: Path) -> None:
-    # An explicit blocking=false at depth is overridden too, not just an omitted flag.
+async def test_subagent_tool_forces_foreground_at_depth_when_background_true(
+    tmp_path: Path,
+) -> None:
+    # An explicit background=true at depth is overridden too, not just an omitted flag.
     assistant = ChatMessage.assistant(model="openai/gpt-5.2", content="child done")
     manager = FakeRunManager()
     manager.next_result = assistant
@@ -1095,7 +1097,7 @@ async def test_subagent_tool_forces_blocking_at_depth_when_blocking_false(tmp_pa
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "do work", "blocking": False},
+        {"content": "do work", "background": True},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -1103,14 +1105,14 @@ async def test_subagent_tool_forces_blocking_at_depth_when_blocking_false(tmp_pa
     # Assert
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
-    assert result["data"]["spawn_note"] == subagent_module.FORCED_BLOCKING_NOTE
+    assert result["data"]["spawn_note"] == subagent_module.FORCED_FOREGROUND_NOTE
 
 
-async def test_subagent_tool_explicit_blocking_at_depth_has_no_forced_note(
+async def test_subagent_tool_explicit_foreground_at_depth_has_no_forced_note(
     tmp_path: Path,
 ) -> None:
-    # Explicit blocking at depth is honored as-is, with no forced-blocking note:
-    # the caller already asked to block, nothing was overridden.
+    # Explicit foreground at depth is honored as-is, with no forced-foreground note:
+    # the caller already asked to wait, nothing was overridden.
     assistant = ChatMessage.assistant(model="openai/gpt-5.2", content="child done")
     manager = FakeRunManager()
     manager.next_result = assistant
@@ -1121,7 +1123,7 @@ async def test_subagent_tool_explicit_blocking_at_depth_has_no_forced_note(
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "do work", "blocking": True},
+        {"content": "do work", "background": False},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -1132,11 +1134,11 @@ async def test_subagent_tool_explicit_blocking_at_depth_has_no_forced_note(
     assert "spawn_note" not in result["data"]
 
 
-async def test_subagent_tool_top_level_non_blocking_keeps_running_descriptor(
+async def test_subagent_tool_top_level_background_keeps_running_descriptor(
     tmp_path: Path,
 ) -> None:
-    # Regression: at depth 0 an omitted blocking flag stays non-blocking and returns
-    # the "running" descriptor with no forced-blocking note.
+    # Regression: at depth 0 an omitted background flag stays in the background and
+    # returns the "running" descriptor with no forced-foreground note.
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -1154,7 +1156,7 @@ async def test_subagent_tool_top_level_non_blocking_keeps_running_descriptor(
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
     assert "spawn_note" not in result["data"]
-    # Settle the non-blocking completion tracker task before the loop closes.
+    # Settle the background completion tracker task before the loop closes.
     sub_run = manager.started[0][3]
     sub_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
     await asyncio.sleep(0)
@@ -1223,7 +1225,7 @@ async def test_subagent_completion_tracker_logs_unexpected_failures(
     assert str(log_calls[0][2]) == "boom"
 
 
-async def test_subagent_tool_propagates_parent_cancellation_for_blocking(tmp_path: Path) -> None:
+async def test_subagent_tool_propagates_parent_cancellation_for_foreground(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -1234,7 +1236,7 @@ async def test_subagent_tool_propagates_parent_cancellation_for_blocking(tmp_pat
     task = asyncio.create_task(
         _handle_subagent(
             context,
-            {"content": "do work", "agent_id": "worker", "blocking": True},
+            {"content": "do work", "agent_id": "worker", "background": False},
             runtime=runtime,
             batch_tracker=tracker,
         )
@@ -1256,7 +1258,7 @@ async def test_subagent_tool_propagates_parent_cancellation_for_blocking(tmp_pat
     assert result["data"]["cancelled_by_user"] is True
 
 
-async def test_subagent_tool_does_not_propagate_parent_cancellation_for_non_blocking(
+async def test_subagent_tool_does_not_propagate_parent_cancellation_for_background(
     tmp_path: Path,
 ) -> None:
     # Arrange
@@ -1283,7 +1285,7 @@ async def test_subagent_tool_does_not_propagate_parent_cancellation_for_non_bloc
     assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 1
 
 
-async def test_subagent_tool_blocking_waits_for_full_result(tmp_path: Path) -> None:
+async def test_subagent_tool_foreground_waits_for_full_result(tmp_path: Path) -> None:
     # Arrange
     assistant = ChatMessage.assistant(
         model="openai/gpt-5.2",
@@ -1300,7 +1302,7 @@ async def test_subagent_tool_blocking_waits_for_full_result(tmp_path: Path) -> N
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "do work", "blocking": True},
+        {"content": "do work", "background": False},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -1315,7 +1317,7 @@ async def test_subagent_tool_blocking_waits_for_full_result(tmp_path: Path) -> N
     assert trigger_service.calls == []
 
 
-async def test_subagent_tool_blocking_timeout_completes_tracker(
+async def test_subagent_tool_foreground_timeout_completes_tracker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1334,7 +1336,7 @@ async def test_subagent_tool_blocking_timeout_completes_tracker(
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "do work", "blocking": True},
+        {"content": "do work", "background": False},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -1409,10 +1411,10 @@ async def test_wait_for_subagent_result_marks_generic_cancellation_without_user_
     assert result["result"] is None
 
 
-async def test_subagent_tool_blocking_user_cancelled_result_includes_cancelled_by_user(
+async def test_subagent_tool_foreground_user_cancelled_result_includes_cancelled_by_user(
     tmp_path: Path,
 ) -> None:
-    """A blocking sub-agent that the user cancels returns 'cancelled by user'."""
+    """A foreground sub-agent that the user cancels returns 'cancelled by user'."""
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -1423,7 +1425,7 @@ async def test_subagent_tool_blocking_user_cancelled_result_includes_cancelled_b
     task = asyncio.create_task(
         _handle_subagent(
             context,
-            {"content": "do work", "agent_id": "worker", "blocking": True},
+            {"content": "do work", "agent_id": "worker", "background": False},
             runtime=runtime,
             batch_tracker=tracker,
         )

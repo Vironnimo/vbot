@@ -345,7 +345,7 @@ export const subAgentLastToolName = (tool, subAgentStatuses = {}) => {
 };
 
 // Status label for a sub-agent tool row. Prefers the child run's real runtime
-// over the spawn tool's own call duration, which is ~0s for a non-blocking spawn
+// over the spawn tool's own call duration, which is ~0s for a background spawn
 // that returns the moment the child run starts.
 export const subAgentToolStatusLabel = (
   tool,
@@ -364,7 +364,7 @@ export const subAgentToolStatusLabel = (
     return formatDurationMs(childDurationMs, 'chat.toolDurationSeconds');
   }
 
-  // A non-blocking spawn carries no inline result, so its own duration is just
+  // A background spawn carries no inline result, so its own duration is just
   // the spawn-call time; show nothing rather than a misleading near-zero.
   if (
     toolNameForRunTool(tool) === 'subagent' &&
@@ -416,11 +416,11 @@ export const toolArgumentSummary = (tool) => {
 export const isSubAgentTool = (tool) =>
   SUBAGENT_TOOL_NAMES.has(toolNameForRunTool(tool));
 
-export const isStartingBlockingSubAgent = (tool) => {
+export const isStartingForegroundSubAgent = (tool) => {
   if (toolNameForRunTool(tool) !== 'subagent' || !tool.startedEvent) {
     return false;
   }
-  return subAgentArguments(tool).blocking !== false;
+  return subAgentArguments(tool).background !== true;
 };
 
 const subAgentSessionId = (tool) => {
@@ -558,8 +558,8 @@ export const subAgentResultEntryAllowsFetch = (entry, now = Date.now()) => {
   return false;
 };
 
-// A non-blocking spawn returns a "running" descriptor as its tool result, so the
-// final output never lands in tool.result. Blocking spawns already carry it as
+// A background spawn returns a "running" descriptor as its tool result, so the
+// final output never lands in tool.result. Foreground spawns already carry it as
 // data.result. When the child run has finished and no inline result exists, the
 // child session's last assistant message must be fetched to show the response.
 export const subAgentShouldFetchResult = (tool, dotStatus) => {
@@ -620,7 +620,7 @@ export const subAgentNeedsStatusVerification = (
 };
 
 // Returns the value to render in the tool's Result row. With a fetched result it
-// rebuilds the same tool_success envelope a blocking spawn produces, so the
+// rebuilds the same tool_success envelope a foreground spawn produces, so the
 // fetched output renders identically; otherwise the original tool.result stands.
 export const subAgentDisplayResult = (tool, fetchedResult = null) => {
   const resultText = trimmedString(fetchedResult?.result);
@@ -927,7 +927,7 @@ function shouldRenderToolCall(tool) {
     return Boolean(
       subAgentNavigationTarget(tool) ||
       tool.resultEvent ||
-      isStartingBlockingSubAgent(tool),
+      isStartingForegroundSubAgent(tool),
     );
   }
   return Boolean(
