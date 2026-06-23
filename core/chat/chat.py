@@ -159,6 +159,13 @@ MAX_TOOL_ITERATIONS = 1000
 # the session path.
 VISITED_PROJECTS_META_KEY = "visited_projects"
 
+# Prepended (visiting path only) before a reached-into project's auto-loaded files
+# so the model knows why a foreign project's files appeared in its context.
+VISITING_PROJECT_FILES_PREAMBLE = (
+    "You've reached into the project at {path}. Treat its auto-loaded files below "
+    "as that project's instructions."
+)
+
 # How often a streaming attempt may be restarted from scratch after a transient
 # drop that occurred before any visible output. Each restart re-issues the whole
 # request (the adapter's own connect-level retry still applies per attempt), so
@@ -782,7 +789,8 @@ class ChatLoop:
         ``<system-reminder>`` — **not** the system prompt — because the session is
         not born in the project. It renders the files with the **same**
         ``render_project_files`` used for the system-prompt placeholder (one
-        source), then persists the result through ``session.add_note``, vBot's
+        source), prepends a one-line preamble naming the reached-into project,
+        then persists the result through ``session.add_note``, vBot's
         existing reminder mechanism (a ``role: "note"`` the chat loop later embeds
         in ``<system-reminder>`` tags). Returns whether a reminder was added (no
         files → no empty reminder).
@@ -794,7 +802,8 @@ class ChatLoop:
         rendered = self._runtime.system_prompts.render_project_files(project_context)
         if not rendered.strip():
             return False
-        session.add_note(rendered)
+        preamble = VISITING_PROJECT_FILES_PREAMBLE.format(path=project_context.cwd)
+        session.add_note(f"{preamble}\n{rendered}")
         return True
 
     def _inject_visiting_projects(
