@@ -38,7 +38,13 @@ else:
     RuntimeAgent = Any
 
 CommandActionName = Literal[
-    "compact", "handoff", "move_session", "new_session", "retry_last_turn", "set_model"
+    "compact",
+    "handoff",
+    "move_session",
+    "new_session",
+    "rename_session",
+    "retry_last_turn",
+    "set_model",
 ]
 StatusActivityName = Literal["idle", "running"]
 
@@ -219,6 +225,12 @@ class CommandDispatcher:
             argument="none",
             output="action",
         ),
+        "rename": CommandSpec(
+            "rename",
+            "Rename this session; no argument clears the name.",
+            argument="optional",
+            output="toast",
+        ),
         "retry": CommandSpec(
             "retry",
             "Retry the last user turn in this session.",
@@ -265,6 +277,7 @@ class CommandDispatcher:
             "help": self._handle_help,
             "model": self._handle_model,
             "new": self._handle_new,
+            "rename": self._handle_rename,
             "retry": self._handle_retry,
             "status": self._handle_status,
             "stop": self._handle_stop,
@@ -485,6 +498,19 @@ class CommandDispatcher:
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandAction:
         return CommandAction(name="new_session")
+
+    def _handle_rename(
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
+    ) -> CommandAction:
+        """Set or clear this session's title; the accessor owns the write.
+
+        Like ``/model``, a thin trigger: the raw argument (``None`` clears the
+        title) travels to the server handler, which writes through the single
+        titling seam and emits the session-list refresh. Keeping it an action,
+        not a direct ``CommandHandled``, is what lets the rename publish that
+        event — the dispatcher itself cannot.
+        """
+        return CommandAction(name="rename_session", argument=argument)
 
     def _handle_retry(
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
