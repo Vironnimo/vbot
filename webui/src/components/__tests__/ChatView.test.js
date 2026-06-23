@@ -1585,7 +1585,7 @@ describe('ChatView', () => {
             name: 'subagent',
             arguments: {
               agent_id: 'beta',
-              blocking: false,
+              background: true,
               content: 'Inspect in the background',
             },
           },
@@ -2951,7 +2951,7 @@ describe('ChatView', () => {
             name: 'subagent',
             arguments: {
               agent_id: 'alpha',
-              blocking: false,
+              background: true,
               content: 'Inspect the project',
             },
           },
