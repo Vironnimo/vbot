@@ -26,8 +26,10 @@ from core.providers.reasoning import (
     ReasoningReplayPolicy,
 )
 from core.sessions import (
+    CHANNEL_MESSAGE_NOTE_PREFIX,
     PARTIAL_THINKING_NOTE_PREFIX,
     ChatSession,
+    is_channel_message_note,
     is_partial_thinking_note,
     is_skill_context_note,
 )
@@ -56,12 +58,16 @@ UTC_Z_SUFFIX = "Z"
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
 
+# Header for the one grouped reminder that presents passively observed channel
+# messages accumulated since the agent's last turn (the per-message marker is
+# stripped from each line below it).
+CHANNEL_MESSAGES_HEADER = "Messages in the channel since your last turn:"
+
 # Appended to a checkpoint summary when the preserved tail could not be anchored
 # on its recorded boundary and was recovered from post-checkpoint history.
 COMPACTION_TAIL_RECOVERED_HINT = (
-    "Part of the recent verbatim history could not be restored after a data issue "
-    "and is omitted below. The summary above still covers earlier context; the "
-    "conversation continues from the messages that follow."
+    "Some recent history couldn't be restored and is omitted below; continue from "
+    "the messages that follow."
 )
 INPUT_ORIGIN_SPEECH_TRANSCRIPTION: InputOrigin = "speech_transcription"
 SPEECH_TRANSCRIPTION_SYSTEM_REMINDER = (
@@ -852,10 +858,34 @@ def _synthesize_interrupted_tool_result(tool_call: JsonObject) -> JsonObject:
 
 
 def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:
-    return {
-        "role": "user",
-        "content": "\n".join(_system_reminder_block(note) for note in notes),
-    }
+    blocks: list[str] = []
+    channel_run: list[ChatMessage] = []
+    for note in notes:
+        if is_channel_message_note(note):
+            channel_run.append(note)
+            continue
+        if channel_run:
+            blocks.append(_channel_messages_reminder_block(channel_run))
+            channel_run = []
+        blocks.append(_system_reminder_block(note))
+    if channel_run:
+        blocks.append(_channel_messages_reminder_block(channel_run))
+    return {"role": "user", "content": "\n".join(blocks)}
+
+
+def _channel_messages_reminder_block(notes: list[ChatMessage]) -> str:
+    """Render a run of observed channel-message notes as one headed reminder.
+
+    The per-message marker is stripped so the model sees a clean list under
+    ``CHANNEL_MESSAGES_HEADER`` instead of one tagged reminder per message.
+    """
+    lines = [CHANNEL_MESSAGES_HEADER]
+    for note in notes:
+        note.validate()
+        content = note.content if isinstance(note.content, str) else ""
+        lines.append(content.removeprefix(CHANNEL_MESSAGE_NOTE_PREFIX))
+    body = "\n".join(lines)
+    return f"{SYSTEM_REMINDER_OPEN_TAG}\n{body}\n{SYSTEM_REMINDER_CLOSE_TAG}"
 
 
 def _is_empty_assistant_history_message(

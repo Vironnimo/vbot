@@ -1430,6 +1430,44 @@ class TestPartialThinkingNoteEmbedding:
         assert all("Partial thinking" not in m.get("content", "") for m in request)
 
 
+class TestObservedChannelMessageNotes:
+    """Consecutive observed channel-message notes render as one headed reminder."""
+
+    def test_grouped_into_one_reminder_with_header_and_marker_stripped(self) -> None:
+        messages = [
+            ChatMessage.user("hi", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.note("[channel-message] Alice (50): one", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.note("[channel-message] Bob (51): two", timestamp=FIXED_TIMESTAMP),
+        ]
+
+        request = _embed_notes_into_request(messages)
+
+        synthetic = request[-1]
+        assert synthetic["role"] == "user"
+        content = synthetic["content"]
+        # One combined reminder, not one block per message.
+        assert content.count("<system-reminder>") == 1
+        assert "Messages in the channel since your last turn:" in content
+        assert "Alice (50): one" in content
+        assert "Bob (51): two" in content
+        # The internal marker never reaches the model.
+        assert "[channel-message]" not in content
+
+    def test_single_observed_message_uses_the_same_header(self) -> None:
+        messages = [
+            ChatMessage.user("hi", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.note("[channel-message] Alice (50): solo", timestamp=FIXED_TIMESTAMP),
+        ]
+
+        request = _embed_notes_into_request(messages)
+
+        content = request[-1]["content"]
+        assert content.count("<system-reminder>") == 1
+        assert "Messages in the channel since your last turn:" in content
+        assert "Alice (50): solo" in content
+        assert "[channel-message]" not in content
+
+
 class TestAgentTakeoverMessage:
     """The persisted takeover divider stores its endpoints and never hits a provider."""
 

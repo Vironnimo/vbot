@@ -31,6 +31,7 @@ SESSION_APPEND_FLAGS = os.O_APPEND | os.O_CREAT | os.O_WRONLY
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 PARTIAL_THINKING_NOTE_PREFIX = "[partial-thinking] "
+CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
 _TAIL_CHUNK_SIZE = 8192
 _LOGGER = get_logger("sessions")
 
@@ -589,6 +590,15 @@ def is_partial_thinking_note(message: ChatMessage) -> bool:
         message.role == "note"
         and isinstance(message.content, str)
         and message.content.startswith(PARTIAL_THINKING_NOTE_PREFIX)
+    )
+
+
+def is_channel_message_note(message: ChatMessage) -> bool:
+    """Return whether a note holds a passively observed channel message."""
+    return (
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith(CHANNEL_MESSAGE_NOTE_PREFIX)
     )
 
 
