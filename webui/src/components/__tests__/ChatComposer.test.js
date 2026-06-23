@@ -22,6 +22,8 @@ const { transcribeSpeech, uploadAttachment } = await import('$lib/api.js');
 const { createAudioRecorder } = await import('$lib/audioRecorder.js');
 
 const { default: ChatComposer } = await import('../ChatComposer.svelte');
+const { getDraft, getHistory, pushHistory, resetComposerMemory, setDraft } =
+  await import('../../lib/composerMemory.js');
 
 describe('ChatComposer', () => {
   let mountedComponent;
@@ -33,6 +35,8 @@ describe('ChatComposer', () => {
     transcribeSpeech.mockReset();
     uploadAttachment.mockReset();
     createAudioRecorder.mockReset();
+    localStorage.clear();
+    resetComposerMemory();
   });
 
   afterEach(async () => {
@@ -683,7 +687,130 @@ describe('ChatComposer', () => {
       },
     ]);
   });
+
+  it('restores a saved draft for the session on mount', () => {
+    setDraft('agent::one', 'half a thought');
+
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { draftKey: 'agent::one', historyKey: 'agent' },
+    });
+    flushSync();
+
+    expect(composerInput().value).toBe('half a thought');
+  });
+
+  it('persists the typed draft into per-session memory', () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { draftKey: 'agent::one', historyKey: 'agent' },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), 'work in progress');
+
+    expect(getDraft('agent::one')).toBe('work in progress');
+  });
+
+  it('clears the draft and records history when a message is sent', () => {
+    const onSendMessage = vi.fn();
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { draftKey: 'agent::one', historyKey: 'agent', onSendMessage },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), 'hello there');
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith('hello there');
+    expect(composerInput().value).toBe('');
+    expect(getDraft('agent::one')).toBe('');
+    expect(getHistory('agent')).toEqual(['hello there']);
+  });
+
+  it('recalls sent messages with the arrow keys', () => {
+    pushHistory('agent', 'first');
+    pushHistory('agent', 'second');
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { draftKey: 'agent::one', historyKey: 'agent' },
+    });
+    flushSync();
+    const input = composerInput();
+
+    pressKey(input, 'ArrowUp');
+    expect(input.value).toBe('second');
+
+    pressKey(input, 'ArrowUp');
+    expect(input.value).toBe('first');
+
+    // Already at the oldest entry — Up holds position instead of clearing.
+    pressKey(input, 'ArrowUp');
+    expect(input.value).toBe('first');
+
+    pressKey(input, 'ArrowDown');
+    expect(input.value).toBe('second');
+
+    // Down past the newest entry returns to the (empty) live draft.
+    pressKey(input, 'ArrowDown');
+    expect(input.value).toBe('');
+  });
+
+  it('preserves an in-progress draft when Up is pressed by accident', () => {
+    pushHistory('agent', 'old message');
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { draftKey: 'agent::one', historyKey: 'agent' },
+    });
+    flushSync();
+    const input = composerInput();
+
+    typeInComposer(input, 'my draft');
+
+    pressKey(input, 'ArrowUp');
+    expect(input.value).toBe('old message');
+
+    pressKey(input, 'ArrowDown');
+    expect(input.value).toBe('my draft');
+  });
+
+  it('does not recall history when the caret is below the first line', () => {
+    pushHistory('agent', 'old message');
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { draftKey: 'agent::one', historyKey: 'agent' },
+    });
+    flushSync();
+    const input = composerInput();
+
+    // Caret inside the second line: Up should move the caret, not recall.
+    typeInComposer(input, 'line one\nline two', 12);
+
+    const event = pressKey(input, 'ArrowUp');
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(input.value).toBe('line one\nline two');
+  });
 });
+
+function typeInComposer(input, value, caret = value.length) {
+  input.value = value;
+  input.setSelectionRange(caret, caret);
+  input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  flushSync();
+}
+
+function pressKey(input, key) {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+  });
+  input.dispatchEvent(event);
+  flushSync();
+  return event;
+}
 
 function skillFixtures() {
   return [
