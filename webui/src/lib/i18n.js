@@ -159,6 +159,11 @@ export const englishCatalog = Object.freeze({
   'sessions.platform_telegram': 'Telegram',
   'sessions.source_channel': 'Source channel',
   'sessions.subagent_parent': 'Parent',
+  'sessions.actions': 'Session actions',
+  'sessions.rename': 'Rename',
+  'sessions.rename_label': 'Rename session',
+  'sessions.rename_placeholder': 'Session name',
+  'sessions.rename_error': 'The session could not be renamed.',
 
   'skillAutocomplete.label': 'Skill suggestions',
   'skillAutocomplete.eyebrow.commandsAndSkills': 'commands & skills',

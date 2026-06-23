@@ -117,4 +117,39 @@ describe('sessionListView helpers', () => {
     expect(sessionDisplayName({ id: 'session-001' })).toBe('session-001');
     expect(sessionDisplayName({})).toBe('Session');
   });
+
+  it('prefers a user title over channel and id labels', () => {
+    expect(
+      sessionDisplayName({
+        title: 'Release planning',
+        platform: 'telegram',
+        platform_conv_id: '-100123',
+        id: 'session-001',
+      }),
+    ).toBe('Release planning');
+    // A blank title falls back to the channel-derived label.
+    expect(
+      sessionDisplayName({
+        title: '   ',
+        platform: 'telegram',
+        platform_conv_id: '-100123',
+      }),
+    ).toBe('telegram/-100123');
+  });
+
+  it('carries the title through normalization and into the display name', () => {
+    const next = applySessionList(createSessionListState(), [
+      {
+        id: 'session-1',
+        title: 'Release planning',
+        platform: 'telegram',
+        platform_conv_id: '999',
+      },
+    ]);
+
+    expect(next.sessions[0]).toMatchObject({
+      title: 'Release planning',
+      display_name: 'Release planning',
+    });
+  });
 });

@@ -21,6 +21,7 @@ import {
   createRpcEnvelope,
   listProjects,
   removeProject,
+  renameSession,
   setProject,
   showProject,
   getTaskModelOptions,
@@ -471,6 +472,59 @@ describe('project.* wrappers', () => {
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
         method: 'project.clear_model_override',
+      }),
+    );
+  });
+});
+
+describe('renameSession()', () => {
+  it('renames a session through session.rename', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { title: 'Release planning' } }),
+      );
+
+    await expect(
+      renameSession('alpha', 'session-1', 'Release planning', {
+        fetch: fetchFunction,
+      }),
+    ).resolves.toEqual({ title: 'Release planning' });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'session.rename',
+      params: {
+        agent_id: 'alpha',
+        session_id: 'session-1',
+        title: 'Release planning',
+      },
+    });
+  });
+
+  it('sends an empty title verbatim as the clear signal', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { title: null } }));
+
+    await renameSession('alpha', 'session-1', '', { fetch: fetchFunction });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'session.rename',
+      params: { agent_id: 'alpha', session_id: 'session-1', title: '' },
+    });
+  });
+
+  it('rejects an empty agent or session id before sending', () => {
+    expect(() => renameSession('', 'session-1', 'x')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'session.rename',
+      }),
+    );
+    expect(() => renameSession('alpha', '', 'x')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'session.rename',
       }),
     );
   });

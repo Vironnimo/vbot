@@ -111,6 +111,7 @@ def test_commands_are_always_present() -> None:
         "help",
         "model",
         "new",
+        "rename",
         "retry",
         "status",
         "stop",
