@@ -372,6 +372,77 @@ class TestChatSessionManager:
             },
         }
 
+    def test_set_title_stores_title_and_returns_it(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+
+        stored = manager.set_title("coder", "session-one", "Release planning")
+
+        assert stored == "Release planning"
+        assert manager.get_metadata("coder", "session-one") == {"title": "Release planning"}
+
+    def test_set_title_collapses_whitespace_to_single_line(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+
+        stored = manager.set_title("coder", "session-one", "  multi\n  line\ttitle  ")
+
+        assert stored == "multi line title"
+
+    def test_set_title_caps_length(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+
+        stored = manager.set_title("coder", "session-one", "x" * 500)
+
+        assert stored == "x" * 200
+
+    def test_set_title_blank_clears_and_returns_none(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+        manager.set_title("coder", "session-one", "Release planning")
+
+        cleared = manager.set_title("coder", "session-one", "   ")
+
+        assert cleared is None
+        assert "title" not in manager.get_metadata("coder", "session-one")
+
+    def test_set_title_preserves_other_metadata(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+        manager.set_metadata("coder", "session-one", {"platform": "telegram"})
+
+        manager.set_title("coder", "session-one", "Release planning")
+
+        assert manager.get_metadata("coder", "session-one") == {
+            "platform": "telegram",
+            "title": "Release planning",
+        }
+
+    def test_set_title_clear_keeps_other_metadata(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+        manager.set_metadata("coder", "session-one", {"platform": "telegram", "title": "old"})
+
+        manager.set_title("coder", "session-one", "")
+
+        assert manager.get_metadata("coder", "session-one") == {"platform": "telegram"}
+
+    def test_set_title_rejects_missing_session(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        with pytest.raises(ChatSessionError, match="does not exist"):
+            manager.set_title("coder", "missing", "Release planning")
+
+    def test_set_title_surfaces_in_list_with_metadata(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+        manager.set_title("coder", "session-one", "Release planning")
+
+        sessions = manager.list_with_metadata("coder")
+
+        assert sessions[0]["title"] == "Release planning"
+
     def test_get_rejects_missing_session(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 

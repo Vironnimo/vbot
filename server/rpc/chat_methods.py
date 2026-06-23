@@ -25,7 +25,7 @@ from core.subagents.subagents import (
     SUBAGENT_SESSION_METADATA_FLAG,
 )
 from server.events import RESOURCE_KIND_QUEUE
-from server.rpc.agent_methods import _create_session
+from server.rpc.agent_methods import _create_session, _rename_session
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -285,6 +285,10 @@ async def _handle_command_action(
             )
         case "new_session":
             return _handle_new_session_command(state, agent_id, session_id, project_id=project_id)
+        case "rename_session":
+            return _handle_rename_session_command(
+                state, agent_id, session_id, command_action.argument, project_id=project_id
+            )
         case "set_model":
             return _handle_set_model_command(
                 state, agent_id, session_id, command_action.argument, project_id=project_id
@@ -330,6 +334,44 @@ def _handle_new_session_command(
             data={"command": "new", "session_id": new_session_id},
         ),
         output="action",
+    )
+
+
+def _handle_rename_session_command(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    argument: str | None,
+    *,
+    project_id: str | None = None,
+) -> JsonObject:
+    """Set or clear this session's name from ``/rename [name]``.
+
+    A thin trigger over the same ``session.rename`` handler the WebUI calls, so
+    the title write and the session-list refresh event stay in one place. No
+    argument clears the name (the session reverts to its automatic display); the
+    confirmation reflects the stored title after normalization.
+    """
+    try:
+        response = _rename_session(
+            state,
+            {
+                "agent_id": _format_session_agent(agent_id, project_id),
+                "session_id": session_id,
+                "title": argument or "",
+            },
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    stored_title = response.get("title")
+    reply = f"Session renamed to {stored_title}." if stored_title else "Session name cleared."
+    return _command_handled_response(
+        CommandHandled(
+            reply=reply,
+            data={"command": "rename", "session_id": session_id, "title": stored_title},
+        ),
+        output="toast",
     )
 
 

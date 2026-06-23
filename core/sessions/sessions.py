@@ -29,6 +29,11 @@ SESSION_LINE_ENDING = "\n"
 SESSION_LINE_ENDING_BYTES = b"\n"
 SESSION_APPEND_FLAGS = os.O_APPEND | os.O_CREAT | os.O_WRONLY
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+# Sidecar key holding a session's user-facing display title. A safety cap only:
+# the title is single-line and the UI ellipsizes, so this just bounds absurd
+# input, it is not a meaningful length limit.
+SESSION_TITLE_KEY = "title"
+SESSION_TITLE_MAX_LENGTH = 200
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 PARTIAL_THINKING_NOTE_PREFIX = "[partial-thinking] "
 CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
@@ -432,6 +437,35 @@ class ChatSessionManager:
         finally:
             temp_path.unlink(missing_ok=True)
 
+    def set_title(
+        self,
+        agent_id: str,
+        session_id: str,
+        title: str,
+        project_id: str | None = None,
+    ) -> str | None:
+        """Set or clear a session's display title in its metadata sidecar.
+
+        The single seam every titling path goes through — the rename RPC, the
+        ``/rename`` command, and any later automatic titling all call this, so
+        the rule lives in one place. The title is collapsed to a single trimmed
+        line and capped at :data:`SESSION_TITLE_MAX_LENGTH`; a blank result
+        clears any stored title, so the session falls back to its automatic
+        display. Returns the stored title, or ``None`` when cleared.
+
+        Last writer wins: the sidecar is rewritten through :meth:`set_metadata`'s
+        atomic replace, so concurrent renames never corrupt it. Touches only the
+        sidecar (never the transcript), so it needs no :meth:`write_lock`.
+        """
+        normalized_title = _normalize_session_title(title)
+        metadata = dict(self.get_metadata(agent_id, session_id, project_id))
+        if normalized_title is None:
+            metadata.pop(SESSION_TITLE_KEY, None)
+        else:
+            metadata[SESSION_TITLE_KEY] = normalized_title
+        self.set_metadata(agent_id, session_id, metadata, project_id)
+        return normalized_title
+
     async def move(
         self,
         source_agent_id: str,
@@ -565,6 +599,20 @@ def _validate_session_id(session_id: str) -> None:
 
 def _is_valid_session_id(session_id: str) -> bool:
     return bool(SESSION_ID_PATTERN.fullmatch(session_id))
+
+
+def _normalize_session_title(title: str) -> str | None:
+    """Collapse a raw title to one trimmed line and cap it; blank → None (clear).
+
+    Runs of whitespace, including newlines, collapse to single spaces so a title
+    is always one line. ``None`` means "no title" — clear any stored value.
+    """
+    if not isinstance(title, str):
+        raise ChatSessionError("session title must be a string")
+    collapsed = " ".join(title.split())
+    if not collapsed:
+        return None
+    return collapsed[:SESSION_TITLE_MAX_LENGTH]
 
 
 def _skill_context_note_content(name: str, content: str) -> str:
