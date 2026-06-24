@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 import tarfile
 from collections.abc import Callable
 from pathlib import Path
@@ -14,7 +15,13 @@ import respx
 from cli.main import dispatch_update_command
 from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
-from cli.update_management import CommandRun, ReleaseInfo, run_update
+from cli.update_management import (
+    CommandRun,
+    ReleaseInfo,
+    _default_runner,
+    _extract_within,
+    run_update,
+)
 
 
 def _instance() -> ServerInstance:
@@ -221,7 +228,7 @@ def test_release_track_downloads_prebuilt_webui(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     asset_url = "https://example.com/webui-dist.tar.gz"
     respx.get(asset_url).mock(return_value=httpx.Response(200, content=_webui_tar_bytes()))
-    revisions = iter(["old", "new"])
+    revisions = iter(["old", "new", "new"])
 
     def handler(command: list[str]) -> CommandRun:
         if command[:2] == ["git", "symbolic-ref"]:
@@ -321,8 +328,9 @@ def test_dispatch_update_passes_flags_through() -> None:
         restart: bool,
         stop: Callable[..., CommandResult],
         start: Callable[..., CommandResult],
+        service_name: str,
     ) -> CommandResult:
-        captured.update(discard=discard, stash=stash, restart=restart)
+        captured.update(discard=discard, stash=stash, restart=restart, service_name=service_name)
         return CommandResult(ok=True, message="done", instance=instance)
 
     def noop(instance: ServerInstance) -> CommandResult:
@@ -338,4 +346,117 @@ def test_dispatch_update_passes_flags_through() -> None:
     )
 
     assert result.ok
-    assert captured == {"discard": False, "stash": True, "restart": False}
+    assert captured == {
+        "discard": False,
+        "stash": True,
+        "restart": False,
+        "service_name": "vbot",
+    }
+
+
+@respx.mock
+def test_release_track_skips_download_when_up_to_date(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    asset_url = "https://example.com/webui-dist.tar.gz"
+    route = respx.get(asset_url).mock(return_value=httpx.Response(200, content=_webui_tar_bytes()))
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _err()  # detached HEAD -> release track
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
+
+    runner = ScriptedRunner(handler)
+    events, stop, start = _recording_restart()
+    result = run_update(
+        _instance(),
+        runner=runner,
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        latest_release=lambda: ReleaseInfo(tag="v1.0.0", webui_asset_url=asset_url),
+    )
+
+    assert result.ok, result.message
+    assert "already up to date" in result.message
+    assert route.called is False
+    assert events == ["stop", "start"]
+
+
+@respx.mock
+def test_release_track_redownloads_when_dist_missing(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    asset_url = "https://example.com/webui-dist.tar.gz"
+    route = respx.get(asset_url).mock(return_value=httpx.Response(200, content=_webui_tar_bytes()))
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _err()
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
+
+    runner = ScriptedRunner(handler)
+    events, stop, start = _recording_restart()
+    result = run_update(
+        _instance(),
+        runner=runner,
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        latest_release=lambda: ReleaseInfo(tag="v1.0.0", webui_asset_url=asset_url),
+    )
+
+    assert result.ok, result.message
+    assert route.called is True
+    assert (tmp_path / "webui" / "dist" / "index.html").is_file()
+
+
+def test_extract_within_extracts_benign_archive(tmp_path: Path) -> None:
+    # The same-tree fallback path used on Pythons without tarfile's data filter.
+    destination = tmp_path / "webui"
+    destination.mkdir()
+
+    with tarfile.open(fileobj=io.BytesIO(_webui_tar_bytes()), mode="r:gz") as archive:
+        _extract_within(archive, destination)
+
+    assert (destination / "dist" / "index.html").is_file()
+
+
+def test_extract_within_rejects_path_escape(tmp_path: Path) -> None:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        payload = b"x"
+        info = tarfile.TarInfo("../escape.txt")
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+    buffer.seek(0)
+    destination = tmp_path / "webui"
+    destination.mkdir()
+
+    with tarfile.open(fileobj=buffer, mode="r:gz") as archive, pytest.raises(tarfile.TarError):
+        _extract_within(archive, destination)
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_default_runner_disables_git_prompt(tmp_path: Path) -> None:
+    result = _default_runner(
+        [sys.executable, "-c", "import os; print(os.environ.get('GIT_TERMINAL_PROMPT', 'unset'))"],
+        tmp_path,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "0"
+
+
+def test_default_runner_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("cli.update_management._COMMAND_TIMEOUT_SECONDS", 0.2)
+
+    result = _default_runner([sys.executable, "-c", "import time; time.sleep(5)"], tmp_path)
+
+    assert result.returncode == 124
+    assert "timed out" in result.stderr

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import subprocess
 import sys
 import tarfile
@@ -24,7 +25,14 @@ from pathlib import Path
 
 import httpx
 
-from cli.server_management import CommandResult, ServerInstance, start_server, stop_server
+from cli.server_management import (
+    DEFAULT_SERVICE_NAME,
+    CommandResult,
+    ServerInstance,
+    restart_server,
+    start_server,
+    stop_server,
+)
 
 GITHUB_API_BASE = "https://api.github.com/repos/Vironnimo/vbot"
 WEBUI_ASSET_NAME = "webui-dist.tar.gz"
@@ -32,6 +40,7 @@ RELEASE_EXTRAS = "server,cli"
 DEV_EXTRAS = "dev"
 _API_TIMEOUT_SECONDS = 30.0
 _DOWNLOAD_TIMEOUT_SECONDS = 60.0
+_COMMAND_TIMEOUT_SECONDS = 600.0
 
 Restart = Callable[[ServerInstance], CommandResult]
 
@@ -78,6 +87,7 @@ def run_update(
     runner: Runner | None = None,
     root: Path | None = None,
     latest_release: ReleaseLookup | None = None,
+    service_name: str = DEFAULT_SERVICE_NAME,
 ) -> CommandResult:
     """Advance the installed checkout and optionally restart the server."""
 
@@ -102,7 +112,9 @@ def run_update(
     before = _head_commit(run, repo)
     pyproject_before = _file_digest(repo / "pyproject.toml")
 
-    advanced = _advance_dev(run, repo) if track == "dev" else _advance_release(run, repo, lookup)
+    advanced = (
+        _advance_dev(run, repo) if track == "dev" else _advance_release(run, repo, lookup, before)
+    )
     if not advanced.ok:
         return _fail(instance, advanced.message)
 
@@ -136,7 +148,9 @@ def run_update(
         if not webui.ok:
             return CommandResult(ok=False, message="\n".join(lines), instance=instance)
 
-    return _finish(instance, lines, restart=restart, stop=stop, start=start)
+    return _finish(
+        instance, lines, restart=restart, stop=stop, start=start, service_name=service_name
+    )
 
 
 def _handle_dirty(run: Runner, repo: Path, *, discard: bool, stash: bool) -> _Step:
@@ -172,7 +186,7 @@ def _advance_dev(run: Runner, repo: Path) -> _Step:
     return _Step(True, "")
 
 
-def _advance_release(run: Runner, repo: Path, lookup: ReleaseLookup) -> _Step:
+def _advance_release(run: Runner, repo: Path, lookup: ReleaseLookup, before: str) -> _Step:
     """Check out the latest release tag and refresh its prebuilt WebUI."""
 
     try:
@@ -189,9 +203,15 @@ def _advance_release(run: Runner, repo: Path, lookup: ReleaseLookup) -> _Step:
     if checkout.returncode != 0:
         return _Step(False, f"update: checking out {release.tag} failed: {checkout.stderr}")
 
-    if release.webui_asset_url:
-        return _download_webui(release.webui_asset_url, repo)
-    return _Step(False, f"update: release {release.tag} has no {WEBUI_ASSET_NAME} asset")
+    # Already on the latest tag with an intact WebUI: nothing to re-download.
+    after = _head_commit(run, repo)
+    dist_present = (repo / "webui" / "dist" / "index.html").is_file()
+    if before and before == after and dist_present:
+        return _Step(True, "")
+
+    if not release.webui_asset_url:
+        return _Step(False, f"update: release {release.tag} has no {WEBUI_ASSET_NAME} asset")
+    return _download_webui(release.webui_asset_url, repo)
 
 
 def _refresh_dependencies(run: Runner, repo: Path, track: str, pyproject_before: str) -> _Step:
@@ -239,13 +259,39 @@ def _download_webui(asset_url: str, repo: Path) -> _Step:
     webui_dir = repo / "webui"
     webui_dir.mkdir(parents=True, exist_ok=True)
     try:
-        with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as archive:
-            archive.extractall(webui_dir, filter="data")  # type: ignore[call-arg]
-    except (tarfile.TarError, OSError) as exc:
+        _unpack_webui_archive(response.content, webui_dir)
+    except (tarfile.TarError, OSError, ValueError) as exc:
         return _Step(False, f"update: unpacking the prebuilt WebUI failed: {exc}")
     if not (webui_dir / "dist" / "index.html").is_file():
         return _Step(False, "update: prebuilt WebUI did not unpack to webui/dist")
     return _Step(True, "")
+
+
+def _unpack_webui_archive(content: bytes, webui_dir: Path) -> None:
+    """Unpack the WebUI tarball, using tarfile's data filter where available.
+
+    The extraction filter (PEP 706) only exists on CPython >= 3.12 and the
+    3.11.4+/3.10.12+ backports; the deployment target (Raspberry Pi OS can ship
+    3.11.2) may lack it. Feature-detect rather than passing an unknown keyword,
+    and fall back to a same-tree guard so unpacking never escapes webui/.
+    """
+
+    with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
+        if hasattr(tarfile, "data_filter"):
+            archive.extractall(webui_dir, filter="data")  # type: ignore[call-arg]
+        else:
+            _extract_within(archive, webui_dir)
+
+
+def _extract_within(archive: tarfile.TarFile, destination: Path) -> None:
+    """Extract every member, refusing any path that escapes the destination tree."""
+
+    root = destination.resolve()
+    for member in archive.getmembers():
+        target = (destination / member.name).resolve()
+        if not target.is_relative_to(root):
+            raise tarfile.TarError(f"unsafe path in WebUI archive: {member.name}")
+    archive.extractall(destination)
 
 
 def _finish(
@@ -255,23 +301,21 @@ def _finish(
     restart: bool,
     stop: Restart,
     start: Restart,
+    service_name: str,
 ) -> CommandResult:
-    """Restart the resolved server target (unless suppressed) and report."""
+    """Restart the resolved server target (unless suppressed) and report.
+
+    The restart is systemd-aware: on a unit-managed install it goes through the
+    unit rather than fighting it with an out-of-band terminate/start.
+    """
 
     if not restart:
         lines.append("server: not restarted (--no-restart)")
         return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
-    stop_result = stop(instance)
-    if not stop_result.ok and stop_result.message != "not running":
-        lines.append(f"server restart aborted: {stop_result.message}")
-        return CommandResult(ok=False, message="\n".join(lines), instance=instance)
-    start_result = start(instance)
-    if start_result.ok:
-        lines.append("server: restarted")
-        return CommandResult(ok=True, message="\n".join(lines), instance=instance)
-    lines.append(f"server restart failed: {start_result.message}")
-    return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+    restarted = restart_server(instance, service_name=service_name, stop=stop, start=start)
+    lines.append(f"server: {restarted.message}")
+    return CommandResult(ok=restarted.ok, message="\n".join(lines), instance=instance)
 
 
 def _fetch_latest_release() -> ReleaseInfo:
@@ -296,7 +340,26 @@ def _fetch_latest_release() -> ReleaseInfo:
 
 
 def _default_runner(command: list[str], cwd: Path) -> CommandRun:
-    completed = subprocess.run(command, cwd=str(cwd), capture_output=True, text=True)
+    # Disable git's interactive credential prompt so a private/auth'd remote
+    # fails fast instead of hanging a headless update forever, and cap every
+    # command so a stuck git/pip/npm cannot block the update indefinitely.
+    environment = dict(os.environ)
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=_COMMAND_TIMEOUT_SECONDS,
+            env=environment,
+        )
+    except subprocess.TimeoutExpired:
+        return CommandRun(
+            returncode=124,
+            stdout="",
+            stderr=f"command timed out after {_COMMAND_TIMEOUT_SECONDS:.0f}s: {' '.join(command)}",
+        )
     return CommandRun(
         returncode=completed.returncode,
         stdout=(completed.stdout or "").strip(),

@@ -78,7 +78,7 @@ vbot update --stash
 vbot update --no-restart
 ```
 
-If the checkout has local changes to tracked files, `update` refuses; re-run with `--discard` to drop them or `--stash` to keep them (reapplied after the update).
+If the checkout has local changes to tracked files, `update` refuses; re-run with `--discard` to drop them or `--stash` to keep them (reapplied after the update). On a systemd-managed Linux install the restart is routed through the service unit (default `vbot`; override with `--service-name`) instead of an out-of-band stop/start.
 
 ### Autostart
 

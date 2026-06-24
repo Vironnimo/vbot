@@ -201,7 +201,14 @@ def _add_server_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     )
     server_subparsers = server_parser.add_subparsers(dest="command", required=True)
     for command in SERVER_COMMANDS:
-        _add_command_parser(server_subparsers, command, SERVER_HELP[command])
+        command_parser = _add_command_parser(server_subparsers, command, SERVER_HELP[command])
+        if command == "restart":
+            command_parser.add_argument(
+                "--service-name",
+                help=(
+                    "systemd user unit to restart when the install is unit-managed (default: vbot)"
+                ),
+            )
 
 
 def _add_agent_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -970,6 +977,10 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         "--no-restart",
         action="store_true",
         help="Update the code without restarting the server afterward",
+    )
+    update_parser.add_argument(
+        "--service-name",
+        help="systemd user unit to restart when the install is unit-managed (default: vbot)",
     )
 
 
