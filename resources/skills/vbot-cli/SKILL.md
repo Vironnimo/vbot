@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, manage agents, projects, or sessions, talk to a project agent as agent@projekt, list providers models skills or tools, refresh models, connect OAuth providers, bind task models, update prompts or settings, inspect logs or debug traces, schedule cron jobs, or manage Telegram or Discord channels.
+description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, manage agents, projects, or sessions, talk to a project agent as agent@projekt, list providers models skills or tools, refresh models, connect OAuth providers, bind task models, update prompts or settings, inspect logs or debug traces, schedule cron jobs, update the vBot installation itself, or manage Telegram or Discord channels.
 ---
 
 # vBot CLI
@@ -13,7 +13,7 @@ Use this skill when the user wants you to configure, inspect, or operate vBot it
 - Primary identifiers are positional: `vbot agent show assistant`, `vbot channel remove tg-main`, `vbot cron delete <job-id>`. Secondary parameters are flags. There are no `--id`-style flags for the main target.
 - Prefer CLI/RPC-backed changes over direct file edits. Use direct file edits only when no CLI command exists and the user explicitly asked for that level of change.
 - When the user gives you an API key and asks you to configure a provider, use `vbot provider set-key <provider-id> <api-key>`. Do not print the key back. For bot tokens, OAuth codes, passwords, and other secrets, prefer environment variable names unless a dedicated CLI command exists.
-- Start or locate the target server before running RPC-backed management commands. Only `vbot server start`, `vbot server stop`, `vbot server restart`, `vbot server status`, and `vbot doctor ...` work without an already-running server.
+- Start or locate the target server before running RPC-backed management commands. Only `vbot server start`, `vbot server stop`, `vbot server restart`, `vbot server status`, `vbot update`, and `vbot doctor ...` work without an already-running server.
 - Keep commands non-interactive and automation-safe. Capture the result, then verify with a read/list/status command.
 - Use `vbot <area> --help` or `vbot <area> <command> --help` when you need exact flags; every subcommand help text includes a usage example.
 - Treat CLI output as the source of truth for the next step. If a command returns an error with available candidates or `did you mean`, use that hint before retrying.
@@ -67,6 +67,18 @@ vbot server status
 vbot server restart
 vbot server stop
 ```
+
+### Updating vBot
+
+Use `vbot update` to update the installation from its git checkout and restart the server. It auto-detects whether the checkout tracks a branch (pulls and rebuilds the WebUI) or a release tag (fetches the latest release and its prebuilt WebUI), and never touches the `~/.vbot` data directory.
+
+```bash
+vbot update
+vbot update --stash
+vbot update --no-restart
+```
+
+If the checkout has local changes to tracked files, `update` refuses; re-run with `--discard` to drop them or `--stash` to keep them (reapplied after the update).
 
 ### Settings
 
