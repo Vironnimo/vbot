@@ -5,10 +5,9 @@ param(
     [string]$HostName = "127.0.0.1",
     [ValidateRange(1, 65535)]
     [int]$Port = 8420,
-    [switch]$EnableAutostart,
     [switch]$Desktop,
     [switch]$Dev,
-    [switch]$StartServer,
+    [switch]$NoAutostart,
     [switch]$SkipWebuiBuild,
     [switch]$SkipPathUpdate,
     [string]$TaskName = "vBot"
@@ -381,55 +380,6 @@ function Resolve-VbotCommandPath {
     throw "The vbot command was not found after installation. Check pip output for installation errors."
 }
 
-function Enable-VbotAutostart {
-    param(
-        [string]$VbotPath,
-        [string]$ResolvedDataDir,
-        [int]$ResolvedPort
-    )
-
-    if (-not (Test-RunningOnWindows)) {
-        throw "Autostart setup in this script currently supports Windows Task Scheduler only."
-    }
-
-    Write-Step "Configuring Windows autostart task: $TaskName"
-    $arguments = "server start --host `"$HostName`" --port $ResolvedPort --data-dir `"$ResolvedDataDir`""
-    $action = New-ScheduledTaskAction -Execute $VbotPath -Argument $arguments
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    Register-ScheduledTask `
-        -TaskName $TaskName `
-        -Action $action `
-        -Trigger $trigger `
-        -Description "Start vBot server at user login" `
-        -Force |
-        Out-Null
-}
-
-function Start-VbotServer {
-    param(
-        [string]$VbotPath,
-        [string]$ResolvedDataDir,
-        [int]$ResolvedPort
-    )
-
-    if (-not $StartServer) {
-        return
-    }
-
-    Write-Step "Starting vBot server"
-    $vbotCommand = New-CommandSpec -Exe $VbotPath
-    Invoke-External $vbotCommand @(
-        "server",
-        "start",
-        "--host",
-        $HostName,
-        "--port",
-        "$ResolvedPort",
-        "--data-dir",
-        $ResolvedDataDir
-    )
-}
-
 $resolvedDataDir = Resolve-UserPath $DataDir
 $effectivePort = Resolve-EffectivePort `
     -ResolvedDataDir $resolvedDataDir `
@@ -471,11 +421,13 @@ Write-Step "Verifying vBot command and settings"
 Invoke-External $vbotCommand @("--help")
 Invoke-External $vbotCommand @("doctor", "settings", "--data-dir", $resolvedDataDir)
 
-if ($EnableAutostart) {
-    Enable-VbotAutostart $vbotPath $resolvedDataDir $effectivePort
+if (-not $NoAutostart) {
+    Write-Step "Enabling autostart and starting the server"
+    & $vbotPath autostart enable --host $HostName --port $effectivePort --data-dir $resolvedDataDir --task-name $TaskName
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Warning: enabling autostart failed (see message above). On Windows, run 'vbot autostart enable' from an elevated terminal."
+    }
 }
-
-Start-VbotServer $vbotPath $resolvedDataDir $effectivePort
 
 Write-Step "Installation complete"
 Write-Host "vBot command: $vbotPath"
