@@ -20,9 +20,12 @@ from cli.server_management import (
     WebUIProbeResult,
     find_listening_process,
     get_status,
+    is_systemd_managed,
     probe_health,
     probe_webui,
     resolve_instance,
+    restart_server,
+    restart_via_systemd_if_managed,
     start_server,
     start_server_process,
     stop_server,
@@ -833,3 +836,144 @@ def test_cli_lifecycle_smoke_with_faked_process_network_and_webui(
     assert stop_result.message == "stopped"
     assert stop_result.forced is False
     assert calls == ["health", "spawn", "health", "health", "health", "terminate", "wait:2.0"]
+
+
+def test_restart_server_managed_path_stops_then_starts(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+    events: list[str] = []
+
+    def stop(resolved: ServerInstance) -> CommandResult:
+        events.append("stop")
+        return CommandResult(ok=True, message="stopped", instance=resolved)
+
+    def start(resolved: ServerInstance) -> CommandResult:
+        events.append("start")
+        return CommandResult(ok=True, message="started", instance=resolved)
+
+    result = restart_server(instance, stop=stop, start=start, is_managed=lambda _name: False)
+
+    assert result.ok
+    assert result.message == "restarted"
+    assert events == ["stop", "start"]
+
+
+def test_restart_server_managed_aborts_when_stop_fails(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    def stop(resolved: ServerInstance) -> CommandResult:
+        return CommandResult(
+            ok=False, message="port occupied by non-vBot process", instance=resolved
+        )
+
+    def start(resolved: ServerInstance) -> CommandResult:
+        raise AssertionError("must not start after a failed stop")
+
+    result = restart_server(instance, stop=stop, start=start, is_managed=lambda _name: False)
+
+    assert not result.ok
+    assert "restart aborted" in result.message
+
+
+def test_restart_server_uses_systemd_when_unit_managed(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    def stop(resolved: ServerInstance) -> CommandResult:
+        raise AssertionError("managed stop must not run on a systemd install")
+
+    def do_restart(resolved: ServerInstance, name: str) -> CommandResult:
+        return CommandResult(ok=True, message=f"restarted via systemd ({name})", instance=resolved)
+
+    result = restart_server(
+        instance,
+        service_name="vbot",
+        stop=stop,
+        is_managed=lambda _name: True,
+        do_restart=do_restart,
+    )
+
+    assert result.ok
+    assert "via systemd" in result.message
+
+
+def test_restart_via_systemd_returns_none_when_unmanaged(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    assert restart_via_systemd_if_managed(instance, is_managed=lambda _name: False) is None
+
+
+def test_is_systemd_managed_false_off_linux(tmp_path: Path) -> None:
+    def runner(_args: list[str]) -> server_management._SystemctlRun:
+        raise AssertionError("systemctl must not run on a non-linux host")
+
+    assert is_systemd_managed("vbot", platform="win32", runner=runner, unit_dir=tmp_path) is False
+
+
+def test_is_systemd_managed_requires_unit_file_then_active(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def runner(args: list[str]) -> server_management._SystemctlRun:
+        calls.append(args)
+        return server_management._SystemctlRun(returncode=0, stdout="active", stderr="")
+
+    # No unit file yet -> not managed, and systemctl is never probed.
+    assert is_systemd_managed("vbot", platform="linux", runner=runner, unit_dir=tmp_path) is False
+    assert calls == []
+
+    (tmp_path / "vbot.service").write_text("[Unit]\n", encoding="utf-8")
+    assert is_systemd_managed("vbot", platform="linux", runner=runner, unit_dir=tmp_path) is True
+    assert calls == [["systemctl", "--user", "is-active", "vbot.service"]]
+
+
+def test_is_systemd_managed_false_when_inactive(tmp_path: Path) -> None:
+    (tmp_path / "vbot.service").write_text("[Unit]\n", encoding="utf-8")
+
+    def runner(_args: list[str]) -> server_management._SystemctlRun:
+        return server_management._SystemctlRun(returncode=3, stdout="inactive", stderr="")
+
+    assert is_systemd_managed("vbot", platform="linux", runner=runner, unit_dir=tmp_path) is False
+
+
+def test_systemd_restart_confirms_health(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = make_instance(tmp_path)
+    monkeypatch.setattr(
+        server_management, "probe_webui", lambda _instance: WebUIProbeResult(True, 200)
+    )
+    healthy = HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
+
+    def runner(args: list[str]) -> server_management._SystemctlRun:
+        assert args == ["systemctl", "--user", "restart", "vbot.service"]
+        return server_management._SystemctlRun(returncode=0, stdout="", stderr="")
+
+    result = server_management._systemd_restart(
+        instance, "vbot", runner=runner, await_health=lambda _instance: healthy
+    )
+
+    assert result.ok
+    assert result.message == "restarted via systemd"
+
+
+def test_systemd_restart_reports_unit_failure(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    def runner(_args: list[str]) -> server_management._SystemctlRun:
+        return server_management._SystemctlRun(returncode=1, stdout="", stderr="Unit not found")
+
+    result = server_management._systemd_restart(instance, "vbot", runner=runner)
+
+    assert not result.ok
+    assert "failed" in result.message
+
+
+def test_systemd_restart_unhealthy_after_restart(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+    unhealthy = HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError")
+
+    def runner(_args: list[str]) -> server_management._SystemctlRun:
+        return server_management._SystemctlRun(returncode=0, stdout="", stderr="")
+
+    result = server_management._systemd_restart(
+        instance, "vbot", runner=runner, await_health=lambda _instance: unhealthy
+    )
+
+    assert not result.ok
+    assert "did not become healthy" in result.message

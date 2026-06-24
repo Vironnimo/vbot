@@ -26,19 +26,19 @@ vbot model list --host 127.0.0.1 --port 9000 --data-dir ./dev-data
 ```bash
 vbot server start
 vbot server stop
-vbot server restart
+vbot server restart [--service-name <name>]
 vbot server status
 ```
 
-Only server lifecycle commands, `vbot update`, and `vbot doctor ...` can operate without an already-running vBot server. `start` refuses to launch over a non-vBot process on the target port.
+Only server lifecycle commands, `vbot update`, and `vbot doctor ...` can operate without an already-running vBot server. `start` refuses to launch over a non-vBot process on the target port. On a systemd-managed Linux install, `server restart` is routed through the service unit (default `vbot`; override with `--service-name`) so it does not fight the unit.
 
 ## Update
 
 ```bash
-vbot update [--discard | --stash] [--no-restart]
+vbot update [--discard | --stash] [--no-restart] [--service-name <name>]
 ```
 
-`vbot update` updates the installation **from the git checkout it was installed from** (the bootstrap clone), then restarts the server. It never touches the `~/.vbot` data directory. It auto-detects the track: a checkout on a branch (e.g. `main`) pulls and rebuilds the WebUI locally (needs Node); a checkout on a release tag fetches the latest release and its prebuilt WebUI asset (no Node needed). If the checkout has local changes to tracked files, `update` refuses unless you pass `--discard` (drop them) or `--stash` (keep them, reapplied after). `--no-restart` updates without restarting.
+`vbot update` updates the installation **from the git checkout it was installed from** (the bootstrap clone), then restarts the server. It never touches the `~/.vbot` data directory. It auto-detects the track: a checkout on a branch (e.g. `main`) pulls and rebuilds the WebUI locally (needs Node); a checkout on a release tag fetches the latest release and its prebuilt WebUI asset (no Node needed, and re-downloaded only when the tag changed). If the checkout has local changes to tracked files, `update` refuses unless you pass `--discard` (drop them) or `--stash` (keep them, reapplied after). `--no-restart` updates without restarting. On a systemd-managed Linux install the restart goes through the service unit; `--service-name` overrides the unit name (default `vbot`).
 
 Examples:
 

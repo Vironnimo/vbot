@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,10 @@ HEALTH_PATH = "/health"
 WEBUI_PATH = "/"
 WILDCARD_HOSTS = {"", "*", "0.0.0.0", "::"}
 CLI_SERVER_LOGGER_NAME = "cli.server_management"
+DEFAULT_SERVICE_NAME = "vbot"
+_SYSTEMCTL_TIMEOUT_SECONDS = 10.0
+_SYSTEMD_RESTART_READY_TIMEOUT_SECONDS = 10.0
+_SYSTEMD_RESTART_PROBE_INTERVAL_SECONDS = 0.2
 
 
 @dataclass(frozen=True)
@@ -446,6 +451,179 @@ def stop_server(
         health=health,
         process_id=process.pid,
         forced=forced,
+    )
+
+
+@dataclass(frozen=True)
+class _SystemctlRun:
+    """Minimal result of a systemctl invocation."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+SystemctlRunner = Callable[[list[str]], _SystemctlRun]
+
+
+def _run_systemctl(args: list[str]) -> _SystemctlRun:
+    """Run a systemctl command, treating an unavailable binary as a clean failure."""
+
+    try:
+        completed = subprocess.run(
+            args, capture_output=True, text=True, timeout=_SYSTEMCTL_TIMEOUT_SECONDS
+        )
+    except (OSError, subprocess.SubprocessError):
+        return _SystemctlRun(returncode=127, stdout="", stderr="systemctl unavailable")
+    return _SystemctlRun(
+        returncode=completed.returncode,
+        stdout=(completed.stdout or "").strip(),
+        stderr=(completed.stderr or "").strip(),
+    )
+
+
+def _systemd_user_unit_dir() -> Path:
+    return Path.home() / ".config" / "systemd" / "user"
+
+
+def is_systemd_managed(
+    service_name: str = DEFAULT_SERVICE_NAME,
+    *,
+    platform: str = sys.platform,
+    runner: SystemctlRunner = _run_systemctl,
+    unit_dir: Path | None = None,
+) -> bool:
+    """Return whether a systemd user unit currently owns the local server.
+
+    Gated on the unit file's existence first, so non-systemd hosts never spawn a
+    systemctl probe.
+    """
+
+    if not platform.startswith("linux"):
+        return False
+    units = unit_dir or _systemd_user_unit_dir()
+    if not (units / f"{service_name}.service").is_file():
+        return False
+    active = runner(["systemctl", "--user", "is-active", f"{service_name}.service"])
+    return active.returncode == 0 and active.stdout.strip() == "active"
+
+
+def _await_vbot_health(
+    instance: ServerInstance,
+    *,
+    timeout_seconds: float = _SYSTEMD_RESTART_READY_TIMEOUT_SECONDS,
+    interval_seconds: float = _SYSTEMD_RESTART_PROBE_INTERVAL_SECONDS,
+) -> HealthProbeResult:
+    """Poll the health endpoint until the vBot server answers or the deadline passes."""
+
+    deadline = time.monotonic() + timeout_seconds
+    health = probe_health(instance)
+    while not health.is_vbot and time.monotonic() < deadline:
+        time.sleep(interval_seconds)
+        health = probe_health(instance)
+    return health
+
+
+def _systemd_restart(
+    instance: ServerInstance,
+    service_name: str,
+    *,
+    runner: SystemctlRunner = _run_systemctl,
+    await_health: Callable[[ServerInstance], HealthProbeResult] = _await_vbot_health,
+) -> CommandResult:
+    """Restart the server through its systemd user unit and confirm health."""
+
+    restarted = runner(["systemctl", "--user", "restart", f"{service_name}.service"])
+    if restarted.returncode != 0:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"systemctl --user restart {service_name} failed: "
+                f"{restarted.stderr or restarted.stdout}"
+            ),
+            instance=instance,
+        )
+    health = await_health(instance)
+    if health.is_vbot:
+        return CommandResult(
+            ok=True,
+            message="restarted via systemd",
+            instance=instance,
+            health=health,
+            webui=probe_webui(instance),
+            log_path=instance.log_path,
+        )
+    return CommandResult(
+        ok=False,
+        message="restarted via systemd, but the server did not become healthy in time",
+        instance=instance,
+        health=health,
+        log_path=instance.log_path,
+    )
+
+
+def restart_via_systemd_if_managed(
+    instance: ServerInstance,
+    *,
+    service_name: str = DEFAULT_SERVICE_NAME,
+    is_managed: Callable[[str], bool] = is_systemd_managed,
+    do_restart: Callable[[ServerInstance, str], CommandResult] = _systemd_restart,
+) -> CommandResult | None:
+    """Restart via systemd when the target is unit-managed; return None otherwise."""
+
+    if not is_managed(service_name):
+        return None
+    return do_restart(instance, service_name)
+
+
+def restart_server(
+    instance: ServerInstance,
+    *,
+    service_name: str = DEFAULT_SERVICE_NAME,
+    stop: Callable[[ServerInstance], CommandResult] = stop_server,
+    start: Callable[[ServerInstance], CommandResult] = start_server,
+    is_managed: Callable[[str], bool] = is_systemd_managed,
+    do_restart: Callable[[ServerInstance, str], CommandResult] = _systemd_restart,
+) -> CommandResult:
+    """Restart the local server, delegating to systemd when the unit owns it.
+
+    On a systemd-managed install the managed stop/start would fight the unit (its
+    ``Restart=`` directive races the spawned replacement, or systemd's view
+    desyncs from the unmanaged process), so route the restart through the unit
+    instead. Everywhere else fall back to the managed terminate-then-start path.
+    """
+
+    via_systemd = restart_via_systemd_if_managed(
+        instance, service_name=service_name, is_managed=is_managed, do_restart=do_restart
+    )
+    if via_systemd is not None:
+        return via_systemd
+
+    stop_result = stop(instance)
+    if not stop_result.ok and stop_result.message != "not running":
+        return CommandResult(
+            ok=False,
+            message=f"restart aborted: {stop_result.message}",
+            instance=instance,
+            health=stop_result.health,
+        )
+    start_result = start(instance)
+    if start_result.ok:
+        return CommandResult(
+            ok=True,
+            message="restarted",
+            instance=instance,
+            health=start_result.health,
+            webui=start_result.webui,
+            log_path=start_result.log_path,
+            process_id=start_result.process_id,
+        )
+    return CommandResult(
+        ok=False,
+        message=f"restart failed: {start_result.message}",
+        instance=instance,
+        health=start_result.health,
+        log_path=start_result.log_path,
     )
 
 
