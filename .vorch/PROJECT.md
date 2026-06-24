@@ -142,6 +142,8 @@ python desktop/main.py                # Desktop shell
 cd webui && npm install && npm run build   # Svelte → static JS/CSS
 ```
 
+**Releasing:** vBot ships via tagged GitHub releases (the bootstrap and `vbot update` consume the tag and its prebuilt WebUI asset). The version lives only in `pyproject.toml`. The precise procedure — version bump, gates, `gh release create … --generate-notes` (house-style Full Changelog notes, **never** hand-written), and mandatory asset verification — is in `.vorch/workflows/release-workflow.md`. **Read it before cutting a release.**
+
 **Data directory:** `~/.vbot` — created on first run. Holds `.env`, `settings.json`, and all runtime data: `attachments/`, `logs/`, `oauth/`, `cron/jobs.json`, `speech/`, the disposable recall index under `recall/` (`session_index.sqlite` for FTS, `session_vectors.sqlite` for vector), and prompt overrides under `prompts/` and `agents/<agent-id>/prompts/`. Per-domain layout details live in the relevant domain maps.
 
 ## Testing
