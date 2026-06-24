@@ -14,10 +14,9 @@ DATA_DIR="${HOME}/.vbot"
 HOST="127.0.0.1"
 PORT=8420
 PORT_PROVIDED=0
-ENABLE_AUTOSTART=0
 DEV=0
-START_SERVER=0
 SKIP_WEBUI_BUILD=0
+NO_AUTOSTART=0
 SERVICE_NAME="vbot"
 
 usage() {
@@ -28,9 +27,8 @@ Options:
   --data-dir <path>      Data directory (default: ~/.vbot)
   --host <host>          Server host (default: 127.0.0.1)
   --port <port>          Server port (default: 8420, or existing settings.json value)
-  --enable-autostart     Install a systemd user unit and enable login lingering
   --dev                  Install the dev dependency group instead of server+cli
-  --start-server         Start the server after installation
+  --no-autostart         Do not enable autostart or start the server after install
   --skip-webui-build     Use an existing webui/dist instead of building (for
                          low-memory hosts such as a Pi 3 — build elsewhere and
                          copy webui/dist over before running this)
@@ -53,9 +51,8 @@ while [ $# -gt 0 ]; do
         --data-dir) DATA_DIR="$2"; shift 2 ;;
         --host) HOST="$2"; shift 2 ;;
         --port) PORT="$2"; PORT_PROVIDED=1; shift 2 ;;
-        --enable-autostart) ENABLE_AUTOSTART=1; shift ;;
         --dev) DEV=1; shift ;;
-        --start-server) START_SERVER=1; shift ;;
+        --no-autostart) NO_AUTOSTART=1; shift ;;
         --skip-webui-build) SKIP_WEBUI_BUILD=1; shift ;;
         --service-name) SERVICE_NAME="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -198,7 +195,6 @@ else
     [ -f "${WEBUI_DIR}/dist/index.html" ] || fail "WebUI build did not create webui/dist/index.html."
 fi
 
-PYTHON_BIN="$("$PYTHON" -c 'import sys; print(sys.executable)')"
 SCRIPTS_PATH="$("$PYTHON" -c "import sysconfig; print(sysconfig.get_path('scripts'))")"
 VBOT_ON_ORIGINAL_PATH="$(command -v vbot || true)"
 export PATH="${PATH}:${SCRIPTS_PATH}"
@@ -216,54 +212,17 @@ if [ -z "$VBOT_ON_ORIGINAL_PATH" ]; then
     echo "Note: ${SCRIPTS_PATH} is not on your PATH. Add it to your shell profile to use 'vbot' directly."
 fi
 
-if [ "$ENABLE_AUTOSTART" -eq 1 ]; then
-    step "Configuring systemd user unit: ${SERVICE_NAME}"
-    command -v systemctl >/dev/null 2>&1 || fail "systemctl not found; autostart requires systemd."
-
-    UNIT_DIR="${HOME}/.config/systemd/user"
-    mkdir -p "$UNIT_DIR"
-    # KillMode=process: agent-triggered `vbot server restart` replaces the
-    # main process with a detached one inside the same cgroup; the default
-    # control-group kill would take the replacement down with the unit.
-    cat > "${UNIT_DIR}/${SERVICE_NAME}.service" <<UNITEOF
-[Unit]
-Description=vBot server
-
-[Service]
-Type=simple
-WorkingDirectory=${PROJECT_ROOT}
-ExecStart=${PYTHON_BIN} -m server.main --host ${HOST} --port ${PORT} --data-dir ${DATA_DIR}
-Restart=on-failure
-RestartSec=5
-KillMode=process
-TimeoutStopSec=10
-
-[Install]
-WantedBy=default.target
-UNITEOF
-
-    systemctl --user daemon-reload
-    systemctl --user enable "${SERVICE_NAME}.service"
-    if ! loginctl enable-linger "$USER" 2>/dev/null; then
-        echo "Warning: could not enable login lingering. Run 'sudo loginctl enable-linger $USER'"
-        echo "so the server starts at boot instead of at first login."
-    fi
-fi
-
-if [ "$START_SERVER" -eq 1 ]; then
-    step "Starting vBot server"
-    if [ "$ENABLE_AUTOSTART" -eq 1 ]; then
-        systemctl --user start "${SERVICE_NAME}.service"
-    else
-        "$VBOT_PATH" server start --host "$HOST" --port "$PORT" --data-dir "$DATA_DIR"
-    fi
+if [ "$NO_AUTOSTART" -eq 0 ]; then
+    step "Enabling autostart and starting the server"
+    "$VBOT_PATH" autostart enable --host "$HOST" --port "$PORT" --data-dir "$DATA_DIR" --service-name "$SERVICE_NAME" \
+        || echo "Warning: enabling autostart failed (see message above)."
 fi
 
 step "Installation complete"
 echo "vBot command: ${VBOT_PATH}"
 echo "Data directory: ${DATA_DIR}"
 echo "Server URL: http://${HOST}:${PORT}"
-if [ "$ENABLE_AUTOSTART" -eq 1 ]; then
+if [ "$NO_AUTOSTART" -eq 0 ]; then
     echo "Autostart: systemctl --user status ${SERVICE_NAME}"
 fi
 echo "Try: vbot server status --host ${HOST} --port ${PORT} --data-dir \"${DATA_DIR}\""

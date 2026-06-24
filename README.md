@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstr
 irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1 | iex
 ```
 
-This installs the latest **release**, so no Node.js is needed on the machine. To track `main` and build the WebUI locally instead, use the dev track: `bootstrap.sh --dev` on Linux, or download `bootstrap.ps1` and run it with `-Dev` on Windows. As always with `curl | bash` / `irm | iex`, download and read the script first if you prefer to review it before running.
+This installs the latest **release**, so no Node.js is needed on the machine, and enables autostart by default (pass `--no-autostart` to skip). On Windows, run the one-liner in an elevated PowerShell so the autostart task can be created — the install still succeeds otherwise. To track `main` and build the WebUI locally instead, use the dev track: `bootstrap.sh --dev` on Linux, or download `bootstrap.ps1` and run it with `-Dev` on Windows. As always with `curl | bash` / `irm | iex`, download and read the script first if you prefer to review it before running.
 
 The numbered steps below describe the manual install if you would rather clone the repo and run the installer yourself.
 
@@ -68,16 +68,10 @@ missing files in `~/.vbot` without overwriting an existing valid
 .\scripts\install.ps1
 ```
 
-Optional autostart via Windows Task Scheduler:
+By default the installer enables autostart (a Windows Task Scheduler logon task) and starts the server. Creating the task needs an elevated (Administrator) PowerShell. To skip autostart and the immediate start:
 
 ```powershell
-.\scripts\install.ps1 -EnableAutostart
-```
-
-Start the server immediately after installation:
-
-```powershell
-.\scripts\install.ps1 -StartServer
+.\scripts\install.ps1 -NoAutostart
 ```
 
 Uninstall removes the Python package only. It leaves `~/.vbot` untouched:
@@ -100,10 +94,10 @@ virtual environment and tells you how to create one otherwise:
 scripts/install.sh
 ```
 
-Optional autostart via a systemd user unit that starts at boot:
+By default it enables a systemd user autostart unit (started at boot via login lingering) and starts the server. To skip that:
 
 ```bash
-scripts/install.sh --enable-autostart
+scripts/install.sh --no-autostart
 ```
 
 On low-memory hosts (Pi 3 class), skip the on-device WebUI build and use a
