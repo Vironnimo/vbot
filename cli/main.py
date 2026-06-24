@@ -65,10 +65,12 @@ from cli.provider_management import (
     provider_unset_key,
 )
 from cli.server_management import (
+    DEFAULT_SERVICE_NAME,
     CommandResult,
     ServerInstance,
     get_status,
     resolve_instance,
+    restart_via_systemd_if_managed,
     start_server,
     stop_server,
 )
@@ -101,6 +103,7 @@ class ServerCommandContext:
     host: str
     port: int | None
     data_dir: str | None
+    service_name: str
     resolve: Callable[..., ServerInstance]
     start: Callable[[ServerInstance], CommandResult]
     stop: Callable[[ServerInstance], CommandResult]
@@ -165,6 +168,7 @@ def run(
             host=args.host,
             port=args.port,
             data_dir=args.data_dir,
+            service_name=getattr(args, "service_name", None) or DEFAULT_SERVICE_NAME,
             resolve=resolve,
             start=start,
             stop=stop,
@@ -891,6 +895,7 @@ def dispatch_update_command(
         restart=not args.no_restart,
         stop=stop,
         start=start,
+        service_name=getattr(args, "service_name", None) or DEFAULT_SERVICE_NAME,
     )
 
 
@@ -903,6 +908,9 @@ def dispatch_server_command(context: ServerCommandContext) -> CommandResult:
     if context.command == "stop":
         return context.stop(instance)
     if context.command == "restart":
+        via_systemd = restart_via_systemd_if_managed(instance, service_name=context.service_name)
+        if via_systemd is not None:
+            return via_systemd
         stop_result = context.stop(instance)
         if not stop_result.ok:
             return stop_result
