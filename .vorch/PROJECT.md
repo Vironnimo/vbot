@@ -96,18 +96,20 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 
 **Prerequisites:** Python >= 3.11, Node.js (for webui).
 
-**Setup:** Windows users can run the conservative installer, which installs the editable Python package, always installs/builds the WebUI, creates missing `~/.vbot` files without overwriting an existing valid `settings.json` or `.env`, and can optionally register a Windows Task Scheduler autostart task. Existing port settings are respected unless `-Port` is explicit:
+**Setup:** The user-facing path is the one-line bootstrap (`scripts/bootstrap.{sh,ps1}`): it installs prerequisites, clones into `~/vbot`, creates an isolated venv at `~/vbot/.venv`, fetches the prebuilt WebUI (release track), exposes only `vbot`, and enables autostart by default. It drops a `.vbot-bootstrap` marker so the bundled uninstaller knows this is a self-contained install and removes the **whole tree** (venv + source), the `vbot` launcher, and the autostart entry — never the data dir.
+
+Windows users can also run the conservative installer directly, which installs the editable Python package, always installs/builds the WebUI, creates missing `~/.vbot` files without overwriting an existing valid `settings.json` or `.env`, and registers a Windows Task Scheduler autostart task by default (opt out with `-NoAutostart`). Existing port settings are respected unless `-Port` is explicit:
 ```powershell
-.\scripts\install.ps1 [-EnableAutostart] [-StartServer]
+.\scripts\install.ps1 [-NoAutostart]
 ```
-Uninstall is intentionally data-dir preserving:
+Uninstall is intentionally data-dir preserving. For a bootstrap install it removes the whole tree wholesale; for a manual install it uninstalls the pip package and (with `-RemoveAutostart`) the task:
 ```powershell
 .\scripts\uninstall.ps1 [-RemoveAutostart]
 ```
 
-Linux (e.g. Raspberry Pi) has an equivalent installer with the same conservative behavior. Autostart uses a systemd **user** unit (`~/.config/systemd/user/vbot.service`, `KillMode=process` so agent-triggered `vbot server restart` survives unit deactivation) plus `loginctl enable-linger`. On PEP 668 systems (Debian/Raspberry Pi OS) it must run inside a venv and fails early with instructions otherwise. `--skip-webui-build` uses an existing `webui/dist` instead of requiring Node — for low-memory hosts (Pi 3 class), build the WebUI on another machine and copy `webui/dist` over; on a Pi 5 building on-device is fine:
+Linux (e.g. Raspberry Pi) has an equivalent installer with the same conservative behavior, autostart on by default (`--no-autostart` to skip). Autostart uses a systemd **user** unit (`~/.config/systemd/user/vbot.service`, `KillMode=process` so agent-triggered `vbot server restart` survives unit deactivation) plus `loginctl enable-linger`. On PEP 668 systems (Debian/Raspberry Pi OS) it must run inside a venv and fails early with instructions otherwise. `--skip-webui-build` uses an existing `webui/dist` instead of requiring Node — for low-memory hosts (Pi 3 class), build the WebUI on another machine and copy `webui/dist` over; on a Pi 5 building on-device is fine:
 ```bash
-scripts/install.sh [--enable-autostart] [--start-server] [--skip-webui-build]
+scripts/install.sh [--no-autostart] [--skip-webui-build]
 scripts/uninstall.sh [--remove-autostart]
 ```
 

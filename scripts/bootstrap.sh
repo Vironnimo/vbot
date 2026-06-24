@@ -164,6 +164,18 @@ link_vbot() {
     step "Linked vbot into ${HOME}/.local/bin"
 }
 
+# Mark this directory as a self-contained bootstrap install so uninstall.sh knows
+# it may remove the whole tree (venv + source), not just a pip package.
+write_marker() {
+    cat > "${INSTALL_DIR}/.vbot-bootstrap" <<'MARKER'
+# vBot bootstrap install marker.
+# This directory is a self-contained vBot install created by the bootstrap script
+# (it has its own virtual environment in .venv). Running scripts/uninstall.sh
+# (uninstall.ps1 on Windows) removes this entire directory, the 'vbot' launcher,
+# and the autostart entry. Your data directory is never touched.
+MARKER
+}
+
 ensure_git
 ensure_python
 [ "$DEV" -eq 1 ] && ensure_node
@@ -172,6 +184,7 @@ clone_repo
 [ "$DEV" -eq 0 ] && fetch_prebuilt_webui
 run_installer
 link_vbot
+write_marker
 
 step "vBot bootstrap complete"
 echo "Installed at: ${INSTALL_DIR}"
