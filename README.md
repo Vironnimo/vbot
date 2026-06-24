@@ -20,6 +20,18 @@ the WebUI, CLI, desktop shell, and channel adapters are accessors around it.
 Except for `server start`, `server stop`, `server restart`, and `server status`,
 CLI commands require a running vBot server and go through its RPC surface.
 
+## Security
+
+> **vBot runs AI agents with full access to the host it runs on.** By design, agents can read, write, and execute files, run arbitrary shell commands, edit vBot's own source, and trigger restarts. The server has **no authentication** — anyone who can reach its port can drive an agent with all of these capabilities.
+
+This is safe only as a **local, single-user** tool bound to `127.0.0.1` (the default). Do **not**:
+
+- bind the server to `0.0.0.0` or any public network interface,
+- port-forward or reverse-proxy it to the internet without putting your own authentication in front of it,
+- run it on a shared or untrusted host.
+
+Treat exposing vBot to a network as granting remote code execution on that machine. API keys and bot tokens live in `~/.vbot/.env`, never in the repository — keep that directory private.
+
 ## Requirements
 
 - Python **3.11+**
