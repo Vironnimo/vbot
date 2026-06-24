@@ -9,6 +9,7 @@ param(
     [switch]$Desktop,
     [switch]$Dev,
     [switch]$StartServer,
+    [switch]$SkipWebuiBuild,
     [switch]$SkipPathUpdate,
     [string]$TaskName = "vBot"
 )
@@ -435,17 +436,31 @@ $effectivePort = Resolve-EffectivePort `
     -DefaultPort $Port `
     -PortWasProvided ($PSBoundParameters.ContainsKey("Port"))
 $python = Resolve-PythonCommand
-$node = Resolve-CommandSpec @("node.exe", "node")
-$npm = Resolve-CommandSpec @("npm.cmd", "npm")
+if (-not $SkipWebuiBuild) {
+    $node = Resolve-CommandSpec @("node.exe", "node")
+    $npm = Resolve-CommandSpec @("npm.cmd", "npm")
+}
 
 Write-Step "Checking prerequisites"
 Test-PythonVersion $python
-Invoke-External $node @("--version")
-Invoke-External $npm @("--version")
+if (-not $SkipWebuiBuild) {
+    Invoke-External $node @("--version")
+    Invoke-External $npm @("--version")
+}
 
 Initialize-DataDirectory $resolvedDataDir $effectivePort
 Install-PythonPackage $python
-Build-WebUi $npm
+if ($SkipWebuiBuild) {
+    Write-Step "Skipping WebUI build (-SkipWebuiBuild)"
+    $skipBuildIndex = Join-Path $WebUiDir "dist\index.html"
+    if (-not (Test-Path $skipBuildIndex)) {
+        throw "webui/dist/index.html not found. Build the WebUI on another machine and copy webui/dist here, or re-run without -SkipWebuiBuild."
+    }
+    Write-Host "Using existing webui/dist."
+}
+else {
+    Build-WebUi $npm
+}
 
 $scriptsPath = Get-PythonScriptsPath $python
 Ensure-PathContains $scriptsPath
