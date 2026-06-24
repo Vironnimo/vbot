@@ -56,6 +56,18 @@ irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1 
 
 This installs the latest **release**, so no Node.js is needed on the machine, and enables autostart by default (pass `--no-autostart` to skip). On Windows, run the one-liner in an elevated PowerShell so the autostart task can be created — the install still succeeds otherwise. To track `main` and build the WebUI locally instead, use the dev track: `bootstrap.sh --dev` on Linux, or download `bootstrap.ps1` and run it with `-Dev` on Windows. As always with `curl | bash` / `irm | iex`, download and read the script first if you prefer to review it before running.
 
+To uninstall a bootstrap install, run its bundled uninstaller — it removes the whole `~/vbot` directory (virtual environment included), the `vbot` launcher, and the autostart entry, while leaving your data in `~/.vbot` untouched:
+
+```bash
+~/vbot/scripts/uninstall.sh
+```
+
+```powershell
+& "$HOME\vbot\scripts\uninstall.ps1"
+```
+
+On Windows, run the uninstaller from an elevated PowerShell so the autostart task can be removed too.
+
 The numbered steps below describe the manual install if you would rather clone the repo and run the installer yourself.
 
 ### 1. Install vBot

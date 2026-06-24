@@ -27,16 +27,14 @@ installer start/autostart commands unless `-Port` is passed explicitly.
 .\scripts\install.ps1
 ```
 
-Common options:
+By default the installer enables autostart (a Windows Task Scheduler task that
+runs `vbot server start` at user login) and starts the server. Creating the task
+needs an elevated PowerShell. Common options:
 
 ```powershell
-.\scripts\install.ps1 -EnableAutostart
-.\scripts\install.ps1 -StartServer
+.\scripts\install.ps1 -NoAutostart
 .\scripts\install.ps1 -DataDir "$env:USERPROFILE\.vbot" -Port 8420
 ```
-
-The autostart option registers a Windows Task Scheduler task that runs
-`vbot server start` at user login.
 
 To uninstall the Python package while keeping the data directory untouched:
 
@@ -62,11 +60,11 @@ conservative rules (existing valid `settings.json` and `.env` are kept, invalid
 scripts/install.sh
 ```
 
-Common options:
+By default the installer enables a systemd user autostart unit and starts the
+server. Common options:
 
 ```bash
-scripts/install.sh --enable-autostart
-scripts/install.sh --start-server
+scripts/install.sh --no-autostart
 scripts/install.sh --data-dir ~/.vbot --port 8420
 scripts/install.sh --skip-webui-build
 ```
@@ -82,8 +80,8 @@ Notes:
   scripts/install.sh
   ```
 
-- `--enable-autostart` writes a systemd user unit to
-  `~/.config/systemd/user/vbot.service` and enables login lingering so the
+- Autostart (on by default; pass `--no-autostart` to skip) writes a systemd user
+  unit to `~/.config/systemd/user/vbot.service` and enables login lingering so the
   server starts at boot, without root. Manage it with
   `systemctl --user status|start|stop vbot`.
 - `--skip-webui-build` is for low-memory hosts (Pi 3 class) where `npm install`
