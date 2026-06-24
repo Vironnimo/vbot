@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vbot"
-version = "0.1.2"
+version = "0.1.3"
 description = "A local-first agent harness: an async Python runtime giving AI agents a workspace, persistent state, host tool access, and server/WebUI/desktop/CLI accessors."
 readme = "README.md"
 requires-python = ">=3.11"
