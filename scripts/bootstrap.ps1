@@ -101,6 +101,40 @@ function Get-WebuiAssetUrl {
     return $asset.browser_download_url
 }
 
+function Add-ToUserPath {
+    param([string]$PathToAdd)
+    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $target = $PathToAdd.TrimEnd('\', '/')
+    if (-not [string]::IsNullOrWhiteSpace($userPath)) {
+        foreach ($entry in ($userPath -split [System.IO.Path]::PathSeparator)) {
+            if (-not [string]::IsNullOrWhiteSpace($entry) -and ($entry.TrimEnd('\', '/') -ieq $target)) {
+                return
+            }
+        }
+    }
+    $updated = if ([string]::IsNullOrWhiteSpace($userPath)) {
+        $PathToAdd
+    }
+    else {
+        "$userPath$([System.IO.Path]::PathSeparator)$PathToAdd"
+    }
+    [System.Environment]::SetEnvironmentVariable("Path", $updated, "User")
+    Write-Host "Added $PathToAdd to your user PATH. Open a new terminal to use 'vbot'."
+}
+
+function Add-VbotShim {
+    param([string]$InstallDir, [string]$VenvDir)
+    $binDir = Join-Path $InstallDir "bin"
+    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+    $vbotExe = Join-Path $VenvDir "Scripts\vbot.exe"
+    $shim = Join-Path $binDir "vbot.cmd"
+    # Expose only vbot, so the venv's python/pip do not shadow the user's.
+    $content = "@echo off`r`n`"$vbotExe`" %*`r`n"
+    [System.IO.File]::WriteAllText($shim, $content, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Step "Exposing 'vbot' via $shim"
+    Add-ToUserPath -PathToAdd $binDir
+}
+
 if (Test-Path $InstallDir) {
     throw "$InstallDir already exists. Remove it or pass -InstallDir to choose another location."
 }
@@ -145,9 +179,22 @@ else {
     }
 }
 
+Write-Step "Creating virtual environment at $InstallDir\.venv"
+$venvDir = Join-Path $InstallDir ".venv"
+& python -m venv $venvDir
+if ($LASTEXITCODE -ne 0) {
+    throw "Creating the virtual environment failed."
+}
+# Put the venv first on PATH so the installer installs into it (mirrors `source activate`).
+$env:VIRTUAL_ENV = $venvDir
+$env:PATH = "$(Join-Path $venvDir 'Scripts')$([System.IO.Path]::PathSeparator)$env:PATH"
+
 $installer = Join-Path $InstallDir "scripts\install.ps1"
-$installerArgList = @()
-if (-not $Dev) {
+$installerArgList = @("-SkipPathUpdate")
+if ($Dev) {
+    $installerArgList += "-Dev"
+}
+else {
     $installerArgList += "-SkipWebuiBuild"
 }
 if ($InstallerArgs) {
@@ -157,6 +204,9 @@ if ($InstallerArgs) {
 Write-Step "Running installer: install.ps1 $($installerArgList -join ' ')"
 & $installer @installerArgList
 
+Add-VbotShim -InstallDir $InstallDir -VenvDir $venvDir
+
 Write-Step "vBot bootstrap complete"
-Write-Host "Installed at: $InstallDir"
+Write-Host "Installed at: $InstallDir (virtual environment in .venv)"
 Write-Host "Data dir:     $(Join-Path $HOME '.vbot')"
+Write-Host "Open a new terminal, then run: vbot server status"
