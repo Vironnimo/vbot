@@ -1,6 +1,6 @@
 <script>
   import { isRunActive } from '$lib/chatState.js';
-  import { t } from '$lib/i18n.js';
+  import { activeLocaleTag, t } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
   import Dropdown from '../Dropdown.svelte';
 
@@ -48,7 +48,7 @@
   ]);
 
   function formatTokenBadge(usage, contextWindow) {
-    const numberFormat = new Intl.NumberFormat();
+    const numberFormat = new Intl.NumberFormat(activeLocaleTag());
 
     if (usage) {
       const inputTokens = Number.isFinite(usage.input_tokens)
@@ -92,7 +92,7 @@
     if (!usage) {
       return undefined;
     }
-    const numberFormat = new Intl.NumberFormat();
+    const numberFormat = new Intl.NumberFormat(activeLocaleTag());
     const lines = [
       t('chat.tokenTooltipInput', 'Input: {tokens} tok', {
         tokens: numberFormat.format(
