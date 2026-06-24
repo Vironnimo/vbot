@@ -13,7 +13,7 @@ Use this skill when the user wants you to configure, inspect, or operate vBot it
 - Primary identifiers are positional: `vbot agent show assistant`, `vbot channel remove tg-main`, `vbot cron delete <job-id>`. Secondary parameters are flags. There are no `--id`-style flags for the main target.
 - Prefer CLI/RPC-backed changes over direct file edits. Use direct file edits only when no CLI command exists and the user explicitly asked for that level of change.
 - When the user gives you an API key and asks you to configure a provider, use `vbot provider set-key <provider-id> <api-key>`. Do not print the key back. For bot tokens, OAuth codes, passwords, and other secrets, prefer environment variable names unless a dedicated CLI command exists.
-- Start or locate the target server before running RPC-backed management commands. Only `vbot server start`, `vbot server stop`, `vbot server restart`, `vbot server status`, `vbot update`, and `vbot doctor ...` work without an already-running server.
+- Start or locate the target server before running RPC-backed management commands. Only `vbot server start`, `vbot server stop`, `vbot server restart`, `vbot server status`, `vbot update`, `vbot autostart`, and `vbot doctor ...` work without an already-running server.
 - Keep commands non-interactive and automation-safe. Capture the result, then verify with a read/list/status command.
 - Use `vbot <area> --help` or `vbot <area> <command> --help` when you need exact flags; every subcommand help text includes a usage example.
 - Treat CLI output as the source of truth for the next step. If a command returns an error with available candidates or `did you mean`, use that hint before retrying.
@@ -79,6 +79,18 @@ vbot update --no-restart
 ```
 
 If the checkout has local changes to tracked files, `update` refuses; re-run with `--discard` to drop them or `--stash` to keep them (reapplied after the update).
+
+### Autostart
+
+Use `vbot autostart` to make the server start automatically and bring it up now:
+
+```bash
+vbot autostart enable
+vbot autostart status
+vbot autostart disable
+```
+
+`enable` registers OS autostart (Windows Task Scheduler logon task, or a Linux systemd user unit) and starts the server immediately. On Windows this needs an elevated (Administrator) terminal to create the task. `disable` removes the autostart entry but leaves a running server untouched. The installers enable autostart by default (pass `--no-autostart` to opt out).
 
 ### Settings
 

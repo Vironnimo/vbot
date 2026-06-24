@@ -48,6 +48,16 @@ vbot update --stash
 vbot update --no-restart
 ```
 
+## Autostart
+
+```bash
+vbot autostart enable [--task-name <name>] [--service-name <name>]
+vbot autostart disable [--task-name <name>] [--service-name <name>]
+vbot autostart status [--task-name <name>] [--service-name <name>]
+```
+
+`vbot autostart enable` registers OS autostart for the server and starts it now: Windows creates a Task Scheduler logon task; Linux writes a systemd **user** unit, enables it with `--now`, and best-effort enables login lingering. On Windows, creating the task needs an elevated (Administrator) terminal. `disable` removes the entry (a running server keeps going); `status` reports whether autostart is registered. The installers run `vbot autostart enable` by default — pass `--no-autostart` to the installer to skip it.
+
 ## Config
 
 ```bash

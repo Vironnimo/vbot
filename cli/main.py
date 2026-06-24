@@ -16,6 +16,7 @@ from cli.agent_management import (
     agent_show,
     agent_update,
 )
+from cli.autostart_management import autostart_status, disable_autostart, enable_autostart
 from cli.channel_management import (
     channel_add,
     channel_disable,
@@ -184,6 +185,11 @@ def run(
 
     if args.area == "update":
         result = dispatch_update_command(args, resolve=resolve, stop=stop, start=start)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "autostart":
+        result = dispatch_autostart_command(args, resolve=resolve, start=start)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -842,6 +848,29 @@ def dispatch_doctor_command(
     if args.command == "config":
         return doctor_config_fn(args.data_dir)
     raise ValueError(f"Unsupported doctor command: {args.command}")
+
+
+def dispatch_autostart_command(
+    args: argparse.Namespace,
+    *,
+    resolve: Callable[..., ServerInstance],
+    start: Callable[[ServerInstance], CommandResult],
+    enable_fn: Callable[..., CommandResult] = enable_autostart,
+    disable_fn: Callable[..., CommandResult] = disable_autostart,
+    status_fn: Callable[..., CommandResult] = autostart_status,
+) -> CommandResult:
+    """Dispatch one parsed autostart command against the local OS."""
+
+    instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+    if args.command == "enable":
+        return enable_fn(
+            instance, start=start, task_name=args.task_name, service_name=args.service_name
+        )
+    if args.command == "disable":
+        return disable_fn(instance, task_name=args.task_name, service_name=args.service_name)
+    if args.command == "status":
+        return status_fn(instance, task_name=args.task_name, service_name=args.service_name)
+    raise ValueError(f"Unsupported autostart command: {args.command}")
 
 
 def dispatch_update_command(
