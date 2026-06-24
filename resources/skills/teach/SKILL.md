@@ -1,6 +1,6 @@
 ---
 name: teach
-description: Teach the user a topic, concept, or skill so they actually understand it and can do it themselves — not just hand over information. Use when the user asks to be taught, wants to learn or understand something, says they don't get a concept, asks you to explain so it sticks, or wants to be walked through how something works. Examples: "teach me X", "explain X so I get it", "help me learn Y", "I don't understand Z", "walk me through how W works", "I have no idea about V". Do not use for quick factual lookups where the user just wants the answer and moves on.
+description: Teach the user a topic, concept, or skill so they actually understand it and can do it themselves — not just hand over information. Use when the user asks to be taught, wants to learn or understand something, says they don't get a concept, asks you to explain so it sticks, or wants to be walked through how something works. Examples — "teach me X", "explain X so I get it", "help me learn Y", "I don't understand Z", "walk me through how W works", "I have no idea about V". Do not use for quick factual lookups where the user just wants the answer and moves on.
 ---
 
 # Teach
