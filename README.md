@@ -40,6 +40,24 @@ Treat exposing vBot to a network as granting remote code execution on that machi
 
 ## Quick Start
 
+The fastest path is the one-line bootstrap: it installs prerequisites (Python and git), clones the repo into `~/vbot`, fetches the prebuilt WebUI, and runs the installer. Your data still lives separately in `~/.vbot`.
+
+**Linux / Raspberry Pi:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1 | iex
+```
+
+This installs the latest **release**, so no Node.js is needed on the machine. To track `main` and build the WebUI locally instead, use the dev track: `bootstrap.sh --dev` on Linux, or download `bootstrap.ps1` and run it with `-Dev` on Windows. As always with `curl | bash` / `irm | iex`, download and read the script first if you prefer to review it before running.
+
+The numbered steps below describe the manual install if you would rather clone the repo and run the installer yourself.
+
 ### 1. Install vBot
 
 On Windows, the installer prepares the Python CLI, builds the WebUI, and creates
@@ -190,6 +208,16 @@ Then open:
 ```text
 http://127.0.0.1:8420/
 ```
+
+## Updating
+
+Update an installed instance with:
+
+```bash
+vbot update
+```
+
+It updates the code from the git checkout it was installed from and restarts the server, without touching your data in `~/.vbot`. A release install fetches the latest release and its prebuilt WebUI; a `main` (dev) install pulls and rebuilds the WebUI locally. If you have local changes to tracked files, `update` stops — re-run with `--discard` to drop them or `--stash` to keep them (reapplied after). Use `--no-restart` to update without restarting.
 
 ## Default Data Directory
 
