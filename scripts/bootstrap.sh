@@ -17,6 +17,7 @@ API_BASE="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}"
 INSTALL_DIR="${VBOT_DIR:-${HOME}/vbot}"
 DEV=0
 TAG=""
+VERSION=""
 INSTALLER_ARGS=()
 
 usage() {
@@ -24,9 +25,11 @@ usage() {
 Usage: bootstrap.sh [options] [-- <installer options>]
 
 Options:
-  --dir <path>   Where to clone vBot (default: ~/vbot, or \$VBOT_DIR)
-  --dev          Dev track: clone main and build the WebUI locally (needs Node)
-  -h, --help     Show this help
+  --dir <path>     Where to clone vBot (default: ~/vbot, or \$VBOT_DIR)
+  --dev            Dev track: clone main and build the WebUI locally (needs Node)
+  --version <tag>  Install a specific release instead of the latest (e.g. v0.1.2).
+                   Release track only; cannot be combined with --dev.
+  -h, --help       Show this help
 
 Anything after -- is forwarded to scripts/install.sh, e.g.:
   bootstrap.sh -- --no-autostart
@@ -42,6 +45,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dir) INSTALL_DIR="$2"; shift 2 ;;
         --dev) DEV=1; shift ;;
+        --version) VERSION="$2"; shift 2 ;;
         --) shift; INSTALLER_ARGS=("$@"); break ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown option: $1" ;;
@@ -51,6 +55,15 @@ done
 case "$INSTALL_DIR" in
     "~") INSTALL_DIR="$HOME" ;;
     "~/"*) INSTALL_DIR="${HOME}/${INSTALL_DIR#\~/}" ;;
+esac
+
+if [ "$DEV" -eq 1 ] && [ -n "$VERSION" ]; then
+    fail "--version selects a specific release tag and cannot be combined with --dev."
+fi
+# Accept a bare version (0.1.2) as well as the tag form (v0.1.2).
+case "$VERSION" in
+    "" | v*) ;;
+    *) VERSION="v${VERSION}" ;;
 esac
 
 # --- prerequisites -----------------------------------------------------------
@@ -105,6 +118,10 @@ clone_repo() {
     if [ "$DEV" -eq 1 ]; then
         step "Cloning ${REPO_URL} (main) into ${INSTALL_DIR}"
         git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    elif [ -n "$VERSION" ]; then
+        TAG="$VERSION"
+        step "Cloning ${REPO_URL} (${TAG}) into ${INSTALL_DIR}"
+        git clone --depth 1 --branch "$TAG" "$REPO_URL" "$INSTALL_DIR"
     else
         TAG="$(latest_release_tag || true)"
         [ -n "$TAG" ] || fail "Could not determine the latest release. Use --dev to install from main."
