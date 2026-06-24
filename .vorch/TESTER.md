@@ -58,19 +58,24 @@ status to stdout. Exit code 0 = success, 1 = failure.
 
 The WebUI is an Agent-first chat surface with a two-pane layout:
 
-- **Left pane** (210px fixed): Navigation — Chat, Agents, System Prompt, Settings
-- **Right pane**: Content area
+- **Left pane** (210px fixed, `--sidebar-width`): Navigation — Chat, Agents, Projects, Cron, System Prompt, Settings, Logs, Statistics, Debug — plus a live connection-status footer ("Connected"/reconnecting).
+- **Right pane**: Content area for the selected section
 
 ### What to test
 
 | Area | What to check |
 |---|---|
-| **App shell** | Two-pane layout renders; navigation items are visible and work; switching views preserves state |
-| **Chat** | Message list renders; message input works; queue behavior (queued messages visible, removable before send); streaming display (reasoning, text, tool rows); scroll behavior (only timeline scrolls) |
-| **Agents** | Agent list loads; create/edit forms work; model/fallback-model selects show correct labels; tool toggles; delete rejects when only one agent remains |
-| **Settings** | Three sub-views render: General (server host, data directory), Providers (credential status, model counts, Update Model DB button), Appearance (language preference, save button). Provider connections shown with credential status. |
-| **System Prompt** | Placeholder page renders |
-| **Empty states** | No agents, no messages, no sessions — each renders a sensible empty state |
+| **App shell** | Two-pane layout renders; all nine navigation items are visible and work; switching views preserves state; footer shows live connection status |
+| **Chat** | Message list renders; agent-selector chips switch the active agent; message input works; queue behavior (queued messages visible, removable before send); streaming display (reasoning, text, tool rows); token badge; scroll behavior (only timeline scrolls) |
+| **Agents** | Agent list loads; create/edit forms work; model/fallback-model selects show correct labels; thinking-effort and temperature; tool & skill toggles; delete rejects when only one agent remains |
+| **Projects** | Project list loads; add/refresh; detail shows display name, default agent/model/temperature/thinking, auto-load files, and the tool & skill whitelists (the project ceiling); team is scanned live from the repo |
+| **Cron** | Job list or the "No scheduled jobs" empty state; create/edit a scheduled job; completed jobs are hidden from the list |
+| **System Prompt** | Fragment editor renders: per-fragment cards (system.md, runtime.md, tools.md, …) with insertable variable chips, a prompt-scope selector (Default / per-agent), per-fragment Reset, and "modified" badges |
+| **Settings** | Thirteen sections render: General, Defaults, Skills, Sub-Agents, Compaction, Recall, Web Search, Debug, Specialized Models, Providers, Channels, Extensions, Appearance. Providers lists each connection's accounts with credential status plus Add provider and Update Model DB; Appearance has language and chat-width with a Save button |
+| **Logs** | Daily log-file picker, level filter, order toggle, search box, live append; each entry shows timestamp / level / logger / message with a copy action |
+| **Statistics** | On-demand report (nothing extra stored) with tabs Overview / Usage / Runs & errors / Tools / Limits; counts and charts render; Refresh re-aggregates |
+| **Debug** | Trace list (provider, model, method, status, duration) with expandable rows, a trace-limit control, Clear, and a model probe; the local-storage/redaction notice is shown |
+| **Empty states** | No agents, no messages, no sessions, no cron jobs — each renders a sensible empty state |
 | **Error states** | Server unreachable, invalid responses, failed RPCs — user sees meaningful feedback |
 
 ### Interaction patterns
