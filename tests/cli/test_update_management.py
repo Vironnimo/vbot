@@ -55,7 +55,9 @@ class ScriptedRunner:
         )
 
 
-def _recording_restart() -> tuple[list[str], Callable[..., CommandResult], Callable[..., CommandResult]]:
+def _recording_restart() -> tuple[
+    list[str], Callable[..., CommandResult], Callable[..., CommandResult]
+]:
     events: list[str] = []
 
     def stop(instance: ServerInstance) -> CommandResult:
