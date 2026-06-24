@@ -30,7 +30,23 @@ vbot server restart
 vbot server status
 ```
 
-Only server lifecycle commands can operate without an already-running vBot server. `start` refuses to launch over a non-vBot process on the target port.
+Only server lifecycle commands, `vbot update`, and `vbot doctor ...` can operate without an already-running vBot server. `start` refuses to launch over a non-vBot process on the target port.
+
+## Update
+
+```bash
+vbot update [--discard | --stash] [--no-restart]
+```
+
+`vbot update` updates the installation **from the git checkout it was installed from** (the bootstrap clone), then restarts the server. It never touches the `~/.vbot` data directory. It auto-detects the track: a checkout on a branch (e.g. `main`) pulls and rebuilds the WebUI locally (needs Node); a checkout on a release tag fetches the latest release and its prebuilt WebUI asset (no Node needed). If the checkout has local changes to tracked files, `update` refuses unless you pass `--discard` (drop them) or `--stash` (keep them, reapplied after). `--no-restart` updates without restarting.
+
+Examples:
+
+```bash
+vbot update
+vbot update --stash
+vbot update --no-restart
+```
 
 ## Config
 

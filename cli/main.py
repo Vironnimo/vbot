@@ -86,6 +86,7 @@ from cli.task_model_management import (
     task_model_targets,
 )
 from cli.tool_management import tool_list
+from cli.update_management import run_update
 
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
@@ -178,6 +179,11 @@ def run(
             doctor_settings_fn=doctor_settings_fn,
             doctor_config_fn=doctor_config_fn,
         )
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "update":
+        result = dispatch_update_command(args, resolve=resolve, stop=stop, start=start)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -836,6 +842,27 @@ def dispatch_doctor_command(
     if args.command == "config":
         return doctor_config_fn(args.data_dir)
     raise ValueError(f"Unsupported doctor command: {args.command}")
+
+
+def dispatch_update_command(
+    args: argparse.Namespace,
+    *,
+    resolve: Callable[..., ServerInstance],
+    stop: Callable[[ServerInstance], CommandResult],
+    start: Callable[[ServerInstance], CommandResult],
+    run_update_fn: Callable[..., CommandResult] = run_update,
+) -> CommandResult:
+    """Run the local self-update against the resolved server target."""
+
+    instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+    return run_update_fn(
+        instance,
+        discard=args.discard,
+        stash=args.stash,
+        restart=not args.no_restart,
+        stop=stop,
+        start=start,
+    )
 
 
 def dispatch_server_command(context: ServerCommandContext) -> CommandResult:
