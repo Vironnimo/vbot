@@ -11,12 +11,21 @@
 param(
     [string]$InstallDir = (Join-Path $HOME "vbot"),
     [switch]$Dev,
+    [string]$Version = "",
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$InstallerArgs = @()
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($Dev -and -not [string]::IsNullOrWhiteSpace($Version)) {
+    throw "-Version selects a specific release tag and cannot be combined with -Dev."
+}
+# Accept a bare version (0.1.2) as well as the tag form (v0.1.2).
+if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -notmatch '^v')) {
+    $Version = "v$Version"
+}
 
 $RepoOwner = "Vironnimo"
 $RepoName = "vbot"
@@ -169,9 +178,14 @@ if ($Dev) {
     }
 }
 else {
-    $tag = Get-LatestTag
-    if ([string]::IsNullOrWhiteSpace($tag)) {
-        throw "Could not determine the latest release. Use -Dev to install from main."
+    if (-not [string]::IsNullOrWhiteSpace($Version)) {
+        $tag = $Version
+    }
+    else {
+        $tag = Get-LatestTag
+        if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "Could not determine the latest release. Use -Dev to install from main."
+        }
     }
     Write-Step "Cloning $RepoUrl ($tag) into $InstallDir"
     git clone --depth 1 --branch $tag $RepoUrl $InstallDir

@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstr
 irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1 | iex
 ```
 
-This installs the latest **release**, so no Node.js is needed on the machine, and enables autostart by default (pass `--no-autostart` to skip). On Windows, run the one-liner in an elevated PowerShell so the autostart task can be created — the install still succeeds otherwise. To track `main` and build the WebUI locally instead, use the dev track: `bootstrap.sh --dev` on Linux, or download `bootstrap.ps1` and run it with `-Dev` on Windows. As always with `curl | bash` / `irm | iex`, download and read the script first if you prefer to review it before running.
+This installs the latest **release**, so no Node.js is needed on the machine, and enables autostart by default (pass `--no-autostart` to skip). On Windows, run the one-liner in an elevated PowerShell so the autostart task can be created — the install still succeeds otherwise. To pin a specific release instead of the latest, pass `--version v0.1.2` (Linux) or `-Version v0.1.2` (Windows); with the piped one-liner, append it after `bash -s --` (e.g. `… | bash -s -- --version v0.1.2`). To track `main` and build the WebUI locally instead, use the dev track: `bootstrap.sh --dev` on Linux, or download `bootstrap.ps1` and run it with `-Dev` on Windows. As always with `curl | bash` / `irm | iex`, download and read the script first if you prefer to review it before running.
 
 To uninstall a bootstrap install, run its bundled uninstaller — it removes the whole `~/vbot` directory (virtual environment included), the `vbot` launcher, and the autostart entry, while leaving your data in `~/.vbot` untouched:
 
