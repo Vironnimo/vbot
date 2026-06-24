@@ -9,7 +9,17 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# vBot uninstaller for Windows. Mirrors scripts/uninstall.sh. Two modes, picked by
+# whether this is a self-contained bootstrap install:
+#   - bootstrap install (a .vbot-bootstrap marker sits next to scripts\): remove
+#     the whole tree (venv + source), the 'vbot' shim + its PATH entry, and the
+#     autostart task.
+#   - manual/editable install (no marker): uninstall the pip package from the
+#     active interpreter and optionally remove the autostart task.
+# Either way the data dir (~\.vbot) is never touched.
+
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$Marker = Join-Path $ProjectRoot ".vbot-bootstrap"
 
 function Write-Step {
     param([string]$Message)
@@ -95,18 +105,118 @@ function Warn-IfAutostartRemains {
     }
 }
 
-Write-Step "Uninstalling pip package: $PackageName"
-$python = Resolve-PythonCommand
-Invoke-External $python @("-m", "pip", "uninstall", "-y", $PackageName)
+function Remove-FromUserPath {
+    param([string]$PathToRemove)
 
-if ($RemoveAutostart) {
-    Write-Step "Removing autostart task"
-    Remove-VbotAutostart
+    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    if ([string]::IsNullOrWhiteSpace($userPath)) {
+        return
+    }
+
+    $target = $PathToRemove.TrimEnd('\', '/')
+    $kept = @()
+    $removed = $false
+    foreach ($entry in ($userPath -split [System.IO.Path]::PathSeparator)) {
+        if ([string]::IsNullOrWhiteSpace($entry)) {
+            continue
+        }
+        if ($entry.TrimEnd('\', '/') -ieq $target) {
+            $removed = $true
+            continue
+        }
+        $kept += $entry
+    }
+
+    if ($removed) {
+        [System.Environment]::SetEnvironmentVariable("Path", ($kept -join [System.IO.Path]::PathSeparator), "User")
+        Write-Host "Removed $PathToRemove from your user PATH."
+    }
+}
+
+function Remove-DirectoryWithRetry {
+    param([string]$Path)
+
+    # The just-stopped server can hold a brief lock on the venv; retry rather than
+    # fail the whole uninstall on a transient handle.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            return
+        }
+        catch {
+            if ($attempt -eq 3) {
+                throw
+            }
+            Start-Sleep -Seconds 1
+        }
+    }
+}
+
+function Invoke-BootstrapUninstall {
+    $rootNormalized = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
+    $homeNormalized = [System.IO.Path]::GetFullPath($HOME).TrimEnd('\', '/')
+    if ([string]::IsNullOrWhiteSpace($rootNormalized) -or ($rootNormalized -ieq $homeNormalized)) {
+        throw "Refusing to remove '$ProjectRoot'."
+    }
+
+    Write-Step "Removing bootstrap install at $ProjectRoot"
+
+    if (Test-RunningOnWindows) {
+        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        if ($null -ne $task) {
+            try {
+                Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+                Write-Host "Removed autostart task '$TaskName'."
+            }
+            catch {
+                Write-Warning "Could not remove autostart task '$TaskName' (this usually needs an elevated terminal). Remove it manually: Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"
+            }
+        }
+    }
+
+    # Stop a running server so the venv unlocks before removal (best-effort).
+    $venvVbot = Join-Path $ProjectRoot ".venv\Scripts\vbot.exe"
+    if (Test-Path $venvVbot) {
+        try {
+            & $venvVbot server stop *> $null
+        }
+        catch {
+            # best-effort
+        }
+    }
+
+    # The shim itself lives inside ProjectRoot (removed with it); drop its PATH entry.
+    Remove-FromUserPath -PathToRemove (Join-Path $ProjectRoot "bin")
+
+    Set-Location $HOME
+    Remove-DirectoryWithRetry -Path $ProjectRoot
+
+    Write-Step "Uninstall complete"
+    Write-Host "Removed $ProjectRoot (including its virtual environment)."
+    Write-Host "Data directories such as ~\.vbot were not modified."
+}
+
+function Invoke-ManualUninstall {
+    Write-Step "Uninstalling pip package: $PackageName"
+    $python = Resolve-PythonCommand
+    Invoke-External $python @("-m", "pip", "uninstall", "-y", $PackageName)
+
+    if ($RemoveAutostart) {
+        Write-Step "Removing autostart task"
+        Remove-VbotAutostart
+    }
+    else {
+        Warn-IfAutostartRemains
+    }
+
+    Write-Step "Uninstall complete"
+    Write-Host "Data directories such as ~\.vbot were not modified."
+    Write-Host "Source files, webui/node_modules, and webui/dist were not removed."
+}
+
+if (Test-Path $Marker) {
+    Invoke-BootstrapUninstall
 }
 else {
-    Warn-IfAutostartRemains
+    Invoke-ManualUninstall
 }
-
-Write-Step "Uninstall complete"
-Write-Host "Data directories such as ~/.vbot were not modified."
-Write-Host "Source files, webui/node_modules, and webui/dist were not removed."
