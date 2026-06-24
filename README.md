@@ -40,7 +40,7 @@ Treat exposing vBot to a network as granting remote code execution on that machi
 
 ## Quick Start
 
-The fastest path is the one-line bootstrap: it installs prerequisites (Python and git), clones the repo into `~/vbot`, fetches the prebuilt WebUI, and runs the installer. Your data still lives separately in `~/.vbot`.
+The fastest path is the one-line bootstrap: it installs prerequisites (Python and git), clones the repo into `~/vbot`, installs into an isolated virtual environment (`~/vbot/.venv`), fetches the prebuilt WebUI, and puts `vbot` on your PATH (open a new terminal to use it). Your data lives separately in `~/.vbot`.
 
 **Linux / Raspberry Pi:**
 
