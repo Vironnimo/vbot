@@ -1,0 +1,43 @@
+name: Release
+
+# Builds the WebUI on a published release and attaches it as a prebuilt asset,
+# so end-user installs and `vbot update` can fetch ready-to-serve assets without
+# needing Node on the target machine. Source-only repo: webui/dist stays untracked.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-webui:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Install WebUI dependencies
+        working-directory: webui
+        run: npm ci
+
+      - name: Build WebUI
+        working-directory: webui
+        run: npm run build
+
+      - name: Package built WebUI
+        run: |
+          test -f webui/dist/index.html
+          tar -czf webui-dist.tar.gz -C webui dist
+
+      - name: Attach prebuilt WebUI to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" webui-dist.tar.gz --clobber
