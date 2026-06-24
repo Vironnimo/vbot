@@ -1,5 +1,6 @@
 .claude/
-.github/
+.github/*
+!.github/workflows/
 .vscode/
 .opencode/
 .venv/
