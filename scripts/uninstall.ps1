@@ -76,7 +76,7 @@ function Remove-VbotAutostart {
 
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if ($null -eq $task) {
-        Write-Host "No autostart task named '$TaskName' exists."
+        Write-Host "No autostart task named '$TaskName' exists. If you installed with a custom -TaskName, pass the same one here."
         return
     }
 
