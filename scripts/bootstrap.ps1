@@ -135,6 +135,22 @@ function Add-VbotShim {
     Add-ToUserPath -PathToAdd $binDir
 }
 
+function Write-BootstrapMarker {
+    param([string]$InstallDir)
+    # Mark this directory as a self-contained bootstrap install so uninstall.ps1
+    # knows it may remove the whole tree (venv + source), not just a pip package.
+    $marker = Join-Path $InstallDir ".vbot-bootstrap"
+    $lines = @(
+        "# vBot bootstrap install marker.",
+        "# This directory is a self-contained vBot install created by the bootstrap script",
+        "# (it has its own virtual environment in .venv). Running scripts/uninstall.ps1",
+        "# (uninstall.sh on Linux) removes this entire directory, the 'vbot' launcher,",
+        "# and the autostart task. Your data directory is never touched."
+    )
+    $content = ($lines -join "`r`n") + "`r`n"
+    [System.IO.File]::WriteAllText($marker, $content, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 if (Test-Path $InstallDir) {
     throw "$InstallDir already exists. To update an existing install run 'vbot update'; otherwise remove it or pass -InstallDir to choose another location."
 }
@@ -211,6 +227,7 @@ Write-Step "Running installer: install.ps1 $($installerArgList -join ' ')"
 & $installer @installerArgList
 
 Add-VbotShim -InstallDir $InstallDir -VenvDir $venvDir
+Write-BootstrapMarker -InstallDir $InstallDir
 
 Write-Step "vBot bootstrap complete"
 Write-Host "Installed at: $InstallDir (virtual environment in .venv)"
