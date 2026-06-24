@@ -26,6 +26,7 @@ CRON_STATUSES = ("active", "paused", "completed")
 TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
+    "update": "Update the installation from git, refresh deps/WebUI, and restart",
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
     "session": "Inspect and manage agent chat sessions",
@@ -146,6 +147,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manage vBot from the command line")
     subparsers = parser.add_subparsers(dest="area", required=True)
     _add_server_parsers(subparsers)
+    _add_update_parsers(subparsers)
     _add_agent_parsers(subparsers)
     _add_project_parsers(subparsers)
     _add_session_parsers(subparsers)
@@ -936,6 +938,31 @@ def _add_debug_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         required=True,
         metavar="<provider:connection-id>",
         help="Compositional connection id used for credentials",
+    )
+
+
+def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    update_parser = subparsers.add_parser(
+        "update",
+        help=AREA_HELP["update"],
+        description=f"{AREA_HELP['update']}. Example: vbot update",
+    )
+    _add_target_arguments(update_parser)
+    local_changes = update_parser.add_mutually_exclusive_group()
+    local_changes.add_argument(
+        "--discard",
+        action="store_true",
+        help="Discard local changes to tracked files before updating",
+    )
+    local_changes.add_argument(
+        "--stash",
+        action="store_true",
+        help="Stash local changes, update, then reapply them",
+    )
+    update_parser.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="Update the code without restarting the server afterward",
     )
 
 
