@@ -136,7 +136,7 @@ function Add-VbotShim {
 }
 
 if (Test-Path $InstallDir) {
-    throw "$InstallDir already exists. Remove it or pass -InstallDir to choose another location."
+    throw "$InstallDir already exists. To update an existing install run 'vbot update'; otherwise remove it or pass -InstallDir to choose another location."
 }
 
 Confirm-Git
@@ -172,6 +172,12 @@ else {
     New-Item -ItemType Directory -Path $webuiDir -Force | Out-Null
     $archive = Join-Path $InstallDir "webui-dist.tar.gz"
     Invoke-WebRequest -Uri $assetUrl -OutFile $archive -Headers $ApiHeaders
+    # Refuse a tarball whose members escape webui/ (mirrors `vbot update`'s data filter).
+    $unsafe = & tar -tzf $archive | Where-Object { $_ -match '(^/)|((^|/)\.\.(/|$))' }
+    if ($unsafe) {
+        Remove-Item $archive -Force
+        throw "Refusing to unpack the WebUI archive: it contains unsafe paths."
+    }
     tar -xzf $archive -C $webuiDir
     Remove-Item $archive -Force
     if (-not (Test-Path (Join-Path $webuiDir "dist\index.html"))) {

@@ -58,7 +58,7 @@ if [ "$REMOVE_AUTOSTART" -eq 1 ]; then
         systemctl --user daemon-reload
         echo "Removed systemd user unit '${SERVICE_NAME}'."
     else
-        echo "No systemd user unit named '${SERVICE_NAME}' exists."
+        echo "No systemd user unit named '${SERVICE_NAME}' exists. If you installed with a custom --service-name, pass the same one here."
     fi
 elif [ -f "$UNIT_FILE" ]; then
     echo "Warning: systemd user unit '${SERVICE_NAME}' still exists. Re-run with --remove-autostart to remove it." >&2
