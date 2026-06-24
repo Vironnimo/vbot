@@ -26,6 +26,11 @@ dependencies = ["httpx", "pyyaml", "croniter", "tzdata", "beautifulsoup4", "sqli
 [project.scripts]
 vbot = "cli.main:main"
 
+[project.urls]
+Homepage = "https://github.com/Vironnimo/vbot"
+Repository = "https://github.com/Vironnimo/vbot"
+Issues = "https://github.com/Vironnimo/vbot/issues"
+
 [project.optional-dependencies]
 server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "discord.py>=2.7,<3", "python-multipart"]
 cli     = ["rich", "psutil"]
