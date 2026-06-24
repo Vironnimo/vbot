@@ -977,3 +977,68 @@ def test_systemd_restart_unhealthy_after_restart(tmp_path: Path) -> None:
 
     assert not result.ok
     assert "did not become healthy" in result.message
+
+
+def test_run_systemctl_restart_gets_a_longer_timeout_than_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, float] = {}
+
+    def fake_run(args: list[str], **kwargs: Any) -> SimpleNamespace:
+        captured[args[2]] = kwargs["timeout"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(server_management.subprocess, "run", fake_run)
+
+    server_management._run_systemctl(["systemctl", "--user", "restart", "vbot.service"])
+    server_management._run_systemctl(["systemctl", "--user", "is-active", "vbot.service"])
+
+    assert captured["restart"] == server_management._SYSTEMCTL_RESTART_TIMEOUT_SECONDS
+    assert captured["is-active"] == server_management._SYSTEMCTL_PROBE_TIMEOUT_SECONDS
+    assert captured["restart"] > captured["is-active"]
+
+
+def test_run_systemctl_timeout_is_reported_distinctly_from_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(args: list[str], **kwargs: Any) -> SimpleNamespace:
+        raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(server_management.subprocess, "run", fake_run)
+
+    result = server_management._run_systemctl(["systemctl", "--user", "restart", "vbot.service"])
+
+    assert result.returncode == server_management._SYSTEMCTL_TIMEOUT_RETURN_CODE
+    assert "timed out" in result.stderr
+    assert "unavailable" not in result.stderr
+
+
+def test_run_systemctl_missing_binary_reports_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(_args: list[str], **_kwargs: Any) -> SimpleNamespace:
+        raise FileNotFoundError("systemctl")
+
+    monkeypatch.setattr(server_management.subprocess, "run", fake_run)
+
+    result = server_management._run_systemctl(["systemctl", "--user", "is-active", "vbot.service"])
+
+    assert result.returncode == 127
+    assert result.stderr == "systemctl unavailable"
+
+
+def test_systemd_restart_surfaces_timeout_message(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    def runner(_args: list[str]) -> server_management._SystemctlRun:
+        return server_management._SystemctlRun(
+            returncode=server_management._SYSTEMCTL_TIMEOUT_RETURN_CODE,
+            stdout="",
+            stderr="systemctl timed out after 30s",
+        )
+
+    result = server_management._systemd_restart(instance, "vbot", runner=runner)
+
+    assert not result.ok
+    assert "timed out" in result.message
+    assert "unavailable" not in result.message
