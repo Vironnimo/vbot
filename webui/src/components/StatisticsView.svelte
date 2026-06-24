@@ -412,10 +412,6 @@
         formatInteger(overview.total_runs, locale),
       )}
       {@render statCard(
-        t('statistics.overview.openRuns', 'Open runs'),
-        formatInteger(overview.open_run_groups, locale),
-      )}
-      {@render statCard(
         t('statistics.overview.messages', 'Messages'),
         formatInteger(overview.total_messages, locale),
       )}
@@ -762,7 +758,17 @@
         t('statistics.runs.withTools', 'Runs with tools'),
         formatInteger(runs.runs_with_tool_calls, locale),
       )}
+      {@render statCard(
+        t('statistics.runs.openGroups', 'Open run groups'),
+        formatInteger(overview.open_run_groups, locale),
+      )}
     </div>
+    <p class="stats-note">
+      {t(
+        'statistics.runs.openGroupsHint',
+        'Trailing turns with no completion record yet — interrupted, crashed, or still running. Best-effort, and counted apart from the finished runs above.',
+      )}
+    </p>
 
     <div class="stats-grid">
       {@render statCard(

@@ -906,7 +906,6 @@ export const englishCatalog = Object.freeze({
   'statistics.overview.agents': 'Agents',
   'statistics.overview.sessions': 'Sessions',
   'statistics.overview.runs': 'Runs',
-  'statistics.overview.openRuns': 'Open runs',
   'statistics.overview.messages': 'Messages',
   'statistics.overview.toolCalls': 'Tool calls',
   'statistics.overview.runStatus': 'Run status',
@@ -949,6 +948,9 @@ export const englishCatalog = Object.freeze({
   'statistics.runs.count': 'Runs',
   'statistics.runs.average': 'Average',
   'statistics.runs.withTools': 'Runs with tools',
+  'statistics.runs.openGroups': 'Open run groups',
+  'statistics.runs.openGroupsHint':
+    'Trailing turns with no completion record yet — interrupted, crashed, or still running. Best-effort, and counted apart from the finished runs above.',
   'statistics.runs.cancelRate': 'Cancel rate',
   'statistics.runs.failureRate': 'Failure rate',
   'statistics.runs.fallbackRuns': 'Fallback runs (derived)',

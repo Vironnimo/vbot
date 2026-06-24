@@ -270,8 +270,8 @@ describe('StatisticsView', () => {
 
     expect(rpcMock).toHaveBeenCalledWith('statistics.report');
     expect(document.body.textContent).toContain('Run status');
-    // total runs stat card value.
-    expect(document.body.textContent).toContain('Open runs');
+    // "Open run groups" lives on the Runs & errors tab now, not the overview.
+    expect(document.body.textContent).not.toContain('Open run');
     expect(document.body.textContent).toContain('main');
   });
 
@@ -311,6 +311,7 @@ describe('StatisticsView', () => {
     flushSync();
 
     expect(document.body.textContent).toContain('Fallback runs (derived)');
+    expect(document.body.textContent).toContain('Open run groups');
     expect(document.body.textContent).toContain('Longest runs');
     expect(document.body.textContent).toContain('By hour of day');
   });
