@@ -27,7 +27,16 @@ WEBUI_PATH = "/"
 WILDCARD_HOSTS = {"", "*", "0.0.0.0", "::"}
 CLI_SERVER_LOGGER_NAME = "cli.server_management"
 DEFAULT_SERVICE_NAME = "vbot"
-_SYSTEMCTL_TIMEOUT_SECONDS = 10.0
+# A bare systemctl probe (is-active) returns immediately, but `restart` blocks on
+# the unit's stop+start: the stop alone can take the unit's whole TimeoutStopSec
+# (10s in the unit we install) before SIGKILL, plus the fresh start. The restart
+# cap must stay comfortably above that sum, or a slow-but-successful restart trips
+# the subprocess timeout and gets misreported as a failure. Keep it above the
+# unit's TimeoutStopSec if that value is ever raised.
+_SYSTEMCTL_PROBE_TIMEOUT_SECONDS = 10.0
+_SYSTEMCTL_RESTART_TIMEOUT_SECONDS = 30.0
+# Conventional "command timed out" exit code, kept distinct from 127 (not found).
+_SYSTEMCTL_TIMEOUT_RETURN_CODE = 124
 _SYSTEMD_RESTART_READY_TIMEOUT_SECONDS = 10.0
 _SYSTEMD_RESTART_PROBE_INTERVAL_SECONDS = 0.2
 
@@ -467,13 +476,27 @@ SystemctlRunner = Callable[[list[str]], _SystemctlRun]
 
 
 def _run_systemctl(args: list[str]) -> _SystemctlRun:
-    """Run a systemctl command, treating an unavailable binary as a clean failure."""
+    """Run a systemctl command, mapping a missing binary or a timeout to a clean failure.
 
+    A `restart` waits out the unit's stop+start, so it gets a longer cap than the
+    instant probes; a timeout carries its own message so a slow-but-eventually-fine
+    restart is never misreported as "systemctl unavailable".
+    """
+
+    timeout = (
+        _SYSTEMCTL_RESTART_TIMEOUT_SECONDS
+        if "restart" in args
+        else _SYSTEMCTL_PROBE_TIMEOUT_SECONDS
+    )
     try:
-        completed = subprocess.run(
-            args, capture_output=True, text=True, timeout=_SYSTEMCTL_TIMEOUT_SECONDS
+        completed = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return _SystemctlRun(
+            returncode=_SYSTEMCTL_TIMEOUT_RETURN_CODE,
+            stdout="",
+            stderr=f"systemctl timed out after {timeout:.0f}s",
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError:
         return _SystemctlRun(returncode=127, stdout="", stderr="systemctl unavailable")
     return _SystemctlRun(
         returncode=completed.returncode,
