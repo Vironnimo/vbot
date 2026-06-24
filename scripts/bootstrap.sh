@@ -29,7 +29,8 @@ Options:
   -h, --help     Show this help
 
 Anything after -- is forwarded to scripts/install.sh, e.g.:
-  bootstrap.sh -- --enable-autostart --start-server
+  bootstrap.sh -- --no-autostart
+  bootstrap.sh -- --port 9000
 USAGE
 }
 
@@ -100,7 +101,7 @@ latest_release_tag() {
 }
 
 clone_repo() {
-    [ -e "$INSTALL_DIR" ] && fail "$INSTALL_DIR already exists. Remove it or pass --dir to choose another location."
+    [ -e "$INSTALL_DIR" ] && fail "$INSTALL_DIR already exists. To update an existing install run 'vbot update'; otherwise remove it or pass --dir to choose another location."
     if [ "$DEV" -eq 1 ]; then
         step "Cloning ${REPO_URL} (main) into ${INSTALL_DIR}"
         git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
@@ -121,9 +122,15 @@ fetch_prebuilt_webui() {
         | sed -E 's/.*"(https:[^"]+)"/\1/' || true)"
     [ -n "$url" ] || fail "Release ${TAG} has no webui-dist.tar.gz asset yet. Use --dev to build locally, or wait for the release workflow to finish."
     mkdir -p "${INSTALL_DIR}/webui"
-    curl -fsSL "$url" -o "${INSTALL_DIR}/webui-dist.tar.gz"
-    tar -xzf "${INSTALL_DIR}/webui-dist.tar.gz" -C "${INSTALL_DIR}/webui"
-    rm -f "${INSTALL_DIR}/webui-dist.tar.gz"
+    local archive="${INSTALL_DIR}/webui-dist.tar.gz"
+    curl -fsSL "$url" -o "$archive"
+    # Refuse a tarball whose members escape webui/ (mirrors `vbot update`'s data filter).
+    if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+        rm -f "$archive"
+        fail "Refusing to unpack the WebUI archive: it contains unsafe paths."
+    fi
+    tar -xzf "$archive" -C "${INSTALL_DIR}/webui"
+    rm -f "$archive"
     [ -f "${INSTALL_DIR}/webui/dist/index.html" ] || fail "Prebuilt WebUI did not unpack to webui/dist."
 }
 
