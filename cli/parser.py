@@ -27,6 +27,7 @@ TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
     "update": "Update the installation from git, refresh deps/WebUI, and restart",
+    "autostart": "Enable, disable, or inspect OS autostart for the server",
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
     "session": "Inspect and manage agent chat sessions",
@@ -132,6 +133,11 @@ DOCTOR_HELP = {
     "settings": "Validate the target data-dir settings.json",
     "config": "Validate all user-editable JSON config files in the target data-dir",
 }
+AUTOSTART_HELP = {
+    "enable": "Register OS autostart and start the server now",
+    "disable": "Remove the OS autostart entry",
+    "status": "Show whether OS autostart is registered",
+}
 TOOL_HELP = {"list": "List public registered tools"}
 SKILL_HELP = {"list": "List skills and diagnostics"}
 EXTENSIONS_HELP = {
@@ -148,6 +154,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="area", required=True)
     _add_server_parsers(subparsers)
     _add_update_parsers(subparsers)
+    _add_autostart_parsers(subparsers)
     _add_agent_parsers(subparsers)
     _add_project_parsers(subparsers)
     _add_session_parsers(subparsers)
@@ -964,6 +971,25 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         action="store_true",
         help="Update the code without restarting the server afterward",
     )
+
+
+def _add_autostart_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    autostart_parser = subparsers.add_parser(
+        "autostart",
+        help=AREA_HELP["autostart"],
+        description=AREA_HELP["autostart"],
+    )
+    autostart_subparsers = autostart_parser.add_subparsers(dest="command", required=True)
+    for command in ("enable", "disable", "status"):
+        command_parser = _add_command_parser(
+            autostart_subparsers, command, AUTOSTART_HELP[command], example=f"autostart {command}"
+        )
+        command_parser.add_argument(
+            "--task-name", help="Windows Task Scheduler task name (default: vBot)"
+        )
+        command_parser.add_argument(
+            "--service-name", help="systemd user unit name without .service (default: vbot)"
+        )
 
 
 def _add_doctor_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
