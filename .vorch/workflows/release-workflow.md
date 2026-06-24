@@ -2,11 +2,6 @@
 
 How to cut a tagged GitHub release of vBot. Releases are how end users install: the one-line bootstrap and `vbot update` both consume the release tag **and** its prebuilt WebUI asset. Follow these steps exactly — the notes format and the attached asset are not optional.
 
-## When a release is needed
-
-- **Needed** for any change to **installed code** — anything that ships inside the cloned/installed tree: `core/`, `server/`, `cli/`, `desktop/`, `webui/`, or `scripts/install.{sh,ps1}`.
-- **Not needed** for **bootstrap-script-only** changes (`scripts/bootstrap.{sh,ps1}`). The one-liner always fetches `bootstrap.sh` / `bootstrap.ps1` from `main`, so those take effect on push, without a release.
-
 ## Steps
 
 ### 1. Bump the version
@@ -73,4 +68,3 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 - **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the bootstrap or reached by `vbot update`. Never skip step 5.
 - **Tag = version**: `vX.Y.Z` must equal the `pyproject.toml` version, with a leading `v`.
 - **Publish, not draft**: the workflow triggers on a *published* release. `gh release create` publishes by default — don't pass `--draft`.
-- **Bootstrap-only changes need no release** — see "When a release is needed".
