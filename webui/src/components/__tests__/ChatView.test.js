@@ -179,7 +179,7 @@ describe('ChatView', () => {
     mountedComponent = mount(ChatView, { target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat();
+    const numberFormat = new Intl.NumberFormat('en');
     const expectedBadge = `${numberFormat.format(3978)} / ${numberFormat.format(262144)} tok`;
 
     await waitForCondition(
@@ -204,7 +204,7 @@ describe('ChatView', () => {
     mountedComponent = mount(ChatView, { target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat();
+    const numberFormat = new Intl.NumberFormat('en');
     const expectedBadge = `~${numberFormat.format(3978)} / ${numberFormat.format(262144)} tok`;
 
     await waitForCondition(
@@ -233,7 +233,7 @@ describe('ChatView', () => {
     mountedComponent = mount(ChatView, { target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat();
+    const numberFormat = new Intl.NumberFormat('en');
     const expectedBadge = `${numberFormat.format(3978)} tok`;
 
     await waitForCondition(
@@ -266,7 +266,7 @@ describe('ChatView', () => {
     mountedComponent = mount(ChatView, { target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat();
+    const numberFormat = new Intl.NumberFormat('en');
     const expectedTooltip = [
       `Input: ${numberFormat.format(3886)} tok`,
       `Cache read: ${numberFormat.format(3000)} tok`,
@@ -296,7 +296,7 @@ describe('ChatView', () => {
     mountedComponent = mount(ChatView, { target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat();
+    const numberFormat = new Intl.NumberFormat('en');
     const expectedTooltip = [
       `Input: ${numberFormat.format(3886)} tok`,
       `Output: ${numberFormat.format(92)} tok`,
