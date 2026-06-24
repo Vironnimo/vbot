@@ -18,10 +18,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from cli.server_management import CommandResult, ServerInstance, start_server
+from cli.server_management import (
+    DEFAULT_SERVICE_NAME,
+    CommandResult,
+    ServerInstance,
+    start_server,
+)
 
 DEFAULT_TASK_NAME = "vBot"
-DEFAULT_SERVICE_NAME = "vbot"
 
 Restart = Callable[[ServerInstance], CommandResult]
 
