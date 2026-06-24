@@ -134,7 +134,11 @@ run_installer() {
     . "${INSTALL_DIR}/.venv/bin/activate"
 
     local args=()
-    [ "$DEV" -eq 0 ] && args+=(--skip-webui-build)
+    if [ "$DEV" -eq 1 ]; then
+        args+=(--dev)
+    else
+        args+=(--skip-webui-build)
+    fi
     [ "${#INSTALLER_ARGS[@]}" -gt 0 ] && args+=("${INSTALLER_ARGS[@]}")
 
     step "Running installer: scripts/install.sh ${args[*]:-}"
