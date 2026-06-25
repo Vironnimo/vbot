@@ -26,6 +26,7 @@ from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
 from core.projects import ProjectNotFoundError
+from core.projects.paths import cwd_identity_key
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import AgentResolutionError, ConfigAgent
 from core.providers.accounts import (
@@ -194,6 +195,19 @@ class StubProjects:
             return self._projects[project_id]
         except KeyError as error:
             raise ProjectNotFoundError(f"project not found: {project_id}") from error
+
+    def find_by_cwd(self, cwd: object) -> StubProject | None:
+        # Mirror the real store: match on the cwd-identity key so the rooted-agent
+        # detection in the preview path behaves like production.
+        try:
+            target = cwd_identity_key(cast(str, cwd))
+        except ValueError:
+            return None
+        for project_id in sorted(self._projects):
+            project = self._projects[project_id]
+            if cwd_identity_key(project.cwd) == target:
+                return project
+        return None
 
 
 class StubAgentResolver:
@@ -6410,6 +6424,27 @@ async def test_prompt_preview_identity_agent_carries_no_project_context(
     # A bare (identity) address renders no body and no project files, so the
     # output stays byte-identical to before project addressing existed.
     assert response["result"]["text"] == "System for coder"
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_rooted_identity_agent_renders_project_context(
+    tmp_path: Path,
+) -> None:
+    # A rooted identity agent: its workspace IS a registered project's repo. A bare
+    # preview then carries that project's context, matching what its real run sends.
+    state = make_state(tmp_path, StubAdapter())
+    coder_workspace = state.runtime.agents.get("coder").workspace
+    state.runtime.projects.add(
+        StubProject(project_id="vbot", cwd=coder_workspace, auto_load=("AGENTS.md",))
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.preview", "params": {"agent_id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    assert "project_cwd=" in response["result"]["text"]
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ from core.chat import (
 )
 from core.chat.streaming import StreamingChunkTimeoutError, StreamingDeltaError
 from core.projects import AgentResolutionError, ConfigAgent
+from core.projects.paths import cwd_identity_key
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -116,6 +117,20 @@ class StubProjects:
 
     def list(self) -> list[StubProject]:
         return [self._projects[project_id] for project_id in sorted(self._projects)]
+
+    def find_by_cwd(self, cwd: Any) -> StubProject | None:
+        # Mirror the real store: match on the cwd-identity key (realpath +
+        # Windows-only case-fold) so the rooted-agent detection behaves exactly
+        # like production against these stub projects.
+        try:
+            target = cwd_identity_key(cwd)
+        except ValueError:
+            return None
+        for project_id in sorted(self._projects):
+            project = self._projects[project_id]
+            if cwd_identity_key(project.cwd) == target:
+                return project
+        return None
 
 
 class StubAgentResolver:

@@ -163,6 +163,26 @@ class ProjectStore:
                 _LOGGER.warning("Skipping invalid project config %s: %s", config_path, error)
         return sorted(projects, key=lambda project: project.project_id)
 
+    def find_by_cwd(self, cwd: str | os.PathLike[str]) -> Project | None:
+        """Return the project whose repo cwd is ``cwd``, or ``None`` if none match.
+
+        Equality is decided by :func:`core.projects.paths.cwd_identity_key` — the
+        same realpath + Windows-only case-fold rule the duplicate-cwd guard uses —
+        so a path that resolves to a registered project's repo matches it
+        regardless of symlinks or path-case differences. cwd is unique across
+        projects (the duplicate-cwd guard), so at most one project matches. Used to
+        detect a *rooted identity agent* whose workspace IS a project's repo; an
+        empty or unresolvable path yields ``None`` rather than raising.
+        """
+        try:
+            target_key = cwd_identity_key(cwd)
+        except ValueError:
+            return None
+        for project in self.list():
+            if cwd_identity_key(project.cwd) == target_key:
+                return project
+        return None
+
     def update(self, project_id: str, **changes: Any) -> Project:
         """Update mutable project fields. ``project_id`` is immutable.
 
