@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-22T22:00:04.569466+00:00",
+  "fetched_at": "2026-06-25T15:33:38.658796+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -197,6 +197,88 @@
         }
       },
       "name": "AionLabs: Aion-RP 1.0 (8B)"
+    },
+    "alibaba/happyhorse-1.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Alibaba: HappyHorse 1.0"
+    },
+    "alibaba/happyhorse-1.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Alibaba: HappyHorse 1.1"
     },
     "alibaba/wan-2.6": {
       "capabilities": {
@@ -2818,7 +2900,6 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
-          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -2831,7 +2912,6 @@
           "tool_choice",
           "tools",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -3341,55 +3421,6 @@
       },
       "name": "DeepSeek: DeepSeek V4 Pro"
     },
-    "essentialai/rnj-1-instruct": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 32768,
-      "family": "rnj",
-      "max_output_tokens": 32768,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "EssentialAI: Rnj 1 Instruct"
-    },
     "google/chirp-3": {
       "capabilities": {
         "input_modalities": [
@@ -3526,7 +3557,7 @@
       ],
       "context_window": 32768,
       "family": "gemini-flash",
-      "max_output_tokens": 8192,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text+image"
@@ -4034,7 +4065,7 @@
       ],
       "context_window": 131072,
       "family": "gemini",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text+image"
@@ -7087,7 +7118,6 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
-          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -7098,7 +7128,6 @@
           "structured_outputs",
           "temperature",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -7590,7 +7619,7 @@
       ],
       "context_window": 204800,
       "family": "minimax",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 196608,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -9024,7 +9053,7 @@
       ],
       "context_window": 262144,
       "family": "kimi-k2",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 256000,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text",
@@ -9175,7 +9204,7 @@
       ],
       "context_window": 262144,
       "family": "kimi-k2",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -9317,6 +9346,7 @@
           "supported": true
         },
         "supported_parameters": [
+          "frequency_penalty",
           "include_reasoning",
           "logprobs",
           "max_tokens",
@@ -12777,6 +12807,141 @@
       },
       "name": "OpenAI: GPT Chat Latest"
     },
+    "openai/gpt-image-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image"
+        ],
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "OpenAI: GPT Image 1"
+    },
+    "openai/gpt-image-1-mini": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "OpenAI: GPT Image 1 Mini"
+    },
+    "openai/gpt-image-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image"
+        ],
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "OpenAI: GPT Image 2"
+    },
     "openai/gpt-oss-120b": {
       "capabilities": {
         "input_modalities": [
@@ -13813,9 +13978,6 @@
         "output_modalities": [
           "transcription"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -13860,9 +14022,6 @@
         "output_modalities": [
           "transcription"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "max_tokens",
           "response_format",
@@ -14674,57 +14833,6 @@
         }
       },
       "name": "Poolside: Laguna XS.2 (free)"
-    },
-    "prime-intellect/intellect-3": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 131072,
-      "family": "glm",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Prime Intellect: INTELLECT-3"
     },
     "qwen/qwen-2.5-72b-instruct": {
       "capabilities": {
@@ -16762,7 +16870,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 81920,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -16823,7 +16931,7 @@
       ],
       "context_window": 256000,
       "family": "qwen",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 64000,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -17998,6 +18106,49 @@
       },
       "name": "Relace: Relace Search"
     },
+    "sakana/fugu-ultra": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "web_search_options"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Sakana: Fugu Ultra"
+    },
     "sao10k/l3-lunaris-8b": {
       "capabilities": {
         "input_modalities": [
@@ -19080,7 +19231,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -19090,20 +19241,14 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
-          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
           "repetition_penalty",
-          "response_format",
           "seed",
           "stop",
-          "structured_outputs",
           "temperature",
-          "tool_choice",
-          "tools",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -19111,7 +19256,7 @@
           "chat",
           "text_output"
         ],
-        "tools": true,
+        "tools": false,
         "vision": false
       },
       "connections": [
@@ -19834,6 +19979,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_k",
           "top_logprobs",
           "top_p"
         ],
@@ -20405,7 +20551,7 @@
       ],
       "context_window": 202752,
       "family": "glm",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -20514,7 +20660,7 @@
       ],
       "context_window": 202752,
       "family": "glm",
-      "max_output_tokens": 65535,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -20619,6 +20765,7 @@
         "api-key"
       ],
       "context_window": 202752,
+      "family": "glm",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {

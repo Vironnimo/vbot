@@ -1,10 +1,16 @@
 {
-  "_comment": "Hand layer for the opencode-go gateway, rebuilt 2026-06-16. Everything models.dev knows about these models (context_window, max_output_tokens, modalities, family, reasoning) is pulled into the generated opencode-go.json at refresh, so this file carries ONLY what neither the endpoint nor models.dev provides: (1) the per-model wire protocol (metadata.opencode_go.protocol: anthropic|openai) that routes the adapter — a vBot-internal fact, and (2) for hy3-preview, a canonical pointer to tencent/hy3-preview because the opencode-go models.dev section carries no limit block for it (the canonical base fills context_window/max_output_tokens at load). No hand-guessed numbers.",
+  "_comment": "Hand layer for the opencode-go gateway, rebuilt 2026-06-16. Everything models.dev knows about these models (context_window, max_output_tokens, modalities, family, reasoning) is pulled into the generated opencode-go.json at refresh, so this file carries ONLY what neither the endpoint nor models.dev provides: (1) the per-model wire protocol (metadata.opencode_go.protocol: anthropic|openai) that routes the adapter — a vBot-internal fact, and (2) for hy3-preview, a canonical pointer to tencent/hy3-preview because the opencode-go models.dev section carries no limit block for it (the canonical base fills context_window/max_output_tokens at load), and (3) for glm-5.2, the effort reasoning ladder (control: levels, levels: high|max) that models.dev publishes but assembly drops for this model — its gateway wire-id 'glm-5.2' cannot join the lab-prefixed canonical 'zhipuai/glm-5.2', and the gateway's own non-deviating ladder is not stamped onto opencode-go.json, so without this entry the model loads with a bare reasoning:{supported:true} and no selectable effort. Values taken verbatim from the models.dev reasoning_options for glm-5.2. No hand-guessed numbers.",
   "models": {
     "deepseek-v4-flash": {"metadata": {"opencode_go": {"protocol": "openai"}}},
     "deepseek-v4-pro": {"metadata": {"opencode_go": {"protocol": "openai"}}},
     "glm-5": {"metadata": {"opencode_go": {"protocol": "openai"}}},
     "glm-5.1": {"metadata": {"opencode_go": {"protocol": "openai"}}},
+    "glm-5.2": {
+      "capabilities": {
+        "reasoning": {"control": "levels", "levels": ["high", "max"], "supported": true}
+      },
+      "metadata": {"opencode_go": {"protocol": "openai", "reasoning_response_field": "reasoning_content"}}
+    },
     "hy3-preview": {
       "canonical": "tencent/hy3-preview",
       "metadata": {"opencode_go": {"protocol": "openai"}}
