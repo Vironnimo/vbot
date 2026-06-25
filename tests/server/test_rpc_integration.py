@@ -314,6 +314,20 @@ class IntegrationProcessManager:
         del run_id
 
 
+class IntegrationProjects:
+    """Empty project-store stub: the integration runtime registers no project, so
+    the rooting lookup never matches and the visit list is always empty."""
+
+    def get(self, project_id: str) -> Any:
+        raise KeyError(project_id)
+
+    def list(self) -> list[Any]:
+        return []
+
+    def find_by_cwd(self, _cwd: Any) -> Any | None:
+        return None
+
+
 class IntegrationRuntime:
     def __init__(
         self,
@@ -327,6 +341,7 @@ class IntegrationRuntime:
             IntegrationAgent(id="coder", allowed_tools=["lookup", "slow_tool"])
         )
         self.agent_resolver = IntegrationAgentResolver(self.agents)
+        self.projects = IntegrationProjects()
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.storage = IntegrationStorage(tmp_path)
         self.system_prompts = IntegrationPrompts(self.tools)

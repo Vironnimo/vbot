@@ -532,6 +532,33 @@ def runtime_agent_body(agent: RuntimeAgent) -> str:
     return agent.body if isinstance(agent, ConfigAgent) else ""
 
 
+def resolve_prompt_project(
+    projects: ProjectStore, project_id: str | None, agent: RuntimeAgent
+) -> Project | None:
+    """Return the project whose auto-load files belong in this run's system prompt.
+
+    The one rooting policy shared by the chat loop and the prompt-preview RPC, so
+    the preview can never drift from what a run actually sends:
+
+    - ``project_id`` set → that project (a project-born session / config agent).
+    - ``project_id is None`` → the project the *identity* agent is **rooted** in:
+      its ``workspace`` IS a registered project's repo cwd (the rooted identity
+      agent). An agent at its data-dir home — or any workspace not matching a
+      registered repo — yields ``None``, so ``{project_files}`` collapses and the
+      prompt is byte-identical to an ordinary identity run.
+
+    Kept beside :func:`runtime_agent_body` for the same reason: the chat loop and
+    the RPC call it on the agent they already resolved, so prompt assembly stays
+    on its Protocols and never learns the rooting rule itself.
+    """
+    if project_id is not None:
+        return projects.get(project_id)
+    workspace = getattr(agent, "workspace", "") or ""
+    if not workspace:
+        return None
+    return projects.find_by_cwd(workspace)
+
+
 def _effective_allowed_tools(project: Project, scanned: ScannedAgent) -> list[str]:
     """Return the config agent's tools: the project ceiling minus the agent's denials.
 

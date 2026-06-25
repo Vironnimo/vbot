@@ -201,3 +201,37 @@ async def test_file_tool_outside_any_project_injects_nothing(tmp_path: Path) -> 
     persisted = runtime.chat_sessions.get("coder", "s1").load()
     assert not any(m.role == "note" for m in persisted)
     assert "visited_projects" not in runtime.chat_sessions.get_metadata("coder", "s1")
+
+
+@pytest.mark.asyncio
+async def test_rooted_agent_own_project_not_reinjected_as_reminder(tmp_path: Path) -> None:
+    # A rooted identity agent (workspace == the repo) already carries its project's
+    # files in the system prompt. Opening its own repo by absolute path must NOT
+    # re-inject them as a <system-reminder>: the rooted project is suppressed from
+    # the visit trigger (seeded as already-visited).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["read"], workspace=repo)
+    adapter = StubAdapter(
+        [_read_call(str(repo / "AGENTS.md")), {"content": "Done", "tool_calls": None}]
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=_read_tool_registry(),
+        projects=StubProjects(
+            {"vbot": StubProject(project_id="vbot", cwd=str(repo), auto_load=["AGENTS.md"])}
+        ),
+    )
+    runtime.chat_sessions.create("coder", session_id="s1")
+
+    await ChatLoop(runtime).send("coder", "Look at my own repo", session_id="s1")
+
+    # The files are in the system prompt (rooted), and the visit trigger added no
+    # reminder note or meta for the agent's own project.
+    assert "Team rules" in str(adapter.requests[0]["messages"][0]["content"])
+    persisted = runtime.chat_sessions.get("coder", "s1").load()
+    assert not any(m.role == "note" and "Team rules" in (m.content or "") for m in persisted)
+    assert "visited_projects" not in runtime.chat_sessions.get_metadata("coder", "s1")

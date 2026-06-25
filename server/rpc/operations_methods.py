@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.projects import runtime_agent_body
+from core.projects import resolve_prompt_project, runtime_agent_body
 from core.prompts import ProjectPromptContext, PromptError, PromptFragmentManager
 from core.utils.log_viewer import LogViewer
 from core.utils.tokens import estimate_tokens
@@ -125,7 +125,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
-        project_context = _preview_project_context(state, project_id)
+        project_context = _preview_project_context(state, project_id, agent)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -144,17 +144,21 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     return {"text": text, "tokens": token_count, "estimated": estimated}
 
 
-def _preview_project_context(state: Any, project_id: str | None) -> ProjectPromptContext | None:
-    """Build the prompt-time project context for a project-qualified preview.
+def _preview_project_context(
+    state: Any, project_id: str | None, agent: Any
+) -> ProjectPromptContext | None:
+    """Build the prompt-time project context for a preview, mirroring the chat loop.
 
-    Mirrors the chat loop: an identity preview (``project_id is None``) renders no
-    project files, so ``{project_files}`` collapses and the prompt is unchanged. A
-    project-qualified preview carries the project's cwd and auto-load list so the
-    preview matches what a project-born run would actually send.
+    Resolves through the same shared rooting policy a run uses
+    (:func:`core.projects.resolve_prompt_project`), so the preview matches what is
+    actually sent: a project-qualified preview carries that project's cwd and
+    auto-load list; a bare identity preview carries the files of the project the
+    agent is *rooted* in (workspace == a registered repo), or nothing — in which
+    case ``{project_files}`` collapses and the prompt is unchanged.
     """
-    if project_id is None:
+    project = resolve_prompt_project(state.runtime.projects, project_id, agent)
+    if project is None:
         return None
-    project = state.runtime.projects.get(project_id)
     return ProjectPromptContext.from_project(project.cwd, project.auto_load)
 
 

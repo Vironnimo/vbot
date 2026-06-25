@@ -919,6 +919,7 @@ class _ChatRuntimeStub:
     ) -> None:
         self.agents = _StubAgents()
         self.agent_resolver = _StubAgentResolver(self.agents)
+        self.projects = _StubProjects()
         self.providers = _StubProviders()
         self.provider_credentials = _StubCredentials()
         self.chat_sessions = ChatSessionManager(tmp_path)
@@ -943,6 +944,20 @@ class _ChatRuntimeStub:
     @property
     def process_manager(self) -> _RecordingProcessManager:
         return self._process_manager
+
+
+class _StubProjects:
+    """Empty project store: this runtime stub registers no project, so the rooting
+    lookup never matches and the visit list is always empty."""
+
+    def get(self, project_id: str) -> object:
+        raise KeyError(project_id)
+
+    def list(self) -> list[object]:
+        return []
+
+    def find_by_cwd(self, _cwd: object) -> object | None:
+        return None
 
 
 class _StubAgents:

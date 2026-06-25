@@ -360,6 +360,46 @@ def test_list_skips_corrupt_config(data_dir: Path, repo: Path) -> None:
     assert ids == ["vbot"]
 
 
+def test_find_by_cwd_matches_registered_repo(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    created = store.create("vbot", "vBot", repo)
+
+    found = store.find_by_cwd(repo)
+
+    assert found is not None
+    assert found.project_id == created.project_id
+
+
+def test_find_by_cwd_normalizes_path_before_matching(data_dir: Path, repo: Path) -> None:
+    # A non-normalized path (``.``/``..`` segments) resolves to the same repo via
+    # the cwd-identity key, so it still matches the stored project.
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    indirect = repo / "sub" / ".."
+    found = store.find_by_cwd(indirect)
+    assert found is not None
+    assert found.project_id == "vbot"
+
+
+def test_find_by_cwd_returns_none_for_unregistered_path(
+    data_dir: Path, repo: Path, tmp_path: Path
+) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    assert store.find_by_cwd(tmp_path / "somewhere" / "else") is None
+
+
+def test_find_by_cwd_returns_none_for_empty_path(data_dir: Path, repo: Path) -> None:
+    # An empty/unresolvable path (e.g. a config agent's empty workspace) is a clean
+    # "no match", never a raise.
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    assert store.find_by_cwd("") is None
+
+
 def test_update_changes_display_name(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
