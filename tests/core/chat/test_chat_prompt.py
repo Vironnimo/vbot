@@ -176,3 +176,62 @@ async def test_visiting_with_no_project_files_adds_no_reminder(tmp_path: Path) -
 
     assert injected is False
     assert session.load() == []
+
+
+@pytest.mark.asyncio
+async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_path: Path) -> None:
+    # A rooted identity agent: its workspace IS a registered project's repo, on an
+    # identity session (no project_id). The project's auto-load files land in the
+    # system prompt — identity body stays empty (no config-agent body).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=repo)
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        projects=StubProjects(
+            {PROJECT_ID: StubProject(project_id=PROJECT_ID, cwd=str(repo), auto_load=["AGENTS.md"])}
+        ),
+    )
+    runtime.chat_sessions.create("coder", session_id="s1")
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="s1")
+
+    system = _system_message(adapter)
+    assert '<file name="AGENTS.md">\nTeam rules\n</file>' in system
+    agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
+    assert agent_id == "coder"
+    assert agent_body == ""
+    assert isinstance(project_context, ProjectPromptContext)
+    assert project_context.cwd == repo
+    assert project_context.auto_load == ("AGENTS.md",)
+
+
+@pytest.mark.asyncio
+async def test_identity_agent_workspace_not_a_project_stays_unchanged(tmp_path: Path) -> None:
+    # An identity agent whose workspace is its own home (not any registered repo)
+    # gets no project context — the prompt is the unchanged identity prompt.
+    home = tmp_path / "workspace-coder"
+    home.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=home)
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        projects=StubProjects(
+            {PROJECT_ID: StubProject(project_id=PROJECT_ID, cwd=str(repo), auto_load=["AGENTS.md"])}
+        ),
+    )
+    runtime.chat_sessions.create("coder", session_id="s1")
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="s1")
+
+    _agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
+    assert agent_body == ""
+    assert project_context is None
