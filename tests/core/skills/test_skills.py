@@ -1,11 +1,17 @@
 """Tests for the local skill metadata registry."""
 
+import logging
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
 
-from core.skills.skills import SkillMetadata, SkillRegistry, _scan_skill_resources
+from core.skills.skills import (
+    SkillMetadata,
+    SkillRegistry,
+    _logged_skill_warnings,
+    _scan_skill_resources,
+)
 
 
 def write_skill(skills_dir: Path, directory_name: str, metadata: str) -> Path:
@@ -405,6 +411,54 @@ description: [unterminated
         invalid = registry.invalid_diagnostics()
         assert invalid[0].path == duplicate_file.resolve()
         assert "Duplicate skill name 'shared' rejected" in invalid[0].warnings[-1]
+
+
+class TestSkillWarningLogging:
+    """The WARN log for a skill's metadata warning names its file and never floods.
+
+    Registries reload on every project run / reload, so the same warning would
+    otherwise be logged on each scan. It must carry the skill's path (so the user
+    can find the offending file) and be emitted once per process.
+    """
+
+    def _write_malformed_skill(self, skills_dir: Path) -> Path:
+        # ``description: Use mode: careful`` has an unquoted colon-space value, so
+        # the loader repairs it and records the MALFORMED_YAML_FALLBACK_WARNING.
+        return write_skill(
+            skills_dir,
+            "careful",
+            "---\nname: careful\ndescription: Use mode: careful\n---\n",
+        )
+
+    def test_warning_log_names_the_skill_file_path(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _logged_skill_warnings.clear()
+        skills_dir = tmp_path / "skills"
+        skill_file = self._write_malformed_skill(skills_dir)
+        caplog.set_level(logging.WARNING, logger="vbot.skills")
+
+        SkillRegistry.load(skills_dir)
+
+        records = [record for record in caplog.records if record.name == "vbot.skills"]
+        assert len(records) == 1
+        message = records[0].getMessage()
+        assert "careful" in message
+        assert str(skill_file.resolve()) in message
+
+    def test_same_warning_is_logged_once_per_process(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _logged_skill_warnings.clear()
+        skills_dir = tmp_path / "skills"
+        self._write_malformed_skill(skills_dir)
+        caplog.set_level(logging.WARNING, logger="vbot.skills")
+
+        SkillRegistry.load(skills_dir)
+        SkillRegistry.load(skills_dir)
+
+        records = [record for record in caplog.records if record.name == "vbot.skills"]
+        assert len(records) == 1
 
 
 class TestSkillRegistryGet:

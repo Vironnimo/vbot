@@ -300,6 +300,7 @@ def _load_skill_root(
         if not skill_file.is_file():
             continue
 
+        resolved_skill_file = skill_file.resolve()
         try:
             skill, result = _read_skill_metadata(skill_file)
         except OSError as exc:
@@ -307,39 +308,39 @@ def _load_skill_root(
             diagnostics.append(
                 SkillDiagnostic(
                     name=skill_dir.name,
-                    path=skill_file.resolve(),
+                    path=resolved_skill_file,
                     valid=False,
                     warnings=warnings,
                     loadable=False,
                 )
             )
-            _log_validation_warnings(skill_dir.name, warnings)
+            _log_validation_warnings(skill_dir.name, resolved_skill_file, warnings)
             continue
         except ValueError as exc:
             warnings = [str(exc)]
             diagnostics.append(
                 SkillDiagnostic(
                     name=skill_dir.name,
-                    path=skill_file.resolve(),
+                    path=resolved_skill_file,
                     valid=False,
                     warnings=warnings,
                     loadable=False,
                 )
             )
-            _log_validation_warnings(skill_dir.name, warnings)
+            _log_validation_warnings(skill_dir.name, resolved_skill_file, warnings)
             continue
 
         if skill is None:
             diagnostics.append(
                 SkillDiagnostic(
                     name=skill_dir.name,
-                    path=skill_file.resolve(),
+                    path=resolved_skill_file,
                     valid=False,
                     warnings=result.warnings,
                     loadable=False,
                 )
             )
-            _log_validation_warnings(skill_dir.name, result.warnings)
+            _log_validation_warnings(skill_dir.name, resolved_skill_file, result.warnings)
             continue
 
         if skill.name in skills:
@@ -359,7 +360,7 @@ def _load_skill_root(
                     loadable=False,
                 )
             )
-            _log_validation_warnings(skill.name, warnings)
+            _log_validation_warnings(skill.name, skill.path, warnings)
             continue
 
         skills[skill.name] = skill
@@ -372,7 +373,7 @@ def _load_skill_root(
                 loadable=True,
             )
         )
-        _log_validation_warnings(skill.name, result.warnings)
+        _log_validation_warnings(skill.name, skill.path, result.warnings)
 
 
 def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, ValidationResult]:
@@ -515,6 +516,21 @@ def scan_project_skill_names(
     return frozenset(skill.name for skill in project_only.list_all())
 
 
-def _log_validation_warnings(skill_name: str, warnings: list[str]) -> None:
+# Skill registries are reloaded often — once per project, per run, and on every
+# explicit reload — so re-logging a skill's metadata warning on each scan floods
+# the log. Track the (path, warning) pairs already logged in this process and
+# emit each one once: "once per server runtime". A server restart starts a fresh
+# process and logs the current warnings again. This is a process-scoped logging
+# concern (it lives beside the module logger it guards), not an injectable
+# service — the diagnostics returned to callers are never deduplicated, so the UI
+# still sees every warning on every load.
+_logged_skill_warnings: set[tuple[str, str]] = set()
+
+
+def _log_validation_warnings(skill_name: str, skill_path: Path, warnings: list[str]) -> None:
     for warning in warnings:
-        _LOGGER.warning("Skill '%s' metadata warning: %s", skill_name, warning)
+        dedup_key = (str(skill_path), warning)
+        if dedup_key in _logged_skill_warnings:
+            continue
+        _logged_skill_warnings.add(dedup_key)
+        _LOGGER.warning("Skill '%s' metadata warning: %s (at %s)", skill_name, warning, skill_path)
