@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-22T22:00:03.366859+00:00",
+  "fetched_at": "2026-06-25T15:33:37.053693+00:00",
   "provider_id": "openai",
   "raw_response": {
     "models": [
@@ -20,6 +20,7 @@
           "edu_pro",
           "education",
           "enterprise",
+          "enterprise_cbp_automation",
           "enterprise_cbp_usage_based",
           "finserv",
           "free",
@@ -121,6 +122,7 @@
           "edu_pro",
           "education",
           "enterprise",
+          "enterprise_cbp_automation",
           "enterprise_cbp_usage_based",
           "finserv",
           "go",
@@ -220,6 +222,7 @@
           "edu_pro",
           "education",
           "enterprise",
+          "enterprise_cbp_automation",
           "enterprise_cbp_usage_based",
           "finserv",
           "free",
@@ -313,6 +316,7 @@
           "edu_pro",
           "education",
           "enterprise",
+          "enterprise_cbp_automation",
           "enterprise_cbp_usage_based",
           "finserv",
           "go",
