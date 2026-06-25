@@ -125,7 +125,7 @@ from core.chat.tool_dispatch import (
 )
 from core.debug import DebugContext
 from core.extensions import HookContext
-from core.projects import runtime_agent_body
+from core.projects import resolve_prompt_project, runtime_agent_body
 from core.prompts import ProjectPromptContext
 from core.providers.errors import NetworkError
 from core.providers.providers import resolve_context_window
@@ -535,11 +535,26 @@ class ChatLoop:
             project_id,
         )
         project_cwd = self._resolve_project_cwd(project_id)
-        # System-prompt inputs for a project-born session: the config-agent body
-        # (verbatim) and the project files. Both empty for an identity session, so
-        # the assembled prompt stays byte-identical to today.
+        # System-prompt inputs. The config-agent body is verbatim (empty for an
+        # identity agent). The project files come from the run's prompt-project: a
+        # project-born session uses its own project; an identity session uses the
+        # project the agent is *rooted* in (workspace == a registered repo), else
+        # there is none and both inputs collapse — an ordinary identity prompt is
+        # byte-identical to today.
         agent_body = runtime_agent_body(agent)
-        project_prompt_context = self._resolve_project_prompt_context(project_id)
+        prompt_project = resolve_prompt_project(self._runtime.projects, project_id, agent)
+        project_prompt_context = (
+            ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
+            if prompt_project is not None
+            else None
+        )
+        # A rooted identity session already carries its project's files in the
+        # system prompt, so the visit trigger must not re-inject them as a reminder
+        # when the agent opens its own repo by absolute path. A project-born session
+        # has no visit path at all (``project_id`` is set, the visit block is skipped).
+        rooted_project_id = (
+            prompt_project.project_id if project_id is None and prompt_project is not None else None
+        )
         # The project-scoped skill registry (project skills first, then bundled) for
         # every skill consumer in this run: triggers, the prompt skills block, and
         # the provider skill-tool gate. ``project_id is None`` → the global registry,
@@ -633,6 +648,7 @@ class ChatLoop:
                     connection_id=connection_id,
                     project_id=project_id,
                     project_cwd=project_cwd,
+                    rooted_project_id=rooted_project_id,
                 )
             except ProviderError as primary_exc:
                 if _is_model_fallback_trigger(primary_exc):
@@ -675,6 +691,7 @@ class ChatLoop:
                                 connection_id=fb_connection_id,
                                 project_id=project_id,
                                 project_cwd=project_cwd,
+                                rooted_project_id=rooted_project_id,
                             )
                         except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
                             _run_succeeded = False
@@ -764,19 +781,22 @@ class ChatLoop:
         return Path(self._runtime.projects.get(project_id).cwd)
 
     def _resolve_project_prompt_context(
-        self, project_id: str | None
+        self, project_id: str | None, agent: Any
     ) -> ProjectPromptContext | None:
-        """Build the prompt-time project context for a project-born session.
+        """Build the prompt-time project context for this run, or ``None``.
 
-        ``None`` for an identity session (``project_id is None``) → the
-        ``{project_files}`` placeholder collapses and the prompt is unchanged. For
-        a project session it carries the repo cwd + the project's auto-load list,
-        so the system prompt renders the project's auto-load files (AGENTS.md is the
-        seeded first entry, not special-cased).
+        Resolves through the shared rooting policy (:func:`resolve_prompt_project`):
+        a project session uses its own project, an identity session uses the
+        project the agent is *rooted* in (workspace == a registered repo), and any
+        other identity run yields ``None`` → the ``{project_files}`` placeholder
+        collapses and the prompt is unchanged. When present it carries the repo cwd
+        + the project's auto-load list (AGENTS.md is the seeded first entry, not
+        special-cased). Used by the compaction rebuild so a rooted agent keeps its
+        project files across a mid-run compaction.
         """
-        if project_id is None:
+        project = resolve_prompt_project(self._runtime.projects, project_id, agent)
+        if project is None:
             return None
-        project = self._runtime.projects.get(project_id)
         return ProjectPromptContext.from_project(project.cwd, project.auto_load)
 
     def inject_visiting_project_files(
@@ -969,6 +989,7 @@ class ChatLoop:
         connection_id: str,
         project_id: str | None = None,
         project_cwd: Path | None = None,
+        rooted_project_id: str | None = None,
     ) -> ChatMessage:
         replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
         wire_media_types = _resolve_wire_media_support(adapter, model_id)
@@ -981,7 +1002,13 @@ class ChatLoop:
         # and cached for the run, so an ordinary identity run never touches the
         # project store and a busy visiting one scans it at most once.
         visiting_projects: list[Any] | None = None
-        visited_projects_this_run: set[str] = set()
+        # A rooted identity agent's own project files are already in the system
+        # prompt, so seed it as "already visited" — the visit trigger then skips
+        # re-injecting them as a reminder, while other projects it reaches into
+        # still trigger normally.
+        visited_projects_this_run: set[str] = (
+            {rooted_project_id} if rooted_project_id is not None else set()
+        )
         for _ in range(self._max_tool_iterations + 1):
             run.raise_if_cancelled()
             pending_notes = session.drain_pending_notes()
@@ -1239,7 +1266,7 @@ class ChatLoop:
             replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
             agent_body=runtime_agent_body(agent),
-            project_context=self._resolve_project_prompt_context(project_id),
+            project_context=self._resolve_project_prompt_context(project_id, agent),
             skill_registry=self._runtime.skills_for(project_id),
         )
         return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)

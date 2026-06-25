@@ -21,6 +21,7 @@ from core.debug.recorder import DebugContext
 from core.runs import ChatRunManager
 from core.skills.skills import SkillRegistry
 from core.tools import ToolRegistry, tool_success
+from tests.core.chat.test_chat_loop import StubProjects
 
 JsonObject = dict[str, Any]
 
@@ -232,6 +233,7 @@ class StubRuntime:
     ) -> None:
         self.agents = StubAgents(agent)
         self.agent_resolver = StubAgentResolver(self.agents)
+        self.projects = StubProjects({})
         self.chat_sessions = ChatSessionManager(data_dir)
         self.system_prompts = StubPrompts()
         self.tools = tools or ToolRegistry()

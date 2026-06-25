@@ -33,6 +33,7 @@ from core.projects.resolver import (
     ModelConfigurationChecker,
     RuntimeAgent,
     build_agent_resolver,
+    resolve_prompt_project,
     runtime_agent_body,
 )
 from core.projects.store import ProjectStore, project_sessions_dir
@@ -59,6 +60,7 @@ __all__ = [
     "parse_agent_address",
     "project_from_dict",
     "project_sessions_dir",
+    "resolve_prompt_project",
     "runtime_agent_body",
     "slugify_agent_id",
     "slugify_project_id",
