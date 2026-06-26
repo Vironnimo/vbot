@@ -11,6 +11,7 @@ import httpx
 import pytest
 import respx
 
+import core.providers.opencode_go as opencode_go_module
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -516,6 +517,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
             )
         )
 
+        opencode_go_module._warned_unmarked_models.clear()
         with caplog.at_level("WARNING", logger="vbot.providers.opencode_go"):
             await opencode_go_adapter.send(
                 [{"role": "user", "content": "hello"}],
@@ -529,6 +531,45 @@ class TestOpenCodeGoAdapterMinimaxRouting:
             and "brand-new-unlisted-model" in record.getMessage()
             for record in caplog.records
         )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unknown_model_warns_once_per_process(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An unmarked model logs its routing warning once, not on every request."""
+
+        respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "chat"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )
+        )
+
+        opencode_go_module._warned_unmarked_models.clear()
+        with caplog.at_level("WARNING", logger="vbot.providers.opencode_go"):
+            for _ in range(3):
+                await opencode_go_adapter.send(
+                    [{"role": "user", "content": "hello"}],
+                    model_id="repeated-unlisted-model",
+                )
+
+        warnings = [
+            record
+            for record in caplog.records
+            if "no metadata protocol" in record.getMessage()
+            and "repeated-unlisted-model" in record.getMessage()
+        ]
+        assert len(warnings) == 1
 
     @respx.mock
     @pytest.mark.asyncio
