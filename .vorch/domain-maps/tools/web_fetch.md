@@ -19,6 +19,7 @@ Fetches public HTTP(S) content and returns readable text.
 
 - Allows only `http` and `https` URLs.
 - Validates request targets after parsing and DNS resolution; rejects localhost/private/link-local/multicast/reserved targets, including obfuscated IP forms.
+- Connects to the exact IP that cleared validation (pinned via a custom httpcore network backend), so a DNS-rebinding answer cannot swap in a private address between validation and connection; the hostname still drives the Host header and TLS SNI/cert check.
 - Follows redirects manually with validation per hop.
 - Retries transient HTTP 429/5xx up to 3 times with exponential backoff and jitter.
 - Non-HTML or `raw: true` responses return truncated response text unchanged.
