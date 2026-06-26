@@ -78,7 +78,6 @@ _HTTP_OVERLOADED = 529
 # SSE / API constants
 MESSAGES_ENDPOINT = "/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-ANTHROPIC_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 # The active-effort floor snapped against when a Claude has no feed ladder (the
 # bare-stub catalog today). It spans every active effort, so a selected effort
 # passes through unchanged — keeping the effort path byte-identical.

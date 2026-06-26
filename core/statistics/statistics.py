@@ -48,7 +48,6 @@ MESSAGE_ROLES = (
     "compaction_checkpoint",
     "run_summary",
 )
-RUN_STATUSES = ("completed", "failed", "cancelled")
 
 UNKNOWN_MODEL_KEY = "unknown"
 
