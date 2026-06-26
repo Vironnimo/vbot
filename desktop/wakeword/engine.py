@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Protocol
 
 
@@ -25,16 +24,15 @@ class WakewordEngine(Protocol):
 class MockWakewordEngine:
     """Configurable mock engine for UI testing without real microphone.
 
-    Publishes fake state transitions through a callback so the WebUI
-    can validate the full wakeword → recording → transcribing → sending
-    flow when `--mock-wakeword` is used.
+    Returns a configurable score sequence from ``detect`` so the WebUI can
+    validate the full wakeword → recording → transcribing → sending flow when
+    ``--mock-wakeword`` is used.
     """
 
     def __init__(self, score_sequence: list[float] | None = None) -> None:
         self._score_sequence = score_sequence or [0.0]
         self._index = 0
         self._running = False
-        self._on_detected: Callable[[], None] | None = None
 
     def start(self) -> None:
         self._running = True
