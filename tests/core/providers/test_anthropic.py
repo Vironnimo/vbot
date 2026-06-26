@@ -38,6 +38,43 @@ from core.providers.errors import (
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 
+
+def _strip_cache_control(payload: dict) -> dict:
+    """Return ``payload`` with always-on prompt-caching markers removed.
+
+    Prompt caching adds ``cache_control`` to the last block of the system field
+    and recent messages on every request. Structural tests assert the underlying
+    wire mapping and ignore those markers; their placement is verified directly
+    by :class:`TestPromptCaching`.
+    """
+
+    cleaned = dict(payload)
+    system = cleaned.get("system")
+    if isinstance(system, list):
+        cleaned["system"] = [_block_without_cache(block) for block in system]
+    messages = cleaned.get("messages")
+    if isinstance(messages, list):
+        cleaned["messages"] = [_message_without_cache(message) for message in messages]
+    return cleaned
+
+
+def _message_without_cache(message: dict) -> dict:
+    content = message.get("content")
+    if isinstance(content, list):
+        cleaned = dict(message)
+        cleaned["content"] = [_block_without_cache(block) for block in content]
+        return cleaned
+    return message
+
+
+def _block_without_cache(block):
+    if isinstance(block, dict) and "cache_control" in block:
+        cleaned = dict(block)
+        del cleaned["cache_control"]
+        return cleaned
+    return block
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -340,7 +377,7 @@ class TestSendRequestFormat:
 
         # Assert
         assert route.called
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["model"] == "claude-sonnet-4-20250219"
         assert request_body["messages"] == [
             {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
@@ -371,7 +408,7 @@ class TestSendRequestFormat:
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["messages"] == [
             {
                 "role": "user",
@@ -464,7 +501,7 @@ class TestSendRequestFormat:
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["messages"] == [
             {
                 "role": "user",
@@ -502,7 +539,7 @@ class TestSendRequestFormat:
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["messages"] == [
             {
                 "role": "user",
@@ -535,7 +572,7 @@ class TestSendRequestFormat:
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["messages"] == [
             {
                 "role": "user",
@@ -559,8 +596,8 @@ class TestSendRequestFormat:
         )
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
-        assert request_body["system"] == "You are a helpful assistant."
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["system"] == [{"type": "text", "text": "You are a helpful assistant."}]
         for msg in request_body["messages"]:
             assert msg["role"] != "system"
 
@@ -578,8 +615,10 @@ class TestSendRequestFormat:
 
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
-        request_body = json.loads(route.calls.last.request.content)
-        assert request_body["system"] == "Follow the project rules.\n\nKeep answers concise."
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["system"] == [
+            {"type": "text", "text": "Follow the project rules.\n\nKeep answers concise."}
+        ]
         for msg in request_body["messages"]:
             assert msg["role"] != "system"
 
@@ -596,7 +635,7 @@ class TestSendRequestFormat:
         await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert "system" not in request_body
 
     @respx.mock
@@ -612,7 +651,7 @@ class TestSendRequestFormat:
         await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["max_tokens"] == 4096
 
     @respx.mock
@@ -632,7 +671,7 @@ class TestSendRequestFormat:
         )
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["max_tokens"] == 8192  # overridden
 
     @respx.mock
@@ -649,7 +688,7 @@ class TestSendRequestFormat:
         await adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert "model" in request_body
         assert "messages" in request_body
         assert "max_tokens" not in request_body
@@ -674,7 +713,7 @@ class TestSendRequestFormat:
         )
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == thinking
         assert request_body["output_config"] == output_config
 
@@ -719,7 +758,7 @@ class TestSendRequestFormat:
         await anthropic_adapter.send(tool_messages, model_id="claude-sonnet-4-20250219")
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert len(request_body["messages"]) == 3
         assistant_msg = request_body["messages"][1]
         assert assistant_msg["role"] == "assistant"
@@ -749,7 +788,7 @@ class TestSendRequestFormat:
         )
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["system"] == system_blocks
         for msg in request_body["messages"]:
             assert msg["role"] != "system"
@@ -773,7 +812,7 @@ class TestSendRequestFormat:
 
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["system"] == [*first_blocks, *second_blocks]
         for msg in request_body["messages"]:
             assert msg["role"] != "system"
@@ -793,7 +832,7 @@ class TestSendRequestFormat:
 
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["system"] == [
             {"type": "text", "text": "Follow the project rules."},
             *blocks,
@@ -833,8 +872,8 @@ class TestSendRequestFormat:
             thinking_effort="high",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
-        assert request_body["system"] == "You are helpful."
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["system"] == [{"type": "text", "text": "You are helpful."}]
         assert request_body["messages"] == [
             {"role": "user", "content": [{"type": "text", "text": "Weather?"}]},
             {
@@ -888,7 +927,7 @@ class TestSendRequestFormat:
             tools=[READ_TOOL_DEFINITION],
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["tools"] == [
             {
                 "name": "read",
@@ -930,7 +969,7 @@ class TestSendRequestFormat:
 
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["messages"][2] == {
             "role": "user",
             "content": [
@@ -967,7 +1006,7 @@ class TestSendRequestFormat:
 
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["messages"][1]["content"][:2] == [thinking_block, redacted_block]
 
     @respx.mock
@@ -992,7 +1031,7 @@ class TestSendRequestFormat:
 
         await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assistant_content = request_body["messages"][1]["content"]
         assert assistant_content == [{"type": "text", "text": "Previous answer"}]
         assert all(block["type"] != "thinking" for block in assistant_content)
@@ -1011,7 +1050,7 @@ class TestSendRequestFormat:
             thinking_effort="none",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "disabled"}
 
     @respx.mock
@@ -1029,7 +1068,7 @@ class TestSendRequestFormat:
             thinking_effort="high",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
         assert "temperature" not in request_body
 
@@ -1050,7 +1089,7 @@ class TestSendRequestFormat:
             thinking={"type": "enabled", "budget_tokens": 10000},
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 10000}
         assert "temperature" not in request_body
 
@@ -1067,7 +1106,7 @@ class TestSendRequestFormat:
             thinking_effort="high",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
         assert "temperature" not in request_body
         assert request_body["max_tokens"] == 8192
@@ -1087,7 +1126,7 @@ class TestSendRequestFormat:
             thinking_effort="none",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "disabled"}
         assert request_body["temperature"] == 0.5
 
@@ -1113,7 +1152,7 @@ class TestSendRequestFormat:
             include_reasoning=True,
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert "thinking" not in request_body
         assert "output_config" not in request_body
         assert "include_reasoning" not in request_body
@@ -1138,7 +1177,7 @@ class TestSendRequestFormat:
             thinking_effort="high",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 16384}
         assert "output_config" not in request_body
         # Thinking is active, so temperature must be dropped.
@@ -1161,7 +1200,7 @@ class TestSendRequestFormat:
 
         await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="medium")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 20000}
 
     @respx.mock
@@ -1179,7 +1218,7 @@ class TestSendRequestFormat:
 
         await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="high")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 4095}
 
     @respx.mock
@@ -1197,7 +1236,7 @@ class TestSendRequestFormat:
 
         await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="none")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "disabled"}
 
     @respx.mock
@@ -1215,7 +1254,7 @@ class TestSendRequestFormat:
 
         await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="high")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 
@@ -1273,7 +1312,7 @@ class TestReasoningReplay:
             thinking_effort="high",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["messages"][1]["content"] == [
             PRIOR_RUN_THINKING_BLOCK,
             PRIOR_RUN_REDACTED_BLOCK,
@@ -1296,7 +1335,7 @@ class TestReasoningReplay:
             thinking_effort="none",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "disabled"}
         assert request_body["messages"][1]["content"] == [{"type": "text", "text": "A1"}]
 
@@ -1312,7 +1351,7 @@ class TestReasoningReplay:
 
         await anthropic_adapter.send(TWO_RUN_HISTORY, model_id="claude-sonnet-4-20250219")
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert "thinking" not in request_body
         assert request_body["messages"][1]["content"][:2] == [
             PRIOR_RUN_THINKING_BLOCK,
@@ -1338,7 +1377,7 @@ class TestReasoningReplay:
             thinking_effort="high",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert "thinking" not in request_body
         assert request_body["messages"][1]["content"] == [{"type": "text", "text": "A1"}]
 
@@ -1369,7 +1408,7 @@ class TestReasoningReplay:
             thinking_effort="none",
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["messages"] == [
             {"role": "user", "content": [{"type": "text", "text": "Q1"}]},
             {"role": "user", "content": [{"type": "text", "text": "Q2"}]},
@@ -2118,7 +2157,7 @@ class TestSendProviderConfig:
         await custom_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["max_tokens"] == 8192
         assert request_body["temperature"] == 0.7
 
@@ -2149,7 +2188,7 @@ class TestBuildPayloadNoneKwargs:
         )
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert "temperature" in request_body
         assert request_body["temperature"] == 0.7  # from defaults
 
@@ -2166,7 +2205,7 @@ class TestBuildPayloadNoneKwargs:
         )
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["temperature"] == 0.0
 
     @respx.mock
@@ -2182,7 +2221,7 @@ class TestBuildPayloadNoneKwargs:
         )
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["temperature"] == 0.3
 
     @respx.mock
@@ -2201,7 +2240,7 @@ class TestBuildPayloadNoneKwargs:
         ):
             pass
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["temperature"] == 0.7  # default applied
         assert request_body["stream"] is True  # stream() still adds stream=true
 
@@ -2600,7 +2639,7 @@ class TestStreamSSE:
             pass
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["stream"] is True
 
     @respx.mock
@@ -2658,8 +2697,8 @@ class TestStreamSSE:
             pass
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
-        assert request_body["system"] == "You are a helpful assistant."
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["system"] == [{"type": "text", "text": "You are a helpful assistant."}]
         for msg in request_body["messages"]:
             assert msg["role"] != "system"
 
@@ -3014,7 +3053,7 @@ class TestStreamSSE:
             pass
 
         # Assert
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == thinking
         assert request_body["output_config"] == output_config
 
@@ -3609,7 +3648,7 @@ class TestSamplingParameterDropping:
             top_k=10,
         )
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert "temperature" not in request_body
         assert "top_p" not in request_body
         assert "top_k" not in request_body
@@ -3632,7 +3671,7 @@ class TestSamplingParameterDropping:
 
         await adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-6", temperature=0.5)
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["temperature"] == 0.5
 
     @respx.mock
@@ -3646,5 +3685,138 @@ class TestSamplingParameterDropping:
 
         await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-8", temperature=0.5)
 
-        request_body = json.loads(route.calls.last.request.content)
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["temperature"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Prompt caching — cache_control breakpoint placement
+# ---------------------------------------------------------------------------
+
+EPHEMERAL = {"type": "ephemeral"}
+
+
+def _cache_marked_blocks(payload: dict) -> list[dict]:
+    """All content blocks in the payload (system + messages) carrying a marker."""
+    marked: list[dict] = []
+    system = payload.get("system")
+    if isinstance(system, list):
+        marked += [b for b in system if isinstance(b, dict) and "cache_control" in b]
+    for message in payload.get("messages", []):
+        content = message.get("content")
+        if isinstance(content, list):
+            marked += [b for b in content if isinstance(b, dict) and "cache_control" in b]
+    return marked
+
+
+def _long_text_history(turns: int) -> list[dict]:
+    """A user/assistant text history of ``turns`` messages (no system)."""
+    history: list[dict] = []
+    for index in range(turns):
+        role = "user" if index % 2 == 0 else "assistant"
+        history.append({"role": role, "content": [{"type": "text", "text": f"m{index}"}]})
+    return history
+
+
+class TestPromptCaching:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_marks_last_system_block(self, anthropic_adapter):
+        """A string system prompt becomes a block list with a marker on the last block."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES_WITH_SYSTEM, model_id="claude-sonnet-4-20250219"
+        )
+
+        body = json.loads(route.calls.last.request.content)
+        assert body["system"] == [
+            {
+                "type": "text",
+                "text": "You are a helpful assistant.",
+                "cache_control": EPHEMERAL,
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_tools_are_cached_via_the_system_marker(self, anthropic_adapter):
+        """Tools render before system, so the system marker caches them — tools carry none."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES_WITH_SYSTEM,
+            model_id="claude-sonnet-4-20250219",
+            tools=SAMPLE_TOOLS,
+        )
+
+        body = json.loads(route.calls.last.request.content)
+        assert all("cache_control" not in tool for tool in body["tools"])
+        assert body["system"][-1]["cache_control"] == EPHEMERAL
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_rolling_markers_on_three_most_recent_messages(self, anthropic_adapter):
+        """Only the last three messages are marked; earlier history stays unmarked."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(_long_text_history(6), model_id="claude-sonnet-4-20250219")
+
+        messages = json.loads(route.calls.last.request.content)["messages"]
+        marked = ["cache_control" in message["content"][-1] for message in messages]
+        assert marked == [False, False, False, True, True, True]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_never_exceeds_four_breakpoints(self, anthropic_adapter):
+        """System + rolling markers stay within Anthropic's four-breakpoint limit."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        history = [{"role": "system", "content": "Sys"}, *_long_text_history(8)]
+
+        await anthropic_adapter.send(history, model_id="claude-sonnet-4-20250219")
+
+        assert len(_cache_marked_blocks(json.loads(route.calls.last.request.content))) == 4
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_caches_messages_without_a_system_prompt(self, anthropic_adapter):
+        """No system prompt still caches the recent conversation tail."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(_long_text_history(2), model_id="claude-sonnet-4-20250219")
+
+        body = json.loads(route.calls.last.request.content)
+        assert "system" not in body
+        assert [m["content"][-1].get("cache_control") for m in body["messages"]] == [
+            EPHEMERAL,
+            EPHEMERAL,
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_marker_skips_reasoning_block(self, anthropic_adapter):
+        """The marker rides the tool_use block, never a replayed thinking block."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            CANONICAL_MESSAGES_WITH_TOOL_LOOP,
+            model_id="claude-sonnet-4-20250219",
+            thinking_effort="high",
+        )
+
+        assistant = json.loads(route.calls.last.request.content)["messages"][1]
+        blocks_by_type = {block["type"]: block for block in assistant["content"]}
+        assert "cache_control" not in blocks_by_type["thinking"]
+        assert blocks_by_type["tool_use"]["cache_control"] == EPHEMERAL
