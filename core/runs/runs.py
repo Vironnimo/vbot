@@ -643,7 +643,14 @@ class ChatRunManager:
             run.mark_completed(result, payload_extras=payload_extras)
         except asyncio.CancelledError:
             run.mark_cancelled(payload_extras={"timing": terminal_timing()})
-        except BaseException as exc:
+        except (KeyboardInterrupt, SystemExit):
+            # Process-level interrupts must never be downgraded to a failed run:
+            # record the run as cancelled best-effort, then let the interrupt
+            # propagate so shutdown proceeds. Other non-Exception BaseExceptions
+            # (e.g. GeneratorExit) likewise fall through untouched.
+            run.mark_cancelled(payload_extras={"timing": terminal_timing()})
+            raise
+        except Exception as exc:
             if run.cancel_requested:
                 run.mark_cancelled(payload_extras={"timing": terminal_timing()})
                 return
