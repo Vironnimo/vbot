@@ -27,6 +27,11 @@ from cli.server_management import (
 
 DEFAULT_TASK_NAME = "vBot"
 
+# Cap every autostart command so a stuck `systemctl enable --now`, a polkit
+# prompt on `loginctl enable-linger`, or a hung `schtasks` cannot block
+# `vbot autostart enable` forever on a headless host.
+_COMMAND_TIMEOUT_SECONDS = 30.0
+
 Restart = Callable[[ServerInstance], CommandResult]
 
 
@@ -280,7 +285,19 @@ def _repo_root() -> Path:
 
 
 def _default_runner(command: list[str]) -> CommandRun:
-    completed = subprocess.run(command, capture_output=True, text=True)
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return CommandRun(
+            returncode=124,
+            stdout="",
+            stderr=f"command timed out after {_COMMAND_TIMEOUT_SECONDS:.0f}s: {' '.join(command)}",
+        )
     return CommandRun(
         returncode=completed.returncode,
         stdout=(completed.stdout or "").strip(),
