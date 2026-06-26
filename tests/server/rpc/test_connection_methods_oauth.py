@@ -1,4 +1,4 @@
-"""Tests for OAuth provider RPC delegates."""
+"""Tests for OAuth provider RPC handlers."""
 
 from __future__ import annotations
 
