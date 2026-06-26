@@ -151,8 +151,9 @@ def test_model_refresh_posts_refresh_db_without_provider(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
-        calls.append({"url": url, "json": json, "timeout": timeout})
+    def fake_post(url: str, *, json: dict[str, Any], timeout: Any) -> httpx.Response:
+        del timeout
+        calls.append({"url": url, "json": json})
         return httpx.Response(
             200,
             json={"ok": True, "result": {"refreshed_count": 2, "model_count": 50}},
@@ -171,7 +172,6 @@ def test_model_refresh_posts_refresh_db_without_provider(
         {
             "url": f"{instance.url}/api/rpc",
             "json": {"method": "model.refresh_db", "params": {}},
-            "timeout": 10.0,
         }
     ]
 
@@ -183,8 +183,9 @@ def test_model_refresh_posts_refresh_db_with_provider(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
-        calls.append({"url": url, "json": json, "timeout": timeout})
+    def fake_post(url: str, *, json: dict[str, Any], timeout: Any) -> httpx.Response:
+        del timeout
+        calls.append({"url": url, "json": json})
         return httpx.Response(200, json={"ok": True, "result": {"provider_id": "openai"}})
 
     monkeypatch.setattr(model_management.httpx, "post", fake_post)
@@ -196,7 +197,6 @@ def test_model_refresh_posts_refresh_db_with_provider(
         {
             "url": f"{instance.url}/api/rpc",
             "json": {"method": "model.refresh_db", "params": {"provider_id": "openai"}},
-            "timeout": 10.0,
         }
     ]
 
@@ -207,10 +207,10 @@ def test_model_refresh_formats_global_result(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(url: str, *, json: dict[str, Any], timeout: Any) -> httpx.Response:
+        del timeout
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "model.refresh_db", "params": {}}
-        assert timeout == 10.0
         return httpx.Response(
             200,
             json={"ok": True, "result": {"refreshed_count": 2, "model_count": 50}},

@@ -12,6 +12,15 @@ from cli.server_management import CommandResult, ServerInstance
 RPC_PATH = "/api/rpc"
 RPC_TIMEOUT_SECONDS = 10.0
 
+# Methods that legitimately run far longer than the default cap. `model.refresh_db`
+# fans out sequentially to provider /models endpoints, each server-bounded to 60s
+# with retries, so the total can exceed any fixed ceiling. These calls leave the
+# read phase unbounded — the server already bounds the work — while a short connect
+# timeout still fails fast on an unreachable server. This is the same read=None
+# shape the provider chat client uses for open-ended generation.
+_LONG_RUNNING_METHODS: frozenset[str] = frozenset({"model.refresh_db"})
+RPC_LONG_RUNNING_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
+
 
 class RpcPayload:
     """Normalized server RPC success or failure payload."""
@@ -37,11 +46,14 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
     """Call one server RPC method and return normalized success/error payload."""
 
     request_body = {"method": method, "params": params}
+    timeout: httpx.Timeout | float = (
+        RPC_LONG_RUNNING_TIMEOUT if method in _LONG_RUNNING_METHODS else RPC_TIMEOUT_SECONDS
+    )
     try:
         response = httpx.post(
             f"{instance.url}{RPC_PATH}",
             json=request_body,
-            timeout=RPC_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except httpx.RequestError as exc:
         return RpcPayload(
