@@ -17,7 +17,6 @@ from typing import Any, TypeVar, cast
 
 import pytest
 
-import server.delegates as delegates
 from core.automation import TriggerService
 from core.chat import ChatLoop, ChatMessage, ChatSessionManager, CommandDispatcher, ToolCall
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
@@ -42,8 +41,15 @@ from core.settings.normalizers import normalize_extensions_settings
 from core.storage import StorageError
 from core.tools import ToolRegistry, register_read_tool
 from core.utils.errors import ConfigError
-from server.delegates import dispatch_rpc
 from server.events import ServerEventBus
+from server.rpc import (
+    agent_methods,
+    chat_methods,
+    connection_methods,
+    event_bridge,
+    payloads,
+)
+from server.rpc.methods import dispatch_rpc
 from server.rpc.payloads import _model_response
 from server.rpc.provider_access import _provider_has_credentials
 
@@ -69,7 +75,7 @@ def _no_models_dev_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _none_catalog() -> None:
         return None
 
-    monkeypatch.setattr(delegates, "fetch_catalog", _none_catalog)
+    monkeypatch.setattr(connection_methods, "fetch_catalog", _none_catalog)
 
 
 @dataclass(frozen=True)
@@ -779,19 +785,22 @@ class StubStorage:
             temperature = float(value)
             if not math.isfinite(temperature):
                 raise StorageError("Agent default temperature must be finite")
-            if temperature < delegates.MIN_TEMPERATURE or temperature > delegates.MAX_TEMPERATURE:
+            if (
+                temperature < agent_methods.MIN_TEMPERATURE
+                or temperature > agent_methods.MAX_TEMPERATURE
+            ):
                 raise StorageError(
                     "Agent default temperature must be between "
-                    f"{delegates.MIN_TEMPERATURE:g} and {delegates.MAX_TEMPERATURE:g}"
+                    f"{agent_methods.MIN_TEMPERATURE:g} and {agent_methods.MAX_TEMPERATURE:g}"
                 )
             return temperature
 
         if field == "thinking_effort":
             if not isinstance(value, str):
                 raise StorageError("Agent default thinking_effort must be a string or null")
-            if value not in delegates.ALLOWED_THINKING_EFFORTS:
+            if value not in agent_methods.ALLOWED_THINKING_EFFORTS:
                 allowed = ", ".join(
-                    repr(item) for item in sorted(delegates.ALLOWED_THINKING_EFFORTS)
+                    repr(item) for item in sorted(agent_methods.ALLOWED_THINKING_EFFORTS)
                 )
                 raise StorageError(f"Agent default thinking_effort must be one of: {allowed}")
             return value
@@ -2655,7 +2664,7 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -2687,7 +2696,7 @@ async def test_model_refresh_db_provider_publishes_models_resource_changed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -2713,7 +2722,7 @@ async def test_model_refresh_db_global_publishes_models_resource_changed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -2741,7 +2750,7 @@ async def test_model_refresh_db_updates_registry_in_place_for_captured_holders(
     """
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -2773,7 +2782,7 @@ async def test_model_refresh_db_without_params_refreshes_only_eligible_providers
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setenv("OPENROUTER_SECONDARY_API_KEY", "secondary-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -2852,7 +2861,7 @@ async def test_model_refresh_db_empty_params_reloads_runtime_registry_after_glob
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -2876,7 +2885,7 @@ async def test_model_refresh_db_passes_first_usable_connection_to_discovery(
 ) -> None:
     monkeypatch.delenv("OPENROUTER_OAUTH_TOKEN", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
     state = make_state(tmp_path, StubAdapter())
@@ -2908,7 +2917,7 @@ async def test_model_refresh_db_iterates_every_refreshable_connection(
 
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
     monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -2982,7 +2991,7 @@ async def test_global_refresh_counts_multi_connection_provider_once(
 
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
     monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -3042,7 +3051,7 @@ async def test_model_refresh_db_skips_connections_without_effective_endpoint(
     """
 
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
-    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -3089,7 +3098,7 @@ async def test_model_refresh_db_maps_discovery_failures_to_rpc_error(
         raise ModelDiscoveryError("Model discovery failed for provider 'openrouter': bad JSON")
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(delegates, "refresh_models", failing_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", failing_refresh_models)
     state = make_state(tmp_path, StubAdapter())
     state.runtime.providers.add(openrouter_provider())
 
@@ -3132,7 +3141,7 @@ async def test_model_refresh_db_global_continues_when_one_provider_fails(
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setenv("OPENROUTER_SECONDARY_API_KEY", "secondary-key")
-    monkeypatch.setattr(delegates, "refresh_models", selective_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", selective_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -3207,7 +3216,7 @@ async def test_model_refresh_db_single_provider_reports_failed_connection(
 
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
     monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
-    monkeypatch.setattr(delegates, "refresh_models", selective_refresh_models)
+    monkeypatch.setattr(connection_methods, "refresh_models", selective_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -4936,13 +4945,13 @@ async def test_chat_methods_handle_retry_command_as_run_response(
 
     if streaming:
         monkeypatch.setattr(
-            delegates,
+            chat_methods,
             "_streaming_chat_loop",
             lambda _state: SimpleNamespace(retry_run=fake_retry_run),
         )
     else:
         monkeypatch.setattr(state.chat_loop, "retry_run", fake_retry_run)
-    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+    monkeypatch.setattr(chat_methods, "_bridge_run_to_event_bus", lambda _state, _run: None)
 
     response = await dispatch_rpc(
         state,
@@ -5123,7 +5132,7 @@ async def test_chat_send_accepts_content_block_list(
         return run
 
     monkeypatch.setattr(state.chat_loop, "start_run", fake_start_run)
-    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+    monkeypatch.setattr(chat_methods, "_bridge_run_to_event_bus", lambda _state, _run: None)
 
     response = await dispatch_rpc(
         state,
@@ -5211,8 +5220,8 @@ async def test_chat_methods_forward_speech_transcription_input_origin(
             )
 
     monkeypatch.setattr(state.chat_loop, "start_run", fake_start_run)
-    monkeypatch.setattr(delegates, "_streaming_chat_loop", lambda _state: StubStreamingLoop())
-    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+    monkeypatch.setattr(chat_methods, "_streaming_chat_loop", lambda _state: StubStreamingLoop())
+    monkeypatch.setattr(chat_methods, "_bridge_run_to_event_bus", lambda _state, _run: None)
 
     response = await dispatch_rpc(
         state,
@@ -5264,8 +5273,8 @@ async def test_chat_stream_accepts_content_block_list(
             captured["session_id"] = session_id
             return run
 
-    monkeypatch.setattr(delegates, "_streaming_chat_loop", lambda _state: StubStreamingLoop())
-    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+    monkeypatch.setattr(chat_methods, "_streaming_chat_loop", lambda _state: StubStreamingLoop())
+    monkeypatch.setattr(chat_methods, "_bridge_run_to_event_bus", lambda _state, _run: None)
 
     response = await dispatch_rpc(
         state,
@@ -5672,7 +5681,7 @@ async def test_chat_stream_uses_state_streaming_chat_loop(
 
     runtime_streaming_loop = RuntimeStreamingLoop()
     state.streaming_chat_loop = runtime_streaming_loop
-    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+    monkeypatch.setattr(chat_methods, "_bridge_run_to_event_bus", lambda _state, _run: None)
 
     response = await dispatch_rpc(
         state,
@@ -5777,19 +5786,19 @@ class TestRemoveOpaqueProviderMetadata:
     """Tests for _remove_opaque_provider_metadata preserving canonical fields."""
 
     def test_strips_reasoning_meta(self) -> None:
-        result = delegates._remove_opaque_provider_metadata(
+        result = payloads._remove_opaque_provider_metadata(
             {"role": "assistant", "reasoning_meta": {"secret": "opaque"}}
         )
         assert result == {"role": "assistant"}
 
     def test_preserves_usage(self) -> None:
-        result = delegates._remove_opaque_provider_metadata(
+        result = payloads._remove_opaque_provider_metadata(
             {"role": "assistant", "usage": {"input_tokens": 100, "output_tokens": 50}}
         )
         assert result == {"role": "assistant", "usage": {"input_tokens": 100, "output_tokens": 50}}
 
     def test_preserves_usage_and_strips_reasoning_meta(self) -> None:
-        result = delegates._remove_opaque_provider_metadata(
+        result = payloads._remove_opaque_provider_metadata(
             {
                 "role": "assistant",
                 "content": "Hello",
@@ -5806,7 +5815,7 @@ class TestRemoveOpaqueProviderMetadata:
         }
 
     def test_strips_nested_reasoning_meta(self) -> None:
-        result = delegates._remove_opaque_provider_metadata(
+        result = payloads._remove_opaque_provider_metadata(
             {
                 "role": "assistant",
                 "tool_calls": [
@@ -5831,7 +5840,7 @@ class TestRemoveOpaqueProviderMetadata:
         }
 
     def test_preserves_usage_nested_in_dict(self) -> None:
-        result = delegates._remove_opaque_provider_metadata(
+        result = payloads._remove_opaque_provider_metadata(
             {
                 "role": "assistant",
                 "content": "file contents",
@@ -5854,7 +5863,7 @@ class TestVisibleMessage:
             content="Hello",
             usage={"input_tokens": 200, "output_tokens": 30},
         )
-        result = delegates._visible_message(message)
+        result = payloads._visible_message(message)
         assert result["usage"] == {"input_tokens": 200, "output_tokens": 30}
 
     def test_visible_message_strips_reasoning_meta(self) -> None:
@@ -5863,7 +5872,7 @@ class TestVisibleMessage:
             content="Hello",
             reasoning_meta={"secret": "opaque"},
         )
-        result = delegates._visible_message(message)
+        result = payloads._visible_message(message)
         assert "reasoning_meta" not in result
 
     def test_visible_message_preserves_usage_and_strips_reasoning_meta(self) -> None:
@@ -5874,7 +5883,7 @@ class TestVisibleMessage:
             reasoning_meta={"secret": "opaque"},
             usage={"input_tokens": 100, "output_tokens": 50},
         )
-        result = delegates._visible_message(message)
+        result = payloads._visible_message(message)
         assert result["usage"] == {"input_tokens": 100, "output_tokens": 50}
         assert result["reasoning"] == "visible thinking"
         assert "reasoning_meta" not in result
@@ -5884,7 +5893,7 @@ class TestVisibleMessage:
             model="openai/gpt-5.2",
             content="Hello",
         )
-        result = delegates._visible_message(message)
+        result = payloads._visible_message(message)
         assert "usage" not in result
 
     def test_visible_message_preserves_tool_timing(self) -> None:
@@ -5899,7 +5908,7 @@ class TestVisibleMessage:
             content='{"ok":true,"error":null,"data":{},"artifacts":[]}',
             timing=timing,
         )
-        result = delegates._visible_message(message)
+        result = payloads._visible_message(message)
         assert result["timing"] == timing
 
 
@@ -5926,25 +5935,25 @@ class TestServerEventFromRunEvent:
 
     def test_run_completed_includes_usage_when_present(self) -> None:
         event = self._make_event(
-            delegates.RUN_COMPLETED_EVENT,
+            event_bridge.RUN_COMPLETED_EVENT,
             {"status": "completed", "usage": {"input_tokens": 100, "output_tokens": 50}},
         )
-        result = delegates._server_event_from_run_event(event)
+        result = event_bridge._server_event_from_run_event(event)
 
         assert result["payload"]["usage"] == {"input_tokens": 100, "output_tokens": 50}
 
     def test_run_completed_omits_usage_when_absent(self) -> None:
         event = self._make_event(
-            delegates.RUN_COMPLETED_EVENT,
+            event_bridge.RUN_COMPLETED_EVENT,
             {"status": "completed"},
         )
-        result = delegates._server_event_from_run_event(event)
+        result = event_bridge._server_event_from_run_event(event)
 
         assert "usage" not in result["payload"]
 
     def test_run_completed_strips_reasoning_meta_from_usage(self) -> None:
         event = self._make_event(
-            delegates.RUN_COMPLETED_EVENT,
+            event_bridge.RUN_COMPLETED_EVENT,
             {
                 "status": "completed",
                 "usage": {
@@ -5954,20 +5963,20 @@ class TestServerEventFromRunEvent:
                 },
             },
         )
-        result = delegates._server_event_from_run_event(event)
+        result = event_bridge._server_event_from_run_event(event)
 
         assert result["payload"]["usage"] == {"input_tokens": 100, "output_tokens": 50}
         assert "reasoning_meta" not in result["payload"]["usage"]
 
     def test_run_completed_preserves_usage_with_estimated_flag(self) -> None:
         event = self._make_event(
-            delegates.RUN_COMPLETED_EVENT,
+            event_bridge.RUN_COMPLETED_EVENT,
             {
                 "status": "completed",
                 "usage": {"input_tokens": 100, "output_tokens": 50, "estimated": True},
             },
         )
-        result = delegates._server_event_from_run_event(event)
+        result = event_bridge._server_event_from_run_event(event)
 
         assert result["payload"]["usage"] == {
             "input_tokens": 100,
@@ -5977,10 +5986,10 @@ class TestServerEventFromRunEvent:
 
     def test_run_completed_includes_status_alongside_usage(self) -> None:
         event = self._make_event(
-            delegates.RUN_COMPLETED_EVENT,
+            event_bridge.RUN_COMPLETED_EVENT,
             {"status": "completed", "usage": {"input_tokens": 200, "output_tokens": 30}},
         )
-        result = delegates._server_event_from_run_event(event)
+        result = event_bridge._server_event_from_run_event(event)
 
         assert result["payload"]["status"] == "completed"
         assert result["payload"]["usage"] == {"input_tokens": 200, "output_tokens": 30}
@@ -5992,10 +6001,10 @@ class TestServerEventFromRunEvent:
             "duration_ms": 1000,
         }
         event = self._make_event(
-            delegates.RUN_FAILED_EVENT,
+            event_bridge.RUN_FAILED_EVENT,
             {"status": "failed", "timing": timing},
         )
-        result = delegates._server_event_from_run_event(event)
+        result = event_bridge._server_event_from_run_event(event)
 
         assert result["payload"]["status"] == "failed"
         assert result["payload"]["timing"] == timing
@@ -6003,10 +6012,10 @@ class TestServerEventFromRunEvent:
     def test_non_completed_terminal_event_excludes_usage(self) -> None:
         """run_failed and run_cancelled should not carry usage even if payload has it."""
         event = self._make_event(
-            delegates.RUN_FAILED_EVENT,
+            event_bridge.RUN_FAILED_EVENT,
             {"status": "failed", "usage": {"input_tokens": 10}},
         )
-        result = delegates._server_event_from_run_event(event)
+        result = event_bridge._server_event_from_run_event(event)
 
         assert "usage" not in result["payload"]
         assert result["payload"]["status"] == "failed"
@@ -6019,9 +6028,9 @@ class TestServerEventFromRunEvent:
             RUN_STARTED_EVENT,
             {"status": "running", "queue_item_id": "qi-abc-123"},
         )
-        result = delegates._server_event_from_run_event(event)
+        result = event_bridge._server_event_from_run_event(event)
 
-        assert result["type"] == delegates.SERVER_EVENT_TYPES[RUN_STARTED_EVENT]
+        assert result["type"] == event_bridge.SERVER_EVENT_TYPES[RUN_STARTED_EVENT]
         assert result["payload"]["output"] == {
             "status": "running",
             "queue_item_id": "qi-abc-123",
@@ -6035,9 +6044,9 @@ class TestServerEventFromRunEvent:
             RUN_STARTED_EVENT,
             {"status": "running"},
         )
-        result = delegates._server_event_from_run_event(event)
+        result = event_bridge._server_event_from_run_event(event)
 
-        assert result["type"] == delegates.SERVER_EVENT_TYPES[RUN_STARTED_EVENT]
+        assert result["type"] == event_bridge.SERVER_EVENT_TYPES[RUN_STARTED_EVENT]
         assert result["payload"]["output"] == {"status": "running"}
 
 
@@ -6474,7 +6483,7 @@ async def test_chat_methods_handle_handoff_command_for_same_agent(
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     bridged_runs: list[Any] = []
     monkeypatch.setattr(
-        delegates,
+        chat_methods,
         "_bridge_run_to_event_bus",
         lambda _state, run: bridged_runs.append(run),
     )
@@ -6530,7 +6539,7 @@ async def test_chat_methods_handle_handoff_command_for_other_agent(
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     bridged_runs: list[Any] = []
     monkeypatch.setattr(
-        delegates,
+        chat_methods,
         "_bridge_run_to_event_bus",
         lambda _state, run: bridged_runs.append(run),
     )
@@ -6578,7 +6587,7 @@ async def test_chat_methods_handle_handoff_command_with_agent_and_instruction(
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     bridged_runs: list[Any] = []
     monkeypatch.setattr(
-        delegates,
+        chat_methods,
         "_bridge_run_to_event_bus",
         lambda _state, run: bridged_runs.append(run),
     )

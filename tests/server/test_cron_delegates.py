@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfoNotFoundError
 import pytest
 
 from core.automation.cron import CronServiceError
-from server.delegates import dispatch_rpc
+from server.rpc.methods import dispatch_rpc
 
 
 def _state_with_cron_service(
@@ -112,12 +112,12 @@ async def test_cron_list_happy_path_includes_server_side_next_fire_at(
                 return base
             return cast(FrozenDateTime, base.astimezone(tz))
 
-    monkeypatch.setattr("server.delegates.datetime", FrozenDateTime)
+    monkeypatch.setattr("server.rpc.automation_methods.datetime", FrozenDateTime)
 
     def missing_zoneinfo(_timezone_name: str) -> Any:
         raise ZoneInfoNotFoundError("timezone data unavailable")
 
-    monkeypatch.setattr("server.delegates.ZoneInfo", missing_zoneinfo)
+    monkeypatch.setattr("server.rpc.automation_methods.ZoneInfo", missing_zoneinfo)
 
     job = SimpleNamespace(
         id="job-1",

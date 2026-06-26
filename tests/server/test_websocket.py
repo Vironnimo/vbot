@@ -14,8 +14,12 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.runs import ChatRunManager, RunStatus
 from core.subagents import SUBAGENT_SESSION_STARTED_EVENT
 from server.app import _parse_after_sequence, create_app
-from server.delegates import RUN_DELTA_EVENT_TYPES, RUN_OUTPUT_EVENT_TYPES, SERVER_EVENT_TYPES
 from server.events import ALLOWED_SERVER_EVENT_TYPES, APP_ERROR_EVENT, ServerEventBus
+from server.rpc.event_bridge import (
+    RUN_DELTA_EVENT_TYPES,
+    RUN_OUTPUT_EVENT_TYPES,
+    SERVER_EVENT_TYPES,
+)
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
 

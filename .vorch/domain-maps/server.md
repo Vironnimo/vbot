@@ -4,7 +4,7 @@ FastAPI transport layer around the core kernel.
 
 ## Overview
 
-`server/` owns HTTP, Server-Sent Events (SSE), WebSocket, process startup, and request/response mapping. It imports `core/` services but does not own chat, agent, provider, model, tool, skill, or storage business logic. RPC envelope parsing and invocation live under `server/rpc/`. Domain handler bodies live in the domain-indexed `server/rpc/*_methods.py` modules, with shared request validation, payload mapping, runtime access, provider access, and event bridging helpers split into focused `server/rpc/` support modules. `server.delegates` remains the compatibility facade for transport delegate helpers and transitional private-name imports.
+`server/` owns HTTP, Server-Sent Events (SSE), WebSocket, process startup, and request/response mapping. It imports `core/` services but does not own chat, agent, provider, model, tool, skill, or storage business logic. RPC envelope parsing and invocation live under `server/rpc/`. Domain handler bodies live in the domain-indexed `server/rpc/*_methods.py` modules, with shared request validation, payload mapping, runtime access, provider access, and event bridging helpers split into focused `server/rpc/` support modules. The public dispatch entry point is `server.rpc.methods.dispatch_rpc`, which dispatches against the statically built `METHODS` table.
 
 Clients call the vBot server contract; provider wire details stay behind `core/providers/` adapters.
 
@@ -46,7 +46,7 @@ Clients call the vBot server contract; provider wire details stay behind `core/p
 ## Interfaces
 
 - `server.app.create_app(runtime=None, config=None)` — creates the FastAPI app, starts/stops `Runtime` during lifespan, and wires `runtime` plus the runtime-owned services (`chat_run_manager` as `state.chat_runs`, `chat_loop`, `streaming_chat_loop`, `command_dispatcher`) and the server event bus into `app.state`. The server reads these directly — no `getattr` probes, no fallback construction; a runtime stub handed to `create_app` must provide them. Compaction wiring lives in `Runtime.start()`, not in the server.
-- `server.delegates.dispatch_rpc(state, request)` — validates and dispatches RPC methods through `server/rpc/dispatcher.py` and the domain-indexed method registries in `server/rpc/*_methods.py`. New handler code should live in the domain module directly; `server.delegates` should stay a thin facade.
+- `server.rpc.methods.dispatch_rpc(state, request)` — validates and dispatches RPC methods through `server/rpc/dispatcher.py` against the statically built `METHODS` table (assembled once at import from the domain-indexed method registries in `server/rpc/*_methods.py`). New handler code lives in the domain module directly and is registered through that module's `method_handlers()`.
 - `POST /api/upload` — accepts one multipart file upload and returns attachment metadata. The server reads the upload in bounded chunks and rejects payloads over the runtime attachment limit with HTTP 413 before calling attachment storage; blocked MIME types map to HTTP 415.
 - `GET /api/attachments/{attachment_id}` — returns the raw stored blob with its stored `media_type` as Content-Type, or 404 when the attachment does not exist.
 - `POST /api/speech/transcribe` — accepts one multipart `file` upload and returns a transcription using the configured `model_tasks.speech_to_text` binding. Audio is read in bounded chunks and payloads over `speech_upload_max_size_bytes` are rejected with HTTP 413 before the speech domain runs.

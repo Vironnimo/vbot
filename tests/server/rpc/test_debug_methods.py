@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from core.debug.store import DebugTraceStore
-from server.delegates import dispatch_rpc
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST
+from server.rpc.methods import dispatch_rpc
 from tests.server.test_rpc import (
     StubAdapter,
     make_state,

@@ -32,9 +32,10 @@ from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.clients import ClientRegistry
-from server.delegates import RPC_ERROR_INVALID_REQUEST, bridge_run_to_event_bus, dispatch_rpc
 from server.events import RESOURCE_KIND_CLIENTS, ServerEventBus
-from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
+from server.rpc.event_bridge import bridge_run_to_event_bus, publish_resource_changed
+from server.rpc.methods import dispatch_rpc
 
 JsonObject = dict[str, Any]
 

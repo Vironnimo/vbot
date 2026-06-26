@@ -22,7 +22,7 @@ from core.extensions.extensions import (
     RecallBackendDeclaration,
     ToolDeclaration,
 )
-from server.delegates import dispatch_rpc
+from server.rpc.methods import dispatch_rpc
 from tests.server.test_rpc import StubAdapter, make_state
 
 JsonObject = dict[str, Any]
