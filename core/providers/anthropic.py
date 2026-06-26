@@ -743,15 +743,17 @@ class AnthropicAdapter(ProviderAdapter):
                             if isinstance(input_tokens, int):
                                 _usage_from_start = {"input_tokens": input_tokens}
                                 apply_anthropic_cache_usage(_usage_from_start, usage)
-                # Yield complete usage delta when both token counts are available.
+                # Yield the usage delta once output tokens arrive. If message_start
+                # carried no usable input count, degrade to input_tokens=0 rather
+                # than dropping the run's token accounting entirely.
                 elif event_type == "message_delta":
                     delta_usage = parsed.get("usage", {})
                     if isinstance(delta_usage, dict):
                         output_tokens = delta_usage.get("output_tokens")
-                        if isinstance(output_tokens, int) and _usage_from_start is not None:
+                        if isinstance(output_tokens, int):
                             yield {
                                 "type": "usage",
-                                **_usage_from_start,
+                                **(_usage_from_start or {"input_tokens": 0}),
                                 "output_tokens": output_tokens,
                             }
                 if parsed.get("type") == "message_stop":
