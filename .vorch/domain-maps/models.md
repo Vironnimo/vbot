@@ -239,9 +239,6 @@ output + STT; `speech` output → TTS + audio-generation; generic `audio` output
 - **Override-only models** are supported: an override file may carry a wire-id
   absent from the provider file; assembly builds it from override + the join. It
   must supply the loader's required fields.
-- **`apply_overrides` in `discovery.py` is dead** — refresh no longer bakes
-  overrides into `<provider>.json` (that merge moved to load). The helper is
-  retained only for legacy callers/tests and is flagged for removal.
 - Model objects are immutable after load. Change a layer file or the projection,
   then `invalidate`/reload — never mutate a loaded `Model`.
 
