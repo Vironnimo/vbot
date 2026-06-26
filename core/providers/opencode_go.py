@@ -34,6 +34,12 @@ _DEFAULT_PROTOCOL = PROTOCOL_OPENAI
 
 _OUTPUT_LIMIT_KEYS = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
 
+# ``_model_protocol`` runs on every send/stream, so an unmarked model would re-log
+# its routing warning on each request and flood the log. Track which model ids have
+# already warned in this process and emit each once — "once per server runtime"
+# (a restart re-warns). Mirrors the skill-validation dedup in core/skills/skills.py.
+_warned_unmarked_models: set[str] = set()
+
 
 class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter for the OpenCode Go gateway.
@@ -207,13 +213,16 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             return protocol
         # Unknown model (or a malformed/absent protocol fact): default safe and
         # warn so a misroute surfaces in logs instead of silently picking a wire.
-        _LOGGER.warning(
-            "OpenCode Go model '%s' has no metadata protocol; defaulting to '%s' "
-            "(chat/completions). Add metadata.opencode_go.protocol to its override "
-            "entry to route it explicitly.",
-            model_id,
-            _DEFAULT_PROTOCOL,
-        )
+        # Warn once per model id per process so a hot request path does not flood.
+        if model_id not in _warned_unmarked_models:
+            _warned_unmarked_models.add(model_id)
+            _LOGGER.warning(
+                "OpenCode Go model '%s' has no metadata protocol; defaulting to '%s' "
+                "(chat/completions). Add metadata.opencode_go.protocol to its override "
+                "entry to route it explicitly.",
+                model_id,
+                _DEFAULT_PROTOCOL,
+            )
         return _DEFAULT_PROTOCOL
 
     def _lookup_protocol(self, model_id: str) -> str | None:
