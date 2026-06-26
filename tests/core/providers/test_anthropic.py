@@ -3231,9 +3231,11 @@ class TestStreamUsageDelta:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_no_usage_delta_without_input_tokens(self, anthropic_adapter):
-        """stream() does not yield a usage delta when message_start lacks input_tokens
-        even if message_delta has output_tokens."""
+    async def test_stream_usage_delta_degrades_to_zero_input_without_start_usage(
+        self, anthropic_adapter
+    ):
+        """stream() still yields a usage delta when message_start lacks input_tokens,
+        degrading input to 0 rather than dropping the run's output accounting."""
         # Arrange — message_start without usage data
         sse_body = (
             "event: message_start\n"
@@ -3274,9 +3276,9 @@ class TestStreamUsageDelta:
         ):
             chunks.append(chunk)
 
-        # Assert — no usage delta without input_tokens
+        # Assert — output accounting is preserved by degrading input to 0
         usage_deltas = [c for c in chunks if c.get("type") == "usage"]
-        assert len(usage_deltas) == 0
+        assert usage_deltas == [{"type": "usage", "input_tokens": 0, "output_tokens": 10}]
 
     @respx.mock
     @pytest.mark.asyncio
