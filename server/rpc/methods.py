@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from server.rpc import (
     agent_methods,
     automation_methods,
@@ -19,6 +21,9 @@ from server.rpc import (
     statistics_methods,
 )
 from server.rpc.dispatcher import RpcMethodHandler
+from server.rpc.dispatcher import dispatch_rpc as _dispatch_rpc_envelope
+
+JsonObject = dict[str, Any]
 
 
 def build_method_handlers() -> dict[str, RpcMethodHandler]:
@@ -46,3 +51,9 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
 
 
 METHODS = build_method_handlers()
+
+
+async def dispatch_rpc(state: object, request: object) -> JsonObject:
+    """Dispatch one JSON-RPC-like vBot server request against the method table."""
+
+    return await _dispatch_rpc_envelope(state, request, METHODS)
