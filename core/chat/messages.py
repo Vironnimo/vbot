@@ -797,42 +797,41 @@ def _repair_dangling_tool_calls(request_messages: list[JsonObject]) -> list[Json
     """
     repaired: list[JsonObject] = []
     pending_tool_calls: list[JsonObject] = []
+    # IDs answered since the current pending turn. The tool messages that can
+    # answer a pending set are exactly the contiguous run of tool messages
+    # following its assistant turn, so this set is tracked incrementally and reset
+    # at each boundary — avoiding an O(n) rescan of the whole output per flush.
+    answered_ids: set[str] = set()
     for message in request_messages:
-        if message.get("role") == "assistant" and message.get("tool_calls"):
-            _flush_pending_tool_calls(repaired, pending_tool_calls)
+        role = message.get("role")
+        if role == "assistant" and message.get("tool_calls"):
+            _flush_pending_tool_calls(repaired, pending_tool_calls, answered_ids)
             pending_tool_calls = list(_iter_assistant_tool_calls(message))
+            answered_ids = set()
             repaired.append(message)
             continue
-        if message.get("role") == "tool":
+        if role == "tool":
+            tool_call_id = message.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                answered_ids.add(tool_call_id)
             repaired.append(message)
             continue
-        _flush_pending_tool_calls(repaired, pending_tool_calls)
+        _flush_pending_tool_calls(repaired, pending_tool_calls, answered_ids)
         pending_tool_calls = []
+        answered_ids = set()
         repaired.append(message)
-    _flush_pending_tool_calls(repaired, pending_tool_calls)
+    _flush_pending_tool_calls(repaired, pending_tool_calls, answered_ids)
     return repaired
 
 
 def _flush_pending_tool_calls(
-    output: list[JsonObject], pending_tool_calls: list[JsonObject]
+    output: list[JsonObject], pending_tool_calls: list[JsonObject], answered_ids: set[str]
 ) -> None:
-    """Synthesize a tool result for every pending call not yet answered by output."""
-    answered_ids = _answered_tool_call_ids(output)
+    """Synthesize a tool result for every pending call not in *answered_ids*."""
     for tool_call in pending_tool_calls:
         if tool_call.get("id") in answered_ids:
             continue
         output.append(_synthesize_interrupted_tool_result(tool_call))
-
-
-def _answered_tool_call_ids(messages: list[JsonObject]) -> set[str]:
-    answered: set[str] = set()
-    for message in messages:
-        if message.get("role") != "tool":
-            continue
-        tool_call_id = message.get("tool_call_id")
-        if isinstance(tool_call_id, str) and tool_call_id:
-            answered.add(tool_call_id)
-    return answered
 
 
 def _iter_assistant_tool_calls(message: JsonObject) -> list[JsonObject]:
