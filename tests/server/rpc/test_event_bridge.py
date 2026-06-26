@@ -9,14 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
-from core.runs import RUN_STARTED_EVENT, RunEvent
-from server.events import ServerEventBus
+from core.runs import (
+    RUN_STARTED_EVENT,
+    TOOL_CALL_STDERR_EVENT,
+    TOOL_CALL_STDOUT_EVENT,
+    Run,
+    RunEvent,
+)
+from server.events import ALLOWED_SERVER_EVENT_TYPES, ServerEventBus
+from server.rpc import event_bridge
 from server.rpc.event_bridge import (
+    RUN_DELTA_EVENT_TYPES,
+    SERVER_EVENT_TYPES,
     QueuedRunItem,
     _bridge_queued_item_to_event_bus,
     _server_event_from_run_event,
@@ -139,3 +149,52 @@ def test_publish_resource_changed_rejects_unknown_kind() -> None:
         publish_resource_changed(state, "bogus")
 
     assert state.event_bus.events == []
+
+
+def test_process_output_deltas_are_sse_only_not_websocket_events() -> None:
+    """Process stdout/stderr deltas stream over SSE and do not bridge to WebSocket."""
+    process_delta_events = {TOOL_CALL_STDOUT_EVENT, TOOL_CALL_STDERR_EVENT}
+
+    assert process_delta_events <= RUN_DELTA_EVENT_TYPES
+    assert process_delta_events.isdisjoint(SERVER_EVENT_TYPES)
+    assert process_delta_events.isdisjoint(ALLOWED_SERVER_EVENT_TYPES)
+
+
+@pytest.mark.asyncio
+async def test_run_event_bridge_observes_publish_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingEventBus:
+        def publish(self, _event_type: str, _payload: dict[str, Any]) -> None:
+            raise RuntimeError("publish failed")
+
+    run = Run(run_id="run-one", agent_id="agent-1", session_id="session-1")
+    run.emit(RUN_STARTED_EVENT, {"status": "running"})
+    warnings: list[tuple[str, bool]] = []
+
+    def record_warning(message: str, *args: Any, **kwargs: Any) -> None:
+        warnings.append((message, kwargs.get("exc_info") is True))
+
+    monkeypatch.setattr(event_bridge._LOGGER, "warning", record_warning)
+    event_bridge._bridge_run_to_event_bus(SimpleNamespace(event_bus=FailingEventBus()), run)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert warnings == [("Run event bridge failed", True)]
+
+
+def test_run_event_bridge_dedupe_cache_is_bounded() -> None:
+    state = SimpleNamespace(
+        run_event_bridge_run_ids=OrderedDict(),
+        run_event_bridge_retention_limit=2,
+    )
+    cache = state.run_event_bridge_run_ids
+
+    assert event_bridge._run_was_already_bridged(state, cache, "run-one") is False
+    assert event_bridge._run_was_already_bridged(state, cache, "run-one") is True
+    assert event_bridge._run_was_already_bridged(state, cache, "run-two") is False
+    assert event_bridge._run_was_already_bridged(state, cache, "run-three") is False
+
+    assert list(cache) == ["run-two", "run-three"]
+    assert event_bridge._run_was_already_bridged(state, cache, "run-one") is False
+    assert list(cache) == ["run-three", "run-one"]
