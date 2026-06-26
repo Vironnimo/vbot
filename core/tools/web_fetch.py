@@ -7,8 +7,10 @@ import ipaddress
 import random
 import re
 import socket
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
+import httpcore
 import httpx
 from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import NavigableString, PageElement
@@ -146,13 +148,84 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-def _make_client() -> httpx.AsyncClient:
-    """Create an AsyncClient with browser-like headers and manual redirects."""
+def _make_client(pins: dict[str, str]) -> httpx.AsyncClient:
+    """Create an AsyncClient with browser-like headers and manual redirects.
+
+    *pins* maps each request host to the public IP that ``_validate_public_target``
+    already resolved and cleared. The client connects to that pinned IP instead
+    of resolving the host a second time, so a DNS-rebinding answer cannot swap in
+    a private address between validation and connection. The original hostname
+    still drives the Host header and the TLS SNI / certificate check.
+    """
     return httpx.AsyncClient(
         headers=_BROWSER_HEADERS,
         follow_redirects=False,
         timeout=_REQUEST_TIMEOUT,
+        transport=_build_pinned_transport(pins),
     )
+
+
+def _build_pinned_transport(pins: dict[str, str]) -> httpx.AsyncHTTPTransport:
+    """Build a transport that connects to the pre-validated, pinned IPs.
+
+    httpcore exposes the connection pool's network backend; wrapping it is the
+    one seam where the socket target can be pinned without disturbing the request
+    line, Host header, or TLS hostname. respx-based tests patch
+    ``handle_async_request`` (above this backend), so the pin map is inert there
+    and the existing request-level mocks keep matching by hostname.
+    """
+    transport = httpx.AsyncHTTPTransport()
+    transport._pool._network_backend = _PinnedResolutionBackend(  # noqa: SLF001 - httpcore backend injection seam
+        transport._pool._network_backend, pins
+    )
+    return transport
+
+
+class _PinnedResolutionBackend(httpcore.AsyncNetworkBackend):
+    """Connects to pre-validated IPs instead of re-resolving request hosts.
+
+    ``_validate_public_target`` resolves each hop's host and rejects private or
+    loopback addresses before the request is sent. Without pinning, httpcore
+    would resolve the host *again* at connect time, so a low-TTL DNS-rebinding
+    record could return a public IP during validation and a private one for the
+    real connection. This wrapper substitutes the validated IP (looked up in the
+    per-fetch pin map) for the connect target, leaving the hostname intact for
+    the Host header and TLS verification.
+    """
+
+    def __init__(self, inner: httpcore.AsyncNetworkBackend, pins: dict[str, str]) -> None:
+        self._inner = inner
+        self._pins = pins
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        pinned = self._pins.get(host, host)
+        return await self._inner.connect_tcp(
+            pinned,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        return await self._inner.connect_unix_socket(
+            path, timeout=timeout, socket_options=socket_options
+        )
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
 
 
 def _attr_to_text(value: object) -> str:
@@ -696,7 +769,14 @@ async def _resolve_host_addresses(host: str, port: int) -> list[IpAddress]:
     return addresses
 
 
-async def _validate_public_target(url: httpx.URL) -> None:
+async def _validate_public_target(url: httpx.URL) -> str:
+    """Validate a URL against the SSRF blocklist and return the IP to connect to.
+
+    Resolves the host, rejects any private/loopback/reserved address, and returns
+    the single public IP the connection must be pinned to. Returning the resolved
+    address (rather than re-resolving at connect time) is what closes the
+    DNS-rebinding window — see :class:`_PinnedResolutionBackend`.
+    """
     if url.scheme not in {"http", "https"}:
         raise ValueError("only http/https URLs are allowed")
 
@@ -715,12 +795,14 @@ async def _validate_public_target(url: httpx.URL) -> None:
     if literal_address is not None:
         if _is_blocked_ip(literal_address):
             raise ValueError("URL blocked (private/loopback address)")
-        return
+        return str(literal_address)
 
     port = url.port if url.port is not None else _default_port_for_scheme(url.scheme)
-    for resolved in await _resolve_host_addresses(normalized_host, port):
+    resolved_addresses = await _resolve_host_addresses(normalized_host, port)
+    for resolved in resolved_addresses:
         if _is_blocked_ip(resolved):
             raise ValueError("URL blocked (private/loopback address)")
+    return str(resolved_addresses[0])
 
 
 async def _sleep_for_retry(attempt: int) -> None:
@@ -747,12 +829,20 @@ async def _request_with_retry(client: httpx.AsyncClient, url: httpx.URL) -> http
     raise RuntimeError("unreachable retry loop state")
 
 
-async def _fetch_with_retry(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    """Fetch a URL, validating each redirect hop against SSRF rules."""
+async def _fetch_with_retry(
+    client: httpx.AsyncClient, url: str, pins: dict[str, str]
+) -> httpx.Response:
+    """Fetch a URL, validating each redirect hop against SSRF rules.
+
+    Each hop's host is pinned to the IP that just cleared validation, so the
+    transport connects to exactly the address that was checked.
+    """
     current_url = httpx.URL(url)
 
     for redirect_count in range(_MAX_REDIRECTS + 1):
-        await _validate_public_target(current_url)
+        pinned_ip = await _validate_public_target(current_url)
+        if current_url.host:
+            pins[current_url.host] = pinned_ip
 
         response = await _request_with_retry(client, current_url)
         if response.status_code not in _REDIRECT_STATUS_CODES:
@@ -803,8 +893,9 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
         return tool_failure("validation_error", "url must include a valid host", retryable=False)
 
     try:
-        async with _make_client() as client:
-            response = await _fetch_with_retry(client, url)
+        pins: dict[str, str] = {}
+        async with _make_client(pins) as client:
+            response = await _fetch_with_retry(client, url, pins)
     except ValueError as error:
         return tool_failure("validation_error", str(error), retryable=False)
     except httpx.HTTPStatusError as error:

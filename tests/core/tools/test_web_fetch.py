@@ -5,7 +5,9 @@ from __future__ import annotations
 import ipaddress
 import logging
 from pathlib import Path
+from typing import cast
 
+import httpcore
 import httpx
 import pytest
 import respx
@@ -426,6 +428,87 @@ async def test_web_fetch_handler_include_links_false(tmp_path: Path) -> None:
     assert isinstance(content, str)
     assert "Visible Link" in content
     assert link_url not in content
+
+
+@pytest.mark.asyncio
+async def test_validate_public_target_returns_resolved_ip() -> None:
+    pinned = await web_fetch_module._validate_public_target(httpx.URL("https://example.com/path"))
+
+    assert pinned == "93.184.216.34"
+
+
+@pytest.mark.asyncio
+async def test_validate_public_target_returns_literal_ip() -> None:
+    pinned = await web_fetch_module._validate_public_target(httpx.URL("https://93.184.216.34/path"))
+
+    assert pinned == "93.184.216.34"
+
+
+@pytest.mark.asyncio
+async def test_pinned_resolution_backend_substitutes_validated_ip() -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeInner:
+        async def connect_tcp(
+            self,
+            host: str,
+            port: int,
+            timeout: float | None = None,
+            local_address: str | None = None,
+            socket_options: object = None,
+        ) -> str:
+            captured["host"] = host
+            captured["port"] = port
+            return "stream"
+
+    backend = web_fetch_module._PinnedResolutionBackend(
+        cast(httpcore.AsyncNetworkBackend, _FakeInner()), {"example.com": "93.184.216.34"}
+    )
+
+    result = await backend.connect_tcp("example.com", 443)
+
+    assert captured == {"host": "93.184.216.34", "port": 443}
+    assert result == "stream"
+
+
+@pytest.mark.asyncio
+async def test_pinned_resolution_backend_passes_through_unpinned_host() -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeInner:
+        async def connect_tcp(
+            self,
+            host: str,
+            port: int,
+            timeout: float | None = None,
+            local_address: str | None = None,
+            socket_options: object = None,
+        ) -> str:
+            captured["host"] = host
+            return "stream"
+
+    backend = web_fetch_module._PinnedResolutionBackend(
+        cast(httpcore.AsyncNetworkBackend, _FakeInner()), {}
+    )
+
+    await backend.connect_tcp("other.example", 80)
+
+    assert captured["host"] == "other.example"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_fetch_with_retry_pins_validated_ip(tmp_path: Path) -> None:
+    del tmp_path
+    url = "https://example.com/page"
+    respx.get(url).mock(return_value=httpx.Response(200, text="ok"))
+
+    pins: dict[str, str] = {}
+    async with web_fetch_module._make_client(pins) as client:
+        response = await web_fetch_module._fetch_with_retry(client, url, pins)
+
+    assert response.status_code == 200
+    assert pins["example.com"] == "93.184.216.34"
 
 
 def test_extract_content_strips_scripts_and_styles() -> None:
