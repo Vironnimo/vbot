@@ -21,7 +21,7 @@ from core.runs import ChatRunManager
 from core.skills.skills import SkillRegistry
 from core.tools import ToolContext, ToolRegistry, tool_success
 from server.app import create_app
-from server.delegates import dispatch_rpc
+from server.rpc.methods import dispatch_rpc
 
 JsonObject = dict[str, Any]
 

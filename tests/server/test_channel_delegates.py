@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.channels import ChannelConfig, ChannelConfigError
-from server.delegates import dispatch_rpc
+from server.rpc.methods import dispatch_rpc
 
 
 class _NullAsyncContext:
