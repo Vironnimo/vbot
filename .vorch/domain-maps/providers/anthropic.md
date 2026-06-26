@@ -27,6 +27,13 @@ The live `/models` listing is authoritative and rich — each entry carries `max
 - Canonical assistant tool calls become `tool_use` blocks. Provider tool definitions become Anthropic `tools` entries with `input_schema`.
 - Anthropic SSE uses framed `event:`/`data:` events; consume complete SSE data payloads rather than parsing it as OpenAI-style line JSON.
 
+## Prompt Caching
+
+- Anthropic caching is **opt-in on the write side** — unlike OpenAI-style wires it caches nothing unless a content block carries `cache_control`. `_build_payload` calls `_apply_prompt_caching(payload)` last (after all other mutations, so markers land on the final wire shape); it is always on (no setting). The read side is already canonical (see Response Normalization → Usage).
+- **Placement.** Anthropic renders `tools → system → messages`, so one marker on the **last system block** caches tools + system together; up to `MAX_HISTORY_CACHE_BREAKPOINTS` (3) markers roll across the **most recent messages** to cache the growing conversation tail (the dominant cost at large context). Total never exceeds `CACHE_BREAKPOINT_LIMIT` (4, Anthropic's limit). The marker is `{"type": "ephemeral"}` (5-minute TTL — fits the agentic tool loop; the 1h TTL's doubled write cost only pays off across long idle gaps).
+- **Wire shape.** A string `system` is wrapped into a single `text` block to carry the marker (so the wire now sends block-form system even for a plain string prompt). The marker rides the last **cacheable** block — `thinking`/`redacted_thinking` blocks are skipped (`CACHE_UNMARKABLE_BLOCK_TYPES`) so a replayed reasoning block never becomes the breakpoint; it lands on the trailing `text`/`tool_use`/`tool_result` instead. Markers on prefixes below the model's cacheable minimum (Opus 4.8: 4096 tokens; Sonnet/Fable: 2048) are silent no-ops, so there is no size gate.
+- **Why it's safe.** Caching is a prefix match — any earlier byte change invalidates it. The only volatile element in our system prompt is `{current_date}`, which changes once per day, far outside the 5-minute TTL, so the prefix is byte-stable within a session. No per-request volatile content (time-of-day, session id) is in the prompt prefix.
+
 ## Reasoning
 
 - Reasoning is resolved through the shared `resolve_reasoning_intent(...)` (see `providers.md` → "Reasoning is one policy, many renders") and rendered onto Anthropic's `thinking` shape. `_apply_reasoning` snaps against the model's feed ladder or `ANTHROPIC_EFFORT_FLOOR` (every active effort, so the effort path is byte-identical), then `_render_reasoning` materializes the intent:

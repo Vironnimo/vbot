@@ -99,6 +99,22 @@ TOOL_USE_BLOCK_TYPE = "tool_use"
 THINKING_BLOCK_TYPE = "thinking"
 REDACTED_THINKING_BLOCK_TYPE = "redacted_thinking"
 REASONING_META_CONTENT_BLOCKS = "content_blocks"
+
+# Prompt caching. A ``cache_control`` marker on a content block tells Anthropic
+# to cache the request prefix up to that block (cache reads cost ~0.1x input,
+# writes ~1.25x). Caching is a prefix match, so any earlier byte change
+# invalidates it, and at most four markers are allowed per request. A marker on
+# the last system block caches tools + system together (Anthropic renders tools,
+# then system, then messages); the rest roll across the most recent message
+# boundaries so the growing conversation tail stays cached as a run progresses.
+# Markers on prefixes below the model's cacheable minimum are silent no-ops, so
+# no size gate is needed.
+CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
+CACHE_BREAKPOINT_LIMIT = 4
+MAX_HISTORY_CACHE_BREAKPOINTS = 3
+# Reasoning blocks are replayed verbatim for round-tripping; the cache breakpoint
+# rides on a stabler block (text / tool_use / tool_result) instead.
+CACHE_UNMARKABLE_BLOCK_TYPES = frozenset({THINKING_BLOCK_TYPE, REDACTED_THINKING_BLOCK_TYPE})
 ANTHROPIC_TOOL_STOP_REASONS = {"tool_use"}
 ANTHROPIC_STOP_REASONS = {
     "end_turn",
@@ -414,6 +430,9 @@ class AnthropicAdapter(ProviderAdapter):
                 payload.setdefault(key, value)
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
+        # Cache stable prefixes last, after every other payload mutation, so the
+        # markers land on the final system/messages that go on the wire.
+        _apply_prompt_caching(payload)
         return payload
 
     def _model_reasoning_supported(self, model_id: str) -> bool | None:
@@ -1242,6 +1261,96 @@ def _apply_anthropic_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> N
         }
         for tool in tools
     ]
+
+
+def _apply_prompt_caching(payload: dict[str, Any]) -> None:
+    """Place ``cache_control`` breakpoints so Anthropic caches stable prefixes.
+
+    One marker on the last system block caches tools + system together; up to
+    :data:`MAX_HISTORY_CACHE_BREAKPOINTS` markers on the most recent message
+    boundaries cache the growing conversation tail (the dominant cost at large
+    context), giving the next request several read-points within the 20-block
+    cache lookback. The total never exceeds :data:`CACHE_BREAKPOINT_LIMIT`.
+    """
+
+    remaining = CACHE_BREAKPOINT_LIMIT
+    cached_system = _system_with_cache_control(payload.get("system"))
+    if cached_system is not None:
+        payload["system"] = cached_system
+        remaining -= 1
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return
+    history_budget = min(remaining, MAX_HISTORY_CACHE_BREAKPOINTS)
+    marked = 0
+    for index in range(len(messages) - 1, -1, -1):
+        if marked >= history_budget:
+            break
+        message = messages[index]
+        if not isinstance(message, dict):
+            continue
+        cached_message = _message_with_cache_control(message)
+        if cached_message is not None:
+            messages[index] = cached_message
+            marked += 1
+
+
+def _system_with_cache_control(system: Any) -> list[dict[str, Any]] | None:
+    """Return the system field in block form with ``cache_control`` on its last
+    cacheable block, or ``None`` when there is nothing to cache."""
+
+    if isinstance(system, str):
+        if not system.strip():
+            return None
+        return [_cached_text_block(system)]
+    if isinstance(system, list) and system:
+        return _blocks_with_cache_control(system)
+    return None
+
+
+def _message_with_cache_control(message: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a copy of ``message`` with ``cache_control`` on its last cacheable
+    content block, or ``None`` when the message has nothing to cache."""
+
+    content = message.get("content")
+    if isinstance(content, str):
+        if not content.strip():
+            return None
+        marked = dict(message)
+        marked["content"] = [_cached_text_block(content)]
+        return marked
+    if isinstance(content, list) and content:
+        blocks = _blocks_with_cache_control(content)
+        if blocks is None:
+            return None
+        marked = dict(message)
+        marked["content"] = blocks
+        return marked
+    return None
+
+
+def _blocks_with_cache_control(blocks: list[Any]) -> list[dict[str, Any]] | None:
+    """Copy ``blocks`` and add ``cache_control`` to the last cacheable block.
+
+    Returns ``None`` when no block can carry the marker (every block is a
+    reasoning block, see :data:`CACHE_UNMARKABLE_BLOCK_TYPES`)."""
+
+    copied = [dict(block) if isinstance(block, dict) else block for block in blocks]
+    for index in range(len(copied) - 1, -1, -1):
+        block = copied[index]
+        if isinstance(block, dict) and block.get("type") not in CACHE_UNMARKABLE_BLOCK_TYPES:
+            block["cache_control"] = dict(CACHE_CONTROL_EPHEMERAL)
+            return copied
+    return None
+
+
+def _cached_text_block(text: str) -> dict[str, Any]:
+    return {
+        "type": TEXT_BLOCK_TYPE,
+        "text": text,
+        "cache_control": dict(CACHE_CONTROL_EPHEMERAL),
+    }
 
 
 def _anthropic_floor_budget(max_tokens: int | None) -> int | None:
