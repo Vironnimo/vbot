@@ -140,7 +140,10 @@ class ProviderTaskClient:
                         files=files,
                         headers=self._headers(),
                     )
-                except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                except httpx.TransportError as exc:
+                    # Classify every transport failure (timeout, read/write,
+                    # protocol, proxy, connect) the way the chat adapters do, so
+                    # a flaky read is retried instead of escaping unwrapped.
                     raise wrap_network_error(exc) from exc
                 classify_task_response(response)
                 return parse(response)
