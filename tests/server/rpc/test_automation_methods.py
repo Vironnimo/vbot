@@ -1,4 +1,4 @@
-"""Tests for cron RPC delegates."""
+"""Tests for cron (automation) RPC handlers."""
 
 from __future__ import annotations
 

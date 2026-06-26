@@ -1,4 +1,4 @@
-"""Tests for server RPC dispatcher and delegates."""
+"""Tests for the server RPC dispatcher and method handlers."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Tests for task-model RPC delegates."""
+"""Tests for task-model RPC handlers."""
 
 from __future__ import annotations
 
