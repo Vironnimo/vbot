@@ -1,4 +1,4 @@
-"""Tests for channel RPC delegates and session channel-linking RPCs."""
+"""Tests for channel RPC handlers and session channel-linking RPCs."""
 
 from __future__ import annotations
 
