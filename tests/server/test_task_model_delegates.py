@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from server.delegates import dispatch_rpc
+from server.rpc.methods import dispatch_rpc
 
 
 @pytest.mark.asyncio

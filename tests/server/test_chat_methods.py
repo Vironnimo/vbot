@@ -18,8 +18,8 @@ from typing import Any
 import pytest
 
 from core.runs import Run
-from server.delegates import dispatch_rpc
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_RUN_NOT_FOUND
+from server.rpc.methods import dispatch_rpc
 from tests.server.test_rpc import StubAdapter, make_state
 
 JsonObject = dict[str, Any]

@@ -8,16 +8,16 @@ from typing import Any
 
 import pytest
 
-import server.delegates as delegates
 from core.providers.auth_flow import DeviceFlowSession
 from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderConfig
 from core.providers.token_store import OAuthToken, TokenStore
-from server.delegates import dispatch_rpc
 from server.events import (
     PROVIDER_AUTH_COMPLETED_EVENT,
     RESOURCE_CHANGED_EVENT,
     ServerEventBus,
 )
+from server.rpc import connection_methods
+from server.rpc.methods import dispatch_rpc
 
 
 class StubDeviceFlowEngine:
@@ -314,7 +314,7 @@ async def test_provider_connect_logs_polling_task_crashes(
     def record_warning(message: str, *args: Any, **kwargs: Any) -> None:
         warnings.append(message)
 
-    monkeypatch.setattr(delegates._LOGGER, "warning", record_warning)
+    monkeypatch.setattr(connection_methods._LOGGER, "warning", record_warning)
 
     response = await dispatch_rpc(
         state,
@@ -759,8 +759,8 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
             "fetched_at": "2026-05-12T00:00:00+00:00",
         }
 
-    monkeypatch.setattr("server.delegates.OAuthTokenGetter", StubOAuthTokenGetter)
-    monkeypatch.setattr("server.delegates.refresh_models", fake_refresh_models)
+    monkeypatch.setattr("server.rpc.provider_access.OAuthTokenGetter", StubOAuthTokenGetter)
+    monkeypatch.setattr("server.rpc.connection_methods.refresh_models", fake_refresh_models)
 
     response = await dispatch_rpc(
         state,
@@ -805,7 +805,7 @@ async def test_model_refresh_db_preserves_api_key_credential_path(
             "fetched_at": "2026-05-12T00:00:00+00:00",
         }
 
-    monkeypatch.setattr("server.delegates.refresh_models", fake_refresh_models)
+    monkeypatch.setattr("server.rpc.connection_methods.refresh_models", fake_refresh_models)
 
     response = await dispatch_rpc(
         state,

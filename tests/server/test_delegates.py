@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import server.delegates as delegates
 from core.chat import (
     ChatMessage,
     ChatSessionManager,
@@ -29,8 +28,10 @@ from core.runs import (
     QueuedRunItem,
     Run,
 )
-from server.delegates import RUN_DELTA_EVENT_TYPES, SERVER_EVENT_TYPES, dispatch_rpc
 from server.events import ALLOWED_SERVER_EVENT_TYPES
+from server.rpc import chat_methods, event_bridge
+from server.rpc.event_bridge import RUN_DELTA_EVENT_TYPES, SERVER_EVENT_TYPES
+from server.rpc.methods import dispatch_rpc
 
 
 def test_process_output_deltas_are_sse_only_not_websocket_events() -> None:
@@ -279,7 +280,7 @@ async def test_chat_history_rejects_limit_above_maximum(tmp_path: Path) -> None:
         state,
         {
             "method": "chat.history",
-            "params": {"agent_id": "parent", "limit": delegates.MAX_CHAT_HISTORY_LIMIT + 1},
+            "params": {"agent_id": "parent", "limit": chat_methods.MAX_CHAT_HISTORY_LIMIT + 1},
         },
     )
 
@@ -487,7 +488,7 @@ async def test_chat_send_busy_queue_bridges_started_run_to_event_bus(
     )
     bridged_runs: list[Run] = []
     monkeypatch.setattr(
-        delegates,
+        event_bridge,
         "_bridge_run_to_event_bus",
         lambda _state, run: bridged_runs.append(run),
     )
@@ -532,7 +533,7 @@ async def test_chat_stream_busy_queue_bridges_started_run_to_event_bus(
     )
     bridged_runs: list[Run] = []
     monkeypatch.setattr(
-        delegates,
+        event_bridge,
         "_bridge_run_to_event_bus",
         lambda _state, run: bridged_runs.append(run),
     )
@@ -581,8 +582,8 @@ async def test_run_event_bridge_observes_publish_failures(
     def record_warning(message: str, *args: Any, **kwargs: Any) -> None:
         warnings.append((message, kwargs.get("exc_info") is True))
 
-    monkeypatch.setattr(delegates._LOGGER, "warning", record_warning)
-    delegates._bridge_run_to_event_bus(SimpleNamespace(event_bus=FailingEventBus()), run)
+    monkeypatch.setattr(event_bridge._LOGGER, "warning", record_warning)
+    event_bridge._bridge_run_to_event_bus(SimpleNamespace(event_bus=FailingEventBus()), run)
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
@@ -596,13 +597,13 @@ def test_run_event_bridge_dedupe_cache_is_bounded() -> None:
     )
     cache = state.run_event_bridge_run_ids
 
-    assert delegates._run_was_already_bridged(state, cache, "run-one") is False
-    assert delegates._run_was_already_bridged(state, cache, "run-one") is True
-    assert delegates._run_was_already_bridged(state, cache, "run-two") is False
-    assert delegates._run_was_already_bridged(state, cache, "run-three") is False
+    assert event_bridge._run_was_already_bridged(state, cache, "run-one") is False
+    assert event_bridge._run_was_already_bridged(state, cache, "run-one") is True
+    assert event_bridge._run_was_already_bridged(state, cache, "run-two") is False
+    assert event_bridge._run_was_already_bridged(state, cache, "run-three") is False
 
     assert list(cache) == ["run-two", "run-three"]
-    assert delegates._run_was_already_bridged(state, cache, "run-one") is False
+    assert event_bridge._run_was_already_bridged(state, cache, "run-one") is False
     assert list(cache) == ["run-three", "run-one"]
 
 
@@ -610,7 +611,7 @@ def test_run_event_bridge_dedupe_cache_is_bounded() -> None:
 async def test_chat_queue_list_returns_queued_items(monkeypatch: pytest.MonkeyPatch) -> None:
     queued_item = _make_queued_item(item_id="queue-1", content="Queued message")
     queue_manager = QueueManagerStub(items=[queued_item])
-    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+    monkeypatch.setattr(chat_methods, "_state_chat_runs", lambda _state: queue_manager)
 
     response = await dispatch_rpc(
         SimpleNamespace(),
@@ -637,7 +638,7 @@ async def test_chat_queue_list_hides_internal_items(monkeypatch: pytest.MonkeyPa
     public_item = _make_queued_item(item_id="queue-public", content="Visible")
     internal_item = _make_queued_item(item_id="queue-internal", content="Hidden", internal=True)
     queue_manager = QueueManagerStub(items=[public_item, internal_item])
-    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+    monkeypatch.setattr(chat_methods, "_state_chat_runs", lambda _state: queue_manager)
 
     response = await dispatch_rpc(
         SimpleNamespace(),
@@ -665,7 +666,7 @@ async def test_chat_queue_remove_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         items=[_make_queued_item(item_id="queue-1", content="Queued message")],
         remove_result=True,
     )
-    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+    monkeypatch.setattr(chat_methods, "_state_chat_runs", lambda _state: queue_manager)
 
     response = await dispatch_rpc(
         SimpleNamespace(),
@@ -697,7 +698,7 @@ async def test_chat_queue_remove_returns_error_for_unknown_item(
         items=[_make_queued_item(item_id="queue-1", content="Queued message")],
         remove_result=False,
     )
-    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+    monkeypatch.setattr(chat_methods, "_state_chat_runs", lambda _state: queue_manager)
 
     response = await dispatch_rpc(
         SimpleNamespace(),
@@ -725,7 +726,7 @@ async def test_chat_queue_remove_returns_not_found_for_internal_item(
         items=[_make_queued_item(item_id="queue-internal", content="Hidden", internal=True)],
         remove_result=True,
     )
-    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+    monkeypatch.setattr(chat_methods, "_state_chat_runs", lambda _state: queue_manager)
 
     response = await dispatch_rpc(
         SimpleNamespace(),
@@ -751,7 +752,7 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         items=[_make_queued_item(item_id="queue-1", content="Queued message")],
         update_result=True,
     )
-    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+    monkeypatch.setattr(chat_methods, "_state_chat_runs", lambda _state: queue_manager)
 
     captured: dict[str, Any] = {}
     fake_executor = object()
@@ -768,7 +769,7 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         return session_id, fake_executor, "Updated queued message"
 
     monkeypatch.setattr(
-        delegates,
+        chat_methods,
         "_build_streaming_queue_update",
         fake_build_streaming_queue_update,
     )
@@ -811,7 +812,7 @@ async def test_chat_queue_update_returns_not_found_for_internal_item(
         items=[_make_queued_item(item_id="queue-internal", content="Hidden", internal=True)],
         update_result=True,
     )
-    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+    monkeypatch.setattr(chat_methods, "_state_chat_runs", lambda _state: queue_manager)
 
     build_called = False
 
@@ -820,7 +821,7 @@ async def test_chat_queue_update_returns_not_found_for_internal_item(
         build_called = True
         return "session-1", object(), "should-not-build"
 
-    monkeypatch.setattr(delegates, "_build_streaming_queue_update", fail_if_called)
+    monkeypatch.setattr(chat_methods, "_build_streaming_queue_update", fail_if_called)
 
     response = await dispatch_rpc(
         SimpleNamespace(),
