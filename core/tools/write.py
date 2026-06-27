@@ -16,6 +16,12 @@ from core.tools.tools import (
     tool_success,
 )
 
+# UTF-8 BOM (byte form for detecting an existing file's marker, char form for
+# re-adding it). A full-file write preserves a BOM the file already had so the
+# round-trip with the BOM-stripping read tool does not silently drop it.
+_UTF8_BOM_BYTES = b"\xef\xbb\xbf"
+_UTF8_BOM = chr(0xFEFF)
+
 WRITE_TOOL_NAME = "write"
 WRITE_TOOL_DESCRIPTION = (
     "Write the full contents of a file. Creates the file if it does not "
@@ -44,6 +50,15 @@ def _resolve_write_path(context: ToolContext, path: str) -> Path:
     if candidate.is_absolute():
         return candidate.resolve()
     return (context.effective_cwd / candidate).resolve()
+
+
+def _file_starts_with_bom(path: Path) -> bool:
+    """Return whether an existing file begins with a UTF-8 BOM (reads 3 bytes)."""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(len(_UTF8_BOM_BYTES)) == _UTF8_BOM_BYTES
+    except OSError:
+        return False
 
 
 def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -75,11 +90,17 @@ def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
 
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_bytes(content_argument.encode("utf-8"))
+        # Preserve a BOM the existing file already had, so a full-file rewrite of
+        # content the model read BOM-free does not silently drop the marker.
+        payload = content_argument
+        if _file_starts_with_bom(resolved) and not payload.startswith(_UTF8_BOM):
+            payload = _UTF8_BOM + payload
+        encoded = payload.encode("utf-8")
+        resolved.write_bytes(encoded)
     except OSError as error:
         return tool_failure("file_write_error", f"failed to write file: {resolved}: {error}")
 
-    byte_count = len(content_argument.encode("utf-8"))
+    byte_count = len(encoded)
     message = f"OK: written {byte_count} bytes to {resolved}"
     data: JsonObject = {
         "path": str(resolved),

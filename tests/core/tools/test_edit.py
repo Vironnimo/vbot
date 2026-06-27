@@ -410,6 +410,22 @@ def test_edit_matches_different_indentation_fuzzily(tmp_path: Path) -> None:
     assert data["first_changed_line"] == 2
 
 
+def test_edit_preserves_utf8_bom(tmp_path: Path) -> None:
+    # Editing a BOM-prefixed file must keep the BOM intact on the round-trip.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "module.py"
+    target.write_bytes(b"\xef\xbb\xbfvalue = 1\n")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "module.py", "old_string": "value = 1", "new_string": "value = 2"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"\xef\xbb\xbfvalue = 2\n"
+
+
 def test_edit_returns_failure_envelope_for_filesystem_read_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

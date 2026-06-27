@@ -20,6 +20,12 @@ from core.tools.tools import (
 
 MAX_FILE_BYTES = 50 * 1024
 DEFAULT_LINE_LIMIT = 2000
+# UTF-8 BOM that some Windows editors prepend; stripped on read so the model sees
+# clean content (the write tool preserves it on the round-trip).
+_UTF8_BOM_BYTES = b"\xef\xbb\xbf"
+# A NUL byte within this leading window marks a file as binary (the classic
+# heuristic): text — even non-UTF-8 text shown with replacement chars — has none.
+_BINARY_DETECTION_BYTES = 8192
 
 READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
@@ -29,7 +35,8 @@ READ_TOOL_DESCRIPTION = (
     "is hit first); use offset/limit for large files, and an offset past EOF "
     "returns an explicit end-of-file notice. Image files are shown to the model "
     "directly when it supports vision; audio files are transcribed to text; "
-    "video files return a path note only."
+    "video files return a path note only; binary files return a short notice "
+    "instead of garbled text."
 )
 READ_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -120,6 +127,8 @@ def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> 
     start_line = optional_int(offset, field_name="offset", minimum=1) or 1
     max_lines = optional_int(limit, field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
 
+    if raw.startswith(_UTF8_BOM_BYTES):
+        raw = raw[len(_UTF8_BOM_BYTES) :]
     decoded = raw.decode("utf-8", errors="replace")
     all_lines = decoded.splitlines(keepends=True)
     total_lines = len(all_lines)
@@ -219,6 +228,8 @@ def make_read_handler(attachment_store: Any, speech_service: Any) -> ToolHandler
             return await _read_audio(speech_service, resolved, raw, media_type)
         if media_type.startswith("video/"):
             return _read_video(resolved, media_type)
+        if _looks_binary(raw):
+            return _read_binary_notice(resolved)
         return _read_text(raw, arguments)
 
     return read_handler
@@ -298,6 +309,29 @@ async def _read_audio(
         )
 
     return tool_success({"content": f"[Transcription of {resolved.name} ({media_type})]:\n{text}"})
+
+
+def _looks_binary(raw: bytes) -> bool:
+    """Return whether the leading bytes contain a NUL, marking the file binary.
+
+    Checked only after media routing, so image/audio/video files (which contain
+    NUL bytes) are still handled by their own branches. A NUL is the reliable
+    text/binary signal: text has none, binaries almost always do — including
+    files that decode as valid UTF-8 but are really data.
+    """
+    return b"\x00" in raw[:_BINARY_DETECTION_BYTES]
+
+
+def _read_binary_notice(resolved: Path) -> JsonObject:
+    """Return a short notice for a binary file instead of decoding it to garbage."""
+    return tool_success(
+        {
+            "content": (
+                f"[Binary file: {resolved.name} — Path: {resolved}]. "
+                "It contains non-text (binary) data and is not shown as text."
+            )
+        }
+    )
 
 
 def _read_video(resolved: Path, media_type: str) -> JsonObject:

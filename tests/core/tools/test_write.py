@@ -330,6 +330,45 @@ def test_write_returns_failure_envelope_for_unknown_argument(tmp_path: Path) -> 
     assert "filePath" in error["message"]
 
 
+def test_write_preserves_existing_bom(tmp_path: Path) -> None:
+    # A full-file rewrite of content the model read BOM-free must keep the BOM the
+    # file already had.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "config.txt"
+    target.write_bytes(b"\xef\xbb\xbfold\n")
+
+    result = write_handler(make_context(workspace), {"path": "config.txt", "content": "new\n"})
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"\xef\xbb\xbfnew\n"
+
+
+def test_write_does_not_add_bom_to_new_file(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = write_handler(make_context(workspace), {"path": "fresh.txt", "content": "x\n"})
+
+    assert_success_envelope(result)
+    assert (workspace / "fresh.txt").read_bytes() == b"x\n"
+
+
+def test_write_does_not_double_existing_bom(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "c.txt"
+    target.write_bytes(b"\xef\xbb\xbfold\n")
+
+    # Content already starts with a BOM; do not prepend a second one.
+    result = write_handler(
+        make_context(workspace), {"path": "c.txt", "content": chr(0xFEFF) + "new\n"}
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"\xef\xbb\xbfnew\n"
+
+
 def test_write_returns_failure_envelope_for_filesystem_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
