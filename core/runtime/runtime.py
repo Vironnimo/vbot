@@ -63,6 +63,7 @@ from core.skills.skills import (
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
+    FileReadState,
     register_bash_tool,
     register_edit_tool,
     register_glob_tool,
@@ -276,15 +277,19 @@ class Runtime:
         self._start_process_manager()
         self._tools = ToolRegistry()
         self._memory_service = MemoryService()
+        # One read-before-write guard shared by read/write/edit: read stamps each
+        # file, write/edit refuse an unread or externally-changed file (file_state.py).
+        self._file_state = FileReadState()
         register_read_tool(
             self._tools,
             attachment_store=self._attachment_store,
             speech_service=self._speech,
+            file_state=self._file_state,
         )
-        register_edit_tool(self._tools)
+        register_edit_tool(self._tools, file_state=self._file_state)
         register_glob_tool(self._tools)
         register_grep_tool(self._tools)
-        register_write_tool(self._tools)
+        register_write_tool(self._tools, file_state=self._file_state)
         register_memory_tool(self._tools, self._memory_service)
         register_web_fetch_tool(self._tools)
         register_web_search_tool(

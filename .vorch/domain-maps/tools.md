@@ -40,6 +40,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `tools/read.md` - `read`
 - `tools/edit.md` - `edit`
 - `tools/write.md` - `write`
+- `tools/file_state.md` - shared read-before-write / stale-file guard (`FileReadState`) used by `read`/`write`/`edit`
 - `tools/glob.md` - `glob`
 - `tools/grep.md` - `grep`
 - `tools/web_fetch.md` - `web_fetch`

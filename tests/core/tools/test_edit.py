@@ -10,6 +10,7 @@ from core.tools.edit import (
     edit_handler,
     register_edit_tool,
 )
+from core.tools.file_state import FileReadState
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
 
@@ -79,7 +80,7 @@ def test_edit_resolves_relative_path_against_cwd_not_workspace(tmp_path: Path) -
 def test_register_edit_tool_exposes_provider_schema() -> None:
     registry = ToolRegistry()
 
-    register_edit_tool(registry)
+    register_edit_tool(registry, file_state=FileReadState())
 
     tool = registry.get("edit")
     assert tool.name == EDIT_TOOL_NAME == "edit"
@@ -580,3 +581,83 @@ def test_edit_accepts_string_encoded_replace_all(tmp_path: Path) -> None:
     data = assert_success_envelope(result)
     assert data["replacements"] == 3
     assert target.read_text(encoding="utf-8") == "y y y"
+
+
+def test_edit_guard_blocks_when_file_unread(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha beta\n", encoding="utf-8")
+    file_state = FileReadState()
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
+        file_state=file_state,
+    )
+
+    assert_failure_envelope(result, "file_not_read")
+    assert target.read_text(encoding="utf-8") == "alpha beta\n"
+
+
+def test_edit_guard_allows_after_read(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha beta\n", encoding="utf-8")
+    file_state = FileReadState()
+    file_state.record_read("session-1", target.resolve())
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
+        file_state=file_state,
+    )
+
+    assert_success_envelope(result)
+    assert target.read_text(encoding="utf-8") == "ALPHA beta\n"
+
+
+def test_edit_guard_blocks_when_file_changed_since_read(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha beta\n", encoding="utf-8")
+    file_state = FileReadState()
+    file_state.record_read("session-1", target.resolve())
+
+    # External change after the read (longer content → size drift).
+    target.write_text("alpha beta gamma\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
+        file_state=file_state,
+    )
+
+    assert_failure_envelope(result, "file_modified_since_read")
+    assert target.read_text(encoding="utf-8") == "alpha beta gamma\n"
+
+
+def test_edit_guard_restamps_so_next_edit_needs_no_reread(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha beta\n", encoding="utf-8")
+    file_state = FileReadState()
+    file_state.record_read("session-1", target.resolve())
+
+    first = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
+        file_state=file_state,
+    )
+    second = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "beta", "new_string": "BETA"},
+        file_state=file_state,
+    )
+
+    assert_success_envelope(first)
+    assert_success_envelope(second)
+    assert target.read_text(encoding="utf-8") == "ALPHA BETA\n"
