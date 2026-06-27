@@ -92,6 +92,32 @@ async def test_spawn_captures_stdout_and_stderr(manager: ProcessManager) -> None
 
 
 @pytest.mark.asyncio
+async def test_output_is_stripped_of_ansi_escape_sequences(manager: ProcessManager) -> None:
+    # A model must never see raw escape codes — it copies them into file writes.
+    # The colored/title markers are removed while the visible text survives, in
+    # both the streamed poll output and the full log buffer.
+    script = (
+        "import sys; esc = chr(27); bel = chr(7); "
+        "sys.stdout.write(f'{esc}[31mred{esc}[0m and {esc}]0;title{bel}done\\n')"
+    )
+    session_id = await manager.spawn(
+        SCOPE_A, AGENT_A, [sys.executable, "-c", script], env=None, cwd=None
+    )
+
+    result = await poll_until_terminal(manager, session_id)
+    log_result = await manager.log(session_id, AGENT_A)
+
+    streamed = as_text(result["output"])
+    logged = as_text(log_result["output"])
+    assert "red and done" in streamed
+    assert "red and done" in logged
+    for surfaced in (streamed, logged):
+        assert "\x1b" not in surfaced
+        assert "[31m" not in surfaced
+        assert "title" not in surfaced  # the OSC title payload is stripped too
+
+
+@pytest.mark.asyncio
 async def test_buffer_cap_drops_oldest_bytes_and_marks_truncated(tmp_path) -> None:
     manager = ProcessManager(buffer_cap_bytes=32, sweep_interval_seconds=3600)
     try:

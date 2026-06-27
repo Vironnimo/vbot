@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from core.utils.ansi import strip_ansi
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -665,7 +666,11 @@ def _chunks_between(
 
 
 def _decode(data: bytes) -> str:
-    return data.decode("utf-8", errors="replace")
+    # Single decode chokepoint for all process output reaching the model and UI.
+    # Raw bytes stay in the buffer for byte-accurate offset accounting; ANSI
+    # control sequences are stripped only from the surfaced text, so a model
+    # cannot copy escape codes into file writes and the output stays clean.
+    return strip_ansi(data.decode("utf-8", errors="replace"))
 
 
 def _is_waiting_for_input(session: ProcessSession) -> bool:
