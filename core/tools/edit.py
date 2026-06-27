@@ -10,12 +10,14 @@ from core.tools.arguments import (
     looks_like_line_numbered_content,
     normalize_aliases,
 )
+from core.tools.file_state import FileReadState, stale_failure_text
 from core.tools.fuzzy_match import AmbiguousFuzzyMatch, replace_fuzzy
 from core.tools.syntax_check import warning_for_edited_file
 from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolHandler,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -26,7 +28,8 @@ EDIT_TOOL_DESCRIPTION = (
     "Edit a file by replacing text. old_string is matched against the file, "
     "tolerating minor differences in whitespace/indentation, line endings, and "
     "quote style; it must still identify a unique location unless replace_all is "
-    "true. Use this for precise, surgical edits."
+    "true. Use this for precise, surgical edits. You must read the file first; "
+    "this tool fails if you did not, or if it changed on disk since you last read it."
 )
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -164,8 +167,16 @@ def _build_success_data(
     return data
 
 
-def edit_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    """Handle an edit tool call and return a stable vBot result envelope."""
+def edit_handler(
+    context: ToolContext, arguments: JsonObject, *, file_state: FileReadState | None = None
+) -> JsonObject:
+    """Handle an edit tool call and return a stable vBot result envelope.
+
+    When ``file_state`` is supplied the read-before-write guard is active: the
+    edit is refused unless the file was read in this session and has not changed
+    on disk since. A successful edit restamps the file so the same session can
+    edit again without re-reading.
+    """
     validated_arguments = _validate_edit_arguments(arguments)
     if isinstance(validated_arguments, dict):
         return validated_arguments
@@ -182,6 +193,10 @@ def edit_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
             return tool_failure("file_not_found", f"file not found: {resolved}")
         if not resolved.is_file():
             return tool_failure("not_a_file", f"path is not a file: {resolved}")
+        if file_state is not None:
+            reason = file_state.check_stale(context.session_id, resolved)
+            if reason is not None:
+                return tool_failure(*stale_failure_text(reason, resolved))
         content = resolved.read_bytes().decode("utf-8", errors="replace")
     except OSError as error:
         return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
@@ -205,6 +220,11 @@ def edit_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     except OSError as error:
         return tool_failure("file_write_error", f"failed to write file: {resolved}: {error}")
 
+    # The edit is an implicit read of the new content: restamp so the same session
+    # can edit again without re-reading, and so the next stale check is accurate.
+    if file_state is not None:
+        file_state.record_read(context.session_id, resolved)
+
     # Non-blocking: the edit is already written. The warning reports only a syntax
     # break this edit introduced, never a pre-existing one (see syntax_check).
     syntax_warning = warning_for_edited_file(resolved, content, result.new_content)
@@ -215,13 +235,22 @@ def edit_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     )
 
 
-def register_edit_tool(registry: ToolRegistry) -> None:
+def make_edit_handler(file_state: FileReadState) -> ToolHandler:
+    """Create an edit handler bound to the read-before-write guard registry."""
+
+    def edit_handler_bound(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return edit_handler(context, arguments, file_state=file_state)
+
+    return edit_handler_bound
+
+
+def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> None:
     """Register the edit tool with a vBot tool registry."""
     registry.register(
         EDIT_TOOL_NAME,
         EDIT_TOOL_DESCRIPTION,
         EDIT_TOOL_PARAMETERS,
-        edit_handler,
+        make_edit_handler(file_state),
         display=ToolDisplay(
             summary_fields=("path",),
             hidden_argument_keys=("newString", "new_string", "oldString", "old_string"),
@@ -234,5 +263,6 @@ __all__ = [
     "EDIT_TOOL_NAME",
     "EDIT_TOOL_PARAMETERS",
     "edit_handler",
+    "make_edit_handler",
     "register_edit_tool",
 ]

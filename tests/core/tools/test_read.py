@@ -16,6 +16,7 @@ from core.model_tasks import SpeechError, SpeechTranscriptionResult
 from core.tools import (
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
+    FileReadState,
     ToolContext,
     ToolRegistry,
     is_tool_result_envelope,
@@ -85,8 +86,14 @@ def make_context(
 _ReadHandler = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
-def make_handler(store: Any = None, speech: Any = None) -> _ReadHandler:
-    handler = make_read_handler(store or _FakeAttachmentStore(), speech or _FakeSpeech())
+def make_handler(
+    store: Any = None, speech: Any = None, file_state: FileReadState | None = None
+) -> _ReadHandler:
+    handler = make_read_handler(
+        store or _FakeAttachmentStore(),
+        speech or _FakeSpeech(),
+        file_state or FileReadState(),
+    )
     return cast(_ReadHandler, handler)
 
 
@@ -118,7 +125,10 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     registry = ToolRegistry()
 
     register_read_tool(
-        registry, attachment_store=_FakeAttachmentStore(), speech_service=_FakeSpeech()
+        registry,
+        attachment_store=_FakeAttachmentStore(),
+        speech_service=_FakeSpeech(),
+        file_state=FileReadState(),
     )
 
     tool = registry.get("read")
@@ -636,3 +646,19 @@ async def test_read_malformed_docx_falls_back_to_binary_notice(tmp_path: Path) -
     content = data["content"]
     assert isinstance(content, str)
     assert "[Binary file: broken.docx" in content
+
+
+@pytest.mark.asyncio
+async def test_read_records_stamp_so_write_edit_guard_passes(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"content\n")
+    file_state = FileReadState()
+
+    await make_handler(file_state=file_state)(make_context(workspace), {"path": "notes.txt"})
+
+    # The read stamped the file for this session, so the guard no longer flags it.
+    assert file_state.check_stale("session-1", target.resolve()) is None
+    # Sanity: a registry that never saw the read would block the write.
+    assert FileReadState().check_stale("session-1", target.resolve()) is not None

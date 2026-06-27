@@ -5,7 +5,7 @@ Reads a file from the Agent workspace or an absolute path. Text files return the
 ## Interfaces
 
 - Tool name: `read`
-- Registration: `register_read_tool(registry, *, attachment_store, speech_service)`. The handler is built by `make_read_handler(attachment_store, speech_service)` (factory pattern, mirrors `image_generation`) and is **async** — the runtime executor already awaits async tool handlers.
+- Registration: `register_read_tool(registry, *, attachment_store, speech_service, file_state)`. The handler is built by `make_read_handler(attachment_store, speech_service, file_state)` (factory pattern, mirrors `image_generation`) and is **async** — the runtime executor already awaits async tool handlers.
 - Schema: required `path`; optional positive 1-indexed `offset` and `limit` line controls; `additionalProperties: false`.
 - Success: `{ ok: true, data: { content }, error: null, artifacts: [...] }`. `data` is always `{ content }`; `artifacts` is empty except for the image branch.
 - Display: summary field `path`.
@@ -16,6 +16,7 @@ Reads a file from the Agent workspace or an absolute path. Text files return the
 - `read` is the authoritative read-like tool and must not include a provider/tool parameter named `description`.
 - Successful results do not include `data.path`; the agent already knows the requested path from arguments.
 - After the path is confirmed to be a file, the bytes are read once and classified with `sniff_media_type` (see `attachments.md`). The branch is chosen by the sniffed media type, not the file extension — **except** the Office/notebook extraction branch, which is chosen by extension (see below).
+- **Read-before-write stamp:** immediately *before* reading the bytes, the handler calls `file_state.record_read(session_id, resolved)` so the `write`/`edit` guard knows this session has seen the file (see `file_state.md`). Stamping before the byte read is deliberate — if an external write lands in the tiny window after, the stamp stays older than the new content and the next write/edit errs toward a harmless re-read rather than missing the change. Any successful read of an existing file stamps it (text, media, extracted, or binary notice); a partial read (offset/limit or truncation) counts as a full read.
 
 ## Behavior by media type
 

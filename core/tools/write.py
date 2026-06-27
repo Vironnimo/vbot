@@ -6,11 +6,13 @@ import asyncio
 from pathlib import Path
 
 from core.tools.arguments import looks_like_line_numbered_content
+from core.tools.file_state import FileReadState, stale_failure_text
 from core.tools.syntax_check import warning_for_written_file
 from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolHandler,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -26,7 +28,9 @@ WRITE_TOOL_NAME = "write"
 WRITE_TOOL_DESCRIPTION = (
     "Write the full contents of a file. Creates the file if it does not "
     "exist, and replaces the entire file if it does. Not for partial "
-    "edits or appending. Automatically creates parent directories."
+    "edits or appending. Automatically creates parent directories. If the "
+    "file already exists you must read it first; this tool fails if you did "
+    "not, or if it changed on disk since you last read it."
 )
 WRITE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -61,8 +65,17 @@ def _file_starts_with_bom(path: Path) -> bool:
         return False
 
 
-def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    """Handle a write tool call and return a stable vBot result envelope."""
+def write_handler(
+    context: ToolContext, arguments: JsonObject, *, file_state: FileReadState | None = None
+) -> JsonObject:
+    """Handle a write tool call and return a stable vBot result envelope.
+
+    When ``file_state`` is supplied the read-before-write guard is active: an
+    overwrite of an existing file is refused unless that file was read in this
+    session and has not changed on disk since. A non-existent target (a new file)
+    is always allowed. A successful write restamps the file so the same session
+    can write again without re-reading.
+    """
     unknown_arguments = set(arguments) - {"path", "content"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -88,6 +101,12 @@ def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     except RuntimeError as error:
         return tool_failure("invalid_path", str(error))
 
+    # A new file is never stale; the guard only gates overwriting an existing one.
+    if file_state is not None and resolved.exists():
+        reason = file_state.check_stale(context.session_id, resolved)
+        if reason is not None:
+            return tool_failure(*stale_failure_text(reason, resolved))
+
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         # Preserve a BOM the existing file already had, so a full-file rewrite of
@@ -99,6 +118,11 @@ def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         resolved.write_bytes(encoded)
     except OSError as error:
         return tool_failure("file_write_error", f"failed to write file: {resolved}: {error}")
+
+    # The write is an implicit read: restamp so the same session can write again
+    # without re-reading, and so the next stale check compares against this write.
+    if file_state is not None:
+        file_state.record_read(context.session_id, resolved)
 
     byte_count = len(encoded)
     message = f"OK: written {byte_count} bytes to {resolved}"
@@ -115,17 +139,22 @@ def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     return tool_success(data)
 
 
-async def _write_handler_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    return await asyncio.to_thread(write_handler, context, arguments)
+def make_write_handler(file_state: FileReadState) -> ToolHandler:
+    """Create a write handler bound to the read-before-write guard registry."""
+
+    async def write_handler_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return await asyncio.to_thread(write_handler, context, arguments, file_state=file_state)
+
+    return write_handler_async
 
 
-def register_write_tool(registry: ToolRegistry) -> None:
+def register_write_tool(registry: ToolRegistry, *, file_state: FileReadState) -> None:
     """Register the write tool with a vBot tool registry."""
     registry.register(
         WRITE_TOOL_NAME,
         WRITE_TOOL_DESCRIPTION,
         WRITE_TOOL_PARAMETERS,
-        _write_handler_async,
+        make_write_handler(file_state),
         display=ToolDisplay(summary_fields=("path",), hidden_argument_keys=("content",)),
     )
 
@@ -134,6 +163,7 @@ __all__ = [
     "WRITE_TOOL_DESCRIPTION",
     "WRITE_TOOL_NAME",
     "WRITE_TOOL_PARAMETERS",
+    "make_write_handler",
     "register_write_tool",
     "write_handler",
 ]
