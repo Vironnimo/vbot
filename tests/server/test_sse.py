@@ -96,7 +96,7 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
     }
     assert tool_result_data["payload"]["result"]["ok"] is True
     assert tool_result_data["payload"]["result"]["error"] is None
-    assert tool_result_data["payload"]["result"]["data"]["content"] == "SSE visible content"
+    assert tool_result_data["payload"]["result"]["data"]["content"] == "1|SSE visible content"
     assert tool_result_data["payload"]["result"]["artifacts"] == []
     assert "tool_call_failed" not in [event["event"] for event in events]
     assert "batch" not in response.text
