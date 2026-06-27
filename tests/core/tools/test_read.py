@@ -146,7 +146,7 @@ async def test_read_reads_relative_workspace_path(tmp_path: Path) -> None:
     result = await make_handler()(make_context(workspace), {"path": "notes.txt"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "hello\nworkspace\n"
+    assert data["content"] == "1|hello\n2|workspace\n"
 
 
 @pytest.mark.asyncio
@@ -163,7 +163,7 @@ async def test_read_resolves_relative_path_against_cwd_not_workspace(tmp_path: P
     result = await make_handler()(make_context(workspace, cwd=repo), {"path": "notes.txt"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "repo copy\n"
+    assert data["content"] == "1|repo copy\n"
 
 
 @pytest.mark.asyncio
@@ -176,7 +176,7 @@ async def test_read_reads_absolute_path(tmp_path: Path) -> None:
     result = await make_handler()(make_context(workspace), {"path": str(target)})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "absolute\npath\n"
+    assert data["content"] == "1|absolute\n2|path\n"
 
 
 @pytest.mark.asyncio
@@ -189,7 +189,7 @@ async def test_read_text_file_does_not_create_attachment(tmp_path: Path) -> None
     result = await make_handler(store=store)(make_context(workspace), {"path": "notes.txt"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "plain text\n"
+    assert data["content"] == "1|plain text\n"
     assert store.stored == []
 
 
@@ -275,7 +275,48 @@ async def test_read_applies_line_offset_and_limit(tmp_path: Path) -> None:
     )
 
     data = assert_success_envelope(result)
-    assert data["content"] == "two\nthree\n[Showing lines 2-3 of 4. Use offset=4 to continue.]"
+    assert data["content"] == "2|two\n3|three\n[Showing lines 2-3 of 4. Use offset=4 to continue.]"
+
+
+@pytest.mark.asyncio
+async def test_read_numbers_lines_compactly_including_blanks_and_multi_digit(
+    tmp_path: Path,
+) -> None:
+    # The gutter is unpadded ``N|``, numbers every line (blanks included), and
+    # rolls cleanly from single- to multi-digit.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    body = "".join(f"line{i}\n" for i in range(1, 12))  # 11 lines, no trailing blank
+    # write_bytes (not write_text) so LF survives on Windows for exact assertions.
+    workspace.joinpath("code.txt").write_bytes(f"start\n\n{body}".encode())
+
+    result = await make_handler()(make_context(workspace), {"path": "code.txt"})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    lines = content.split("\n")
+    assert lines[0] == "1|start"
+    assert lines[1] == "2|"  # a blank source line keeps its number, no padding
+    assert lines[2] == "3|line1"
+    assert "13|line11" in lines  # single- to multi-digit transition is seamless
+
+
+@pytest.mark.asyncio
+async def test_read_line_gutter_uses_file_absolute_numbers_with_offset(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_bytes(b"a\nb\nc\nd\ne\n")
+
+    result = await make_handler()(
+        make_context(workspace), {"path": "notes.txt", "offset": 3, "limit": 2}
+    )
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    # Numbering reflects the true file position, not the page position.
+    assert content.startswith("3|c\n4|d\n")
 
 
 @pytest.mark.asyncio
@@ -401,7 +442,7 @@ async def test_read_invalid_utf8_uses_replacement_character(tmp_path: Path) -> N
     result = await make_handler()(make_context(workspace), {"path": "invalid.txt"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "valid�text"
+    assert data["content"] == "1|valid�text"
 
 
 @pytest.mark.asyncio

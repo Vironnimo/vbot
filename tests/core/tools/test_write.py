@@ -229,6 +229,35 @@ def test_write_preserves_exact_supplied_content_at_byte_level(tmp_path: Path) ->
     assert data["bytes"] == len(content.encode("utf-8"))
 
 
+def test_write_rejects_pasted_line_number_gutter(tmp_path: Path) -> None:
+    # A model that pastes read's ``N|`` gutter back must be stopped before it
+    # corrupts the file with line-number prefixes.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "config.py", "content": "1|import os\n2|import sys\n3|\n"},
+    )
+
+    error = assert_failure_envelope(result, "line_numbered_content")
+    assert "line-number" in error["message"]
+    assert not (workspace / "config.py").exists()
+
+
+def test_write_allows_non_consecutive_pipe_lines(tmp_path: Path) -> None:
+    # Numbered-looking lines that do not run consecutively are real content,
+    # not the gutter — the guard must let them through.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    content = "1|alpha\n5|beta\n"
+
+    result = write_handler(make_context(workspace), {"path": "data.txt", "content": content})
+
+    assert_success_envelope(result)
+    assert (workspace / "data.txt").read_text(encoding="utf-8") == content
+
+
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [

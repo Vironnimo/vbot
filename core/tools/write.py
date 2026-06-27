@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from core.tools.arguments import looks_like_line_numbered_content
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -58,6 +59,13 @@ def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     content_argument = arguments.get("content")
     if not isinstance(content_argument, str):
         return tool_failure("invalid_arguments", "content must be a string")
+
+    if looks_like_line_numbered_content(content_argument):
+        return tool_failure(
+            "line_numbered_content",
+            "content looks like read's `N|` line-number gutter pasted back in. "
+            "Write the raw file text without the leading line numbers.",
+        )
 
     try:
         resolved = _resolve_write_path(context, path_argument)
