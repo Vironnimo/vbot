@@ -27,6 +27,18 @@ from core.tools.tools import JsonObject
 _TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
 _FALSE_STRINGS = frozenset({"false", "0", "no", "off"})
 
+# The read tool prefixes every line with a compact ``N|`` reference gutter. This
+# separator is the single source of truth shared by the read builder and the
+# detector below, so the two never drift apart.
+LINE_NUMBER_GUTTER_SEPARATOR = "|"
+# A block is treated as the gutter (not ordinary content that merely contains a
+# pipe) only when at least this share of its non-blank lines carry a consecutive
+# ``N|`` prefix.
+_LINE_NUMBER_GUTTER_DOMINANCE = 0.6
+# Two consecutive numbered lines is the minimum signal: a lone ``1|value`` line
+# or a sparse pipe table must still pass through.
+_LINE_NUMBER_GUTTER_MIN_LINES = 2
+
 
 class ToolArgumentError(ValueError):
     """An invalid tool argument supplied by the model.
@@ -212,6 +224,43 @@ def normalize_aliases(arguments: JsonObject, aliases: dict[str, str]) -> JsonObj
     return normalized
 
 
+def looks_like_line_numbered_content(text: str) -> bool:
+    """Return whether ``text`` is dominated by the read tool's ``N|`` gutter.
+
+    The read tool prefixes each line with its number as ``N|`` for reference. If
+    a model echoes that display format back into a write or edit, the file is
+    silently corrupted with ``N|`` prefixes. This detects that case so the write
+    path can reject it, while still letting sparse literal-pipe content through (a
+    lone ``1|value`` line, a Markdown table). The signal is deliberately strict:
+    at least two lines, a majority of non-blank lines prefixed by digits and the
+    separator, and those numbers running consecutively (as a pasted read page is).
+    """
+    if not isinstance(text, str):
+        return False
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) < _LINE_NUMBER_GUTTER_MIN_LINES:
+        return False
+
+    numbers: list[int] = []
+    for line in lines:
+        prefix, separator, _rest = line.lstrip().partition(LINE_NUMBER_GUTTER_SEPARATOR)
+        if separator and prefix.isdigit():
+            numbers.append(int(prefix))
+
+    if len(numbers) < _LINE_NUMBER_GUTTER_MIN_LINES:
+        return False
+    if len(numbers) / len(lines) < _LINE_NUMBER_GUTTER_DOMINANCE:
+        return False
+
+    consecutive = sum(
+        1
+        for previous, current in zip(numbers, numbers[1:], strict=False)
+        if current == previous + 1
+    )
+    return consecutive >= len(numbers) - 1
+
+
 def _to_int(value: object, field_name: str) -> int:
     if isinstance(value, bool):
         raise ToolArgumentError(f"{field_name} must be an integer")
@@ -277,8 +326,10 @@ def _check_float_minimum(
 
 
 __all__ = [
+    "LINE_NUMBER_GUTTER_SEPARATOR",
     "ToolArgumentError",
     "coerce_bool",
+    "looks_like_line_numbered_content",
     "normalize_aliases",
     "optional_int",
     "optional_number",

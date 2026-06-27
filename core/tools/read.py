@@ -7,7 +7,7 @@ from typing import Any
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
-from core.tools.arguments import optional_int
+from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, optional_int
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -23,11 +23,13 @@ DEFAULT_LINE_LIMIT = 2000
 
 READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
-    "Read a file. Text files return their contents, truncated to 2000 lines or "
-    "50 KB (whichever is hit first); use offset/limit for large files, and an "
-    "offset past EOF returns an explicit end-of-file notice. Image files are "
-    "shown to the model directly when it supports vision; audio files are "
-    "transcribed to text; video files return a path note only."
+    "Read a file. Text files return their contents with every line prefixed by "
+    "its number as `N|` — a reference gutter only; never reproduce it when "
+    "writing or editing. Output is truncated to 2000 lines or 50 KB (whichever "
+    "is hit first); use offset/limit for large files, and an offset past EOF "
+    "returns an explicit end-of-file notice. Image files are shown to the model "
+    "directly when it supports vision; audio files are transcribed to text; "
+    "video files return a path note only."
 )
 READ_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -92,6 +94,20 @@ def _build_read_hint(
     return message + "]"
 
 
+def _add_line_numbers(lines: list[str], start_line: int) -> list[str]:
+    """Prefix each line with a compact ``N|`` reference gutter.
+
+    The gutter is deliberately unpadded: padding to a fixed width is pure token
+    overhead on dense source, while dropping the numbers entirely makes the model
+    hand-count lines and miss by one. Each input line keeps its trailing newline
+    (``keepends``); the number goes in front, file-absolute from ``start_line``.
+    """
+    return [
+        f"{start_line + index}{LINE_NUMBER_GUTTER_SEPARATOR}{line}"
+        for index, line in enumerate(lines)
+    ]
+
+
 def _resolve_read_path(context: ToolContext, path: str) -> Path:
     candidate = Path(path).expanduser()
     if candidate.is_absolute():
@@ -120,16 +136,19 @@ def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> 
     selected_lines = all_lines[start_index : start_index + max_lines]
     line_limited = start_index + len(selected_lines) < total_lines
 
-    output = "".join(selected_lines)
+    # Number before any byte fitting so the gutter counts against the 50 KB
+    # budget and the model can cite/patch lines without hand-counting.
+    numbered_lines = _add_line_numbers(selected_lines, start_line)
+    output = "".join(numbered_lines)
     output_bytes = output.encode("utf-8")
     byte_limited = len(output_bytes) > MAX_FILE_BYTES
 
     if not (line_limited or byte_limited):
         return output
 
-    shown_line_count = len(selected_lines)
+    shown_line_count = len(numbered_lines)
     if byte_limited:
-        provisional_count = max(1, min(len(selected_lines), shown_line_count))
+        provisional_count = max(1, min(len(numbered_lines), shown_line_count))
         while True:
             provisional_end = min(total_lines, start_line + provisional_count - 1)
             hint = _build_read_hint(
@@ -140,7 +159,7 @@ def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> 
             )
             reserved_bytes = len(hint.encode("utf-8")) + 2
             available_bytes = max(MAX_FILE_BYTES - reserved_bytes, 0)
-            output, fitted_count = _fit_lines_within_byte_limit(selected_lines, available_bytes)
+            output, fitted_count = _fit_lines_within_byte_limit(numbered_lines, available_bytes)
             if fitted_count == provisional_count:
                 shown_line_count = fitted_count
                 break

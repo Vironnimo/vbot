@@ -7,6 +7,7 @@ import pytest
 from core.tools.arguments import (
     ToolArgumentError,
     coerce_bool,
+    looks_like_line_numbered_content,
     normalize_aliases,
     optional_int,
     optional_number,
@@ -161,3 +162,33 @@ class TestNormalizeAliases:
     def test_returns_same_object_when_no_alias_present(self) -> None:
         arguments = {"old_string": "x"}
         assert normalize_aliases(arguments, {"oldString": "old_string"}) is arguments
+
+
+class TestLooksLikeLineNumberedContent:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "1|import os\n2|import sys\n3|\n",  # consecutive, blank gutter line included
+            "  10|alpha\n  11|beta\n  12|gamma",  # indented gutter, multi-digit
+            "5|a\n6|b",  # the minimum: two consecutive numbered lines
+        ],
+    )
+    def test_detects_pasted_gutter(self, text: str) -> None:
+        assert looks_like_line_numbered_content(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "plain single line",
+            "1|only one numbered line\nplain\nplain",  # not dominant (1 of 3)
+            "1|alpha\n5|beta",  # numbered but not consecutive
+            "| name | id |\n| ---- | -- |\n| a | 1 |",  # Markdown table, no digit prefix
+            "x = a|b\ny = c|d",  # literal pipes, no digit prefix
+        ],
+    )
+    def test_passes_ordinary_content(self, text: str) -> None:
+        assert looks_like_line_numbered_content(text) is False
+
+    def test_non_string_is_false(self) -> None:
+        assert looks_like_line_numbered_content(None) is False  # type: ignore[arg-type]
