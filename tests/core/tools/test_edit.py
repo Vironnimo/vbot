@@ -374,6 +374,42 @@ def test_edit_preserves_crlf_for_exact_match_replacement_at_byte_level(tmp_path:
     assert data["replacements"] == 1
 
 
+def test_edit_matches_smart_quotes_fuzzily(tmp_path: Path) -> None:
+    # The file has straight quotes; the model sent curly ones. Fuzzy matching
+    # should still find and replace the target.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "config.py"
+    target.write_text('name = "value"\n', encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "config.py", "old_string": "name = “value”", "new_string": 'name = "other"'},
+    )
+
+    data = assert_success_envelope(result)
+    assert target.read_text(encoding="utf-8") == 'name = "other"\n'
+    assert data["replacements"] == 1
+
+
+def test_edit_matches_different_indentation_fuzzily(tmp_path: Path) -> None:
+    # The file uses 4-space indentation; the model sent 2-space. The match should
+    # succeed and the replacement be re-indented to the file's actual style.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "module.py"
+    target.write_text("def f():\n    return 1\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "module.py", "old_string": "  return 1", "new_string": "  return 42"},
+    )
+
+    data = assert_success_envelope(result)
+    assert target.read_text(encoding="utf-8") == "def f():\n    return 42\n"
+    assert data["first_changed_line"] == 2
+
+
 def test_edit_returns_failure_envelope_for_filesystem_read_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
