@@ -17,8 +17,15 @@ from core.tools.tools import (
 )
 
 MEMORY_TOOL_DESCRIPTION = (
-    "List or edit pinned memory entries in USER.md and MEMORY.md. Use 'user' scope for "
-    "durable user facts and 'agent' scope for stable agent/workflow notes."
+    "List or edit pinned memory in USER.md ('user' scope: who the user is — preferences, "
+    "role, style) and MEMORY.md ('agent' scope: your own environment, conventions, and "
+    "tool quirks). Entries are injected into every future turn, so keep them compact.\n\n"
+    "WHEN: save proactively when the user states a preference, correction, or personal "
+    "detail, or you learn a stable fact about their environment or workflow. The best "
+    "memory stops the user from having to repeat themselves.\n\n"
+    "SKIP: trivial or easily re-discovered facts, raw data, task progress, completed-work "
+    "logs, and anything stale within a week (PR numbers, commit hashes, 'phase N done').\n\n"
+    "For replace/remove, call action='list' first — 1-based ids shift after a remove."
 )
 MEMORY_ACTIONS = ("list", "add", "replace", "remove")
 MEMORY_SCOPES = ("user", "agent")
