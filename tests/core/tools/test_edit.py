@@ -239,6 +239,60 @@ def test_edit_hints_gutter_when_old_string_is_line_numbered(tmp_path: Path) -> N
     assert "line-number" in error["message"]
 
 
+def test_edit_warns_when_edit_breaks_syntax_without_blocking(tmp_path: Path) -> None:
+    # The edit is still applied (warn, don't block); the result carries a
+    # non-fatal syntax warning attributing the break to this edit.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "module.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "module.py", "old_string": "value = 1", "new_string": "value = (1"},
+    )
+
+    assert is_tool_result_envelope(result) is True
+    assert result["ok"] is True
+    assert target.read_text(encoding="utf-8") == "value = (1\n"
+    data = result["data"]
+    assert isinstance(data, dict)
+    assert data["syntax_warning"].startswith("Syntax check failed after this edit:")
+
+
+def test_edit_does_not_blame_preexisting_syntax_error(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "module.py"
+    target.write_text("def f(:\n    return 1\n", encoding="utf-8")  # already broken
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "module.py", "old_string": "return 1", "new_string": "return 2"},
+    )
+
+    assert result["ok"] is True
+    data = result["data"]
+    assert isinstance(data, dict)
+    assert "already syntactically invalid before this edit" in data["syntax_warning"]
+
+
+def test_edit_no_syntax_warning_when_result_is_valid(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "module.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "module.py", "old_string": "value = 1", "new_string": "value = 2"},
+    )
+
+    data = assert_success_envelope(result)
+    assert "syntax_warning" not in data
+    assert target.read_text(encoding="utf-8") == "value = 2\n"
+
+
 def test_edit_returns_ambiguous_match_without_replace_all(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

@@ -10,6 +10,7 @@ from core.tools.arguments import (
     looks_like_line_numbered_content,
     normalize_aliases,
 )
+from core.tools.syntax_check import warning_for_edited_file
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -183,17 +184,21 @@ def _build_success_data(
     resolved: Path,
     first_line_number: int,
     replaced_count: int,
+    syntax_warning: str | None,
 ) -> JsonObject:
     message = (
         f"OK: updated {resolved} (first changed line: {first_line_number}, "
         f"replacements: {replaced_count})"
     )
-    return {
+    data: JsonObject = {
         "message": message,
         "path": str(resolved),
         "first_changed_line": first_line_number,
         "replacements": replaced_count,
     }
+    if syntax_warning is not None:
+        data["syntax_warning"] = syntax_warning
+    return data
 
 
 def _replace_exact_matches(
@@ -317,7 +322,12 @@ def edit_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     except OSError as error:
         return tool_failure("file_write_error", f"failed to write file: {resolved}: {error}")
 
-    return tool_success(_build_success_data(resolved, first_line_number, replaced_count))
+    # Non-blocking: the edit is already written. The warning reports only a syntax
+    # break this edit introduced, never a pre-existing one (see syntax_check).
+    syntax_warning = warning_for_edited_file(resolved, content, updated_content)
+    return tool_success(
+        _build_success_data(resolved, first_line_number, replaced_count, syntax_warning)
+    )
 
 
 def register_edit_tool(registry: ToolRegistry) -> None:

@@ -258,6 +258,39 @@ def test_write_allows_non_consecutive_pipe_lines(tmp_path: Path) -> None:
     assert (workspace / "data.txt").read_text(encoding="utf-8") == content
 
 
+def test_write_warns_on_broken_syntax_without_blocking(tmp_path: Path) -> None:
+    # The file is still written (warn, don't block); the result carries a
+    # non-fatal syntax warning so the model can fix it next turn.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "config.json", "content": '{"a": 1,}'},
+    )
+
+    assert is_tool_result_envelope(result) is True
+    assert result["ok"] is True
+    target = workspace / "config.json"
+    assert target.read_text(encoding="utf-8") == '{"a": 1,}'
+    data = result["data"]
+    assert isinstance(data, dict)
+    assert "JSONDecodeError" in data["syntax_warning"]
+
+
+def test_write_no_syntax_warning_for_valid_file(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "config.json", "content": '{"a": 1}'},
+    )
+
+    data = assert_success_envelope(result)
+    assert "syntax_warning" not in data
+
+
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
