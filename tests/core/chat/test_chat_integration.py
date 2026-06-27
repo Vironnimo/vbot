@@ -18,6 +18,7 @@ from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningRep
 from core.runtime import Runtime
 from core.skills.skills import SkillRegistry
 from core.tools import tool_success
+from core.tools.memory import MEMORY_TOOL_DESCRIPTION
 from core.utils.config import Config
 
 JsonObject = dict[str, Any]
@@ -599,11 +600,7 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
             },
             {
                 "name": "memory",
-                "description": (
-                    "List or edit pinned memory entries in USER.md and MEMORY.md. Use "
-                    "'user' scope for durable user facts and 'agent' scope for stable "
-                    "agent/workflow notes."
-                ),
+                "description": MEMORY_TOOL_DESCRIPTION,
                 "parameters": {
                     "type": "object",
                     "properties": {
