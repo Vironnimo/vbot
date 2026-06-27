@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+from zipfile import ZipFile
 
 import pytest
 
@@ -581,3 +583,56 @@ async def test_read_video_returns_path_note_without_attachment(tmp_path: Path) -
     assert "[Video: clip.mp4 (video/mp4)" in content
     assert "cannot view video" in content
     assert store.stored == []
+
+
+@pytest.mark.asyncio
+async def test_read_extracts_docx_as_text_without_gutter(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    document_xml = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>Report body</w:t></w:r></w:p></w:body></w:document>"
+    )
+    with ZipFile(workspace / "report.docx", "w") as archive:
+        archive.writestr("word/document.xml", document_xml)
+
+    result = await make_handler()(make_context(workspace), {"path": "report.docx"})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert content == "[Extracted text from report.docx (Word document)]:\nReport body"
+    # A rendering, not editable source: no `N|` gutter.
+    assert "1|" not in content
+
+
+@pytest.mark.asyncio
+async def test_read_extracts_ipynb_instead_of_dumping_raw_json(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    notebook = {"cells": [{"cell_type": "code", "source": "print('hi')"}]}
+    workspace.joinpath("nb.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
+
+    result = await make_handler()(make_context(workspace), {"path": "nb.ipynb"})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert content.startswith("[Extracted text from nb.ipynb (Jupyter notebook)]:")
+    assert "# Cell 1 [code]\nprint('hi')" in content
+    assert '"cells"' not in content
+
+
+@pytest.mark.asyncio
+async def test_read_malformed_docx_falls_back_to_binary_notice(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    # A .docx that is not a valid zip: extraction fails, binary check takes over.
+    workspace.joinpath("broken.docx").write_bytes(b"PK\x03\x04 not really a zip \x00 body")
+
+    result = await make_handler()(make_context(workspace), {"path": "broken.docx"})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert "[Binary file: broken.docx" in content
