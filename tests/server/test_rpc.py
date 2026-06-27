@@ -39,7 +39,7 @@ from core.runs import ChatRunManager, Run
 from core.settings import AGENT_DEFAULT_FIELDS
 from core.settings.normalizers import normalize_extensions_settings
 from core.storage import StorageError
-from core.tools import ToolRegistry, register_read_tool
+from core.tools import FileReadState, ToolRegistry, register_read_tool
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
 from server.rpc import (
@@ -5430,7 +5430,12 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
     )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
-    register_read_tool(state.runtime.tools, attachment_store=None, speech_service=None)
+    register_read_tool(
+        state.runtime.tools,
+        attachment_store=None,
+        speech_service=None,
+        file_state=FileReadState(),
+    )
     state.runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
     workspace = Path(state.runtime.agents.get("coder").workspace)
     workspace.mkdir(parents=True, exist_ok=True)

@@ -5,7 +5,7 @@ Replaces text inside an existing file, matching `old_string` with controlled fuz
 ## Interfaces
 
 - Tool name: `edit`
-- Registration: `register_edit_tool(registry)`
+- Registration: `register_edit_tool(registry, *, file_state)` — the `FileReadState` guard registry is injected (factory `make_edit_handler(file_state)`).
 - Schema: required `path`, `old_string`, `new_string`; optional boolean `replace_all`; `additionalProperties: false`.
 - Success data includes `message`, resolved `path`, `first_changed_line`, and `replacements`.
 - Display: summary field `path`; hides `old_string`, `new_string`, `oldString`, and `newString` from argument details.
@@ -24,6 +24,7 @@ Replaces text inside an existing file, matching `old_string` with controlled fuz
 
 ## Constraints & Gotchas
 
+- **Read-before-write guard** (shared with `write`, see `file_state.md`): the edit is **blocked** (failure envelope) when the file was not read in this session (`file_not_read`) or its `(mtime, size)` changed on disk since the read (`file_modified_since_read`). The check runs right after the exists/is-file checks, before the content is read for matching; a successful edit restamps the file so the same session can edit again without re-reading. This is a hard block, separate from the fuzzy match and the (non-blocking) syntax check.
 - Missing text, ambiguous matches, validation failures, and expected filesystem errors return failure envelopes.
 - `new_string` dominated by read's `N|` line-number gutter is rejected with a `line_numbered_content` failure (it would write line-number prefixes into the file). When a not-found `old_string` itself carries the gutter, the `text_not_found` message points at the gutter rather than generic whitespace advice. Shared detector: `looks_like_line_numbered_content` in `core/tools/arguments.py`.
 - After a successful edit, the result is syntax-checked in-process by extension (`.py`/`.json`/`.yaml`/`.yml`/`.toml`). It is non-blocking (the edit is already written) and surfaced as `data.syntax_warning`. The file is parsed both before and after, so a pre-existing syntax error is never blamed on the edit — the message then says the file "was already syntactically invalid". Logic in `core/tools/syntax_check.py`.

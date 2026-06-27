@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.runs import Run
-from core.tools import register_read_tool
+from core.tools import FileReadState, register_read_tool
 from server.app import _sse_run_events, create_app
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
@@ -35,7 +35,12 @@ EXPECTED_SSE_EVENT_NAMES = [
 def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_path: Path) -> None:
     adapter = StubAdapter(stream_deltas=_test_stream_turns())
     runtime = StubRuntime(tmp_path, adapter)
-    register_read_tool(runtime.tools, attachment_store=None, speech_service=None)
+    register_read_tool(
+        runtime.tools,
+        attachment_store=None,
+        speech_service=None,
+        file_state=FileReadState(),
+    )
     runtime.agents.update(
         "coder",
         model="openai/gpt-5.2::api-key",
@@ -207,7 +212,12 @@ def _stream_test_run(
 ) -> Any:
     adapter = StubAdapter(stream_deltas=_test_stream_turns())
     runtime = StubRuntime(tmp_path, adapter)
-    register_read_tool(runtime.tools, attachment_store=None, speech_service=None)
+    register_read_tool(
+        runtime.tools,
+        attachment_store=None,
+        speech_service=None,
+        file_state=FileReadState(),
+    )
     runtime.agents.update(
         "coder",
         model="openai/gpt-5.2::api-key",
