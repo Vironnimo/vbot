@@ -20,6 +20,7 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 
 ## Constraints & Gotchas
 
+- Combined `output` and the streamed stdout/stderr Run events are ANSI-stripped — terminal color/escape sequences are removed before the text reaches the model or UI. Stripping happens once in `ProcessManager` (shared `core/utils/ansi.strip_ansi`); see `process.md`.
 - Sensitive environment overrides such as `PATH`, loader hooks, and shell startup hooks are blocked.
 - A login shell environment is probed once per process and falls back to `os.environ` on failure or timeout.
 - Spawn failures and tool-enforced timeouts are failure envelopes. A `process_timeout` is reported only when the timeout actually killed a still-running process (terminal status `killed`); a process that exits on its own as the deadline elapses keeps its completed/failed result instead of being masked as a timeout.

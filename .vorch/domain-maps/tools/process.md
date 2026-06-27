@@ -26,3 +26,4 @@ Manages background process sessions created by `bash`.
 - Combined output buffers are capped; `process log` returns a window from that buffer.
 - `process poll` output is incremental since the previous poll.
 - `waiting_for_input` is a best-effort hint only.
+- All surfaced output is ANSI-stripped at the single decode boundary (`_decode` in `core/tools/process_manager.py`, via `core/utils/ansi.strip_ansi`): raw bytes stay in the buffer so byte offsets and the cap stay accurate, but the `poll`/`log` text the model and UI see has terminal escape/color sequences removed. This stops a model from copying escape codes into file writes and keeps output clean. Consequence: an agent cannot inspect *literal* terminal escape codes through process output — `read` the file directly if that is ever needed.
