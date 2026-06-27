@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.tools.arguments import ToolArgumentError, coerce_bool, normalize_aliases
+from core.tools.arguments import (
+    ToolArgumentError,
+    coerce_bool,
+    looks_like_line_numbered_content,
+    normalize_aliases,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -151,6 +156,13 @@ def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool
     if not isinstance(new_string, str):
         return tool_failure("invalid_arguments", "new_string must be a string")
 
+    if looks_like_line_numbered_content(new_string):
+        return tool_failure(
+            "line_numbered_content",
+            "new_string looks like read's `N|` line-number gutter pasted back in. "
+            "Use the raw replacement text without the leading line numbers.",
+        )
+
     try:
         replace_all = coerce_bool(
             arguments.get("replace_all"), field_name="replace_all", default=False
@@ -222,6 +234,12 @@ def _replace_normalized_matches(
     normalized_occurrences = _find_all_occurrences(normalized_content, normalized_old_string)
 
     if not normalized_occurrences:
+        if looks_like_line_numbered_content(old_string):
+            return tool_failure(
+                "text_not_found",
+                "old_string not found — it carries read's `N|` line-number gutter. "
+                "Match against the raw file text, without the leading line numbers.",
+            )
         return tool_failure(
             "text_not_found",
             "old_string not found in file. Check whitespace, indentation, or line endings.",

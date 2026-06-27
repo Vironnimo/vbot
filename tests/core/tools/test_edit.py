@@ -204,6 +204,41 @@ def test_edit_returns_failure_for_not_found_text(tmp_path: Path) -> None:
     assert "old_string not found" in error["message"]
 
 
+def test_edit_rejects_line_numbered_new_string(tmp_path: Path) -> None:
+    # A model that pastes read's ``N|`` gutter into the replacement must be
+    # stopped before it writes line-number prefixes into the file.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "alpha\nbeta", "new_string": "1|one\n2|two"},
+    )
+
+    error = assert_failure_envelope(result, "line_numbered_content")
+    assert "line-number" in error["message"]
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+
+def test_edit_hints_gutter_when_old_string_is_line_numbered(tmp_path: Path) -> None:
+    # A gutter'd old_string never matches the raw file; the error should point at
+    # the gutter instead of generic whitespace advice.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("hello\nworld\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "1|hello\n2|world", "new_string": "x"},
+    )
+
+    error = assert_failure_envelope(result, "text_not_found")
+    assert "old_string not found" in error["message"]
+    assert "line-number" in error["message"]
+
+
 def test_edit_returns_ambiguous_match_without_replace_all(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

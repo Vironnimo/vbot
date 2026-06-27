@@ -20,3 +20,4 @@ Performs exact text replacement inside an existing text file.
 
 - The tool normalizes line endings for match/replacement and preserves the file's line-ending style where practical.
 - Missing text, ambiguous matches, validation failures, and expected filesystem errors return failure envelopes.
+- `new_string` dominated by read's `N|` line-number gutter is rejected with a `line_numbered_content` failure (it would write line-number prefixes into the file). When a not-found `old_string` itself carries the gutter, the `text_not_found` message points at the gutter rather than generic whitespace advice. Shared detector: `looks_like_line_numbered_content` in `core/tools/arguments.py`.

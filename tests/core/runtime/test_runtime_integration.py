@@ -24,6 +24,7 @@ from core.recall import (
     VectorRecallBackend,
 )
 from core.runtime.runtime import Runtime
+from core.tools.read import READ_TOOL_DESCRIPTION
 from core.utils.config import Config
 from core.utils.errors import ConfigError
 
@@ -772,13 +773,7 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
     assert definitions == [
         {
             "name": "read",
-            "description": (
-                "Read a file. Text files return their contents, truncated to 2000 lines or "
-                "50 KB (whichever is hit first); use offset/limit for large files, and an "
-                "offset past EOF returns an explicit end-of-file notice. Image files are "
-                "shown to the model directly when it supports vision; audio files are "
-                "transcribed to text; video files return a path note only."
-            ),
+            "description": READ_TOOL_DESCRIPTION,
             "parameters": {
                 "type": "object",
                 "properties": {

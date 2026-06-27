@@ -21,3 +21,4 @@ Creates or replaces a complete UTF-8 text file.
 - Parent directories are created automatically.
 - Content is written as UTF-8 text.
 - Validation and expected filesystem errors return failure envelopes.
+- Content dominated by read's `N|` line-number gutter (≥2 consecutive numbered lines) is rejected with a `line_numbered_content` failure, so a model cannot corrupt a file by pasting read output back in. Shared detector: `looks_like_line_numbered_content` in `core/tools/arguments.py`.
