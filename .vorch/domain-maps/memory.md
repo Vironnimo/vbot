@@ -41,9 +41,11 @@ This domain is separate from Sessions. Sessions remain JSONL-canonical chat hist
 - The memory backend only edits bullet entries inside `## Entries`.
 - A missing file is created on first write with a default preamble (`# Agent Memory` for `MEMORY.md`, `# User Profile` for `USER.md`); an empty `## Entries` section renders the placeholder line "No tool-managed memory entries are recorded yet."
 - Prompt rendering embeds each selected file's *entire* raw content (preamble + `## Entries` + suffix) as one `<file name="...">...</file>` block, all wrapped in a single `<memory>...</memory>` block; `agent_user` orders `MEMORY.md` before `USER.md`. Missing selected files are omitted.
+- The rendered `<memory>` block opens with a hardcoded one-paragraph guidance line (`_MEMORY_GUIDANCE`) before the file blocks: it tells the model to write durable, declarative facts rather than imperative self-instructions. It renders only when the block renders (so it is absent when memory is `off` or no file has content), complementing the memory tool's WHEN/SKIP description. The text is hardcoded today and is flagged as a candidate to become user-editable when System Prompt assembly is reworked (`stuff/HANDOFF-system-prompt-architecture.md`).
 - Writes use a same-directory temp file plus atomic replace.
-- Entry content is normalized to single-line whitespace and capped at 2,000 characters.
-- Duplicate `add` returns the existing entry instead of writing another copy.
+- Entry content is normalized to single-line whitespace and capped at 2,000 characters per entry.
+- Each scope has a per-scope total budget over the sum of its tool-managed entry contents (`agent`/`MEMORY.md` = 4,000 chars, `user`/`USER.md` = 3,000 chars), bounding how much pinned memory is injected into every prompt. An `add` or `replace` that pushes a scope past its budget is rejected with a `MemoryError` ("Memory '<scope>' scope is full (X/Y characters)…"), which the tool surfaces to the model as a failure so it removes or shortens an entry first. The budget counts only tool-managed entries, not the freeform preamble/suffix (which the tool cannot edit). A non-increasing change (a shrinking `replace`, or any `remove`) is always allowed even when already over budget, so the model can always dig out.
+- Duplicate `add` returns the existing entry instead of writing another copy (and is never budget-rejected, since it does not grow the store).
 
 ## Cross-Domain Rules
 

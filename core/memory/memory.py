@@ -38,6 +38,23 @@ MEMORY_SECTION_HEADING = "## Entries"
 _BULLET_PREFIX = "- "
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 _MAX_ENTRY_LENGTH = 2_000
+# Per-scope total budget over the tool-managed entries (sum of normalized entry
+# content lengths), bounding how much pinned memory is injected into every prompt.
+# Both exceed _MAX_ENTRY_LENGTH so a single normal add into an empty scope always
+# fits; agent notes accumulate more than the user profile, so its budget is larger.
+_MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000}
+# Behavioral guidance rendered at the top of the pinned-memory block, so it appears
+# only when memory is enabled (the block collapses to "" otherwise). Complements the
+# memory tool's WHEN/SKIP description with the one writing-quality rule that is not
+# obvious: declarative facts round-trip safely, imperative self-instructions do not.
+# NOTE: this text is hardcoded today; it is a candidate to become user-editable once
+# the System Prompt assembly is reworked (see stuff/HANDOFF-system-prompt-architecture.md).
+_MEMORY_GUIDANCE = (
+    "Write durable, declarative facts here, not instructions to yourself: "
+    '"User prefers concise answers" (good), not "Always answer concisely" (bad) — '
+    "imperative notes get re-read as standing directives in later sessions and can "
+    "override the user's current request."
+)
 
 
 class MemoryError(VBotError, ValueError):
@@ -97,7 +114,9 @@ class FilePinnedMemoryBackend:
                 existing_index = entries.index(normalized) + 1
                 return MemoryEntry(id=existing_index, scope=validated_scope, content=normalized)
 
+            previous_total = sum(len(entry) for entry in entries)
             entries.append(normalized)
+            _enforce_scope_budget(validated_scope, entries, previous_total)
             _write_memory_parts(path, preamble, entries, suffix)
             return MemoryEntry(id=len(entries), scope=validated_scope, content=normalized)
 
@@ -114,7 +133,9 @@ class FilePinnedMemoryBackend:
             preamble, entries, suffix = _read_memory_parts(path)
             index = _entry_index(entry_id, entries)
             normalized = _normalize_entry_content(content)
+            previous_total = sum(len(entry) for entry in entries)
             entries[index] = normalized
+            _enforce_scope_budget(validated_scope, entries, previous_total)
             _write_memory_parts(path, preamble, entries, suffix)
             return MemoryEntry(id=entry_id, scope=validated_scope, content=normalized)
 
@@ -137,7 +158,8 @@ class FilePinnedMemoryBackend:
         visible_blocks = [block for block in blocks if block]
         if not visible_blocks:
             return ""
-        return "<memory>\n" + "\n\n".join(visible_blocks) + "\n</memory>"
+        sections = [_MEMORY_GUIDANCE, *visible_blocks]
+        return "<memory>\n" + "\n\n".join(sections) + "\n</memory>"
 
     def _path(self, workspace: Path, scope: MemoryScope) -> Path:
         workspace_path = Path(workspace)
@@ -296,6 +318,22 @@ def _normalize_entry_content(content: object) -> str:
     if len(normalized) > _MAX_ENTRY_LENGTH:
         raise MemoryError(f"content must be at most {_MAX_ENTRY_LENGTH} characters")
     return normalized
+
+
+def _enforce_scope_budget(scope: MemoryScope, entries: list[str], previous_total: int) -> None:
+    """Reject a mutation that pushes a scope's tool-managed entries past its budget.
+
+    A non-increasing change (shrink or remove) is always allowed so the model can
+    always dig out of an over-budget state — e.g. after the budget is lowered or
+    pre-existing entries already exceed it.
+    """
+    budget = _MAX_SCOPE_BUDGET[scope]
+    total = sum(len(entry) for entry in entries)
+    if total > budget and total > previous_total:
+        raise MemoryError(
+            f"Memory '{scope}' scope is full ({total}/{budget} characters). "
+            "Remove or shorten an entry before adding (action='list', then 'remove')."
+        )
 
 
 def _entry_index(entry_id: int, entries: list[str]) -> int:

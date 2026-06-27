@@ -13,6 +13,7 @@ from core.memory import (
     MemoryError,
     MemoryService,
 )
+from core.memory.memory import _MAX_ENTRY_LENGTH, _MAX_SCOPE_BUDGET, _MEMORY_GUIDANCE
 
 
 def test_memory_service_preserves_preamble_and_manages_entries(tmp_path: Path) -> None:
@@ -117,9 +118,25 @@ def test_memory_service_builds_prompt_block_for_selected_files(tmp_path: Path) -
     agent_and_user = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
     disabled = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_OFF)
 
-    assert agent_only == '<memory>\n<file name="MEMORY.md">\nAgent memory\n</file>\n</memory>'
+    assert agent_only == (
+        f'<memory>\n{_MEMORY_GUIDANCE}\n\n<file name="MEMORY.md">\nAgent memory\n</file>\n</memory>'
+    )
     assert '<file name="MEMORY.md">' in agent_and_user
     assert '<file name="USER.md">' in agent_and_user
+    assert disabled == ""
+
+
+def test_memory_service_prompt_block_includes_guidance_when_enabled(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
+    service = MemoryService()
+
+    enabled = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_AGENT)
+    disabled = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_OFF)
+
+    assert _MEMORY_GUIDANCE in enabled
+    # Guidance never appears without a rendered memory block.
     assert disabled == ""
 
 
@@ -133,3 +150,74 @@ def test_memory_service_prompt_block_omits_missing_files(tmp_path: Path) -> None
 
     assert "Agent memory" in prompt_block
     assert "USER.md" not in prompt_block
+
+
+def test_memory_service_rejects_add_exceeding_scope_budget(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    service = MemoryService()
+    entry_len = _MAX_ENTRY_LENGTH
+    fill_count = _MAX_SCOPE_BUDGET["agent"] // entry_len
+
+    for index in range(fill_count):
+        service.add_entry(workspace, "agent", chr(ord("a") + index) * entry_len)
+
+    with pytest.raises(MemoryError, match="full"):
+        service.add_entry(workspace, "agent", "z" * entry_len)
+
+    assert len(service.list_entries(workspace, "agent")) == fill_count
+
+
+def test_memory_service_remove_frees_scope_budget(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    service = MemoryService()
+    entry_len = _MAX_ENTRY_LENGTH
+    fill_count = _MAX_SCOPE_BUDGET["agent"] // entry_len
+
+    for index in range(fill_count):
+        service.add_entry(workspace, "agent", chr(ord("a") + index) * entry_len)
+    with pytest.raises(MemoryError, match="full"):
+        service.add_entry(workspace, "agent", "z" * entry_len)
+
+    service.remove_entry(workspace, "agent", 1)
+    added = service.add_entry(workspace, "agent", "z" * entry_len)
+
+    assert added.content == "z" * entry_len
+    assert len(service.list_entries(workspace, "agent")) == fill_count
+
+
+def test_memory_service_scope_budgets_are_independent(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    service = MemoryService()
+    entry_len = _MAX_ENTRY_LENGTH
+    agent_count = _MAX_SCOPE_BUDGET["agent"] // entry_len
+    user_count = _MAX_SCOPE_BUDGET["user"] // entry_len
+
+    for index in range(agent_count):
+        service.add_entry(workspace, "agent", chr(ord("a") + index) * entry_len)
+    # The agent scope is now full; the user scope has its own independent budget.
+    for index in range(user_count):
+        service.add_entry(workspace, "user", chr(ord("a") + index) * entry_len)
+
+    assert len(service.list_entries(workspace, "agent")) == agent_count
+    assert len(service.list_entries(workspace, "user")) == user_count
+
+
+def test_memory_service_replace_respects_scope_budget(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    service = MemoryService()
+    budget = _MAX_SCOPE_BUDGET["user"]
+    first = budget // 2
+    second = budget - first  # first + second fills exactly to the budget
+
+    service.add_entry(workspace, "user", "a" * first)
+    service.add_entry(workspace, "user", "b" * (second - 100))
+
+    # Growing the second entry one char past the budget is rejected; the
+    # original entry is preserved because the write never happened.
+    with pytest.raises(MemoryError, match="full"):
+        service.replace_entry(workspace, "user", 2, "c" * (second + 1))
+    assert service.list_entries(workspace, "user")[1].content == "b" * (second - 100)
+
+    # Growing it to exactly the budget is allowed (total == budget, not over).
+    replaced = service.replace_entry(workspace, "user", 2, "c" * second)
+    assert replaced.content == "c" * second
