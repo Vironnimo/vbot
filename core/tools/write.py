@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 
 from core.tools.arguments import looks_like_line_numbered_content
+from core.tools.syntax_check import warning_for_written_file
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -80,13 +81,17 @@ def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
 
     byte_count = len(content_argument.encode("utf-8"))
     message = f"OK: written {byte_count} bytes to {resolved}"
-    return tool_success(
-        {
-            "path": str(resolved),
-            "bytes": byte_count,
-            "message": message,
-        }
-    )
+    data: JsonObject = {
+        "path": str(resolved),
+        "bytes": byte_count,
+        "message": message,
+    }
+    # Non-blocking: the file is already written. A syntax warning only tells the
+    # model it just broke the file so it can fix it next turn.
+    warning = warning_for_written_file(resolved, content_argument)
+    if warning is not None:
+        data["syntax_warning"] = warning
+    return tool_success(data)
 
 
 async def _write_handler_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
