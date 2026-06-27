@@ -446,6 +446,35 @@ async def test_read_invalid_utf8_uses_replacement_character(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_read_strips_utf8_bom(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("bom.txt").write_bytes(b"\xef\xbb\xbfhello\nworld\n")
+
+    result = await make_handler()(make_context(workspace), {"path": "bom.txt"})
+
+    data = assert_success_envelope(result)
+    # The BOM is stripped, so line 1 has no phantom leading character.
+    assert data["content"] == "1|hello\n2|world\n"
+
+
+@pytest.mark.asyncio
+async def test_read_returns_binary_notice_for_nul_bytes(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    # Bytes that decode as valid UTF-8 but contain an embedded NUL — still binary.
+    workspace.joinpath("data.bin").write_bytes(b"\x7fELF\x00\x00\x01payload")
+
+    result = await make_handler()(make_context(workspace), {"path": "data.bin"})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert "Binary file" in content
+    assert "data.bin" in content
+
+
+@pytest.mark.asyncio
 async def test_read_empty_file_returns_empty_content(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
