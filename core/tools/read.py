@@ -8,6 +8,7 @@ from typing import Any
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
 from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, optional_int
+from core.tools.file_state import FileReadState
 from core.tools.read_extract import (
     ExtractionError,
     document_label,
@@ -205,12 +206,16 @@ def _render_text(text: str, start_line: int, max_lines: int, *, number: bool) ->
     return output + ("\n\n" if output and not output.endswith("\n") else "") + hint
 
 
-def make_read_handler(attachment_store: Any, speech_service: Any) -> ToolHandler:
+def make_read_handler(
+    attachment_store: Any, speech_service: Any, file_state: FileReadState
+) -> ToolHandler:
     """Create a read handler bound to the attachment store and speech service.
 
     Closes over the services so the text path stays dependency-free while images
     are promoted to attachments and audio is transcribed via speech-to-text.
-    Mirrors the image-generation tool's factory pattern.
+    Mirrors the image-generation tool's factory pattern. ``file_state`` records
+    each read so the write/edit guard can detect unread or externally-changed
+    files (see ``file_state.py``).
     """
 
     async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -232,6 +237,11 @@ def make_read_handler(attachment_store: Any, speech_service: Any) -> ToolHandler
             return tool_failure("file_not_found", f"file not found: {resolved}")
         if not resolved.is_file():
             return tool_failure("not_a_file", f"path is not a file: {resolved}")
+
+        # Stamp before reading bytes: if an external write lands in the tiny window
+        # before the read, the stamp stays older than the new content, so the next
+        # write/edit errs toward a (harmless) re-read rather than missing the change.
+        file_state.record_read(context.session_id, resolved)
 
         try:
             raw = resolved.read_bytes()
@@ -404,13 +414,14 @@ def register_read_tool(
     *,
     attachment_store: Any,
     speech_service: Any,
+    file_state: FileReadState,
 ) -> None:
     """Register the read tool with a vBot tool registry."""
     registry.register(
         READ_TOOL_NAME,
         READ_TOOL_DESCRIPTION,
         READ_TOOL_PARAMETERS,
-        make_read_handler(attachment_store, speech_service),
+        make_read_handler(attachment_store, speech_service, file_state),
         display=ToolDisplay(summary_fields=("path",)),
     )
 

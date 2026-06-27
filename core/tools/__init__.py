@@ -17,7 +17,13 @@ from core.tools.edit import (
     EDIT_TOOL_NAME,
     EDIT_TOOL_PARAMETERS,
     edit_handler,
+    make_edit_handler,
     register_edit_tool,
+)
+from core.tools.file_state import (
+    FileReadState,
+    StaleReason,
+    stale_failure_text,
 )
 from core.tools.glob import (
     GLOB_TOOL_DESCRIPTION,
@@ -142,6 +148,7 @@ from core.tools.write import (
     WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_NAME,
     WRITE_TOOL_PARAMETERS,
+    make_write_handler,
     register_write_tool,
     write_handler,
 )
@@ -168,6 +175,8 @@ __all__ = [
     "EDIT_TOOL_DESCRIPTION",
     "EDIT_TOOL_NAME",
     "EDIT_TOOL_PARAMETERS",
+    "FileReadState",
+    "StaleReason",
     "GLOB_TOOL_DESCRIPTION",
     "GLOB_TOOL_NAME",
     "GLOB_TOOL_PARAMETERS",
@@ -239,6 +248,7 @@ __all__ = [
     "glob_handler",
     "grep_handler",
     "is_tool_result_envelope",
+    "make_edit_handler",
     "make_memory_handler",
     "make_process_handler",
     "make_skill_handler",
@@ -246,6 +256,7 @@ __all__ = [
     "make_image_generation_handler",
     "make_read_handler",
     "make_session_search_handler",
+    "make_write_handler",
     "register_edit_tool",
     "register_glob_tool",
     "register_bash_tool",
@@ -265,6 +276,7 @@ __all__ = [
     "register_write_tool",
     "memory_handler",
     "session_search_handler",
+    "stale_failure_text",
     "tool_failure",
     "tool_success",
     "web_fetch_handler",

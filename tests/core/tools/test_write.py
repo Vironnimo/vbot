@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from core.tools.file_state import FileReadState
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.write import (
     WRITE_TOOL_NAME,
@@ -62,7 +63,7 @@ def assert_failure_envelope(result: dict[str, object], code: str) -> dict[str, s
 def test_register_write_tool_exposes_provider_schema() -> None:
     registry = ToolRegistry()
 
-    register_write_tool(registry)
+    register_write_tool(registry, file_state=FileReadState())
 
     tool = registry.get("write")
     assert tool.name == WRITE_TOOL_NAME == "write"
@@ -88,7 +89,7 @@ async def test_dispatch_write_offloads_sync_file_io(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = ToolRegistry()
-    register_write_tool(registry)
+    register_write_tool(registry, file_state=FileReadState())
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -401,3 +402,98 @@ def test_write_success_and_failure_results_are_valid_envelopes(tmp_path: Path) -
 
     assert is_tool_result_envelope(success) is True
     assert is_tool_result_envelope(failure) is True
+
+
+def test_write_guard_blocks_overwrite_of_unread_existing_file(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"original\n")
+    file_state = FileReadState()
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "replacement\n"},
+        file_state=file_state,
+    )
+
+    assert_failure_envelope(result, "file_not_read")
+    assert target.read_bytes() == b"original\n"
+
+
+def test_write_guard_allows_new_file_without_read(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    file_state = FileReadState()
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "fresh.txt", "content": "brand new\n"},
+        file_state=file_state,
+    )
+
+    assert_success_envelope(result)
+    assert (workspace / "fresh.txt").read_bytes() == b"brand new\n"
+
+
+def test_write_guard_allows_overwrite_after_read(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"original\n")
+    file_state = FileReadState()
+    file_state.record_read("session-1", target.resolve())
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "replacement\n"},
+        file_state=file_state,
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"replacement\n"
+
+
+def test_write_guard_blocks_when_file_changed_since_read(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"original\n")
+    file_state = FileReadState()
+    file_state.record_read("session-1", target.resolve())
+
+    # An external change after the read (different byte length → size drift).
+    target.write_bytes(b"changed out of band\n")
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "replacement\n"},
+        file_state=file_state,
+    )
+
+    assert_failure_envelope(result, "file_modified_since_read")
+    assert target.read_bytes() == b"changed out of band\n"
+
+
+def test_write_guard_restamps_so_next_write_needs_no_reread(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"original\n")
+    file_state = FileReadState()
+    file_state.record_read("session-1", target.resolve())
+
+    first = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "first\n"},
+        file_state=file_state,
+    )
+    second = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "second\n"},
+        file_state=file_state,
+    )
+
+    assert_success_envelope(first)
+    assert_success_envelope(second)
+    assert target.read_bytes() == b"second\n"
