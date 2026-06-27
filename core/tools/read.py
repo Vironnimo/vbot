@@ -8,6 +8,12 @@ from typing import Any
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
 from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, optional_int
+from core.tools.read_extract import (
+    ExtractionError,
+    document_label,
+    extract_document_text,
+    is_extractable_document,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -35,8 +41,9 @@ READ_TOOL_DESCRIPTION = (
     "is hit first); use offset/limit for large files, and an offset past EOF "
     "returns an explicit end-of-file notice. Image files are shown to the model "
     "directly when it supports vision; audio files are transcribed to text; "
-    "video files return a path note only; binary files return a short notice "
-    "instead of garbled text."
+    "Word/Excel/Jupyter files (.docx/.xlsx/.ipynb) are extracted to readable "
+    "text; video files return a path note only; binary files return a short "
+    "notice instead of garbled text."
 )
 READ_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -123,14 +130,24 @@ def _resolve_read_path(context: ToolContext, path: str) -> Path:
 
 
 def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> str:
-    """Render file bytes as text with offset/limit controls and truncation safeguards."""
+    """Render file bytes as numbered text with offset/limit controls and truncation."""
     start_line = optional_int(offset, field_name="offset", minimum=1) or 1
     max_lines = optional_int(limit, field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
 
     if raw.startswith(_UTF8_BOM_BYTES):
         raw = raw[len(_UTF8_BOM_BYTES) :]
     decoded = raw.decode("utf-8", errors="replace")
-    all_lines = decoded.splitlines(keepends=True)
+    return _render_text(decoded, start_line, max_lines, number=True)
+
+
+def _render_text(text: str, start_line: int, max_lines: int, *, number: bool) -> str:
+    """Apply offset/limit, optional line numbering, and truncation safeguards.
+
+    Shared by the literal-file path (``number=True`` adds the ``N|`` gutter) and
+    the extracted-document path (``number=False`` — a rendering of an Office or
+    notebook file is not editable source, so the gutter would only mislead).
+    """
+    all_lines = text.splitlines(keepends=True)
     total_lines = len(all_lines)
 
     if total_lines == 0:
@@ -147,17 +164,17 @@ def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> 
 
     # Number before any byte fitting so the gutter counts against the 50 KB
     # budget and the model can cite/patch lines without hand-counting.
-    numbered_lines = _add_line_numbers(selected_lines, start_line)
-    output = "".join(numbered_lines)
+    rendered_lines = _add_line_numbers(selected_lines, start_line) if number else selected_lines
+    output = "".join(rendered_lines)
     output_bytes = output.encode("utf-8")
     byte_limited = len(output_bytes) > MAX_FILE_BYTES
 
     if not (line_limited or byte_limited):
         return output
 
-    shown_line_count = len(numbered_lines)
+    shown_line_count = len(rendered_lines)
     if byte_limited:
-        provisional_count = max(1, min(len(numbered_lines), shown_line_count))
+        provisional_count = max(1, min(len(rendered_lines), shown_line_count))
         while True:
             provisional_end = min(total_lines, start_line + provisional_count - 1)
             hint = _build_read_hint(
@@ -168,7 +185,7 @@ def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> 
             )
             reserved_bytes = len(hint.encode("utf-8")) + 2
             available_bytes = max(MAX_FILE_BYTES - reserved_bytes, 0)
-            output, fitted_count = _fit_lines_within_byte_limit(numbered_lines, available_bytes)
+            output, fitted_count = _fit_lines_within_byte_limit(rendered_lines, available_bytes)
             if fitted_count == provisional_count:
                 shown_line_count = fitted_count
                 break
@@ -228,6 +245,13 @@ def make_read_handler(attachment_store: Any, speech_service: Any) -> ToolHandler
             return await _read_audio(speech_service, resolved, raw, media_type)
         if media_type.startswith("video/"):
             return _read_video(resolved, media_type)
+        # Office/notebook extraction runs before the binary check: docx/xlsx are
+        # zip archives full of NUL bytes that would otherwise be dismissed as
+        # binary, and ipynb is JSON that would dump as unreadable raw text.
+        if is_extractable_document(resolved.name):
+            extracted = _read_extracted_document(resolved, arguments)
+            if extracted is not None:
+                return extracted
         if _looks_binary(raw):
             return _read_binary_notice(resolved)
         return _read_text(raw, arguments)
@@ -247,6 +271,35 @@ def _read_text(raw: bytes, arguments: JsonObject) -> JsonObject:
         return tool_failure("invalid_arguments", str(error))
 
     return tool_success({"content": content})
+
+
+def _read_extracted_document(resolved: Path, arguments: JsonObject) -> JsonObject | None:
+    """Return rendered text for an Office/notebook file, or ``None`` to fall through.
+
+    On a malformed document the extractor raises ``ExtractionError``; returning
+    ``None`` then lets the caller fall back to the binary-notice / text path. The
+    rendered text is numbered-gutter-free (it is a rendering, not editable source)
+    but still passes through the shared line/byte truncation.
+    """
+    try:
+        extracted = extract_document_text(resolved)
+    except ExtractionError:
+        return None
+
+    try:
+        start_line = optional_int(arguments.get("offset"), field_name="offset", minimum=1) or 1
+        max_lines = (
+            optional_int(arguments.get("limit"), field_name="limit", minimum=1)
+            or DEFAULT_LINE_LIMIT
+        )
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
+
+    header = f"[Extracted text from {resolved.name} ({document_label(resolved.name)})]:"
+    body = _render_text(extracted, start_line, max_lines, number=False)
+    if not body.strip():
+        body = "(no extractable text)"
+    return tool_success({"content": f"{header}\n{body}"})
 
 
 def _read_image(
