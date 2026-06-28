@@ -54,6 +54,11 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
             f"{instance.url}{RPC_PATH}",
             json=request_body,
             timeout=timeout,
+            # The CLI only ever talks to the local server over loopback, and RPC bodies
+            # carry secrets (e.g. provider.set_key). Ignore ambient HTTP_PROXY/.netrc so a
+            # plaintext credential can never be diverted through an environment proxy — the
+            # same hardening the health/webui probes already apply.
+            trust_env=False,
         )
     except httpx.RequestError as exc:
         return RpcPayload(

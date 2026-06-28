@@ -65,7 +65,9 @@ def test_model_list_posts_model_list_rpc(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(
             200,
@@ -90,7 +92,9 @@ def test_model_list_posts_model_list_rpc(
 def test_model_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "model.list", "params": {}}
         assert timeout == 10.0
@@ -131,7 +135,9 @@ def test_model_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_model_list_returns_empty_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "model.list", "params": {}}
         assert timeout == 10.0
@@ -151,7 +157,9 @@ def test_model_refresh_posts_refresh_db_without_provider(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: Any) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
+    ) -> httpx.Response:
         del timeout
         calls.append({"url": url, "json": json})
         return httpx.Response(
@@ -183,7 +191,9 @@ def test_model_refresh_posts_refresh_db_with_provider(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: Any) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
+    ) -> httpx.Response:
         del timeout
         calls.append({"url": url, "json": json})
         return httpx.Response(200, json={"ok": True, "result": {"provider_id": "openai"}})
@@ -207,7 +217,9 @@ def test_model_refresh_formats_global_result(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: Any) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
+    ) -> httpx.Response:
         del timeout
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "model.refresh_db", "params": {}}
@@ -235,7 +247,9 @@ def test_model_refresh_reports_failed_providers(
 
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -271,7 +285,9 @@ def test_model_list_returns_error_on_rpc_failure(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "model.list", "params": {}}
         assert timeout == 10.0

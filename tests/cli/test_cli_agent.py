@@ -50,7 +50,9 @@ def test_agent_list_posts_rpc_and_formats_rows(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "agent.list", "params": {}}
         assert timeout == 10.0
@@ -78,7 +80,9 @@ def test_agent_show_posts_rpc_and_formats_detail(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "agent.get", "params": {"id": "coder"}}
         return httpx.Response(200, json={"ok": True, "result": agent_payload()})
 
@@ -113,7 +117,9 @@ def test_agent_create_posts_mutable_fields(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {
             "method": "agent.create",
             "params": {
@@ -148,7 +154,9 @@ def test_agent_update_posts_null_and_lists(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {
             "method": "agent.update",
             "params": {
@@ -197,7 +205,9 @@ def test_agent_update_rejects_empty_changes(tmp_path: Path) -> None:
 def test_agent_delete_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "agent.delete", "params": {"id": "writer"}}
         return httpx.Response(200, json={"ok": True, "result": {"agent_id": "writer"}})
 

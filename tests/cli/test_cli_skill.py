@@ -41,7 +41,9 @@ def test_skill_list_posts_skill_list_rpc(tmp_path: Path, monkeypatch: pytest.Mon
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(
             200,
@@ -75,7 +77,9 @@ def test_skill_list_posts_skill_list_rpc(tmp_path: Path, monkeypatch: pytest.Mon
 def test_skill_list_formats_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "skill.list", "params": {}}
         assert timeout == 10.0
@@ -109,7 +113,9 @@ def test_skill_list_formats_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 def test_skill_list_returns_empty_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={"ok": True, "result": {"skills": [], "invalid_skills": []}},
@@ -128,7 +134,9 @@ def test_skill_list_formats_requirement_status(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -168,7 +176,9 @@ def test_skill_list_includes_invalid_section_when_present(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -205,7 +215,9 @@ def test_skill_list_returns_error_on_rpc_failure(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             500,
             json={

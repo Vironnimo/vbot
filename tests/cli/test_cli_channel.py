@@ -135,7 +135,9 @@ def test_channel_add_posts_create_rpc(tmp_path: Path, monkeypatch: pytest.Monkey
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(200, json={"ok": True, "result": {"id": "tg-assistant"}})
 
@@ -189,7 +191,9 @@ def test_channel_simple_id_commands_post_expected_rpc(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(200, json={"ok": True, "result": {"ok": True}})
 
@@ -216,7 +220,9 @@ def test_channel_status_posts_status_rpc(tmp_path: Path, monkeypatch: pytest.Mon
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(
             200,
@@ -257,7 +263,9 @@ def test_channel_update_posts_update_rpc(tmp_path: Path, monkeypatch: pytest.Mon
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(200, json={"ok": True, "result": {"ok": True}})
 
@@ -311,7 +319,9 @@ def test_channel_update_rejects_empty_changes(tmp_path: Path) -> None:
 def test_channel_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "channel.list", "params": {}}
         assert timeout == 10.0
@@ -370,7 +380,9 @@ def test_channel_commands_surface_rpc_domain_errors(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={

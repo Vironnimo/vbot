@@ -87,7 +87,9 @@ def test_extensions_list_formats_rows(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "extensions.list", "params": {}}
         return httpx.Response(
             200, json={"ok": True, "result": {"extensions": _extensions_payload()}}
@@ -117,7 +119,9 @@ def test_extensions_disable_writes_settings_and_prints_restart_hint(
     instance = make_instance(tmp_path)
     posted: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         posted.append(json)
         if json["method"] == "extensions.list":
             return httpx.Response(
@@ -153,7 +157,9 @@ def test_extensions_enable_removes_from_disabled(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         if json["method"] == "extensions.list":
             return httpx.Response(
                 200, json={"ok": True, "result": {"extensions": _extensions_payload()}}
@@ -175,7 +181,9 @@ def test_extensions_disable_unknown_name_suggests_candidate(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json["method"] == "extensions.list"
         return httpx.Response(
             200, json={"ok": True, "result": {"extensions": _extensions_payload()}}
@@ -197,7 +205,9 @@ def test_extensions_disable_already_disabled_is_noop(
     instance = make_instance(tmp_path)
     posted: list[str] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         posted.append(json["method"])
         return httpx.Response(
             200, json={"ok": True, "result": {"extensions": _extensions_payload()}}

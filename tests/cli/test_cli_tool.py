@@ -31,7 +31,9 @@ def test_tool_list_posts_rpc_and_formats_rows(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "tool.list", "params": {}}
         assert timeout == 10.0
@@ -65,7 +67,9 @@ def test_tool_list_rejects_malformed_rpc_result(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, "result": {}})
 
     monkeypatch.setattr(tool_management.httpx, "post", fake_post)
