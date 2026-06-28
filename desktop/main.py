@@ -1,22 +1,38 @@
-"""Desktop target configuration and probing for the vBot pywebview accessor."""
+"""Desktop launch, target probing, and window wiring for the vBot pywebview accessor.
+
+The entrypoint builds the in-window server-selection controller
+(:mod:`desktop.connection`) and the voice bridge (:mod:`desktop.wakeword.bridge`),
+wires the *same* bridge as the window's single ``js_api`` (so both the shell
+connection screen and the remote WebUI call into it), and hands the live window
+to the controller. There is no silent localhost default: the controller
+auto-connects to the last-used server after the GUI loop starts, or shows the
+connection screen on first run / any unreachable target.
+
+This module still owns the shared probing primitives (``probe_target`` /
+``validate_host`` / ``validate_port`` / ``build_target_url`` and the ``PROBE_*``
+classifications) that the connection controller reuses; it no longer owns the
+old static fallback page or pre-loop target resolution — the controller subsumes
+both.
+"""
 
 from __future__ import annotations
 
 import argparse
-import html
 import importlib
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
-from desktop.settings import (
-    read_settings,
-    read_wakeword_settings,
-    write_settings,
-)
+from desktop.settings import read_wakeword_settings
+
+if TYPE_CHECKING:
+    from desktop.connection import ConnectionController
+
+logger = logging.getLogger("vbot.desktop")
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
@@ -49,13 +65,19 @@ class HttpGet(Protocol):
 
 
 class WebviewModule(Protocol):
-    """Subset of pywebview used by the Desktop shell."""
+    """Subset of pywebview used by the Desktop shell.
+
+    pywebview requires the window to be created with initial content *before*
+    the GUI loop starts; ``Window.load_url`` / ``load_html`` may only run after
+    ``start``. ``start`` therefore takes the post-loop entry callable
+    (``func``), the native ``menu`` list, and the optional ``icon``.
+    """
 
     def create_window(self, title: str, **kwargs: Any) -> Any:
-        """Create a window before the GUI loop starts."""
+        """Create a window before the GUI loop starts (needs ``url`` or ``html``)."""
 
-    def start(self, **kwargs: Any) -> Any:
-        """Start the native GUI loop."""
+    def start(self, func: Any = None, **kwargs: Any) -> Any:
+        """Start the native GUI loop, calling ``func`` once after it starts."""
 
 
 @dataclass(frozen=True)
@@ -74,15 +96,6 @@ class DesktopProbeResult:
 
     status: str
     target: DesktopTarget
-
-
-@dataclass(frozen=True)
-class DesktopWindowContent:
-    """Window content selected before pywebview window creation."""
-
-    status: str
-    url: str | None = None
-    html: str | None = None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -109,41 +122,6 @@ def icon_path(base_dir: Path | None = None) -> Path:
     """Return the optional source-run Desktop icon path."""
 
     return (base_dir if base_dir is not None else desktop_dir()) / ICON_FILE_NAME
-
-
-def resolve_target(
-    argv: list[str] | None = None,
-    *,
-    settings_file: Path | None = None,
-) -> DesktopTarget:
-    """Resolve target from CLI args, Desktop settings, then defaults."""
-
-    args = parse_args(argv)
-    saved_settings = read_settings(settings_file)
-    host_source = "--host" if args.host is not None else "settings.host"
-    host_value = args.host if args.host is not None else saved_settings.get("host", DEFAULT_HOST)
-    port_value = args.port if args.port is not None else saved_settings.get("port", DEFAULT_PORT)
-    port = validate_port(port_value, source="settings.port" if args.port is None else "--port")
-
-    try:
-        host = validate_host(host_value, source=host_source)
-    except ValueError as exc:
-        target = DesktopTarget(
-            host=str(host_value or ""), port=port, url="", configuration_error=str(exc)
-        )
-        if args.host is None:
-            normalized_settings = dict(saved_settings)
-            normalized_settings["host"] = DEFAULT_HOST
-            normalized_settings["port"] = port
-            write_settings(normalized_settings, settings_file)
-        return target
-
-    target = DesktopTarget(host=host, port=port, url=build_target_url(host, port))
-    normalized_settings = dict(saved_settings)
-    normalized_settings["host"] = target.host
-    normalized_settings["port"] = target.port
-    write_settings(normalized_settings, settings_file)
-    return target
 
 
 def build_target_url(host: str, port: int) -> str:
@@ -182,23 +160,6 @@ def probe_target(
     return DesktopProbeResult(status=PROBE_WEBUI_UNAVAILABLE, target=target)
 
 
-def choose_window_content(
-    target: DesktopTarget,
-    *,
-    probe: Callable[[DesktopTarget], DesktopProbeResult] = probe_target,
-) -> DesktopWindowContent:
-    """Return URL content for a valid WebUI target, otherwise safe inline HTML."""
-
-    probe_result = probe(target)
-    if probe_result.status == PROBE_WEBUI_AVAILABLE:
-        return DesktopWindowContent(status=probe_result.status, url=target.url)
-
-    return DesktopWindowContent(
-        status=probe_result.status,
-        html=build_fallback_html(probe_result),
-    )
-
-
 def load_webview() -> WebviewModule:
     """Import pywebview lazily so non-desktop test gates do not require it."""
 
@@ -212,159 +173,105 @@ def load_webview() -> WebviewModule:
         ) from exc
 
 
-def launch_window(
-    content: DesktopWindowContent,
-    *,
-    webview_module: WebviewModule | None = None,
-    app_icon_path: Path | None = None,
-    js_api: Any = None,
-) -> None:
-    """Create the pywebview window and run the GUI loop."""
-
-    webview = webview_module if webview_module is not None else load_webview()
-    if content.url is not None:
-        kwargs: dict[str, Any] = {"url": content.url, "text_select": True}
-        if js_api is not None:
-            kwargs["js_api"] = js_api
-        webview.create_window(WINDOW_TITLE, **kwargs)
-    elif content.html is not None:
-        webview.create_window(WINDOW_TITLE, html=content.html, text_select=True)
-    else:
-        raise ValueError("Desktop window content requires either url or html")
-
-    resolved_icon_path = app_icon_path if app_icon_path is not None else icon_path()
-    if resolved_icon_path.exists():
-        # pywebview icon support varies by backend/platform, so custom icons are optional.
-        webview.start(icon=str(resolved_icon_path))
-        return
-    webview.start()
-
-
 def launch_desktop(
     argv: list[str] | None = None,
     *,
     settings_file: Path | None = None,
     probe: Callable[[DesktopTarget], DesktopProbeResult] = probe_target,
     webview_module: WebviewModule | None = None,
+    menu_module: Any = None,
     app_icon_path: Path | None = None,
-) -> DesktopTarget:
-    """Resolve, probe, and launch the thin pywebview Desktop shell."""
+) -> None:
+    """Build the controller, bridge, window, and menu, then run the GUI loop.
+
+    Lifecycle (pywebview requires this order): create the window *before* the
+    loop with the connection screen as neutral initial content and the bridge as
+    its single ``js_api``; hand the window to the controller; then start the loop
+    with a post-loop entry callable and the native Server menu attached. The
+    entry callable runs only after the loop is live, so its ``load_url`` /
+    ``load_html`` navigation is valid.
+
+    Target selection: an explicit ``--host`` / ``--port`` override connects
+    straight to that target; with no flags the controller auto-connects to the
+    last-used server, or shows the connection screen on first run. There is no
+    silent localhost default — only a *deliberate* CLI override skips
+    auto-connect. The effective launch target (override else last-used) is
+    resolved once and used for both the window navigation and the voice worker's
+    server URL, so window and voice always point at the same server.
+    """
+
+    from desktop.connection import (
+        ConnectionController,
+        build_connection_html,
+        build_server_menu,
+    )
 
     args = parse_args(argv)
-    target = resolve_target(argv, settings_file=settings_file)
-    content = choose_window_content(target, probe=probe)
+    webview = webview_module if webview_module is not None else load_webview()
 
-    # Set up wakeword bridge and worker
-    bridge = _create_wakeword_bridge(args, settings_file, target.url)
+    controller = ConnectionController(settings_file=settings_file, probe=probe)
+    override = _resolve_launch_override(args)
+    server_url = _resolve_launch_server_url(override, controller)
+    bridge = _create_wakeword_bridge(args, settings_file, controller, server_url)
 
-    # Append desktop accessor query param so the WebUI can detect Desktop mode
-    if content.url is not None:
-        content = DesktopWindowContent(
-            status=content.status,
-            url=_append_accessor_param(content.url),
-        )
+    # The window must be created with initial content before the GUI loop; the
+    # connection screen is a safe neutral page that the post-loop entry callable
+    # replaces once the loop is live (navigating to the WebUI on connect).
+    initial_html = build_connection_html(servers=controller.list_servers())
+    window = webview.create_window(
+        WINDOW_TITLE,
+        html=initial_html,
+        text_select=True,
+        js_api=bridge,
+    )
+    controller.attach_window(window)
+
+    start_kwargs: dict[str, Any] = {"menu": build_server_menu(controller, menu_module=menu_module)}
+    resolved_icon_path = app_icon_path if app_icon_path is not None else icon_path()
+    if resolved_icon_path.exists():
+        # pywebview icon support varies by backend/platform, so custom icons are optional.
+        start_kwargs["icon"] = str(resolved_icon_path)
+
+    entry_callable = _select_launch_entry(controller, override)
 
     try:
-        launch_window(
-            content,
-            webview_module=webview_module,
-            app_icon_path=app_icon_path,
-            js_api=bridge,
-        )
+        webview.start(entry_callable, **start_kwargs)
     finally:
-        if bridge is not None:
-            bridge._stop_worker()
-
-    return target
+        bridge._stop_worker()
 
 
-def build_fallback_html(probe_result: DesktopProbeResult) -> str:
-    """Build escaped inline HTML for expected Desktop connection failures."""
+def _select_launch_entry(
+    controller: ConnectionController,
+    override: tuple[str, int] | None,
+) -> Callable[[], Any]:
+    """Return the nullary post-loop entry callable and log the chosen branch.
 
-    target = probe_result.target
-    escaped_host = html.escape(target.host)
-    escaped_port = html.escape(str(target.port))
-    escaped_url = html.escape(target.url)
-    title, body, hint = _fallback_copy(probe_result.status)
+    An explicit CLI override connects straight to that target (the controller
+    remembers it as a side effect of a successful connect); otherwise the
+    controller auto-connects to last-used, or shows the connection screen on
+    first run. pywebview's ``func`` is nullary, so the override branch is wrapped
+    in a zero-argument closure.
+    """
 
-    return f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{html.escape(title)} · vBot</title>
-    <style>
-      :root {{
-        color-scheme: dark;
-        background: #15130f;
-        color: #f1eadf;
-        font-family: "Trebuchet MS", Verdana, sans-serif;
-      }}
-      body {{
-        min-height: 100vh;
-        margin: 0;
-        display: grid;
-        place-items: center;
-        background:
-          radial-gradient(circle at 20% 10%, rgba(240, 164, 58, 0.18), transparent 32rem),
-          #15130f;
-      }}
-      main {{
-        width: min(42rem, calc(100vw - 3rem));
-        padding: 2rem;
-        border: 1px solid rgba(240, 164, 58, 0.28);
-        border-radius: 1.5rem;
-        background: #211d17;
-        box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.36);
-      }}
-      .eyebrow {{
-        margin: 0 0 0.65rem;
-        color: #f0a43a;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-      }}
-      h1 {{
-        margin: 0 0 1rem;
-        font-family: Georgia, "Times New Roman", serif;
-        font-size: clamp(2.25rem, 7vw, 4rem);
-        line-height: 0.98;
-      }}
-      p {{
-        margin: 0 0 1rem;
-        color: #b8aa95;
-        font-size: 1rem;
-        line-height: 1.6;
-      }}
-      dl {{
-        display: grid;
-        grid-template-columns: max-content 1fr;
-        gap: 0.65rem 1rem;
-        margin: 1.5rem 0 0;
-        padding: 1rem;
-        border-radius: 1rem;
-        background: #2d271f;
-      }}
-      dt {{ color: #847762; }}
-      dd {{ margin: 0; overflow-wrap: anywhere; }}
-    </style>
-  </head>
-  <body>
-    <main>
-      <p class="eyebrow">vBot Desktop</p>
-      <h1>{html.escape(title)}</h1>
-      <p>{html.escape(body)}</p>
-      <p>{html.escape(hint)}</p>
-      <dl aria-label="Desktop target">
-        <dt>Host</dt><dd>{escaped_host}</dd>
-        <dt>Port</dt><dd>{escaped_port}</dd>
-        <dt>URL</dt><dd>{escaped_url}</dd>
-      </dl>
-    </main>
-  </body>
-</html>
-"""
+    if override is not None:
+        host, port = override
+        logger.info("Desktop starting; connecting to CLI override %s:%s", host, port)
+
+        def connect_override() -> Any:
+            return controller.connect(host, port)
+
+        return connect_override
+
+    launch_target = controller.resolve_last_used()
+    if launch_target is None:
+        logger.info("Desktop starting with no saved server; showing connection screen")
+    else:
+        logger.info(
+            "Desktop starting; auto-connecting to %s:%s",
+            launch_target.host,
+            launch_target.port,
+        )
+    return controller.auto_connect
 
 
 def validate_port(value: Any, *, source: str = "port") -> int:
@@ -404,42 +311,20 @@ def _is_vbot_health_response(response: HttpResponse) -> bool:
     return bool(payload == {"status": "ok"})
 
 
-def _fallback_copy(status: str) -> tuple[str, str, str]:
-    """Return title/body/help copy for a Desktop probe status."""
-
-    if status == PROBE_SERVER_UNREACHABLE:
-        return (
-            "Server unreachable",
-            "vBot Desktop could not connect to the configured server target.",
-            "Start a vBot server or choose a different host and port, then open Desktop again.",
-        )
-    if status == PROBE_WEBUI_UNAVAILABLE:
-        return (
-            "WebUI unavailable",
-            "The vBot server is reachable, but it is not serving the WebUI at the root path.",
-            "Build or deploy the WebUI for this server, then reopen Desktop.",
-        )
-    if status == PROBE_NOT_VBOT_SERVER:
-        return (
-            "Not a vBot server",
-            "Something responded at the configured target, but /health did not match vBot.",
-            "Use a host and port for a running vBot server.",
-        )
-    if status == PROBE_INVALID_TARGET:
-        return (
-            "Invalid Desktop target",
-            "vBot Desktop could not build a valid server URL from the configured host.",
-            "Choose a localhost or LAN host name without a scheme, path, or whitespace.",
-        )
-    raise ValueError(f"Unsupported Desktop probe status: {status}")
-
-
 def _create_wakeword_bridge(
     args: argparse.Namespace,
-    settings_file: Path | None = None,
-    server_url: str = "",
+    settings_file: Path | None,
+    controller: ConnectionController,
+    server_url: str,
 ) -> Any:
     """Create the DesktopBridge with engine and worker for the wakeword pipeline.
+
+    The controller is passed in as the bridge's connection delegate (so the
+    shell connection screen's ``connect`` call routes through it). ``server_url``
+    is the *effective launch target* the caller resolved once (CLI override else
+    last-used), so the local voice pipeline sends transcripts to the same server
+    the window opens. An empty ``server_url`` (first run, nothing to target)
+    makes the worker skip sending — the no-target behavior the worker guards.
 
     Uses MockWakewordWorker when --mock-wakeword is set or when openWakeWord
     cannot be imported. Returns the bridge instance (never None — the bridge
@@ -473,7 +358,11 @@ def _create_wakeword_bridge(
             server_url=server_url,
         )
 
-    bridge = DesktopBridge(settings_path=settings_file, worker_factory=worker_factory)
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        worker_factory=worker_factory,
+        connection=controller,
+    )
 
     wakeword_config = read_wakeword_settings(settings_file)
     if wakeword_config.get("enabled", False):
@@ -482,17 +371,54 @@ def _create_wakeword_bridge(
     return bridge
 
 
-def _append_accessor_param(url: str) -> str:
-    """Append ?accessor=desktop to a URL, preserving existing query params."""
+def _resolve_launch_override(args: argparse.Namespace) -> tuple[str, int] | None:
+    """Return an explicit ``(host, port)`` launch override from the CLI flags.
 
-    separator = "&" if "?" in url else "?"
-    return f"{url}{separator}{ACCESSOR_QUERY_PARAM}"
+    A ``--host`` and/or ``--port`` is a *deliberate* target, not the silent
+    localhost default the plan removed — so when either is given it must take
+    effect. A missing half is filled from ``DEFAULT_HOST`` / ``DEFAULT_PORT``
+    (acceptable because the user explicitly asked to launch at a specific
+    target). With neither flag given, returns ``None`` and the launcher falls
+    back to last-used auto-connect.
+    """
+
+    if args.host is None and args.port is None:
+        return None
+    host = args.host if args.host is not None else DEFAULT_HOST
+    port = args.port if args.port is not None else DEFAULT_PORT
+    return (host, port)
 
 
-def main(argv: list[str] | None = None) -> DesktopTarget:
-    """Open the vBot Desktop shell for the resolved server target."""
+def _resolve_launch_server_url(
+    override: tuple[str, int] | None,
+    controller: ConnectionController,
+) -> str:
+    """Return the WebUI base URL of the effective launch target for the worker.
 
-    return launch_desktop(argv)
+    Uses the CLI override when present, else the controller's last-used / first
+    remembered target, so the voice worker and the window point at the *same*
+    server. Returns an empty string when there is no target (first run, no flags)
+    or when the host cannot form a valid URL — the worker treats that as "no
+    server" and skips network calls.
+    """
+
+    if override is not None:
+        host, port = override
+    else:
+        entry = controller.resolve_last_used()
+        if entry is None:
+            return ""
+        host, port = entry.host, entry.port
+    try:
+        return build_target_url(host, port)
+    except ValueError:
+        return ""
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Open the vBot Desktop shell, routing target selection through the window."""
+
+    launch_desktop(argv)
 
 
 def _parse_port(value: str) -> int:
