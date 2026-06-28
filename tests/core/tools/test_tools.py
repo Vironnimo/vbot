@@ -19,6 +19,7 @@ from core.tools import (
     ToolExecutionConfig,
     ToolExecutor,
     ToolNoteHook,
+    ToolPromptBlockRegistry,
     ToolRegistry,
     is_tool_result_envelope,
     tool_failure,
@@ -1123,3 +1124,50 @@ class TestPublicExports:
         exported_hook: ToolNoteHook = note_hook
 
         exported_hook("reminder")
+
+
+class TestToolPromptBlockRegistry:
+    """The tool side of the unified contributor path (D6).
+
+    A tool declares a prompt block here; the runtime gathers ``block_definitions``
+    and hands them to the prompt manager. The prompts domain only ever consumes a
+    list of ``BlockDefinition`` objects — it never imports a tool class.
+    """
+
+    def test_static_and_dynamic_tool_blocks_become_definitions(self) -> None:
+        registry = ToolPromptBlockRegistry()
+        registry.register("bash", default_text="Bash guidance.")
+        registry.register("web_fetch", render=lambda ctx: "Fetched.")
+
+        definitions = registry.block_definitions()
+
+        by_id = {definition.id: definition for definition in definitions}
+        assert by_id["tool:bash"].owner == "tool:bash"
+        assert by_id["tool:bash"].default_text == "Bash guidance."
+        assert by_id["tool:bash"].editable is True
+        assert by_id["tool:web_fetch"].owner == "tool:web_fetch"
+        assert by_id["tool:web_fetch"].render is not None
+        assert by_id["tool:web_fetch"].editable is False
+
+    def test_requires_exactly_one_of_text_or_render(self) -> None:
+        registry = ToolPromptBlockRegistry()
+
+        with pytest.raises(ValueError, match="exactly one"):
+            registry.register("bash", default_text="x", render=lambda ctx: "y")
+        with pytest.raises(ValueError, match="exactly one"):
+            registry.register("bash")
+
+    def test_duplicate_tool_name_is_first_wins(self, caplog: pytest.LogCaptureFixture) -> None:
+        registry = ToolPromptBlockRegistry()
+        registry.register("bash", default_text="First.")
+
+        caplog.set_level(logging.WARNING, logger="vbot.tools")
+        registry.register("bash", default_text="Second.")
+
+        definitions = registry.block_definitions()
+        assert len(definitions) == 1
+        assert definitions[0].default_text == "First."
+        assert any("already declared" in record.getMessage() for record in caplog.records)
+
+    def test_empty_registry_yields_no_definitions(self) -> None:
+        assert ToolPromptBlockRegistry().block_definitions() == []

@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from core.utils.errors import VBotError
@@ -44,6 +45,10 @@ BLOCK_SEPARATOR = "\n\n"
 GENERATED_PATTERN = re.compile(r"\{generated:([^{}]+)\}")
 # ``{include:filename}`` pulls a flat, safe workspace file into a text block.
 INCLUDE_PATTERN = re.compile(r"\{include:([^{}]+)\}")
+# Shared immutable empty mapping for the optional build-time replacements default,
+# so the keyword default is not a mutable object and every "no replacements" caller
+# shares one instance.
+MAPPING_PROXY_EMPTY: Mapping[str, str] = MappingProxyType({})
 
 
 class PromptError(VBotError, ValueError):
@@ -406,6 +411,7 @@ def resolve_block_text(
     *,
     override_resolver: OverrideResolver,
     producers: Mapping[str, BlockProducer],
+    replacements: Mapping[str, str] = MAPPING_PROXY_EMPTY,
 ) -> str:
     """Resolve one block's effective text before the non-emptiness gate.
 
@@ -413,12 +419,16 @@ def resolve_block_text(
       on any exception, log a warning and return ``""`` so only this block drops,
       never the run. ``data`` blocks that carry a ``render`` go through here too.
     - **static text** block: take the override cascade result (the injected
-      resolver, falling back to ``default_text``) and expand ``{generated:…}``
-      (producers) then ``{include:…}`` (workspace files), both fail-soft.
+      resolver, falling back to ``default_text``), expand ``{generated:…}``
+      (producers) then ``{include:…}`` (workspace files) — both fail-soft — and
+      finally apply the build-time ``replacements`` (the runtime variables
+      ``{host}``/``{model}``/… that stay literal placeholders, not ``{generated:…}``,
+      and are filled here at build). Replacements are plain text substitution, so a
+      block that does not contain a placeholder is untouched.
     - **static data** block: its ``default_text`` is rendered **verbatim** —
-      never run through marker/include expansion (mirrors today's "agent body
-      substituted last, literally"). A data block that needs expansion uses a
-      ``render`` function instead.
+      never run through marker/include/replacement expansion (mirrors today's
+      "agent body substituted last, literally"). A data block that needs expansion
+      uses a ``render`` function instead.
     """
     definition = block.definition
     if definition.render is not None:
@@ -437,7 +447,24 @@ def resolve_block_text(
         return text
 
     expanded = expand_generated_markers(text, producers, context)
-    return expand_workspace_includes(expanded, context.agent.workspace)
+    included = expand_workspace_includes(expanded, context.agent.workspace)
+    return apply_replacements(included, replacements)
+
+
+def apply_replacements(text: str, replacements: Mapping[str, str]) -> str:
+    """Replace each build-time placeholder in *text* with its value (plain text).
+
+    The single home for the runtime-variable substitution (``{host}``, ``{model}``,
+    …). Plain ``str.replace`` per key — never a format engine — so an unrelated
+    ``{…}`` in the text is left untouched and only the known runtime placeholders
+    are filled.
+    """
+    if not replacements:
+        return text
+    for placeholder, value in replacements.items():
+        if placeholder in text:
+            text = text.replace(placeholder, value)
+    return text
 
 
 def normalize_blocks(rendered_blocks: Sequence[str]) -> str:
@@ -461,13 +488,15 @@ def assemble_system_prompt(
     owner_activity: OwnerActivity,
     override_resolver: OverrideResolver,
     producers: Mapping[str, BlockProducer],
+    replacements: Mapping[str, str] = MAPPING_PROXY_EMPTY,
 ) -> str:
     """Assemble the final system prompt from blocks (the public entry point).
 
     Resolves the layout into the effective ordered ``(definition, enabled)`` list,
-    renders each surviving block's effective text, applies the three gates, and
-    normalizes the survivors into one string. Deterministic for the cache: the
-    same inputs always produce the same output.
+    renders each surviving block's effective text (applying the build-time
+    ``replacements`` to text blocks), applies the three gates, and normalizes the
+    survivors into one string. Deterministic for the cache: the same inputs always
+    produce the same output.
     """
     resolved = resolve_layout(definitions, layout)
     rendered: list[str] = []
@@ -477,6 +506,7 @@ def assemble_system_prompt(
             context,
             override_resolver=override_resolver,
             producers=producers,
+            replacements=replacements,
         )
         if passes_gates(block, context.agent, owner_activity, text):
             rendered.append(text)
@@ -512,6 +542,90 @@ class MappingOverrideResolver:
         return self.overrides.get((scope, definition.id))
 
 
+class BlockStore(Protocol):
+    """The persisted layout + per-block text override source the manager reads.
+
+    The seam between the assembly engine (definitions, this module) and the β
+    persistence (``layout.json`` + ``blocks/<namespace>/<slug>.md``, Phase 2). The
+    manager depends on this Protocol, never the concrete ``PromptBlockStore``, so
+    its unit tests inject a fake/empty source exactly as Phase 1's tests do.
+
+    Two read operations, both per scope (``"default"`` or an ``"agent:<id>"`` key
+    the manager forms from the resolved build scope):
+
+    - :meth:`read_layout` returns the scope's owned ordered entries, or ``[]`` when
+      the scope has no saved layout yet (every block then defaults in at its rank).
+    - :meth:`read_block_override` returns one block's saved override text, or
+      ``None`` when no override exists (fall back to the owner default).
+
+    The agent-scope cascade (agent override ← default override ← owner default) is
+    composed by the manager from these two reads, not by the store.
+    """
+
+    def read_layout(self, scope: str) -> list[LayoutEntry]:
+        """Return the saved ordered layout entries for *scope* (``[]`` if none)."""
+        ...
+
+    def read_block_override(self, scope: str, block_id: str) -> str | None:
+        """Return *block_id*'s saved override text for *scope* (``None`` if none)."""
+        ...
+
+
+@dataclass(frozen=True)
+class EmptyBlockStore:
+    """A :class:`BlockStore` with no saved layout and no overrides.
+
+    The default the manager uses when no persistence is wired (Phase 1-style unit
+    tests, and any path that has not been handed Phase 2's store yet): every scope
+    reads an empty layout (so all definitions default in at their rank) and no
+    block has an override (so every block uses its owner default text).
+    """
+
+    def read_layout(self, scope: str) -> list[LayoutEntry]:
+        return []
+
+    def read_block_override(self, scope: str, block_id: str) -> str | None:
+        return None
+
+
+def load_layout_entries(raw: object) -> list[LayoutEntry]:
+    """Parse a ``layout.json`` payload into :class:`LayoutEntry` objects, fail-soft.
+
+    The bundled default layout and Phase 2's persisted layouts share this one
+    parser. The payload is the ordered ``[{"id", "enabled", "source"}, ...]`` list
+    (D3). A non-list payload yields ``[]``; a malformed entry (not an object, no
+    string ``id``) is skipped with a warning rather than aborting assembly — a
+    broken layout must never take a run down, it just falls back to defaults. A
+    missing ``enabled`` defaults to ``True`` (a listed block is on); ``source`` is
+    optional metadata used only to rank an entry whose definition is momentarily
+    gone.
+    """
+    if not isinstance(raw, list):
+        if raw is not None:
+            _LOGGER.warning("Ignoring malformed prompt layout: expected a list")
+        return []
+
+    entries: list[LayoutEntry] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            _LOGGER.warning("Skipping malformed layout entry (not an object): %r", item)
+            continue
+        block_id = item.get("id")
+        if not isinstance(block_id, str) or not block_id:
+            _LOGGER.warning("Skipping layout entry with no string id: %r", item)
+            continue
+        enabled = item.get("enabled", True)
+        source = item.get("source")
+        entries.append(
+            LayoutEntry(
+                id=block_id,
+                enabled=bool(enabled),
+                source=source if isinstance(source, str) else None,
+            )
+        )
+    return entries
+
+
 __all__ = [
     "BLOCK_KIND_DATA",
     "BLOCK_KIND_TEXT",
@@ -522,17 +636,21 @@ __all__ = [
     "BlockRenderContext",
     "BlockRenderer",
     "BlockSource",
+    "BlockStore",
     "CallableOwnerActivity",
+    "EmptyBlockStore",
     "LayoutEntry",
     "MappingOverrideResolver",
     "OverrideResolver",
     "OwnerActivity",
     "PromptError",
     "ResolvedBlock",
+    "apply_replacements",
     "assemble_system_prompt",
     "dedupe_definitions",
     "expand_generated_markers",
     "expand_workspace_includes",
+    "load_layout_entries",
     "normalize_blocks",
     "parse_block_source",
     "passes_gates",

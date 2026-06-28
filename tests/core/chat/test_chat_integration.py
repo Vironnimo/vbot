@@ -732,20 +732,21 @@ def _write_model_resource(resources: Path) -> None:
 
 
 def _write_prompt_resources(resources: Path) -> None:
+    # Block-model resources: the core text blocks read their default text from these
+    # files (the tool/channel/skill lists are {generated:…} producers now); SOUL and
+    # memory render through their own blocks, not via system.md placeholders. system.md
+    # is no longer the assembly driver (the layout is) and is kept empty.
     prompts_dir = resources / "prompts"
     prompts_dir.mkdir(parents=True)
-    (prompts_dir / "system.md").write_text(
-        "{include:SOUL.md}\n{memory}\n{runtime}\n{tools}\n{channels}\n{skills}",
-        encoding="utf-8",
-    )
+    (prompts_dir / "system.md").write_text("", encoding="utf-8")
     (prompts_dir / "runtime.md").write_text(
         "Version {app_version}\nModel {model}\nWorkspace {agent_workspace}\n"
         "Thinking {thinking_effort}\nDate {current_date}",
         encoding="utf-8",
     )
-    (prompts_dir / "tools.md").write_text("Tools\n{tool_list}", encoding="utf-8")
-    (prompts_dir / "channels.md").write_text("Channels\n{channel_list}", encoding="utf-8")
-    (prompts_dir / "skills.md").write_text("Skills\n{skill_list}", encoding="utf-8")
+    (prompts_dir / "tools.md").write_text("Tools\n{generated:tool_list}", encoding="utf-8")
+    (prompts_dir / "channels.md").write_text("Channels\n{generated:channel_list}", encoding="utf-8")
+    (prompts_dir / "skills.md").write_text("Skills\n{generated:skill_list}", encoding="utf-8")
     (prompts_dir / "compaction.md").write_text("Summarize the conversation.", encoding="utf-8")
 
 

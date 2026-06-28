@@ -467,6 +467,75 @@ class ToolRegistry:
         }
 
 
+class ToolPromptBlockRegistry:
+    """Collect tool-owned System Prompt block declarations (D6).
+
+    The tool-side of the unified contributor path: a tool that wants prompt
+    content declares a block here at its ``register_*`` step, and the runtime
+    gathers :meth:`block_definitions` and hands them to the prompt manager. This
+    keeps the prompt domain free of tool internals — it only ever consumes a list
+    of ``core.prompts.BlockDefinition`` objects, never imports a tool class.
+
+    A declared block is id ``tool:<name>`` and owner ``tool:<name>`` (so gate 2
+    renders it only when ``<name>`` is on the agent's effective allowlist), static
+    (``default_text``) or dynamic (``render``) — the same split as a core or
+    extension block. No built-in tool declares a block today; the seam exists and
+    is proven by a test. Collisions are resolved first-wins with a warning, like
+    tool-name registration.
+    """
+
+    def __init__(self) -> None:
+        self._declarations: dict[str, tuple[str | None, Callable[..., str] | None]] = {}
+
+    def register(
+        self,
+        tool_name: str,
+        *,
+        default_text: str | None = None,
+        render: Callable[..., str] | None = None,
+    ) -> None:
+        """Declare a prompt block for *tool_name* (exactly one text / render).
+
+        Passing both or neither raises ``ValueError`` at declaration. A second
+        declaration for the same tool name is ignored with a warning (first wins),
+        mirroring how a duplicate tool name is handled.
+        """
+        if not tool_name:
+            raise ValueError("Tool prompt block requires a tool name")
+        has_text = default_text is not None
+        has_render = render is not None
+        if has_text == has_render:
+            raise ValueError("Tool prompt block requires exactly one of default_text / render")
+        if tool_name in self._declarations:
+            _LOGGER.warning(
+                "Tool prompt block for %r already declared; ignoring the duplicate",
+                tool_name,
+            )
+            return
+        self._declarations[tool_name] = (default_text, render)
+
+    def block_definitions(self) -> list[Any]:
+        """Return the declared blocks as ``core.prompts.BlockDefinition`` objects.
+
+        Lazy ``core.prompts`` import so the tools domain carries no import-time
+        dependency on the prompts domain (this runs at runtime collection, never at
+        module load). Order is declaration order.
+        """
+        from core.prompts import BlockDefinition
+
+        definitions: list[Any] = []
+        for tool_name, (default_text, render) in self._declarations.items():
+            definitions.append(
+                BlockDefinition(
+                    id=f"tool:{tool_name}",
+                    owner=f"tool:{tool_name}",
+                    default_text=default_text,
+                    render=render,
+                )
+            )
+        return definitions
+
+
 class ToolExecutor:
     """Schedule tool calls concurrently while preserving returned call order."""
 
@@ -684,6 +753,7 @@ __all__ = [
     "ToolNoteHook",
     "ToolNotAllowedError",
     "ToolNotFoundError",
+    "ToolPromptBlockRegistry",
     "ToolRegistry",
     "is_tool_result_envelope",
     "tool_failure",

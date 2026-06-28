@@ -8,9 +8,12 @@ import threading
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal, Protocol
 
 from core.utils.errors import VBotError
+
+if TYPE_CHECKING:
+    from core.prompts.blocks import BlockDefinition
 
 MemoryScope = Literal["user", "agent"]
 MemoryPromptMode = Literal["off", "agent", "agent_user"]
@@ -43,18 +46,37 @@ _MAX_ENTRY_LENGTH = 2_000
 # Both exceed _MAX_ENTRY_LENGTH so a single normal add into an empty scope always
 # fits; agent notes accumulate more than the user profile, so its budget is larger.
 _MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000}
-# Behavioral guidance rendered at the top of the pinned-memory block, so it appears
-# only when memory is enabled (the block collapses to "" otherwise). Complements the
-# memory tool's WHEN/SKIP description with the one writing-quality rule that is not
-# obvious: declarative facts round-trip safely, imperative self-instructions do not.
-# NOTE: this text is hardcoded today; it is a candidate to become user-editable once
-# the System Prompt assembly is reworked (see stuff/HANDOFF-system-prompt-architecture.md).
+# Behavioral guidance rendered at the top of the pinned-memory block. It is the
+# editable default text of the ``memory:guidance`` block (D6): the memory domain
+# declares the block, so the guidance ships with its owner instead of as a
+# hardcoded prompt string. Because the guidance is the block's own non-empty text
+# and the block is gated on "memory tool enabled" (not "memory files non-empty"),
+# it now appears whenever ``memory_prompt_mode != off`` — including before the first
+# entry, when the agent needs it most (this is the empty-memory fix from D5).
+# Complements the memory tool's WHEN/SKIP description with the one writing-quality
+# rule that is not obvious: declarative facts round-trip safely, imperative
+# self-instructions do not.
 _MEMORY_GUIDANCE = (
     "Write durable, declarative facts here, not instructions to yourself: "
     '"User prefers concise answers" (good), not "Always answer concisely" (bad) — '
     "imperative notes get re-read as standing directives in later sessions and can "
     "override the user's current request."
 )
+# The ``memory:guidance`` block id and owner. The owner ``memory`` is gate 2's
+# input: the block renders only when the memory tool is enabled for the agent
+# (``memory_prompt_mode != off``), resolved by the manager's owner-active seam.
+MEMORY_BLOCK_ID = "memory:guidance"
+MEMORY_BLOCK_OWNER = "memory"
+# The producer name the embedded ``{generated:memory_files}`` marker expands to.
+# The manager registers this producer (its closure reads the agent/mode); the file
+# reading itself lives in :func:`read_memory_files` so the data half stays in the
+# memory domain.
+MEMORY_FILES_PRODUCER_NAME = "memory_files"
+# The block's default text: the guidance prose, then the embedded files marker, all
+# inside the ``<memory>`` wrapper — one sortable unit (D2). The marker renders ""
+# when the files are empty/absent, and normalization trims the gap, so an empty
+# memory still shows the guidance inside a clean ``<memory>`` wrapper.
+_MEMORY_BLOCK_TEMPLATE = "<memory>\n{guidance}\n\n{{generated:{producer}}}\n</memory>"
 
 
 class MemoryError(VBotError, ValueError):
@@ -149,17 +171,24 @@ class FilePinnedMemoryBackend:
             _write_memory_parts(path, preamble, entries, suffix)
             return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
 
-    def build_prompt_block(self, workspace: Path, mode: MemoryPromptMode) -> str:
+    def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
+        """Return the ``<file>``-wrapped pinned-memory file contents, ``""`` if empty.
+
+        The data half of the memory block — only the file contents, with no
+        ``<memory>`` wrapper and no guidance, and **no** empty-suppression of any
+        surrounding block (the guidance lives in the block's own text now). The
+        ``memory_files`` producer calls this so the file reading stays in the
+        memory domain. ``off`` mode reads nothing; a missing file is skipped, an
+        unreadable file raises :class:`MemoryError` (unchanged ``_read_prompt_file``
+        behavior).
+        """
         validated_mode = validate_memory_prompt_mode(mode)
         blocks = [
             _read_prompt_file(Path(workspace) / filename)
             for filename in MEMORY_PROMPT_FILES[validated_mode]
         ]
         visible_blocks = [block for block in blocks if block]
-        if not visible_blocks:
-            return ""
-        sections = [_MEMORY_GUIDANCE, *visible_blocks]
-        return "<memory>\n" + "\n\n".join(sections) + "\n</memory>"
+        return "\n\n".join(visible_blocks)
 
     def _path(self, workspace: Path, scope: MemoryScope) -> Path:
         workspace_path = Path(workspace)
@@ -190,8 +219,60 @@ class MemoryService:
     def remove_entry(self, workspace: Path, scope: MemoryScope, entry_id: int) -> MemoryEntry:
         return self._backend.remove_entry(workspace, scope, entry_id)
 
-    def build_prompt_block(self, workspace: Path, mode: MemoryPromptMode) -> str:
-        return self._backend.build_prompt_block(workspace, mode)
+    def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
+        return self._backend.read_prompt_files(workspace, mode)
+
+
+class _MemoryFileReader(Protocol):
+    """The one method :func:`read_memory_files` needs from a memory provider."""
+
+    def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
+        """Return the ``<file>``-wrapped pinned-memory file contents for a mode."""
+        ...
+
+
+def read_memory_files(
+    workspace: Path, mode: MemoryPromptMode, *, provider: _MemoryFileReader
+) -> str:
+    """Render the embedded ``{generated:memory_files}`` text for one agent/mode.
+
+    The single file-reading entry point the ``memory_files`` producer wraps: only
+    the ``<file>``-wrapped pinned-memory contents (no guidance, no ``<memory>``
+    wrapper), ``""`` when empty/absent or when the mode is ``off``. Kept in the
+    memory domain so the producer the manager registers stays a thin closure;
+    *provider* is the manager's memory provider (a :class:`MemoryService` or any
+    stub exposing ``read_prompt_files``).
+    """
+    return provider.read_prompt_files(Path(workspace), mode)
+
+
+def memory_block_definition() -> BlockDefinition:
+    """Return the ``memory:guidance`` block declaration (D6).
+
+    The memory domain ships its own block: a static, editable ``text`` block whose
+    default text is the guidance prose wrapped in ``<memory>`` with an embedded
+    ``{generated:memory_files}`` marker (one sortable unit, D2). Owner ``memory``
+    drives gate 2, so the block — guidance included — renders whenever the memory
+    tool is enabled, even with empty/absent files (the D5 empty-memory fix). The
+    file contents are supplied by the ``memory_files`` producer (see
+    :func:`read_memory_files`), which the runtime registers on the manager.
+
+    Imported lazily so the memory domain carries no import-time dependency on the
+    prompts package (which depends back on memory through the tool-availability
+    seam); the factory runs only at block collection, never at module import.
+    """
+    from core.prompts.blocks import BLOCK_KIND_TEXT, BlockDefinition
+
+    default_text = _MEMORY_BLOCK_TEMPLATE.format(
+        guidance=_MEMORY_GUIDANCE,
+        producer=MEMORY_FILES_PRODUCER_NAME,
+    )
+    return BlockDefinition(
+        id=MEMORY_BLOCK_ID,
+        owner=MEMORY_BLOCK_OWNER,
+        kind=BLOCK_KIND_TEXT,
+        default_text=default_text,
+    )
 
 
 def validate_memory_scope(scope: object) -> MemoryScope:

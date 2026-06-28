@@ -1,0 +1,10 @@
+[
+  { "id": "core:agent_body", "enabled": true, "source": "core" },
+  { "id": "core:soul", "enabled": true, "source": "core" },
+  { "id": "memory:guidance", "enabled": true, "source": "memory" },
+  { "id": "core:project_files", "enabled": true, "source": "core" },
+  { "id": "core:runtime", "enabled": true, "source": "core" },
+  { "id": "core:tools", "enabled": true, "source": "core" },
+  { "id": "core:channels", "enabled": true, "source": "core" },
+  { "id": "core:skills", "enabled": true, "source": "core" }
+]
