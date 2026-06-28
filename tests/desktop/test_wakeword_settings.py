@@ -1,9 +1,10 @@
-"""Tests for Desktop entrypoint wakeword/accessor wiring in ``desktop.main``.
+"""Tests for the Desktop ``--mock-wakeword`` flag in ``desktop.main``.
 
 The wakeword *settings* read/write/merge functions moved to ``desktop.settings``
-and are covered by ``test_settings.py``; what remains here is the entrypoint
-behavior that still lives in ``desktop.main`` — the ``--mock-wakeword`` flag and
-the accessor query-param helper.
+and are covered by ``test_settings.py``; the accessor query-param helper moved to
+``desktop.connection`` (covered by ``test_connection.py``). What remains here is
+the entrypoint argument behavior that still lives in ``desktop.main`` — the
+``--mock-wakeword`` flag.
 """
 
 from __future__ import annotations
@@ -26,15 +27,3 @@ def test_parse_args_mock_wakeword_defaults_to_false() -> None:
     args = desktop_main.parse_args(["--host", "127.0.0.1"])
 
     assert args.mock_wakeword is False
-
-
-def test_append_accessor_param_appends_to_root_url() -> None:
-    result = desktop_main._append_accessor_param("http://127.0.0.1:8420/")
-
-    assert result == "http://127.0.0.1:8420/?accessor=desktop"
-
-
-def test_append_accessor_param_preserves_existing_params() -> None:
-    result = desktop_main._append_accessor_param("http://127.0.0.1:8420/?foo=bar")
-
-    assert result == "http://127.0.0.1:8420/?foo=bar&accessor=desktop"
