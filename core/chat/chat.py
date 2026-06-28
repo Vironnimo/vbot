@@ -1131,9 +1131,14 @@ class ChatLoop:
                                     visiting_projects,
                                     visited_projects_this_run,
                                 )
-                    # Honor cancellation only after every sibling tool result has
-                    # been persisted, so a mid-cycle cancel never leaves an
-                    # assistant turn with dangling tool_calls in JSONL history.
+                    # Honored only after every sibling tool result is persisted, so
+                    # this cooperative stop never itself dangles the assistant turn.
+                    # It is not a full JSONL guarantee, though: the forceful
+                    # task.cancel() in Run.request_cancel (and a process kill) can
+                    # still interrupt the dispatch above with tool_calls left
+                    # unanswered on disk. That persisted state is not corruption —
+                    # request assembly repairs it via _repair_dangling_tool_calls,
+                    # synthesizing the missing results before any provider sees it.
                     run.raise_if_cancelled()
                 finally:
                     session.flush_deferred_notes()
