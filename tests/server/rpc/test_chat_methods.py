@@ -476,6 +476,7 @@ class _QueueOnBusyLoop:
 
     def __init__(self, resolved_session_id: str = "s1") -> None:
         self._resolved_session_id = resolved_session_id
+        self.build_calls: list[dict[str, Any]] = []
 
     async def start_run(self, agent_id: str, content: Any, **kwargs: Any) -> Any:
         raise ActiveRunError("session already has an active run")
@@ -486,14 +487,20 @@ class _QueueOnBusyLoop:
     def build_queue_update(
         self, agent_id: str, session_id: str, content: Any, **kwargs: Any
     ) -> tuple[str, object, str]:
+        self.build_calls.append({"agent_id": agent_id, "session_id": session_id, **kwargs})
         return self._resolved_session_id, object(), "display"
 
 
 class _FakeQueueRuns:
     """Minimal ChatRunManager stand-in for the queue remove/update handlers."""
 
+    def __init__(self, project_id: str | None = None) -> None:
+        # The queued item carries the project anchor it was enqueued under, exactly
+        # like the real QueuedRunItem, so the update handler can rebuild against it.
+        self._project_id = project_id
+
     def list_queued(self, agent_id: str, session_id: str) -> list[Any]:
-        return [SimpleNamespace(item_id="q-1", internal=False)]
+        return [SimpleNamespace(item_id="q-1", internal=False, project_id=self._project_id)]
 
     def remove_queued(self, agent_id: str, session_id: str, item_id: str) -> bool:
         return True
@@ -502,13 +509,13 @@ class _FakeQueueRuns:
         return True
 
 
-def _make_queue_state(loop: Any) -> SimpleNamespace:
+def _make_queue_state(loop: Any, *, queue_project_id: str | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         chat_loop=loop,
         streaming_chat_loop=loop,
         runtime=SimpleNamespace(),
         event_bus=ServerEventBus(),
-        chat_runs=_FakeQueueRuns(),
+        chat_runs=_FakeQueueRuns(queue_project_id),
         command_dispatcher=_NoCommandDispatcher(),
     )
 
@@ -577,6 +584,34 @@ def test_queue_update_scopes_on_resolved_session_id() -> None:
     assert _queue_resource_events(state) == [
         {"kind": "queue", "scope": {"agent_id": "builder", "session_id": "resolved-s1"}}
     ]
+
+
+def test_queue_update_rebuilds_against_queued_item_project() -> None:
+    # A project session's queued item carries its own project_id. The queue is keyed on the
+    # bare agent id, so the edit's params carry no project — the rebuild must take it from the
+    # item. Without this, the project session is looked up in the identity anchor and fails.
+    loop = _QueueOnBusyLoop()
+    state = _make_queue_state(loop, queue_project_id="vbot")
+
+    _chat_queue_update(
+        state,
+        {"agent_id": "builder", "session_id": "s1", "item_id": "q-1", "content": "edit"},
+    )
+
+    assert loop.build_calls[-1]["project_id"] == "vbot"
+
+
+def test_queue_update_identity_item_rebuilds_without_project() -> None:
+    # An identity-session item has project_id=None, so the rebuild stays project-less.
+    loop = _QueueOnBusyLoop()
+    state = _make_queue_state(loop, queue_project_id=None)
+
+    _chat_queue_update(
+        state,
+        {"agent_id": "builder", "session_id": "s1", "item_id": "q-1", "content": "edit"},
+    )
+
+    assert loop.build_calls[-1]["project_id"] is None
 
 
 # ---------------------------------------------------------------------------

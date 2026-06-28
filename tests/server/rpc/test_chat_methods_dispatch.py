@@ -707,10 +707,15 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         agent_id: str,
         session_id: str,
         content: str | list[TextBlock],
+        *,
+        input_origin: str | None = None,
+        project_id: str | None = None,
     ) -> tuple[str, Any, str]:
         captured["agent_id"] = agent_id
         captured["session_id"] = session_id
         captured["content"] = content
+        captured["input_origin"] = input_origin
+        captured["project_id"] = project_id
         return session_id, fake_executor, "Updated queued message"
 
     monkeypatch.setattr(
@@ -743,6 +748,8 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         "agent_id": "agent-1",
         "session_id": "session-1",
         "content": [TextBlock(type="text", text="Edited queued text")],
+        "input_origin": None,
+        "project_id": None,
     }
     assert queue_manager.update_calls == [
         ("agent-1", "session-1", "queue-1", fake_executor, "Updated queued message")

@@ -19,7 +19,7 @@ from core.projects import (
     format_agent_address,
     parse_agent_address,
 )
-from core.runs import ActiveRunError, ChatRunManager
+from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem
 from core.subagents.subagents import (
     SUBAGENT_PARENT_METADATA_KEY,
     SUBAGENT_SESSION_METADATA_FLAG,
@@ -987,27 +987,26 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         chat_runs = _state_chat_runs(state)
-        if not _queue_item_is_public(chat_runs, agent_id, session_id, item_id):
+        queued_item = _public_queue_item(chat_runs, agent_id, session_id, item_id)
+        if queued_item is None:
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
 
-        if input_origin is None:
-            (
-                resolved_session_id,
-                updated_executor,
-                updated_display_content,
-            ) = _build_streaming_queue_update(state, agent_id, session_id, content)
-        else:
-            (
-                resolved_session_id,
-                updated_executor,
-                updated_display_content,
-            ) = _build_streaming_queue_update(
-                state,
-                agent_id,
-                session_id,
-                content,
-                input_origin=input_origin,
-            )
+        # The queue is keyed on the bare agent id, so the edit's params carry no project.
+        # Rebuild against the anchor the item was queued under (its own project_id — the same
+        # source the drain path uses); otherwise a project session is looked up in the
+        # identity anchor and the rebuild fails with session-not-found.
+        (
+            resolved_session_id,
+            updated_executor,
+            updated_display_content,
+        ) = _build_streaming_queue_update(
+            state,
+            agent_id,
+            session_id,
+            content,
+            input_origin=input_origin,
+            project_id=queued_item.project_id,
+        )
         updated = chat_runs.update_queued(
             agent_id,
             resolved_session_id,
@@ -1033,16 +1032,30 @@ def _active_run_response(state: Any, agent_id: str, session_id: str) -> JsonObje
     return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
 
 
+def _public_queue_item(
+    chat_runs: ChatRunManager,
+    agent_id: str,
+    session_id: str,
+    item_id: str,
+) -> QueuedRunItem | None:
+    """Return the queued item if it exists and is public (not internal), else ``None``.
+
+    Internal items (e.g. subagent-driven) stay hidden from the queue RPCs, so they are
+    treated as absent here just like a missing id.
+    """
+    for item in chat_runs.list_queued(agent_id, session_id):
+        if item.item_id == item_id:
+            return item if not item.internal else None
+    return None
+
+
 def _queue_item_is_public(
     chat_runs: ChatRunManager,
     agent_id: str,
     session_id: str,
     item_id: str,
 ) -> bool:
-    for item in chat_runs.list_queued(agent_id, session_id):
-        if item.item_id == item_id:
-            return not item.internal
-    return False
+    return _public_queue_item(chat_runs, agent_id, session_id, item_id) is not None
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

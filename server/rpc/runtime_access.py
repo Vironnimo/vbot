@@ -18,18 +18,19 @@ def _build_streaming_queue_update(
     agent_id: str,
     session_id: str,
     content: str | list[ContentBlock],
+    *,
     input_origin: str | None = None,
+    project_id: str | None = None,
 ) -> tuple[str, RunExecutor, str]:
     streaming_chat_loop = _streaming_chat_loop(state)
-    if input_origin is None:
-        return cast(
-            tuple[str, RunExecutor, str],
-            streaming_chat_loop.build_queue_update(agent_id, session_id, content),
-        )
     return cast(
         tuple[str, RunExecutor, str],
         streaming_chat_loop.build_queue_update(
-            agent_id, session_id, content, input_origin=cast(Any, input_origin)
+            agent_id,
+            session_id,
+            content,
+            input_origin=cast(Any, input_origin),
+            project_id=project_id,
         ),
     )
 
