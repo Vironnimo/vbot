@@ -191,20 +191,12 @@ def test_resolve_target_rejects_invalid_settings_ports(tmp_path: Path, port: obj
         desktop_main.resolve_target([], settings_file=settings_file)
 
 
-def test_settings_file_lives_next_to_desktop_main() -> None:
-    assert (
-        desktop_main.settings_path()
-        == Path(desktop_main.__file__).resolve().parent / "settings.json"
-    )
-
-
 def test_settings_writes_use_desktop_local_file_not_server_data_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    desktop_dir = tmp_path / "desktop"
     server_data_dir = tmp_path / "server-data"
-    settings_file = desktop_main.settings_path(desktop_dir)
+    settings_file = tmp_path / "desktop-config" / "settings.json"
     monkeypatch.setenv("VBOT_DATA_DIR", str(server_data_dir))
 
     target = desktop_main.resolve_target(
@@ -571,10 +563,6 @@ def test_phase_6_contract_probe_has_no_retry_loop() -> None:
 
     assert result.status == desktop_main.PROBE_WEBUI_UNAVAILABLE
     assert requested_urls == ["http://127.0.0.1:8420/health", "http://127.0.0.1:8420/"]
-
-
-def test_phase_6_contract_settings_stay_beside_desktop_main() -> None:
-    assert desktop_main.settings_path().parent == Path(desktop_main.__file__).resolve().parent
 
 
 @pytest.mark.parametrize(

@@ -256,7 +256,7 @@ class WakewordWorker:
     def _read_config(self) -> dict[str, Any]:
         """Read the current wakeword configuration from Desktop settings."""
         try:
-            from desktop.main import read_wakeword_settings
+            from desktop.settings import read_wakeword_settings
 
             return read_wakeword_settings(self._settings_path)
         except Exception:

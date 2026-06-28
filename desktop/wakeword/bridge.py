@@ -12,7 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from desktop.main import read_wakeword_settings, write_wakeword_settings
+from desktop.settings import read_wakeword_settings, write_wakeword_settings
 
 _WAKEWORD_STATE_OFF = "off"
 _WAKEWORD_STATE_LISTENING = "listening"
