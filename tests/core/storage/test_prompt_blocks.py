@@ -274,71 +274,6 @@ def test_write_block_override_leaves_no_temp_file(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# override cascade (agent <- default <- owner-default)
-# --------------------------------------------------------------------------
-
-
-def test_cascade_prefers_agent_override(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    store.write_block_override(None, "tool:bash", "default override")
-    store.write_block_override("assistant", "tool:bash", "agent override")
-
-    resolved = store.resolve_effective_text("assistant", "tool:bash", "owner default")
-
-    assert resolved == "agent override"
-
-
-def test_cascade_falls_back_to_default_override(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    store.write_block_override(None, "tool:bash", "default override")
-
-    resolved = store.resolve_effective_text("assistant", "tool:bash", "owner default")
-
-    assert resolved == "default override"
-
-
-def test_cascade_falls_back_to_owner_default(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    resolved = store.resolve_effective_text("assistant", "tool:bash", "owner default")
-
-    assert resolved == "owner default"
-
-
-def test_cascade_without_agent_scope_starts_at_default(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    store.write_block_override(None, "tool:bash", "default override")
-    # An agent override exists but no agent scope is passed -> it must be ignored.
-    store.write_block_override("assistant", "tool:bash", "agent override")
-
-    resolved = store.resolve_effective_text(None, "tool:bash", "owner default")
-
-    assert resolved == "default override"
-
-
-def test_cascade_dynamic_block_has_no_override(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    # Even if an override file somehow exists, a dynamic block (no owner default)
-    # resolves to None and the store never reads an override for it.
-    store.write_block_override(None, "tool:bash", "stray override")
-
-    resolved = store.resolve_effective_text("assistant", "tool:bash", None)
-
-    assert resolved is None
-
-
-def test_cascade_empty_string_override_wins_over_owner_default(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    store.write_block_override(None, "user:notes", "")
-
-    # An explicit empty override is a real override (the user blanked the block),
-    # distinct from "no override" -> it wins over the owner default.
-    resolved = store.resolve_effective_text(None, "user:notes", "owner default")
-
-    assert resolved == ""
-
-
-# --------------------------------------------------------------------------
 # agent-scope seeding
 # --------------------------------------------------------------------------
 
@@ -486,15 +421,11 @@ def test_storage_manager_delegates_layout_round_trip(tmp_path: Path) -> None:
     assert storage.read_block_layout(None) == entries
 
 
-def test_storage_manager_delegates_override_and_cascade(tmp_path: Path) -> None:
+def test_storage_manager_delegates_block_overrides(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.write_block_override(None, "tool:bash", "default override")
 
     assert storage.read_block_override(None, "tool:bash") == "default override"
-    assert (
-        storage.resolve_effective_block_text("assistant", "tool:bash", "owner default")
-        == "default override"
-    )
     assert storage.remove_block_override(None, "tool:bash") is True
 
 
