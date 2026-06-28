@@ -21,6 +21,11 @@ JsonObject = dict[str, Any]
 
 _OOXML_PREFIX = "application/vnd.openxmlformats-officedocument."
 _OOXML_WILDCARD = "application/vnd.openxmlformats-officedocument.*"
+# An OOXML file's ``[Content_Types].xml`` is a small manifest — a few KiB even for
+# large documents. Reading it unbounded lets a crafted ZIP entry decompress to
+# gigabytes from a within-upload-limit file (a zip bomb), so the sniff decompresses
+# at most this many bytes and treats any overflow as "not OOXML".
+_MAX_OOXML_CONTENT_TYPES_BYTES = 1_048_576
 _UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _MIME_ALLOWLIST = frozenset(
     {
@@ -316,9 +321,16 @@ def _normalize_attachment_id(attachment_id: str) -> str:
 def _sniff_ooxml_media_type(data: bytes) -> str | None:
     try:
         with ZipFile(io.BytesIO(data)) as archive, archive.open("[Content_Types].xml") as handle:
-            content_types = handle.read().decode("utf-8", errors="ignore")
+            # Bounded read = bounded decompression: ``read(n)`` inflates at most ``n``
+            # bytes, so a zip bomb in this entry cannot exhaust memory here.
+            content_types_bytes = handle.read(_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
     except (BadZipFile, KeyError, OSError):
         return None
+
+    if len(content_types_bytes) > _MAX_OOXML_CONTENT_TYPES_BYTES:
+        # Larger than any legitimate manifest — treat as a decompression bomb, not Office.
+        return None
+    content_types = content_types_bytes.decode("utf-8", errors="ignore")
 
     if "wordprocessingml.document" in content_types:
         return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

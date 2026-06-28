@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from core.attachments.attachments import (
+    _MAX_OOXML_CONTENT_TYPES_BYTES,
     AttachmentError,
     AttachmentNotFoundError,
     AttachmentStore,
@@ -16,6 +19,17 @@ from core.attachments.attachments import (
     AttachmentTypeNotAllowedError,
     sniff_media_type,
 )
+
+_OOXML_PREFIX = "application/vnd.openxmlformats-officedocument."
+_DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _build_ooxml_payload(content_types_xml: bytes) -> bytes:
+    """Build a minimal ZIP carrying one ``[Content_Types].xml`` entry."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+    return buffer.getvalue()
 
 
 @pytest.mark.parametrize(
@@ -44,6 +58,31 @@ def test_sniff_media_type_does_not_create_attachments(tmp_path: Path) -> None:
     sniff_media_type(b"\x89PNG\r\n\x1a\n", "diagram.png")
 
     assert not (tmp_path / "attachments").exists()
+
+
+def test_sniff_media_type_classifies_valid_ooxml() -> None:
+    # A small, well-formed [Content_Types].xml still classifies as docx — the bomb
+    # guard must not break legitimate Office files.
+    payload = _build_ooxml_payload(
+        b'<?xml version="1.0"?><Types><Override '
+        b'ContentType="application/vnd.openxmlformats-officedocument.'
+        b'wordprocessingml.document.main+xml"/></Types>'
+    )
+
+    assert sniff_media_type(payload, "report.docx") == _DOCX_MEDIA_TYPE
+
+
+def test_sniff_media_type_rejects_oversized_ooxml_content_types() -> None:
+    # A [Content_Types].xml that decompresses past the sniff cap is a zip bomb, not
+    # an Office file — even though it carries the docx marker. The bounded read keeps
+    # this from exhausting memory, and the type must not be classified as OOXML.
+    bomb_xml = b"wordprocessingml.document" + b" " * (_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
+    payload = _build_ooxml_payload(bomb_xml)
+
+    media_type = sniff_media_type(payload, "bomb.docx")
+
+    assert not media_type.startswith(_OOXML_PREFIX)
+    assert media_type == "application/octet-stream"
 
 
 @pytest.mark.parametrize(
