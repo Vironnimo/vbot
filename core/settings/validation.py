@@ -375,7 +375,7 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
 
     _warn_unknown_keys(diagnostics, "$", data, AGENT_FIELDS, "agent field")
     _validate_required_fields(diagnostics, "$", data, REQUIRED_AGENT_FIELDS)
-    _validate_agent_id(diagnostics, data.get("id"))
+    _validate_agent_id(diagnostics, "$.id", data.get("id"))
     _validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=True)
     _validate_string(diagnostics, "$.model", data.get("model"), required=True)
     _validate_string(diagnostics, "$.fallback_model", data.get("fallback_model"), required=True)
@@ -422,9 +422,7 @@ def validate_cron_jobs_data(data: Any) -> list[JsonDiagnostic]:
             continue
         _warn_unknown_keys(diagnostics, item_path, item, CRON_JOB_FIELDS, "cron job field")
         _validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
-        _validate_non_empty_string(
-            diagnostics, f"{item_path}.agent_id", item.get("agent_id"), required=True
-        )
+        _validate_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
         _validate_non_empty_string(
             diagnostics, f"{item_path}.prompt", item.get("prompt"), required=True
         )
@@ -469,7 +467,7 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
         data.get("platform"),
         ALLOWED_CHANNEL_PLATFORMS,
     )
-    _validate_non_empty_string(diagnostics, "$.agent_id", data.get("agent_id"), required=True)
+    _validate_agent_id(diagnostics, "$.agent_id", data.get("agent_id"))
     _validate_allowed_string(
         diagnostics,
         "$.dm_scope",
@@ -948,14 +946,14 @@ def _validate_debug(diagnostics: list[JsonDiagnostic], value: Any) -> None:
             )
 
 
-def _validate_agent_id(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+def _validate_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
     if not isinstance(value, str) or not value:
-        _error(diagnostics, "$.id", "must be a non-empty string")
+        _error(diagnostics, path, "must be a non-empty string")
         return
     if AGENT_ID_PATTERN.fullmatch(value) is None:
         _error(
             diagnostics,
-            "$.id",
+            path,
             "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
         )
 
