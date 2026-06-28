@@ -447,7 +447,17 @@ class TelegramChannelAdapter(ChannelAdapter):
             raise ChannelError("Attachment store is not configured for Telegram channels")
 
         bot = self._require_bot()
+        # get_file fetches only metadata (size + path), not the body; checking the reported
+        # size here refuses an oversized file before download_as_bytearray pulls it into
+        # memory. store() re-checks as a backstop for when Telegram omits the size.
         telegram_file = await bot.get_file(file_id)
+        reported_size = getattr(telegram_file, "file_size", None)
+        attachment_store.ensure_within_limit(
+            reported_size if isinstance(reported_size, int) else None
+        )
+
+        # The pre-check already bounded this to <= the store limit, so converting the
+        # downloaded bytearray to immutable bytes copies only validated, in-limit data.
         payload = await telegram_file.download_as_bytearray()
         return attachment_store.store(filename, bytes(payload))
 

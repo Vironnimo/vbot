@@ -25,6 +25,7 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
 
 - `AttachmentStore(data_dir: Path, *, max_size_bytes: int = 20_971_520)` — rejects a non-positive `max_size_bytes` with `AttachmentError`
 - `AttachmentStore.max_size_bytes` exposes the configured upload limit so transport layers can reject oversized payloads before materializing the full request body.
+- `AttachmentStore.ensure_within_limit(reported_size_bytes: int | None) -> None` — pre-check companion to `store`: raises `AttachmentTooLargeError` when a platform-reported size exceeds the limit, so a transport refuses an oversized file before downloading it. A `None` size (platform reported none) skips the pre-check and leaves `store`'s post-download size check as the backstop.
 - `sniff_media_type(data: bytes, filename: str) -> str` — public, side-effect-free wrapper over the internal magic-bytes sniffer (`_sniff_mime`). Classifies bytes as image/audio/video/text/etc. **without** touching disk or the allowlist, so callers can decide how to handle a file before storing it. The `read` tool uses it to branch on media type.
 - `store(filename: str, data: bytes) -> AttachmentRecord` — checks size, sniffs MIME, validates the allowlist, writes blob and sidecar, extracts `text_content` for `text/*`
 - `get(attachment_id: str) -> AttachmentRecord` — loads one attachment record from its sidecar

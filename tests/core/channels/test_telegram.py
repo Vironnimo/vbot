@@ -16,7 +16,7 @@ import pytest
 
 import core.channels.engine as engine_module
 import core.channels.telegram as telegram_module
-from core.attachments import AttachmentStore
+from core.attachments import AttachmentStore, AttachmentTooLargeError
 from core.channels.adapter import (
     FileData,
     ReplyPlanFacts,
@@ -866,6 +866,39 @@ async def test_media_download_runs_in_worker_not_in_handler(
     blocks = await_args.args[1]
     assert isinstance(blocks, list)
     assert isinstance(blocks[0], MediaBlock)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_oversized_inbound_media_rejected_before_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path, max_size_bytes=8)
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        attachment_store=attachment_store,
+    )
+    download_mock = AsyncMock(return_value=bytearray(b"\x89PNG\r\n\x1a\nIMG"))
+    # get_file returns metadata (including file_size) only; the body is a separate fetch.
+    bot.get_file.return_value = SimpleNamespace(
+        file_size=1_000_000,
+        download_as_bytearray=download_mock,
+    )
+    raw_message = make_photo_update(
+        chat_id=12345,
+        user_id=50,
+        file_id="photo-1",
+        file_unique_id="uniq-1",
+    ).effective_message
+
+    with pytest.raises(AttachmentTooLargeError):
+        await adapter.build_media_blocks(raw_message)
+
+    # The oversized file is refused on its reported size; the body is never downloaded.
+    download_mock.assert_not_awaited()
     await adapter.stop()
 
 

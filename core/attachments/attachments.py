@@ -87,6 +87,21 @@ class AttachmentStore:
 
         return self._max_size_bytes
 
+    def ensure_within_limit(self, reported_size_bytes: int | None) -> None:
+        """Reject an oversized attachment from its reported size, before its bytes exist.
+
+        Transport adapters (channels) learn a file's size from platform metadata before
+        downloading it. Calling this first refuses an oversized file without ever
+        materializing it in memory; ``store`` still re-checks once the bytes arrive, as a
+        backstop. A ``None`` size means the platform reported none, so the pre-check is
+        skipped and only the backstop applies.
+        """
+
+        if reported_size_bytes is not None and reported_size_bytes > self._max_size_bytes:
+            raise AttachmentTooLargeError(
+                f"Attachment size {reported_size_bytes} exceeds limit {self._max_size_bytes}"
+            )
+
     def store(self, filename: str, data: bytes) -> AttachmentRecord:
         """Persist one blob and sidecar metadata, then return the record."""
 
