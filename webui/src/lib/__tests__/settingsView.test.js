@@ -7,6 +7,7 @@ import { init } from '../i18n.js';
 import {
   AGENT_DEFAULTS_FIELDS,
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
+  applyExtensionsPanelList,
   accountDisplayName,
   buildAgentDefaultsPayload,
   buildChatWidthOptions,
@@ -1190,5 +1191,37 @@ describe('buildClientPresenceRows()', () => {
       status: '',
       isOwn: false,
     });
+  });
+});
+
+describe('applyExtensionsPanelList() hook order', () => {
+  it('drops the removed before_agent_start hook while keeping the rest in order', () => {
+    const [extension] = applyExtensionsPanelList({
+      extensions: [
+        {
+          name: 'example',
+          capabilities: {
+            hooks: {
+              run_start: 1,
+              before_agent_start: 2,
+              context: 3,
+              tool_call: 4,
+              tool_result: 5,
+              run_end: 6,
+            },
+          },
+        },
+      ],
+    });
+
+    const hookEvents = extension.capabilities.hooks.map((hook) => hook.event);
+    expect(hookEvents).not.toContain('before_agent_start');
+    expect(hookEvents).toEqual([
+      'run_start',
+      'context',
+      'tool_call',
+      'tool_result',
+      'run_end',
+    ]);
   });
 });
