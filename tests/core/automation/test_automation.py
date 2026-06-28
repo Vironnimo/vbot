@@ -387,7 +387,9 @@ async def test_compact_session_delegates_to_command_chat_loop() -> None:
     reply = await trigger_service.compact_session("coder", "session-one")
 
     # Assert
-    chat_loop.compact_session.assert_awaited_once_with("coder", "session-one", None)
+    chat_loop.compact_session.assert_awaited_once_with(
+        "coder", "session-one", None, project_id=None
+    )
     trigger_chat_loop.compact_session.assert_not_awaited()
     assert reply == "Context compacted."
 
@@ -406,5 +408,22 @@ async def test_compact_session_forwards_instruction_to_command_chat_loop() -> No
 
     # Assert
     chat_loop.compact_session.assert_awaited_once_with(
-        "coder", "session-one", "keep the API design"
+        "coder", "session-one", "keep the API design", project_id=None
+    )
+
+
+async def test_compact_session_forwards_project_id_to_command_chat_loop() -> None:
+    # A /compact issued in a project chat must carry the project scope down to the
+    # chat loop, not collapse to the identity session.
+    chat_loop = SimpleNamespace(compact_session=AsyncMock(return_value="Context compacted."))
+    trigger_service = TriggerService(
+        cast(Any, chat_loop),
+        cast(Any, Mock()),
+        cast(Any, Mock()),
+    )
+
+    await trigger_service.compact_session("coder", "session-one", project_id="proj")
+
+    chat_loop.compact_session.assert_awaited_once_with(
+        "coder", "session-one", None, project_id="proj"
     )
