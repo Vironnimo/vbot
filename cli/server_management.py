@@ -15,9 +15,8 @@ from typing import Any
 import httpx
 import psutil  # type: ignore[import-untyped]
 
-from core.utils.config import Config
+from core.utils.config import DEFAULT_HOST, Config, resolve_port
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager, resolve_daily_log_path
-from server.main import DEFAULT_HOST, resolve_port
 
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 10.0
 DEFAULT_PROBE_TIMEOUT_SECONDS = 0.5

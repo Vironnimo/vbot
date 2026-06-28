@@ -12,9 +12,8 @@ from core.settings import (
     validate_data_dir_config,
     validate_settings_file,
 )
-from core.utils.config import Config
+from core.utils.config import DEFAULT_HOST, Config
 from core.utils.logging import resolve_daily_log_path
-from server.main import DEFAULT_HOST
 
 
 def doctor_settings(data_dir: str | Path | None = None) -> CommandResult:
