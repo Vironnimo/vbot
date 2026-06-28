@@ -768,6 +768,58 @@ def test_persisted_block_layout_and_override_flow_through_real_storage(config: C
         runtime.stop()
 
 
+def test_block_edit_facade_writes_flow_through_real_storage(config: Config):
+    """The block-edit facade's writes round-trip through the real StorageManager.
+
+    Guards the write half of the composition-root seam (_StorageManagerBlockStore):
+    update_block / set_layout / create_block / remove_block must persist through
+    StorageManager's block write API (scope translation included) and shape the very
+    next assembled prompt — proving the adapter is not on the EmptyBlockStore no-op
+    sink. The facade lives on the runtime's SystemPromptManager.
+    """
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        manager = runtime.system_prompts
+        agent = runtime.agents.get("main")
+
+        # update_block: a default-scope override on the tools block replaces the
+        # bundled text on the next build (write_block_override → storage scope None).
+        manager.update_block("core:tools", "## FACADE-TOOLS-MARKER\n{generated:tool_list}")
+        assert (
+            runtime.storage.read_block_override(None, "core:tools")
+            == "## FACADE-TOOLS-MARKER\n{generated:tool_list}"
+        )
+        assert "## FACADE-TOOLS-MARKER" in manager.build_system_prompt(agent)
+
+        # set_layout: disabling the skills block persists and gates it out (prune via
+        # storage). An unknown id is tolerated — pruned, not an error.
+        manager.set_layout(
+            [
+                {"id": "core:runtime", "enabled": True},
+                {"id": "core:tools", "enabled": True},
+                {"id": "core:skills", "enabled": False},
+                {"id": "extension:gone", "enabled": True},
+            ]
+        )
+        persisted_ids = {entry.id for entry in runtime.storage.read_block_layout(None)}
+        assert "extension:gone" not in persisted_ids  # contributor-gone id pruned
+        assert "## Available Skills" not in manager.build_system_prompt(agent)
+
+        # create_block then remove_block: the custom block's override file and layout
+        # entry are written, then both removed, all through the real storage seam.
+        manager.create_block("greeting", "Hello from a custom block.")
+        assert runtime.storage.read_block_override(None, "user:greeting") is not None
+        assert "Hello from a custom block." in manager.build_system_prompt(agent)
+
+        manager.remove_block("user:greeting")
+        assert runtime.storage.read_block_override(None, "user:greeting") is None
+        assert "Hello from a custom block." not in manager.build_system_prompt(agent)
+    finally:
+        runtime.stop()
+
+
 def test_reload_skills_updates_provider_skill_tool_visibility(config: Config, tmp_path: Path):
     """Runtime.reload_skills() makes provider tools use the fresh skill registry."""
     logging.getLogger("vbot").handlers = []
