@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from core.channels import ChannelConfigError, channel_system_reminder
 from core.memory import MEMORY_PROMPT_MODES
+from core.prompts import load_bundled_default_layout
 from core.settings import (
     ALLOWED_THINKING_EFFORTS,
     MAX_TEMPERATURE,
@@ -75,7 +76,7 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
         _ensure_agent_model_connections(state, changes)
         state.runtime.agents.create(agent_id, name, **changes)
         if changes.get("custom_system_prompt_enabled") is True:
-            state.runtime.storage.copy_agent_prompt_fragments(agent_id)
+            _seed_agent_custom_prompt(state, agent_id)
         agent = state.runtime.agents.get(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -96,13 +97,31 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
             changes.get("custom_system_prompt_enabled") is True
             and not previous_agent.custom_system_prompt_enabled
         ):
-            state.runtime.storage.copy_agent_prompt_fragments(agent_id)
+            _seed_agent_custom_prompt(state, agent_id)
         agent = state.runtime.agents.update(agent_id, **changes)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     return response
+
+
+def _seed_agent_custom_prompt(state: Any, agent_id: str) -> None:
+    """Seed an agent's prompt scope when its custom System Prompt is just enabled.
+
+    Both halves of the System Prompt move into the agent's scope together (D4):
+    the editable text fragments and the block layout, each seeded from the current
+    effective default scope and independent afterwards. The effective default
+    layout is the saved default-scope layout, falling back to the bundled default
+    when the default scope owns none. Both seeds preserve an existing agent file,
+    so re-enabling never clobbers an already-customized agent scope; text overrides
+    are intentionally not copied — the agent inherits block text until it overrides.
+    """
+
+    storage = state.runtime.storage
+    storage.copy_agent_prompt_fragments(agent_id)
+    default_layout = storage.read_block_layout(None) or load_bundled_default_layout()
+    storage.seed_agent_block_layout(agent_id, default_layout)
 
 
 async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
