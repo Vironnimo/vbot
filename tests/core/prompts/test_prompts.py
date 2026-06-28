@@ -16,6 +16,7 @@ from core.memory import (
     MEMORY_PROMPT_MODE_OFF,
     MemoryPromptMode,
 )
+from core.prompts.blocks import validate_workspace_include
 from core.prompts.prompts import (
     EDITABLE_PROMPT_FRAGMENT_NAMES,
     ProjectPromptContext,
@@ -24,7 +25,6 @@ from core.prompts.prompts import (
     PromptFragmentManager,
     SkillPromptMetadata,
     SystemPromptManager,
-    _validate_workspace_include,
 )
 
 
@@ -550,7 +550,7 @@ def test_unsafe_workspace_include_raises_error(
 
 @pytest.mark.parametrize("filename", ["SOUL.md", "CUSTOM.md", "my-notes.txt", "notes.json"])
 def test_validate_workspace_include_accepts_safe_flat_filenames(filename: str) -> None:
-    _validate_workspace_include(filename)  # should not raise
+    validate_workspace_include(filename)  # should not raise
 
 
 @pytest.mark.parametrize(
@@ -564,7 +564,7 @@ def test_validate_workspace_include_accepts_safe_flat_filenames(filename: str) -
 )
 def test_validate_workspace_include_rejects_unsafe_paths(filename: str) -> None:
     with pytest.raises(PromptError, match="Unsafe workspace include"):
-        _validate_workspace_include(filename)
+        validate_workspace_include(filename)
 
 
 def test_workspace_include_wraps_content_in_xml_file_tag(
@@ -625,7 +625,9 @@ def test_custom_agent_system_prompt_uses_agent_fragments_without_default_fallbac
 
     prompt = manager.build_system_prompt(_agent(workspace, custom_system_prompt_enabled=True))
 
-    assert prompt == "Custom root\n"
+    # The empty agent-scope {skills} fragment collapses to ""; the block engine's
+    # normalization then trims the trailing newline the old byte format kept.
+    assert prompt == "Custom root"
     assert ("default", "skills.md") not in storage.reads
 
 
@@ -1086,6 +1088,67 @@ def test_real_system_md_identity_at_home_is_byte_identical_without_placeholders(
     ).build_system_prompt(_agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER))
 
     assert with_placeholders == without_placeholders
+
+
+def test_identity_agent_block_assembly_matches_current_content_and_order(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    # Phase 1 regression (the keystone): an identity agent at home, built through
+    # the block-routed assembly with the REAL bundled root, must yield the same
+    # content in the same order as the current assembly — SOUL, then memory, then
+    # runtime, then tools, then channels, then skills — cleanly normalized.
+    repo_root = Path(__file__).resolve().parents[3]
+    real_root = (repo_root / "resources" / "prompts" / "system.md").read_text(encoding="utf-8")
+    manager = SystemPromptManager(
+        StubStorage({**fragments, "system.md": real_root}),
+        StubTools(),
+        StubSkills([StubSkill("debugging", "Debug failures")]),
+        channel_registry=StubChannels(
+            [
+                ChannelConfig(
+                    id="tg-main",
+                    platform="telegram",
+                    agent_id="coder",
+                    allowed_chat_ids=["1"],
+                    token_env_var="TELEGRAM_BOT_TOKEN",
+                    enabled=True,
+                )
+            ]
+        ),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+        host="test-host",
+        os_name="test-os",
+        current_date=lambda: "2026-05-04",
+    )
+
+    prompt = manager.build_system_prompt(
+        _agent(workspace, allowed_skills=["*"], memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
+    )
+
+    # Content: every section's substance is present.
+    assert "Soul text" in prompt
+    assert "<memory>" in prompt
+    assert "Memory text" in prompt
+    assert "User text" in prompt
+    assert "## Runtime" in prompt
+    assert "- Host: test-host" in prompt
+    assert "## Available Tools" in prompt
+    assert "## Channels" in prompt
+    assert "- tg-main: telegram (default target available)" in prompt
+    assert "## Available Skills" in prompt
+    assert "<name>debugging</name>" in prompt
+    # Order: SOUL < memory < runtime < tools < channels < skills (today's order).
+    sections = ["Soul text", "<memory>", "## Runtime", "## Available Tools", "## Channels"]
+    positions = [prompt.index(section) for section in sections]
+    assert positions == sorted(positions)
+    assert prompt.index("## Channels") < prompt.index("## Available Skills")
+    # Normalization: no leading/trailing blank line and no triple-newline residue.
+    assert prompt == prompt.strip()
+    assert "\n\n\n" not in prompt
 
 
 def _agent(
