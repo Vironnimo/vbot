@@ -8,4 +8,4 @@
 
 ## Available Tools
 
-{tool_list}
+{generated:tool_list}
