@@ -543,23 +543,37 @@ class MappingOverrideResolver:
 
 
 class BlockStore(Protocol):
-    """The persisted layout + per-block text override source the manager reads.
+    """The persisted layout + per-block text override source the manager drives.
 
     The seam between the assembly engine (definitions, this module) and the β
     persistence (``layout.json`` + ``blocks/<namespace>/<slug>.md``, Phase 2). The
     manager depends on this Protocol, never the concrete ``PromptBlockStore``, so
     its unit tests inject a fake/empty source exactly as Phase 1's tests do.
 
-    Two read operations, both per scope (``"default"`` or an ``"agent:<id>"`` key
-    the manager forms from the resolved build scope):
+    Read side, both per scope (``"default"`` or an ``"agent:<id>"`` key the manager
+    forms from the resolved build scope):
 
     - :meth:`read_layout` returns the scope's owned ordered entries, or ``[]`` when
       the scope has no saved layout yet (every block then defaults in at its rank).
     - :meth:`read_block_override` returns one block's saved override text, or
       ``None`` when no override exists (fall back to the owner default).
 
+    Write side (Phase 4 — the block-edit facade calls these): the manager is the
+    only writer, so the store stays a dumb persistence sink. Every write is atomic
+    in the concrete store; ids and slugs are validated there before any path is
+    built (defense in depth on top of the manager's edge validation).
+
+    - :meth:`write_layout` persists a scope's ordered entries verbatim.
+    - :meth:`prune_layout` persists only the entries whose id is still in
+      *known_ids*, dropping a contributor-gone id on the next write (tolerate, D4).
+    - :meth:`seed_agent_layout` seeds an agent scope's layout from a default layout,
+      preserving an existing one unless *overwrite* (returns ``None`` when preserved).
+    - :meth:`write_block_override` writes one block's override text.
+    - :meth:`remove_block_override` removes one block's override (``True`` when one
+      existed; removing a missing override is a no-op).
+
     The agent-scope cascade (agent override ← default override ← owner default) is
-    composed by the manager from these two reads, not by the store.
+    composed by the manager from the two reads, not by the store.
     """
 
     def read_layout(self, scope: str) -> list[LayoutEntry]:
@@ -570,6 +584,30 @@ class BlockStore(Protocol):
         """Return *block_id*'s saved override text for *scope* (``None`` if none)."""
         ...
 
+    def write_layout(self, scope: str, entries: Sequence[LayoutEntry]) -> None:
+        """Persist *scope*'s ordered layout entries verbatim."""
+        ...
+
+    def prune_layout(
+        self, scope: str, entries: Sequence[LayoutEntry], known_ids: frozenset[str]
+    ) -> None:
+        """Persist *scope*'s layout keeping only entries whose id is in *known_ids*."""
+        ...
+
+    def seed_agent_layout(
+        self, scope: str, default_layout: Sequence[LayoutEntry], *, overwrite: bool = False
+    ) -> None:
+        """Seed an agent *scope*'s layout from *default_layout* (preserve unless overwrite)."""
+        ...
+
+    def write_block_override(self, scope: str, block_id: str, content: str) -> None:
+        """Persist *block_id*'s override text in *scope*."""
+        ...
+
+    def remove_block_override(self, scope: str, block_id: str) -> bool:
+        """Remove *block_id*'s override in *scope* (``True`` when one existed)."""
+        ...
+
 
 @dataclass(frozen=True)
 class EmptyBlockStore:
@@ -578,7 +616,9 @@ class EmptyBlockStore:
     The default the manager uses when no persistence is wired (Phase 1-style unit
     tests, and any path that has not been handed Phase 2's store yet): every scope
     reads an empty layout (so all definitions default in at their rank) and no
-    block has an override (so every block uses its owner default text).
+    block has an override (so every block uses its owner default text). The write
+    side is a no-op sink — a manager wired without persistence accepts edits but
+    drops them, so an edit path never crashes for the lack of a real store.
     """
 
     def read_layout(self, scope: str) -> list[LayoutEntry]:
@@ -586,6 +626,25 @@ class EmptyBlockStore:
 
     def read_block_override(self, scope: str, block_id: str) -> str | None:
         return None
+
+    def write_layout(self, scope: str, entries: Sequence[LayoutEntry]) -> None:
+        return None
+
+    def prune_layout(
+        self, scope: str, entries: Sequence[LayoutEntry], known_ids: frozenset[str]
+    ) -> None:
+        return None
+
+    def seed_agent_layout(
+        self, scope: str, default_layout: Sequence[LayoutEntry], *, overwrite: bool = False
+    ) -> None:
+        return None
+
+    def write_block_override(self, scope: str, block_id: str, content: str) -> None:
+        return None
+
+    def remove_block_override(self, scope: str, block_id: str) -> bool:
+        return False
 
 
 def load_layout_entries(raw: object) -> list[LayoutEntry]:

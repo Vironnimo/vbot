@@ -7,7 +7,7 @@ all core services and manages the application lifecycle.
 import asyncio
 import os
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +32,7 @@ from core.prompts import (
     BlockDefinition,
     BlockStore,
     LayoutEntry,
+    PromptAgentStore,
     SkillPromptRegistry,
     SystemPromptManager,
 )
@@ -125,13 +126,13 @@ class _ProjectSkillBundle:
     names: frozenset[str]
 
 
-class _StorageBlockReader(Protocol):
-    """The block reads the storage-backed :class:`BlockStore` adapter bridges to.
+class _StorageBlockBackend(Protocol):
+    """The storage block surface the storage-backed ``BlockStore`` adapter bridges to.
 
-    Phase 2's ``StorageManager`` exposes these (``read_block_layout`` /
-    ``read_block_override``) with the storage scope convention: ``None`` = default,
-    a bare ``"<agent-id>"`` = that agent's scope. Declared as a Protocol so the
-    adapter depends on the read surface, not the concrete ``StorageManager``.
+    Phase 2's ``StorageManager`` exposes these with the storage scope convention:
+    ``None`` = default, a bare ``"<agent-id>"`` = that agent's scope. Declared as a
+    Protocol so the adapter depends on the read/write surface, not the concrete
+    ``StorageManager``.
     """
 
     def read_block_layout(self, scope: str | None) -> list[LayoutEntry]:
@@ -142,22 +143,51 @@ class _StorageBlockReader(Protocol):
         """Return a block's saved override text in a scope (``None`` when absent)."""
         ...
 
+    def write_block_layout(self, scope: str | None, entries: Sequence[LayoutEntry]) -> Path:
+        """Atomically write a scope's ordered block layout."""
+        ...
+
+    def prune_block_layout(
+        self,
+        scope: str | None,
+        entries: Sequence[LayoutEntry],
+        known_ids: frozenset[str] | set[str],
+    ) -> Path:
+        """Write a scope's layout keeping only entries with a live definition."""
+        ...
+
+    def seed_agent_block_layout(
+        self,
+        agent_id: str,
+        default_layout: Sequence[LayoutEntry],
+        *,
+        overwrite: bool = False,
+    ) -> Path | None:
+        """Seed an agent scope's block layout from the current default layout."""
+        ...
+
+    def write_block_override(self, scope: str | None, block_id: str, content: str) -> Path:
+        """Atomically write a block's text override in a scope."""
+        ...
+
+    def remove_block_override(self, scope: str | None, block_id: str) -> bool:
+        """Remove a block's text override in a scope (``True`` when one existed)."""
+        ...
+
 
 class _StorageManagerBlockStore:
-    """Adapt the storage manager's block reads to the prompts ``BlockStore``.
+    """Adapt the storage manager's block I/O to the prompts ``BlockStore``.
 
     This is the composition-root seam where the prompts-domain scope-key convention
     (``"default"`` / ``"agent:<id>"``) meets the storage-domain scope-token
     convention (``None`` / bare ``"<id>"``). It bridges **both** the method-name
     difference (``read_layout`` → ``read_block_layout``) and the scope translation,
-    in one place.
-
-    Read-side only for now; the write side (set-layout / create / remove / update /
-    reset) is Phase 4's manager work. Phase 4 extends this class with those methods,
-    reusing :meth:`_to_store_scope` so the translation stays single-sourced.
+    in one place, for the read **and** the write side. Every method routes its scope
+    key through the single :meth:`_to_store_scope` translation so the two
+    conventions never diverge.
     """
 
-    def __init__(self, storage: _StorageBlockReader) -> None:
+    def __init__(self, storage: _StorageBlockBackend) -> None:
         self._storage = storage
 
     def read_layout(self, scope_key: str) -> list[LayoutEntry]:
@@ -165,6 +195,30 @@ class _StorageManagerBlockStore:
 
     def read_block_override(self, scope_key: str, block_id: str) -> str | None:
         return self._storage.read_block_override(self._to_store_scope(scope_key), block_id)
+
+    def write_layout(self, scope_key: str, entries: Sequence[LayoutEntry]) -> None:
+        self._storage.write_block_layout(self._to_store_scope(scope_key), entries)
+
+    def prune_layout(
+        self, scope_key: str, entries: Sequence[LayoutEntry], known_ids: frozenset[str]
+    ) -> None:
+        self._storage.prune_block_layout(self._to_store_scope(scope_key), entries, known_ids)
+
+    def seed_agent_layout(
+        self, scope_key: str, default_layout: Sequence[LayoutEntry], *, overwrite: bool = False
+    ) -> None:
+        # Only an agent scope key seeds an agent layout; the storage method keys by
+        # the bare agent id, so translate and pass it through.
+        store_scope = self._to_store_scope(scope_key)
+        if store_scope is None:
+            return
+        self._storage.seed_agent_block_layout(store_scope, default_layout, overwrite=overwrite)
+
+    def write_block_override(self, scope_key: str, block_id: str, content: str) -> None:
+        self._storage.write_block_override(self._to_store_scope(scope_key), block_id, content)
+
+    def remove_block_override(self, scope_key: str, block_id: str) -> bool:
+        return self._storage.remove_block_override(self._to_store_scope(scope_key), block_id)
 
     @staticmethod
     def _to_store_scope(scope_key: str) -> str | None:
@@ -498,6 +552,7 @@ class Runtime:
             block_definitions=self._collect_prompt_block_definitions(),
             loaded_extensions=self._loaded_extension_names(),
             block_store=self._resolve_prompt_block_store(),
+            agent_store=cast(PromptAgentStore, self._agents),
         )
 
         self._log_startup_inventory()
