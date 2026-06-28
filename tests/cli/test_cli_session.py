@@ -75,7 +75,9 @@ def test_session_list_posts_rpc_and_formats_rows(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(
             200,
@@ -130,7 +132,9 @@ def test_session_list_reports_empty_state(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, "result": {"sessions": []}})
 
     monkeypatch.setattr(session_management.httpx, "post", fake_post)
@@ -147,7 +151,9 @@ def test_session_create_posts_optional_fields(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(
             200,
@@ -182,7 +188,9 @@ def test_session_create_omits_unset_fields(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(
             200,
@@ -208,7 +216,9 @@ def test_session_link_channel_posts_link_rpc(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {"ok": True}})
 
@@ -242,7 +252,9 @@ def test_session_commands_surface_rpc_domain_errors(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -270,7 +282,9 @@ def test_run_dispatches_session_list(
     def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
         return instance
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "session.list", "params": {"agent_id": "assistant"}}
         return httpx.Response(200, json={"ok": True, "result": {"sessions": []}})
 
@@ -302,7 +316,9 @@ def test_session_delete_requires_confirmation(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {}})
 
@@ -323,7 +339,9 @@ def test_session_delete_posts_rpc_when_confirmed(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(
             200,

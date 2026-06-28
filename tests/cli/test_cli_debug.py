@@ -40,7 +40,9 @@ def test_parse_args_supports_debug_trace_and_probe() -> None:
 def test_debug_status_formats_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "debug.status", "params": {}}
         return httpx.Response(
             200,
@@ -69,7 +71,9 @@ def test_debug_status_formats_state(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_debug_trace_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "debug.trace_list", "params": {}}
         return httpx.Response(
             200,
@@ -107,7 +111,9 @@ def test_debug_trace_list_formats_rows(tmp_path: Path, monkeypatch: pytest.Monke
 def test_debug_trace_show_dumps_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "debug.trace_get", "params": {"trace_id": "abc123"}}
         return httpx.Response(
             200,
@@ -134,7 +140,9 @@ def test_debug_trace_clear_posts_clear_rpc(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {"cleared": True}})
 
@@ -152,7 +160,9 @@ def test_debug_model_probe_formats_preview(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {
             "method": "debug.model_probe",
             "params": {"provider_id": "openai", "connection_id": "openai:api-key"},
@@ -198,7 +208,9 @@ def test_debug_commands_surface_disabled_error(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -226,7 +238,9 @@ def test_run_dispatches_debug_status(
     def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
         return instance
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={

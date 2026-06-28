@@ -31,7 +31,9 @@ def test_log_list_posts_rpc_and_formats_files(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "log.list", "params": {}}
         assert timeout == 10.0
@@ -60,7 +62,9 @@ def test_log_read_posts_rpc_and_formats_entries(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "log.read", "params": {"file": "2026-05-11"}}
         return httpx.Response(
             200,
