@@ -3,18 +3,30 @@
 from __future__ import annotations
 
 import platform
-import re
 import socket
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any, Protocol
 
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE, MemoryPromptMode, MemoryService
+from core.prompts.blocks import (
+    BLOCK_KIND_DATA,
+    BLOCK_SEPARATOR,
+    BlockDefinition,
+    BlockProducer,
+    BlockRenderContext,
+    CallableOwnerActivity,
+    LayoutEntry,
+    MappingOverrideResolver,
+    PromptError,
+    assemble_system_prompt,
+    expand_workspace_includes,
+    wrap_include_file,
+)
 from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
-from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -67,23 +79,12 @@ PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"placeholder": "{skill_list}", "description": "List of available skills"},
     ],
 }
-INCLUDE_PATTERN = re.compile(r"\{include:([^{}]+)\}")
 # The two collapsing project placeholders. Both render to "" when their input is
 # empty, so the surrounding blank lines in ``system.md`` close up and an identity
 # agent at home gets byte-identical output to before these placeholders existed.
 AGENT_BODY_PLACEHOLDER = "{agent_body}"
 PROJECT_FILES_PLACEHOLDER = "{project_files}"
-# The blank-line separator the two project placeholders carry when they render
-# content. Each placeholder absorbs its own separator (body trails one, project
-# files lead with one) and the root template puts NO blank line around them, so
-# an empty placeholder collapses spurlessly — an identity agent at home gets a
-# byte-identical prompt to before these placeholders existed.
-_BLOCK_SEPARATOR = "\n\n"
 _LOGGER = get_logger("prompts")
-
-
-class PromptError(VBotError, ValueError):
-    """Raised when a public prompt-domain request is invalid."""
 
 
 @dataclass(frozen=True)
@@ -448,6 +449,7 @@ class SystemPromptManager:
         host: str | None = None,
         os_name: str | None = None,
         current_date: Callable[[], str] | None = None,
+        loaded_extensions: Sequence[str] = (),
     ) -> None:
         self._storage = storage
         self._tool_registry = tool_registry
@@ -460,6 +462,10 @@ class SystemPromptManager:
         self._host = host
         self._os_name = os_name
         self._current_date = current_date or _current_utc_date
+        # The set of loaded extension names, gate 2's input for ``extension:<name>``
+        # owners (D5/D6). Phase 1 has none; Phase 3 rebuilds and injects it on every
+        # extension (re)load. Held as a frozenset for cheap membership checks.
+        self._loaded_extensions = frozenset(loaded_extensions)
 
     @property
     def app_dir(self) -> Path:
@@ -490,8 +496,60 @@ class SystemPromptManager:
         against — a project run passes its project-scoped registry; ``None`` uses
         the configured global one (identity runs, unchanged).
         """
+        context = BlockRenderContext(agent=agent, project_context=project_context)
+        producers = self._build_producers(agent, skill_registry)
+        resolved_root = self._resolve_root_text(
+            agent,
+            scope,
+            agent_body=agent_body,
+            project_context=project_context,
+            producers=producers,
+            context=context,
+        )
+        # Route the finished root through the block engine's deterministic
+        # normalization (trim, single blank line between survivors, no leading /
+        # trailing blank line). In Phase 1 the manager has no storage-backed block
+        # definitions yet, so the whole resolved root is one verbatim ``data``
+        # block — its content was already fully expanded above and must not be
+        # re-interpreted (the verbatim agent body lives inside it). Phases 2–3
+        # replace this single block with the real definition list + layout while
+        # the engine, gates, and producers built here stay the assembly path.
+        root_block = BlockDefinition(
+            id="core:root",
+            owner="always",
+            kind=BLOCK_KIND_DATA,
+            default_text=resolved_root,
+        )
+        return assemble_system_prompt(
+            [root_block],
+            [LayoutEntry(id=root_block.id)],
+            context,
+            owner_activity=CallableOwnerActivity(self._is_owner_active),
+            override_resolver=MappingOverrideResolver(),
+            producers=producers,
+        )
+
+    def _resolve_root_text(
+        self,
+        agent: PromptAgent,
+        scope: Any,
+        *,
+        agent_body: str,
+        project_context: ProjectPromptContext | None,
+        producers: Mapping[str, BlockProducer],
+        context: BlockRenderContext,
+    ) -> str:
+        """Resolve the root ``system.md`` into fully-expanded text (no normalization).
+
+        Every vBot placeholder (``{memory}``/``{runtime}``/``{tools}``/… and the
+        two collapsing project placeholders), every ``{include:…}``, and finally
+        the verbatim ``{agent_body}`` are resolved here, exactly as before the
+        block engine existed. The list placeholders (``{tool_list}`` etc.) resolve
+        through the shared ``producers`` so the list formatting has one home. The
+        result is one finished string the engine then normalizes — Phase 1 keeps
+        the substantive content identical.
+        """
         prompt_scope = self._resolve_build_scope(agent, scope)
-        active_skill_registry = self._resolve_skill_registry(skill_registry)
         prompt = self._read_prompt_fragment(prompt_scope, agent.id, "system.md")
 
         if "{app_version}" in prompt:
@@ -502,28 +560,35 @@ class SystemPromptManager:
             project_files = self.render_project_files(project_context)
             # Lead with the separator so an empty render collapses to "" and the
             # surrounding template has no blank line of its own to leave behind.
-            project_block = f"{_BLOCK_SEPARATOR}{project_files}" if project_files else ""
+            project_block = f"{BLOCK_SEPARATOR}{project_files}" if project_files else ""
             prompt = prompt.replace(PROJECT_FILES_PLACEHOLDER, project_block)
         if "{runtime}" in prompt:
             prompt = prompt.replace("{runtime}", self._build_runtime_block(agent, prompt_scope))
         if "{tools}" in prompt:
-            prompt = prompt.replace("{tools}", self._build_tools_block(agent, prompt_scope))
-        if "{channels}" in prompt:
-            prompt = prompt.replace("{channels}", self._build_channels_block(agent, prompt_scope))
-        if "{skills}" in prompt:
+            tools = self._read_prompt_fragment(prompt_scope, agent.id, "tools.md")
             prompt = prompt.replace(
-                "{skills}",
-                self._build_skills_block(agent, prompt_scope, active_skill_registry),
+                "{tools}", tools.replace("{tool_list}", producers["tool_list"](context))
+            )
+        if "{channels}" in prompt:
+            channels = self._read_prompt_fragment(prompt_scope, agent.id, "channels.md")
+            prompt = prompt.replace(
+                "{channels}",
+                channels.replace("{channel_list}", producers["channel_list"](context)),
+            )
+        if "{skills}" in prompt:
+            skills = self._read_prompt_fragment(prompt_scope, agent.id, "skills.md")
+            prompt = prompt.replace(
+                "{skills}", skills.replace("{skill_list}", producers["skill_list"](context))
             )
 
-        prompt = self._replace_workspace_includes(prompt, agent.workspace)
+        prompt = expand_workspace_includes(prompt, agent.workspace)
 
         # The agent body is substituted LAST and literally — like an {include},
         # never as a template. Because every vBot placeholder and {include} is
         # already resolved by now and nothing runs after this replace, any "{...}"
         # inside the body is left untouched (plan risk "Body-Wörtlichkeit"). It
         # trails with the separator so an empty body collapses spurlessly.
-        body_block = f"{agent_body}{_BLOCK_SEPARATOR}" if agent_body else ""
+        body_block = f"{agent_body}{BLOCK_SEPARATOR}" if agent_body else ""
         return prompt.replace(AGENT_BODY_PLACEHOLDER, body_block)
 
     def render_project_files(self, project_context: ProjectPromptContext | None) -> str:
@@ -581,7 +646,7 @@ class SystemPromptManager:
             # failures, ValueError the decode/bad-path ones.
             _LOGGER.warning("Skipping unreadable project file %s: %s", file_path, exc)
             return None
-        return _wrap_include_file(filename, content)
+        return wrap_include_file(filename, content)
 
     def provider_tool_definitions(
         self,
@@ -612,6 +677,96 @@ class SystemPromptManager:
         """Return the per-call registry, or the configured global one when absent."""
         return skill_registry if skill_registry is not None else self._skill_registry
 
+    def _build_producers(
+        self,
+        agent: PromptAgent,
+        skill_registry: SkillPromptRegistry | None,
+    ) -> dict[str, BlockProducer]:
+        """Build the ``{generated:NAME}`` producer registry for this build.
+
+        Each producer is a closure over the registries the manager already holds
+        (and the per-call skill-registry override), so the list-formatting logic
+        lives in one place and serves both the legacy child-fragment placeholders
+        (``{tool_list}`` etc.) here in Phase 1 and the ``{generated:…}`` markers
+        the block engine expands in Phases 2–3. ``memory_files`` renders the
+        ``USER.md``/``MEMORY.md`` ``<file>`` contents per the agent's memory mode
+        (the data half of today's memory block, without the guidance).
+        """
+        active_skill_registry = self._resolve_skill_registry(skill_registry)
+
+        def tool_list(context: BlockRenderContext) -> str:
+            return _format_tool_list(self._prompt_definitions_for_agent(context.agent))
+
+        def channel_list(context: BlockRenderContext) -> str:
+            return _format_channel_list(self._agent_active_channels(context.agent))
+
+        def skill_list(context: BlockRenderContext) -> str:
+            return _format_skill_list(
+                active_skill_registry.filter_allowed(context.agent.allowed_skills)
+            )
+
+        def memory_files(context: BlockRenderContext) -> str:
+            return self._render_memory_files(context.agent)
+
+        return {
+            "tool_list": tool_list,
+            "channel_list": channel_list,
+            "skill_list": skill_list,
+            "memory_files": memory_files,
+        }
+
+    def _is_owner_active(self, owner: str, agent: PromptAgent) -> bool:
+        """Return whether a block's owner is active for *agent* (gate 2, D5).
+
+        Reads the same seams the manager already applies — never a hardcoded or
+        re-implemented gate:
+
+        - ``always`` → always true.
+        - ``memory`` → the memory tool is enabled for the agent.
+        - ``tool:<name>`` → ``<name>`` is in the agent's effective allowed tools.
+        - ``channel`` → the agent has at least one active+enabled+running channel.
+        - ``extension:<name>`` → the extension is in the loaded-extension set
+          (Phase 3 supplies that set; until then no extension owner is active).
+        """
+        if owner == "always":
+            return True
+        if owner == "memory":
+            mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
+            return memory_tool_enabled(mode)
+        if owner == "channel":
+            return bool(self._agent_active_channels(agent))
+        tool_prefix = "tool:"
+        if owner.startswith(tool_prefix):
+            tool_name = owner[len(tool_prefix) :]
+            return self._agent_tool_allowed(agent, tool_name)
+        extension_prefix = "extension:"
+        if owner.startswith(extension_prefix):
+            return owner[len(extension_prefix) :] in self._loaded_extensions
+        return False
+
+    def _agent_tool_allowed(self, agent: PromptAgent, tool_name: str) -> bool:
+        """Return whether *tool_name* is in the agent's effective prompt tool set.
+
+        Reuses the same prompt-definition path the tools block uses (allowlist +
+        derived ``memory`` visibility), so gate 2 cannot drift from what the tool
+        list actually shows.
+        """
+        definitions = self._prompt_definitions_for_agent(agent)
+        return any(definition.get("name") == tool_name for definition in definitions)
+
+    def _render_memory_files(self, agent: PromptAgent) -> str:
+        """Render the ``USER.md``/``MEMORY.md`` ``<file>`` contents, ``""`` if empty.
+
+        The data half of today's memory block. Phase 1 reuses
+        ``MemoryService.build_prompt_block`` and strips its ``<memory>`` wrapper
+        and guidance line so the producer yields only the file contents — Phase 3
+        moves the file reading into the producer outright and turns the guidance
+        into the memory block's own editable text.
+        """
+        mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
+        block = self._memory_provider.build_prompt_block(Path(agent.workspace), mode)
+        return _strip_memory_wrapper(block)
+
     def _build_memory_block(self, agent: PromptAgent) -> str:
         mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
         return self._memory_provider.build_prompt_block(Path(agent.workspace), mode)
@@ -631,11 +786,6 @@ class SystemPromptManager:
             "{current_date}": self._current_date(),
         }
         return _replace_placeholders(runtime, replacements)
-
-    def _build_tools_block(self, agent: PromptAgent, scope: PromptScope) -> str:
-        tools = self._read_prompt_fragment(scope, agent.id, "tools.md")
-        tool_list = _format_tool_list(self._prompt_definitions_for_agent(agent))
-        return tools.replace("{tool_list}", tool_list)
 
     def _provider_definitions_for_agent(self, agent: PromptAgent) -> list[JsonObject]:
         definitions = self._tool_registry.provider_definitions(agent.allowed_tools)
@@ -671,21 +821,6 @@ class SystemPromptManager:
             return definitions
 
         return [*definitions, *definition_loader([MEMORY_TOOL_NAME])]
-
-    def _build_channels_block(self, agent: PromptAgent, scope: PromptScope) -> str:
-        channels = self._read_prompt_fragment(scope, agent.id, "channels.md")
-        channel_list = _format_channel_list(self._agent_active_channels(agent))
-        return channels.replace("{channel_list}", channel_list)
-
-    def _build_skills_block(
-        self,
-        agent: PromptAgent,
-        scope: PromptScope,
-        skill_registry: SkillPromptRegistry,
-    ) -> str:
-        skills = self._read_prompt_fragment(scope, agent.id, "skills.md")
-        skill_list = _format_skill_list(skill_registry.filter_allowed(agent.allowed_skills))
-        return skills.replace("{skill_list}", skill_list)
 
     def _resolve_build_scope(self, agent: PromptAgent, scope: Any = None) -> PromptScope:
         if scope is None:
@@ -735,59 +870,6 @@ class SystemPromptManager:
             active_channels.append(channel)
         return active_channels
 
-    def _replace_workspace_includes(self, prompt: str, workspace: str) -> str:
-        # An empty workspace means "no includes". A config agent has no
-        # identity/memory home (workspace == ""), so {include:…} placeholders
-        # have nothing to resolve against and are dropped. Resolving them anyway
-        # would turn Path("") into Path("."), reading SOUL.md/USER.md relative to
-        # the server's process CWD — log noise every turn and a latent leak.
-        if not workspace:
-            return INCLUDE_PATTERN.sub("", prompt)
-
-        workspace_path = Path(workspace)
-
-        def replace_include(match: re.Match[str]) -> str:
-            filename = match.group(1).strip()
-            _validate_workspace_include(filename)
-            include_path = workspace_path / filename
-            try:
-                content = include_path.read_text(encoding="utf-8")
-            except FileNotFoundError:
-                _LOGGER.warning("Skipping missing workspace include: %s", include_path)
-                return ""
-            except (OSError, ValueError) as exc:
-                # Present but unreadable for ANY reason (locked, no permission, a
-                # directory, binary/non-UTF-8, …). A prompt file must never abort the
-                # run (user decision): log and drop the block, like a missing include.
-                _LOGGER.warning("Skipping unreadable workspace include %s: %s", include_path, exc)
-                return ""
-            return _wrap_include_file(filename, content)
-
-        return INCLUDE_PATTERN.sub(replace_include, prompt)
-
-
-def _wrap_include_file(filename: str, content: str) -> str:
-    """Wrap a file's content in the canonical ``<file name="…">`` block.
-
-    The single wrap used by both workspace includes and project files so the two
-    rendering paths produce identical framing.
-    """
-    return f'<file name="{filename}">\n{content}\n</file>'
-
-
-def _validate_workspace_include(filename: str) -> None:
-    # Check both POSIX and Windows path semantics so separators and drive
-    # prefixes of either platform are rejected on any host.
-    posix_path = PurePosixPath(filename)
-    windows_path = PureWindowsPath(filename)
-    if (
-        posix_path.name != filename
-        or posix_path.is_absolute()
-        or windows_path.name != filename
-        or windows_path.is_absolute()
-    ):
-        raise PromptError(f"Unsafe workspace include: {filename}")
-
 
 def _normalize_prompt_scope(scope: Any = None) -> PromptScope:
     if scope is None:
@@ -836,6 +918,32 @@ def _replace_placeholders(template: str, replacements: dict[str, str]) -> str:
     for placeholder, value in replacements.items():
         result = result.replace(placeholder, value)
     return result
+
+
+_MEMORY_CLOSE_TAG = "\n</memory>"
+_MEMORY_FILE_MARKER = "<file name="
+
+
+def _strip_memory_wrapper(block: str) -> str:
+    """Return only the ``<file>``-wrapped contents of a rendered memory block.
+
+    The ``memory_files`` producer wants just the file data — not the ``<memory>``
+    wrapper or the guidance line that ``build_prompt_block`` prepends. The block is
+    either ``""`` (no visible files) or
+    ``<memory>\\n{guidance}\\n\\n{file blocks}\\n</memory>``; slicing from the first
+    ``<file name=`` to the closing tag yields the file blocks intact, with no
+    dependence on the guidance wording. Phase 3 reads the files directly in the
+    producer and retires this helper.
+    """
+    if not block:
+        return ""
+    marker_index = block.find(_MEMORY_FILE_MARKER)
+    if marker_index == -1:
+        return ""
+    inner = block[marker_index:]
+    if inner.endswith(_MEMORY_CLOSE_TAG):
+        inner = inner[: -len(_MEMORY_CLOSE_TAG)]
+    return inner
 
 
 def _format_tool_list(tool_definitions: list[dict[str, Any]]) -> str:
