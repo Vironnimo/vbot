@@ -58,7 +58,9 @@ def test_task_model_list_formats_bindings(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "task_model.settings", "params": {}}
         return httpx.Response(
             200,
@@ -97,7 +99,9 @@ def test_task_model_list_reports_empty_state(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, "result": {"model_tasks": {}}})
 
     monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
@@ -115,7 +119,9 @@ def test_task_model_targets_formats_rows(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {
             "method": "task_model.list_targets",
             "params": {"task_type": "speech_to_text"},
@@ -158,7 +164,9 @@ def test_task_model_set_posts_sparse_update(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {"model_tasks": {}}})
 
@@ -221,7 +229,9 @@ def test_task_model_clear_posts_empty_target(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {"model_tasks": {}}})
 
@@ -246,7 +256,9 @@ def test_task_model_options_dumps_schema_json(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {
             "method": "task_model.options",
             "params": {"task_type": "text_to_speech", "target": "openai/tts::api-key"},
@@ -276,7 +288,9 @@ def test_run_dispatches_task_model_list(
     def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
         return instance
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, "result": {"model_tasks": {}}})
 
     monkeypatch.setattr(task_model_management.httpx, "post", fake_post)

@@ -31,7 +31,9 @@ def test_prompt_list_posts_rpc_and_formats_rows(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert url == f"{instance.url}/api/rpc"
         assert json == {"method": "prompt.list", "params": {}}
         assert timeout == 10.0
@@ -80,7 +82,9 @@ def test_prompt_update_posts_rpc(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {"name": "tools.md"}})
 
@@ -100,7 +104,9 @@ def test_prompt_reset_posts_rpc(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "prompt.reset", "params": {"name": "skills.md"}}
         return httpx.Response(200, json={"ok": True, "result": {"name": "skills.md"}})
 
@@ -117,7 +123,9 @@ def test_prompt_preview_posts_rpc_and_includes_rendered_text(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "prompt.preview", "params": {"agent_id": "coder"}}
         return httpx.Response(
             200,

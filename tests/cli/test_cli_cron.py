@@ -98,7 +98,9 @@ def test_cron_create_posts_recurring_fields(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {"id": "job-1"}})
 
@@ -131,7 +133,9 @@ def test_cron_create_posts_recurring_fields(
 def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "cron.list", "params": {}}
         return httpx.Response(
             200,
@@ -185,7 +189,9 @@ def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 def test_cron_list_reports_empty_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, "result": {"jobs": []}})
 
     monkeypatch.setattr(cron_management.httpx, "post", fake_post)
@@ -228,7 +234,9 @@ def test_cron_simple_id_commands_post_expected_rpc(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {"ok": True}})
 
@@ -250,7 +258,9 @@ def test_run_dispatches_cron_create_with_once_schedule(
     def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
         return instance
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {
             "method": "cron.create",
             "params": {
@@ -293,7 +303,9 @@ def test_run_dispatches_cron_update_schedule_change(
     def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
         return instance
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {
             "method": "cron.update",
             "params": {

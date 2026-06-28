@@ -137,7 +137,9 @@ def test_project_add_posts_rpc_and_renders_scan_preview(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(
             200,
@@ -219,7 +221,9 @@ def test_project_add_renders_empty_team_and_clean_report(
     # Arrange
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -249,7 +253,9 @@ def test_project_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     # Arrange
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {"method": "project.list", "params": {}}
         return httpx.Response(
             200,
@@ -288,7 +294,9 @@ def test_project_list_reports_empty_state(tmp_path: Path, monkeypatch: pytest.Mo
     # Arrange
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, "result": {"projects": []}})
 
     monkeypatch.setattr(project_management.httpx, "post", fake_post)
@@ -307,7 +315,9 @@ def test_project_show_posts_rpc_and_renders_team(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(
             200,
@@ -354,7 +364,9 @@ def test_project_show_renders_default_knob_lines(
     # explicit provider default (rendered distinctly from "no default" = "-").
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -385,7 +397,9 @@ def test_project_set_posts_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(
             200,
@@ -426,7 +440,9 @@ def test_run_project_set_maps_default_knobs(
 
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(
             200,
@@ -483,7 +499,9 @@ def test_run_project_set_clear_flags_send_null(
 
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(
             200,
@@ -551,7 +569,9 @@ def test_project_rm_reports_archive_path(tmp_path: Path, monkeypatch: pytest.Mon
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(
             200,
@@ -583,7 +603,9 @@ def test_project_rm_surfaces_busy_block(tmp_path: Path, monkeypatch: pytest.Monk
     # Arrange
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -612,7 +634,9 @@ def test_project_rm_surfaces_in_use_block(tmp_path: Path, monkeypatch: pytest.Mo
     # Arrange
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -648,7 +672,9 @@ def test_run_dispatches_project_add(
     def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
         return instance
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {
             "method": "project.add",
             "params": {"cwd": "./my-repo", "display_name": "vBot"},
@@ -689,7 +715,9 @@ def test_session_list_forwards_project_qualified_address(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {"sessions": []}})
 
@@ -711,7 +739,9 @@ def test_session_list_bare_agent_unchanged(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append(json)
         return httpx.Response(200, json={"ok": True, "result": {"sessions": []}})
 
@@ -736,7 +766,9 @@ def test_run_forwards_cron_create_project_address(
     def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
         return instance
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         assert json == {
             "method": "cron.create",
             "params": {
@@ -779,7 +811,9 @@ def test_cron_list_renders_project_target_address(
     # target reads as ``builder@vbot`` and a bare target stays ``assistant``.
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={
