@@ -33,7 +33,7 @@ AREA_HELP = {
     "session": "Inspect and manage agent chat sessions",
     "channel": "Inspect and manage channel configs",
     "tool": "Inspect public tool catalog",
-    "prompt": "Inspect and manage prompt fragments",
+    "prompt": "Inspect and manage System Prompt blocks",
     "log": "Inspect parsed server logs",
     "provider": "Inspect and configure provider connections",
     "model": "Inspect and refresh model catalogs",
@@ -81,9 +81,9 @@ CHANNEL_HELP = {
     "status": "Show one channel listener status",
 }
 PROMPT_HELP = {
-    "list": "List editable prompt fragments",
-    "update": "Replace one prompt fragment",
-    "reset": "Reset one prompt fragment to bundled default",
+    "list": "List System Prompt blocks",
+    "update": "Replace one editable prompt block's text",
+    "reset": "Reset one editable prompt block to its inherited default",
     "preview": "Render one agent's complete system prompt",
 }
 LOG_HELP = {
@@ -597,19 +597,23 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         prompt_subparsers,
         "update",
         PROMPT_HELP["update"],
-        example="prompt update identity --file identity.md",
+        example="prompt update core:tools --file tools.md",
     )
-    update_parser.add_argument("name", metavar="<fragment-name>", help="Prompt fragment to update")
+    update_parser.add_argument(
+        "block_id", metavar="<block-id>", help="Editable prompt block id, for example core:tools"
+    )
     content_group = update_parser.add_mutually_exclusive_group(required=True)
-    content_group.add_argument("--content", help="New fragment content as inline text")
+    content_group.add_argument("--content", help="New block content as inline text")
     content_group.add_argument(
-        "--file", dest="content_file", metavar="<path>", help="Read fragment content from a file"
+        "--file", dest="content_file", metavar="<path>", help="Read block content from a file"
     )
 
     reset_parser = _add_command_parser(
-        prompt_subparsers, "reset", PROMPT_HELP["reset"], example="prompt reset identity"
+        prompt_subparsers, "reset", PROMPT_HELP["reset"], example="prompt reset core:tools"
     )
-    reset_parser.add_argument("name", metavar="<fragment-name>", help="Prompt fragment to reset")
+    reset_parser.add_argument(
+        "block_id", metavar="<block-id>", help="Editable prompt block id, for example core:tools"
+    )
 
     preview_parser = _add_command_parser(
         prompt_subparsers, "preview", PROMPT_HELP["preview"], example="prompt preview assistant"

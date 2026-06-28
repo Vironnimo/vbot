@@ -1,4 +1,4 @@
-"""Prompt fragment RPC commands for the vBot CLI."""
+"""Prompt block RPC commands for the vBot CLI."""
 
 from __future__ import annotations
 
@@ -10,39 +10,39 @@ from cli.server_management import CommandResult, ServerInstance
 
 
 def prompt_list(instance: ServerInstance) -> CommandResult:
-    """Return prompt fragment metadata via `prompt.list` RPC."""
+    """Return System Prompt block metadata via `prompt.list` RPC."""
 
     payload = _rpc_call(instance, "prompt.list", {})
     if not payload.ok:
         return payload.to_command_result()
-    fragments = payload.data.get("fragments")
-    if not isinstance(fragments, list):
+    blocks = payload.data.get("blocks")
+    if not isinstance(blocks, list):
         return CommandResult(
             ok=False,
-            message="RPC result missing prompt fragments list",
+            message="RPC result missing prompt blocks list",
             instance=instance,
         )
-    return CommandResult(ok=True, message=_format_prompt_rows(fragments), instance=instance)
+    return CommandResult(ok=True, message=_format_prompt_rows(blocks), instance=instance)
 
 
-def prompt_update(instance: ServerInstance, name: str, content: str) -> CommandResult:
-    """Update one prompt fragment via `prompt.update` RPC."""
+def prompt_update(instance: ServerInstance, block_id: str, content: str) -> CommandResult:
+    """Update one editable prompt block via `prompt.update` RPC."""
 
-    payload = _rpc_call(instance, "prompt.update", {"name": name, "content": content})
+    payload = _rpc_call(instance, "prompt.update", {"id": block_id, "content": content})
     if not payload.ok:
         return payload.to_command_result()
-    fragment_name = _string_or_default(payload.data.get("name"), name)
-    return CommandResult(ok=True, message=f"updated {fragment_name}", instance=instance)
+    resolved_id = _string_or_default(payload.data.get("id"), block_id)
+    return CommandResult(ok=True, message=f"updated {resolved_id}", instance=instance)
 
 
-def prompt_reset(instance: ServerInstance, name: str) -> CommandResult:
-    """Reset one prompt fragment via `prompt.reset` RPC."""
+def prompt_reset(instance: ServerInstance, block_id: str) -> CommandResult:
+    """Reset one editable prompt block via `prompt.reset` RPC."""
 
-    payload = _rpc_call(instance, "prompt.reset", {"name": name})
+    payload = _rpc_call(instance, "prompt.reset", {"id": block_id})
     if not payload.ok:
         return payload.to_command_result()
-    fragment_name = _string_or_default(payload.data.get("name"), name)
-    return CommandResult(ok=True, message=f"reset {fragment_name}", instance=instance)
+    resolved_id = _string_or_default(payload.data.get("id"), block_id)
+    return CommandResult(ok=True, message=f"reset {resolved_id}", instance=instance)
 
 
 def prompt_preview(instance: ServerInstance, agent_id: str) -> CommandResult:
@@ -63,36 +63,37 @@ def prompt_preview(instance: ServerInstance, agent_id: str) -> CommandResult:
     )
 
 
-def _format_prompt_rows(fragments: Sequence[object]) -> str:
-    if not fragments:
-        return "no prompt fragments"
+def _format_prompt_rows(blocks: Sequence[object]) -> str:
+    if not blocks:
+        return "no prompt blocks"
 
     lines = ["prompts:"]
-    for fragment in fragments:
-        lines.append(_format_prompt_row(fragment))
+    for block in blocks:
+        lines.append(_format_prompt_row(block))
     return "\n".join(lines)
 
 
-def _format_prompt_row(fragment: object) -> str:
-    if not isinstance(fragment, dict):
-        return "- invalid prompt fragment"
+def _format_prompt_row(block: object) -> str:
+    if not isinstance(block, dict):
+        return "- invalid prompt block"
 
-    name = _string_or_default(fragment.get("name"), "?")
-    modified = _bool_text(fragment.get("is_modified"))
-    variables = _format_variables(fragment.get("variables"))
-    return f"- {name} modified={modified} variables={variables}"
+    block_id = _string_or_default(block.get("id"), "?")
+    owner = _string_or_default(block.get("owner"), "?")
+    kind = _string_or_default(block.get("kind"), "?")
+    enabled = _bool_text(block.get("enabled"))
+    editable = _bool_text(block.get("editable"))
+    source = _string_or_default(block.get("source"), "?")
+    modified = _modified_text(block)
+    return (
+        f"- {block_id} owner={owner} kind={kind} "
+        f"enabled={enabled} editable={editable} source={source} modified={modified}"
+    )
 
 
-def _format_variables(value: object) -> str:
-    if not isinstance(value, list) or not value:
+def _modified_text(block: dict[str, object]) -> str:
+    if block.get("editable") is not True:
         return "-"
-    placeholders = []
-    for item in value:
-        if isinstance(item, dict):
-            placeholder = item.get("placeholder")
-            if isinstance(placeholder, str) and placeholder:
-                placeholders.append(placeholder)
-    return ",".join(placeholders) if placeholders else "-"
+    return _bool_text(block.get("is_modified"))
 
 
 def _bool_text(value: object) -> str:

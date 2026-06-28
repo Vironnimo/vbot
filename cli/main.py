@@ -517,9 +517,9 @@ def dispatch_prompt_command(
                 message=f"cannot read prompt content file: {exc}",
                 instance=instance,
             )
-        return update_prompt_fn(instance, args.name, content)
+        return update_prompt_fn(instance, args.block_id, content)
     if args.command == "reset":
-        return reset_prompt_fn(instance, args.name)
+        return reset_prompt_fn(instance, args.block_id)
     if args.command == "preview":
         return preview_prompt_fn(instance, args.agent)
     raise ValueError(f"Unsupported prompt command: {args.command}")
