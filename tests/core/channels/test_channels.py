@@ -24,6 +24,7 @@ from core.channels import (
     ChannelStorage,
 )
 from core.channels.adapter import FileData, RouteFacts
+from core.channels.channels import _normalize_channel_id
 from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
 from core.chat.commands import NotACommand
@@ -290,6 +291,52 @@ def test_channel_storage_crud_round_trip(tmp_path: Path) -> None:
     assert reloaded.enabled is False
     with pytest.raises(ChannelNotFoundError, match=initial.id):
         storage.get(initial.id)
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["../agents", "..", "foo/bar", "a\\b", "/etc", ".", "tg/../x", "tg-assistant/"],
+)
+def test_normalize_channel_id_rejects_path_components(bad_id: str) -> None:
+    # A channel id is a storage path segment; separators and traversal must be refused.
+    with pytest.raises(ChannelConfigError):
+        _normalize_channel_id(bad_id)
+
+
+def test_normalize_channel_id_accepts_valid_slug() -> None:
+    assert _normalize_channel_id("  tg-assistant  ") == "tg-assistant"
+
+
+def test_channel_storage_delete_rejects_path_traversal_id(tmp_path: Path) -> None:
+    # Arrange: a real channels dir plus a sibling that a traversal id would target.
+    storage = ChannelStorage(tmp_path)
+    (tmp_path / "channels").mkdir()
+    sibling = tmp_path / "agents"
+    sibling.mkdir()
+    sibling.joinpath("keep.txt").write_text("important", encoding="utf-8")
+
+    # Act / Assert: the traversal is refused before any filesystem deletion.
+    with pytest.raises(ChannelConfigError):
+        storage.delete("../agents")
+
+    # The traversal target survives untouched.
+    assert sibling.is_dir()
+    assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"
+
+
+def test_channel_service_delete_rejects_path_traversal_id(tmp_path: Path) -> None:
+    # The same guard holds one layer up, where channel.delete RPC enters.
+    service = make_service(tmp_path)
+    (tmp_path / "channels").mkdir()
+    sibling = tmp_path / "agents"
+    sibling.mkdir()
+    sibling.joinpath("keep.txt").write_text("important", encoding="utf-8")
+
+    with pytest.raises(ChannelConfigError):
+        service.delete_channel("../agents")
+
+    assert sibling.is_dir()
+    assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"
 
 
 def test_channel_storage_load_all_missing_directory_returns_empty_list(tmp_path: Path) -> None:

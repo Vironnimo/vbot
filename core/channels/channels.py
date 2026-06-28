@@ -966,7 +966,17 @@ class ChannelService:
 def _normalize_channel_id(channel_id: str) -> str:
     if not isinstance(channel_id, str) or not channel_id.strip():
         raise ChannelConfigError("channel_id must be a non-empty string")
-    return channel_id.strip()
+    normalized = channel_id.strip()
+    # The id becomes a path segment under the channels directory, and delete recursively
+    # removes that directory: a separator or traversal component (``../agents``, ``/etc``)
+    # would let an operation escape storage and rmtree an arbitrary directory. Enforce the
+    # same bare-slug rule ChannelConfig already requires, at the choke point every storage
+    # and service call funnels through.
+    if _CHANNEL_ID_PATTERN.fullmatch(normalized) is None:
+        raise ChannelConfigError(
+            "channel_id must contain only letters, numbers, underscore, and hyphen"
+        )
+    return normalized
 
 
 def _get_running_loop_or_none() -> asyncio.AbstractEventLoop | None:
