@@ -1,4 +1,12 @@
-"""Tests for system prompt assembly."""
+"""Tests for the block-model System Prompt assembly.
+
+The manager now assembles the prompt from declared blocks (core text blocks from
+the prompt resources, the memory block, the SOUL / project-files / agent-body data
+blocks, plus contributed tool/extension blocks) in the bundled default layout
+order, gated by the three gates. These tests use the real bundled resource block
+texts (what production ships) and an empty block store (no saved layout/overrides),
+so they exercise the same path a real identity run takes.
+"""
 
 import logging
 from collections.abc import Sequence
@@ -16,7 +24,11 @@ from core.memory import (
     MEMORY_PROMPT_MODE_OFF,
     MemoryPromptMode,
 )
-from core.prompts.blocks import validate_workspace_include
+from core.prompts.blocks import (
+    BlockDefinition,
+    LayoutEntry,
+    validate_workspace_include,
+)
 from core.prompts.prompts import (
     EDITABLE_PROMPT_FRAGMENT_NAMES,
     ProjectPromptContext,
@@ -27,6 +39,10 @@ from core.prompts.prompts import (
     SystemPromptManager,
 )
 
+_RESOURCES_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "resources" / "prompts"
+# The core text-block fragment files whose contents are the blocks' default texts.
+_CORE_FRAGMENT_NAMES = ("runtime.md", "tools.md", "channels.md", "skills.md")
+
 
 @dataclass(frozen=True)
 class StubSkill:
@@ -35,14 +51,22 @@ class StubSkill:
 
 
 class StubStorage:
-    def __init__(self, fragments: dict[str, str]) -> None:
-        self._fragments = fragments
+    """Storage stub returning the real bundled resource fragments by default.
+
+    The core text blocks read their default text through ``read_prompt_fragment``;
+    seeding it with the real ``resources/prompts/*.md`` exercises the production
+    block texts. Agent-scope fragments default to ``""`` (no default fallback),
+    matching the real storage contract.
+    """
+
+    def __init__(self, fragments: dict[str, str] | None = None) -> None:
+        self._fragments = fragments if fragments is not None else _real_fragments()
         self._agent_fragments: dict[tuple[str, str], str] = {}
         self.reads: list[tuple[str, str]] = []
 
     def read_prompt_fragment(self, fragment_name: str) -> str:
         self.reads.append(("default", fragment_name))
-        return self._fragments[fragment_name]
+        return self._fragments.get(fragment_name, "")
 
     def read_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> str:
         self.reads.append((agent_id, fragment_name))
@@ -193,27 +217,10 @@ class StubChannels:
         return any(channel.id == channel_id and channel.enabled for channel in self._channels)
 
 
-@pytest.fixture
-def fragments() -> dict[str, str]:
+def _real_fragments() -> dict[str, str]:
     return {
-        "system.md": ("{include:SOUL.md}\n{memory}\n{runtime}\n{tools}\n{channels}\n{skills}"),
-        "runtime.md": (
-            "## Runtime\n"
-            "- Host: {host}\n"
-            "- OS: {os}\n"
-            "- App version: {app_version}\n"
-            "- You are powered by the model {model}\n"
-            "- Your Workspace (HOME, your CWD for tools, where you and your files live): "
-            "{agent_workspace}\n"
-            "- App Path: {app_dir}\n"
-            "- Data Path: All app data (sessions, workspaces, skills, configs, etc.) "
-            "lives here: {data_root}\n"
-            "- Thinking level: {thinking_effort}\n"
-            "- Date: {current_date}"
-        ),
-        "tools.md": "## Available Tools\n{tool_list}",
-        "channels.md": "## Channels\n{channel_list}",
-        "skills.md": "## Available Skills\n{skill_list}",
+        name: (_RESOURCES_PROMPTS_DIR / name).read_text(encoding="utf-8")
+        for name in _CORE_FRAGMENT_NAMES
     }
 
 
@@ -227,137 +234,158 @@ def workspace(tmp_path: Path) -> Path:
     return directory
 
 
-def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_files(
-    fragments: dict[str, str],
+def _manager(
+    tmp_path: Path,
+    *,
+    storage: StubStorage | None = None,
+    tools: StubTools | None = None,
+    skills: StubSkills | None = None,
+    channels: StubChannels | None = None,
+    block_definitions: Sequence[BlockDefinition] = (),
+    loaded_extensions: Sequence[str] = (),
+    host: str = "test-host",
+    os_name: str = "test-os",
+    current_date: str = "2026-05-04",
+) -> SystemPromptManager:
+    return SystemPromptManager(
+        storage or StubStorage(),
+        tools or StubTools(),
+        skills or StubSkills([]),
+        channel_registry=channels,
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+        host=host,
+        os_name=os_name,
+        current_date=lambda: current_date,
+        block_definitions=block_definitions,
+        loaded_extensions=loaded_extensions,
+    )
+
+
+# --- Identity-agent assembly (content + order + normalization) ----------------
+
+
+def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     workspace: Path,
     tmp_path: Path,
 ) -> None:
     tools = StubTools()
     skills = StubSkills(
+        [StubSkill("agent-cli", "Delegate coding tasks"), StubSkill("news", "News")]
+    )
+    channels = StubChannels(
         [
-            StubSkill("agent-cli", "Delegate coding tasks"),
-            StubSkill("news", "Fetch news"),
+            ChannelConfig(
+                id="tg-private",
+                platform="telegram",
+                agent_id="coder",
+                allowed_chat_ids=["8506476339"],
+                token_env_var="TELEGRAM_BOT_TOKEN",
+                enabled=True,
+            ),
+            ChannelConfig(
+                id="tg-group",
+                platform="telegram",
+                agent_id="coder",
+                allowed_chat_ids=["111", "222"],
+                token_env_var="TELEGRAM_GROUP_TOKEN",
+                enabled=True,
+            ),
+            ChannelConfig(
+                id="other-agent-channel",
+                platform="telegram",
+                agent_id="other-agent",
+                allowed_chat_ids=["333"],
+                token_env_var="OTHER_TOKEN",
+                enabled=True,
+            ),
         ]
     )
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        tools,
-        skills,
-        channel_registry=StubChannels(
-            [
-                ChannelConfig(
-                    id="tg-private",
-                    platform="telegram",
-                    agent_id="coder",
-                    allowed_chat_ids=["8506476339"],
-                    token_env_var="TELEGRAM_BOT_TOKEN",
-                    enabled=True,
-                ),
-                ChannelConfig(
-                    id="tg-group",
-                    platform="telegram",
-                    agent_id="coder",
-                    allowed_chat_ids=["111", "222"],
-                    token_env_var="TELEGRAM_GROUP_TOKEN",
-                    enabled=True,
-                ),
-                ChannelConfig(
-                    id="other-agent-channel",
-                    platform="telegram",
-                    agent_id="other-agent",
-                    allowed_chat_ids=["333"],
-                    token_env_var="OTHER_TOKEN",
-                    enabled=True,
-                ),
-            ]
-        ),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-        host="test-host",
-        os_name="test-os",
-        current_date=lambda: "2026-05-04",
-    )
-    agent = _agent(
-        workspace,
-        allowed_tools=["read_file"],
-        allowed_skills=["agent-cli"],
-    )
+    manager = _manager(tmp_path, tools=tools, skills=skills, channels=channels)
+    agent = _agent(workspace, allowed_tools=["read_file"], allowed_skills=["agent-cli"])
 
     prompt = manager.build_system_prompt(agent)
 
+    # Runtime block (variables filled).
     assert "- Host: test-host" in prompt
     assert "- OS: test-os" in prompt
     assert "- App version: 0.1.0" in prompt
     assert "- You are powered by the model openai/gpt-5.2" in prompt
     assert f"{workspace}" in prompt
-    assert str((tmp_path / "app").resolve()) in prompt
-    assert str((tmp_path / "data").resolve()) in prompt
     assert "- Thinking level: high" in prompt
     assert "- Date: 2026-05-04" in prompt
+    # Tools block.
     assert "- read_file: Read a workspace file" in prompt
     assert "shell" not in prompt
+    # Channels block (only this agent's active channels).
     assert "## Channels" in prompt
     assert "- tg-private: telegram (default target available)" in prompt
     assert "- tg-group: telegram (explicit target required)" in prompt
     assert "other-agent-channel" not in prompt
+    # Skills block.
     assert "<name>agent-cli</name>" in prompt
     assert "<description>Delegate coding tasks</description>" in prompt
-    assert "<path>" not in prompt
-    assert "<location>" not in prompt
     assert "news" not in prompt
+    # Data blocks: SOUL + memory files.
     assert "Soul text" in prompt
     assert "Memory text" in prompt
     assert "User text" in prompt
     assert '<file name="SOUL.md">' in prompt
     assert '<file name="MEMORY.md">' in prompt
     assert '<file name="USER.md">' in prompt
+    # No leftover placeholders / no "- None" / clean normalization.
     assert "{" not in prompt
-    assert tools.prompt_allowlist_calls == [["read_file"], ["memory"]]
+    assert "- None" not in prompt
+    assert prompt == prompt.strip()
+    assert "\n\n\n" not in prompt
+    # Order: SOUL < memory < runtime < tools < channels < skills.
+    order = ["Soul text", "<memory>", "## Runtime", "## Available Tools", "## Channels"]
+    positions = [prompt.index(section) for section in order]
+    assert positions == sorted(positions)
+    assert prompt.index("## Channels") < prompt.index("## Available Skills")
+    # Same agent allowlist drives prompt tools and gate 2's memory-tool check.
+    assert tools.prompt_allowlist_calls[0] == ["read_file"]
     assert skills.allowlist == ["agent-cli"]
 
 
-def test_memory_block_omits_workspace_memory_when_agent_memory_is_off(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
+# --- Memory block (the empty-memory fix is the key regression) ----------------
 
-    prompt = manager.build_system_prompt(
-        _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    )
 
-    assert "Soul text" in prompt
+def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:
+    # The bug fix (D5): the guidance is the block's own text and the owner gate is
+    # "memory tool enabled" — so the block appears whenever memory_prompt_mode != off,
+    # even with empty/absent MEMORY.md/USER.md (the agent needs the guidance most
+    # precisely before the first entry).
+    empty_workspace = tmp_path / "empty-ws"
+    empty_workspace.mkdir()
+    manager = _manager(tmp_path)
+    agent = _agent(empty_workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "<memory>" in prompt
+    assert "declarative facts" in prompt  # the guidance prose
+    assert "<file name=" not in prompt  # no memory files to embed
+
+
+def test_memory_block_absent_when_memory_off(workspace: Path, tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "Soul text" in prompt  # SOUL still renders
+    assert "<memory>" not in prompt
     assert "Memory text" not in prompt
     assert "User text" not in prompt
-    assert "<memory>" not in prompt
 
 
-def test_memory_block_can_include_only_agent_memory(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
+def test_memory_block_includes_only_agent_memory(workspace: Path, tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
 
-    prompt = manager.build_system_prompt(
-        _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
-    )
+    prompt = manager.build_system_prompt(agent)
 
     assert "<memory>" in prompt
     assert '<file name="MEMORY.md">' in prompt
@@ -366,20 +394,139 @@ def test_memory_block_can_include_only_agent_memory(
     assert "User text" not in prompt
 
 
-def test_provider_tool_definitions_use_same_agent_allowlist(
-    fragments: dict[str, str],
-    workspace: Path,
+# --- Channels block: channel-less agent has NO channels block (not "- None") ---
+
+
+def test_channel_less_agent_has_no_channels_block(workspace: Path, tmp_path: Path) -> None:
+    # Adapted from the old "renders - None" test: with no active channels the whole
+    # block gates out (owner "channel"), it does not render "- None".
+    manager = _manager(tmp_path, channels=StubChannels([]))
+    agent = _agent(workspace, allowed_tools=["read_file"])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Channels" not in prompt
+    assert "- None" not in prompt
+
+
+def test_channels_block_absent_without_channel_registry(workspace: Path, tmp_path: Path) -> None:
+    manager = _manager(tmp_path, channels=None)
+    agent = _agent(workspace)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Channels" not in prompt
+
+
+# --- SOUL / project-files / agent-body data blocks ----------------------------
+
+
+def test_soul_block_collapses_without_workspace_file(tmp_path: Path) -> None:
+    # A config agent has workspace "" → SOUL block collapses (gate 3); no decoy
+    # SOUL from the process CWD is read.
+    manager = _manager(tmp_path)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert '<file name="SOUL.md">' not in prompt
+
+
+def test_config_agent_body_renders_verbatim_before_soul_and_memory(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent, agent_body="You are the orchestrator.")
+
+    assert "You are the orchestrator." in prompt
+
+
+def test_config_agent_body_with_braces_is_not_expanded(tmp_path: Path) -> None:
+    # Plan risk "Body-Wörtlichkeit": the agent body is a data block, never expanded —
+    # a "{...}" inside it (even a real vBot placeholder name) survives verbatim.
+    manager = _manager(tmp_path)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    body = "Use {host} and {include:SOUL.md} and {generated:tool_list} literally; also {custom}."
+
+    prompt = manager.build_system_prompt(agent, agent_body=body)
+
+    assert body in prompt
+
+
+def test_project_files_render_in_order_after_memory(workspace: Path, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
+    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "CONTEXT.md"])
+
+    prompt = manager.build_system_prompt(agent, project_context=context)
+
+    assert '<file name="AGENTS.md">\nTeam rules\n</file>' in prompt
+    assert '<file name="CONTEXT.md">\nProject context\n</file>' in prompt
+    # Default layout: memory before project files; AGENTS.md before CONTEXT.md.
+    assert prompt.index("<memory>") < prompt.index("AGENTS.md")
+    assert prompt.index("AGENTS.md") < prompt.index("CONTEXT.md")
+
+
+def test_project_files_collapse_without_context(workspace: Path, tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
+
+    prompt = manager.build_system_prompt(agent, project_context=None)
+
+    # No project block; the identity content is unaffected.
+    assert "Soul text" in prompt
+    assert "<memory>" in prompt
+
+
+def test_render_project_files_one_source_for_reminder_and_prompt(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    manager = _manager(tmp_path)
+    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
+
+    rendered = manager.render_project_files(context)
+    in_prompt = manager.build_system_prompt(agent, project_context=context)
+
+    assert rendered == '<file name="AGENTS.md">\nTeam rules\n</file>'
+    assert rendered in in_prompt
+
+
+def test_project_files_never_abort_run_on_unreadable_file(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "GOOD.md").write_text("Good doc", encoding="utf-8")
+    (repo / "ADIR").mkdir()
+    (repo / "BINARY.md").write_bytes(b"\xff\xfe\x00\x01 not utf-8")
+    manager = _manager(tmp_path)
+    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project(repo, ["ADIR", "BINARY.md", "GOOD.md"])
+
+    with caplog.at_level(logging.WARNING):
+        prompt = manager.build_system_prompt(agent, project_context=context)
+
+    assert '<file name="GOOD.md">\nGood doc\n</file>' in prompt
+    assert '<file name="ADIR">' not in prompt
+    assert '<file name="BINARY.md">' not in prompt
+    assert "Skipping unreadable project file" in caplog.text
+
+
+# --- Provider tool definitions (unchanged behavior) ---------------------------
+
+
+def test_provider_tool_definitions_use_same_agent_allowlist(
+    workspace: Path, tmp_path: Path
 ) -> None:
     tools = StubTools()
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        tools,
-        StubSkills([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
+    manager = _manager(tmp_path, tools=tools)
     agent = _agent(workspace, allowed_tools=["read_file"])
 
     definitions = manager.provider_tool_definitions(agent)
@@ -400,18 +547,9 @@ def test_provider_tool_definitions_use_same_agent_allowlist(
 
 
 def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
+    workspace: Path, tmp_path: Path
 ) -> None:
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
+    manager = _manager(tmp_path)
     agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
 
     definitions = manager.provider_tool_definitions(agent)
@@ -419,40 +557,10 @@ def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
     assert "memory" not in [definition["name"] for definition in definitions]
 
 
-def test_build_system_prompt_renders_none_when_agent_has_no_active_channels(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([]),
-        channel_registry=StubChannels([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
-    agent = _agent(workspace, allowed_tools=["read_file"])
-
-    prompt = manager.build_system_prompt(agent)
-
-    assert "## Channels\n- None" in prompt
-
-
 def test_provider_tool_definitions_include_internal_skill_when_agent_has_skills(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
+    workspace: Path, tmp_path: Path
 ) -> None:
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([StubSkill("debugging", "Debug failures")]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
+    manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
     agent = _agent(workspace, allowed_tools=[], allowed_skills=["debugging"])
 
     definitions = manager.provider_tool_definitions(agent)
@@ -461,18 +569,9 @@ def test_provider_tool_definitions_include_internal_skill_when_agent_has_skills(
 
 
 def test_provider_tool_definitions_omit_internal_skill_when_agent_has_no_skills(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
+    workspace: Path, tmp_path: Path
 ) -> None:
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([StubSkill("debugging", "Debug failures")]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
+    manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
     agent = _agent(workspace, allowed_tools=["read_file"], allowed_skills=[])
 
     definitions = manager.provider_tool_definitions(agent)
@@ -480,72 +579,81 @@ def test_provider_tool_definitions_omit_internal_skill_when_agent_has_no_skills(
     assert "skill" not in [definition["name"] for definition in definitions]
 
 
-def test_empty_tool_and_skill_allowlists_emit_empty_sections(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
+# --- Contributed tool/extension blocks via the manager ------------------------
+
+
+def test_extension_static_block_renders_when_extension_loaded(
+    workspace: Path, tmp_path: Path
 ) -> None:
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([StubSkill("agent-cli", "Delegate coding tasks")]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-        current_date=lambda: "2026-05-04",
+    block = BlockDefinition(
+        id="extension:greeter",
+        owner="extension:greeter",
+        default_text="Hello from the greeter extension.",
     )
-    agent = _agent(
-        workspace,
-        allowed_tools=[],
-        allowed_skills=[],
-        memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
-    )
+    manager = _manager(tmp_path, block_definitions=[block], loaded_extensions=["greeter"])
+    agent = _agent(workspace)
 
     prompt = manager.build_system_prompt(agent)
 
-    assert "- read_file" not in prompt
-    assert "<available_skills>\n</available_skills>" in prompt
-    assert "agent-cli" not in prompt
+    assert "Hello from the greeter extension." in prompt
 
 
-def test_skill_xml_escapes_metadata(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([StubSkill("a&b", "Use <danger>")]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
+def test_extension_block_dropped_when_extension_not_loaded(workspace: Path, tmp_path: Path) -> None:
+    # The owner gate (gate 2) drops a block whose extension is not in the loaded set.
+    block = BlockDefinition(
+        id="extension:greeter",
+        owner="extension:greeter",
+        default_text="Hello from the greeter extension.",
     )
-    agent = _agent(workspace, allowed_skills=["*"])
+    manager = _manager(tmp_path, block_definitions=[block], loaded_extensions=[])
+    agent = _agent(workspace)
 
     prompt = manager.build_system_prompt(agent)
 
-    assert "<name>a&amp;b</name>" in prompt
-    assert "<description>Use &lt;danger&gt;</description>" in prompt
+    assert "Hello from the greeter extension." not in prompt
 
 
-def test_unsafe_workspace_include_raises_error(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    fragments["system.md"] = "{include:../secret.md}"
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
+def test_dynamic_block_renders_and_isolates_failure(workspace: Path, tmp_path: Path) -> None:
+    good = BlockDefinition(
+        id="extension:good",
+        owner="extension:good",
+        render=lambda context: "Dynamic OK",
     )
 
-    with pytest.raises(PromptError, match="Unsafe workspace include"):
-        manager.build_system_prompt(_agent(workspace))
+    def boom(context: Any) -> str:
+        raise RuntimeError("render failed")
+
+    bad = BlockDefinition(id="extension:bad", owner="extension:bad", render=boom)
+    manager = _manager(
+        tmp_path,
+        block_definitions=[good, bad],
+        loaded_extensions=["good", "bad"],
+    )
+    agent = _agent(workspace)
+
+    prompt = manager.build_system_prompt(agent)
+
+    # The good dynamic block renders; the raising one drops only itself (run lives).
+    assert "Dynamic OK" in prompt
+
+
+def test_tool_block_gated_on_tool_allowlist(workspace: Path, tmp_path: Path) -> None:
+    # A tool-owned block (id/owner tool:<name>) renders only when the tool is on the
+    # agent's effective allowlist (gate 2 reuses the prompt tool list).
+    block = BlockDefinition(
+        id="tool:read_file",
+        owner="tool:read_file",
+        default_text="Read-file guidance.",
+    )
+    manager = _manager(tmp_path, block_definitions=[block])
+    allowed = _agent(workspace, allowed_tools=["read_file"])
+    denied = _agent(workspace, allowed_tools=["shell"])
+
+    assert "Read-file guidance." in manager.build_system_prompt(allowed)
+    assert "Read-file guidance." not in manager.build_system_prompt(denied)
+
+
+# --- Workspace include safety (via the SOUL block / unit helper) ---------------
 
 
 @pytest.mark.parametrize("filename", ["SOUL.md", "CUSTOM.md", "my-notes.txt", "notes.json"])
@@ -555,127 +663,173 @@ def test_validate_workspace_include_accepts_safe_flat_filenames(filename: str) -
 
 @pytest.mark.parametrize(
     "filename",
-    [
-        "../foo",
-        "foo/bar",
-        "/etc/passwd",
-        "C:\\Windows\\system32\\cmd.exe",
-    ],
+    ["../foo", "foo/bar", "/etc/passwd", "C:\\Windows\\system32\\cmd.exe"],
 )
 def test_validate_workspace_include_rejects_unsafe_paths(filename: str) -> None:
     with pytest.raises(PromptError, match="Unsafe workspace include"):
         validate_workspace_include(filename)
 
 
-def test_workspace_include_wraps_content_in_xml_file_tag(
-    fragments: dict[str, str],
-    workspace: Path,
+def test_soul_block_wraps_content_in_xml_file_tag(workspace: Path, tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF, allowed_tools=[])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert '<file name="SOUL.md">\nSoul text\n</file>' in prompt
+
+
+def test_soul_block_never_aborts_run_on_unreadable_file(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    fragments["system.md"] = "{include:SOUL.md}"
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "SOUL.md").mkdir()  # a directory where the file is expected
+    manager = _manager(tmp_path)
+    agent = _agent(ws, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    with caplog.at_level(logging.WARNING):
+        prompt = manager.build_system_prompt(agent)
+
+    assert '<file name="SOUL.md">' not in prompt
+    assert "Skipping unreadable workspace include" in caplog.text
+
+
+# --- Layout / overrides via an injected block store ---------------------------
+
+
+class StubBlockStore:
+    """A BlockStore stub: a per-scope layout + per-(scope, id) override map."""
+
+    def __init__(
+        self,
+        *,
+        layouts: dict[str, list[LayoutEntry]] | None = None,
+        overrides: dict[tuple[str, str], str] | None = None,
+    ) -> None:
+        self._layouts = layouts or {}
+        self._overrides = overrides or {}
+
+    def read_layout(self, scope: str) -> list[LayoutEntry]:
+        return list(self._layouts.get(scope, []))
+
+    def read_block_override(self, scope: str, block_id: str) -> str | None:
+        return self._overrides.get((scope, block_id))
+
+
+def test_saved_layout_disables_a_core_block(workspace: Path, tmp_path: Path) -> None:
+    # A scope that disables the skills block in its saved layout drops it; the other
+    # blocks still default in at their rank.
+    layout = [LayoutEntry(id="core:skills", enabled=False, source="core")]
+    store = StubBlockStore(layouts={"default": layout})
     manager = SystemPromptManager(
-        StubStorage(fragments),
+        StubStorage(),
+        StubTools(),
+        StubSkills([StubSkill("agent-cli", "Delegate")]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+        host="h",
+        os_name="o",
+        current_date=lambda: "2026-05-04",
+        block_store=store,
+    )
+    agent = _agent(workspace, allowed_skills=["agent-cli"])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Available Skills" not in prompt
+    assert "## Runtime" in prompt  # other blocks still present
+
+
+def test_block_override_replaces_owner_default_text(workspace: Path, tmp_path: Path) -> None:
+    store = StubBlockStore(
+        overrides={("default", "core:tools"): "## Custom Tools\n{generated:tool_list}"}
+    )
+    manager = SystemPromptManager(
+        StubStorage(),
         StubTools(),
         StubSkills([]),
         app_version="0.1.0",
         app_dir=tmp_path / "app",
         data_root=tmp_path / "data",
+        host="h",
+        os_name="o",
+        current_date=lambda: "2026-05-04",
+        block_store=store,
     )
+    agent = _agent(workspace, allowed_tools=["read_file"])
 
-    prompt = manager.build_system_prompt(_agent(workspace))
+    prompt = manager.build_system_prompt(agent)
 
-    assert prompt == '<file name="SOUL.md">\nSoul text\n</file>'
+    assert "## Custom Tools" in prompt
+    assert "## Tool Call Style" not in prompt  # bundled default replaced
+    assert "- read_file: Read a workspace file" in prompt  # producer still expands
 
 
-def test_missing_workspace_include_is_omitted(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
+def test_update_block_definitions_refreshes_contributed_blocks(
+    workspace: Path, tmp_path: Path
 ) -> None:
-    fragments["system.md"] = "Before\n{include:MISSING.md}\nAfter"
-    manager = SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
+    manager = _manager(tmp_path)
+    agent = _agent(workspace)
+    assert "Hello refreshed." not in manager.build_system_prompt(agent)
+
+    manager.update_block_definitions(
+        [
+            BlockDefinition(
+                id="extension:late",
+                owner="extension:late",
+                default_text="Hello refreshed.",
+            )
+        ],
+        ["late"],
     )
 
-    prompt = manager.build_system_prompt(_agent(workspace))
-
-    assert prompt == "Before\n\nAfter"
+    assert "Hello refreshed." in manager.build_system_prompt(agent)
 
 
-def test_custom_agent_system_prompt_uses_agent_fragments_without_default_fallback(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
+# --- Custom agent scope -------------------------------------------------------
+
+
+def test_custom_agent_scope_uses_agent_fragments_without_default_fallback(
+    workspace: Path, tmp_path: Path
 ) -> None:
-    storage = StubStorage(fragments)
-    storage.set_agent_prompt_fragment("coder", "system.md", "Custom root\n{skills}")
-    manager = SystemPromptManager(
-        storage,
-        StubTools(),
-        StubSkills([StubSkill("debugging", "Debug failures")]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
+    # An agent scope reads agent fragments with no default fallback: an unset
+    # runtime fragment makes the runtime block empty → it collapses.
+    storage = StubStorage()
+    storage.set_agent_prompt_fragment("coder", "runtime.md", "## Custom Runtime\nHost {host}")
+    manager = _manager(tmp_path, storage=storage)
+    agent = _agent(workspace, custom_system_prompt_enabled=True)
 
-    prompt = manager.build_system_prompt(_agent(workspace, custom_system_prompt_enabled=True))
+    prompt = manager.build_system_prompt(agent)
 
-    # The empty agent-scope {skills} fragment collapses to ""; the block engine's
-    # normalization then trims the trailing newline the old byte format kept.
-    assert prompt == "Custom root"
-    assert ("default", "skills.md") not in storage.reads
-
-
-def test_custom_agent_system_prompt_omits_unreferenced_blocks_lazily(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    storage = StubStorage(fragments)
-    storage.set_agent_prompt_fragment("coder", "system.md", "Custom root only")
-    manager = SystemPromptManager(
-        storage,
-        StubTools(),
-        StubSkills([StubSkill("debugging", "Debug failures")]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
-
-    prompt = manager.build_system_prompt(_agent(workspace, custom_system_prompt_enabled=True))
-
-    assert prompt == "Custom root only"
-    assert storage.reads == [("coder", "system.md")]
+    assert "## Custom Runtime" in prompt
+    assert "Host test-host" in prompt
+    # Default-scope runtime fragment is not read for an agent build.
+    assert ("default", "runtime.md") not in storage.reads
+    # Tools fragment is unset for the agent scope → tools block collapses.
+    assert "## Tool Call Style" not in prompt
 
 
 def test_default_prompt_scope_preview_ignores_agent_custom_toggle(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
+    workspace: Path, tmp_path: Path
 ) -> None:
-    fragments["system.md"] = "Default root"
-    storage = StubStorage(fragments)
-    storage.set_agent_prompt_fragment("coder", "system.md", "Custom root")
-    manager = SystemPromptManager(
-        storage,
-        StubTools(),
-        StubSkills([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
+    storage = StubStorage()
+    storage.set_agent_prompt_fragment("coder", "runtime.md", "## Custom Runtime")
+    manager = _manager(tmp_path, storage=storage)
 
     prompt = manager.build_system_prompt(
         _agent(workspace, custom_system_prompt_enabled=True),
         scope={"type": "default"},
     )
 
-    assert prompt == "Default root"
+    # Default scope uses bundled runtime, not the agent's custom fragment.
+    assert "## Custom Runtime" not in prompt
+    assert "## Runtime" in prompt
+
+
+# --- PromptFragmentManager (the still-present editable-fragment surface) -------
 
 
 def test_prompt_fragment_manager_lists_editable_fragments_in_ui_order(tmp_path: Path) -> None:
@@ -688,7 +842,6 @@ def test_prompt_fragment_manager_lists_editable_fragments_in_ui_order(tmp_path: 
     assert [fragment["name"] for fragment in fragments] == list(EDITABLE_PROMPT_FRAGMENT_NAMES)
     assert fragments[0]["is_modified"] is False
     assert fragments[1]["is_modified"] is True
-    assert any(variable["placeholder"] == "{app_version}" for variable in fragments[1]["variables"])
 
 
 def test_prompt_fragment_manager_updates_and_resets_editable_fragment(tmp_path: Path) -> None:
@@ -704,11 +857,7 @@ def test_prompt_fragment_manager_updates_and_resets_editable_fragment(tmp_path: 
 
 def test_prompt_fragment_manager_lists_available_agent_scopes(tmp_path: Path) -> None:
     enabled_agent = _agent(tmp_path, custom_system_prompt_enabled=True)
-    disabled_agent = _agent(
-        tmp_path,
-        agent_id="disabled",
-        custom_system_prompt_enabled=False,
-    )
+    disabled_agent = _agent(tmp_path, agent_id="disabled", custom_system_prompt_enabled=False)
     manager = PromptFragmentManager(
         EditableStubStorage(tmp_path),
         StubAgentStore([disabled_agent, enabled_agent]),
@@ -733,19 +882,6 @@ def test_prompt_fragment_manager_reads_missing_agent_fragments_as_empty(tmp_path
     assert all(fragment["is_modified"] is False for fragment in fragments)
 
 
-def test_prompt_fragment_manager_updates_and_resets_agent_fragment(tmp_path: Path) -> None:
-    storage = EditableStubStorage(tmp_path)
-    agent = _agent(tmp_path, custom_system_prompt_enabled=True)
-    manager = PromptFragmentManager(storage, StubAgentStore([agent]))
-    scope = {"type": "agent", "agent_id": "coder"}
-
-    updated = manager.update_fragment("skills.md", "custom agent skills", scope)
-    reset = manager.reset_fragment("skills.md", scope)
-
-    assert updated == {"name": "skills.md", "content": "custom agent skills", "is_modified": True}
-    assert reset == {"name": "skills.md", "content": "skills.md content", "is_modified": True}
-
-
 def test_prompt_fragment_manager_rejects_disabled_agent_scope(tmp_path: Path) -> None:
     agent = _agent(tmp_path, custom_system_prompt_enabled=False)
     manager = PromptFragmentManager(EditableStubStorage(tmp_path), StubAgentStore([agent]))
@@ -761,394 +897,33 @@ def test_prompt_fragment_manager_rejects_internal_compaction_fragment(tmp_path: 
         manager.update_fragment("compaction.md", "custom compaction")
 
 
-# --- Phase 4: {agent_body} and {project_files} placeholders -----------------
-#
-# These tests mirror the real ``resources/prompts/system.md`` slotting: the
-# config-agent body sits in the identity slot (before SOUL/memory), the project
-# files after the identity block. The emptiness-collapse rule means an identity
-# agent at home (empty body, no project context) gets the unchanged prompt.
-
-# Root fragment with the two new placeholders in their real slots. The trailing
-# ``{tools}`` etc. are dropped so these focused tests assert body/project framing
-# without channel/skill noise; ``{runtime}`` is dropped too (not under test here).
-_PROJECT_ROOT_FRAGMENT = "{agent_body}\n{include:SOUL.md}\n{memory}\n{project_files}"
+# --- Skills block registry override ------------------------------------------
 
 
-def _project_manager(
-    fragments: dict[str, str],
-    tmp_path: Path,
-    *,
-    root: str = _PROJECT_ROOT_FRAGMENT,
-) -> SystemPromptManager:
-    fragments = dict(fragments)
-    fragments["system.md"] = root
-    return SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        StubSkills([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
-
-
-def test_config_agent_prompt_inserts_body_and_project_files_in_order(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    # Config agent: no SOUL/memory home, a verbatim body, and two auto-load files
-    # in the repo cwd (AGENTS.md is the seeded first entry, CONTEXT.md follows).
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
-    manager = _project_manager(fragments, tmp_path)
-    # Config agent's real production workspace is "" (no SOUL/memory home), so
-    # {include:SOUL.md}/{memory} collapse — the same value the resolver synthesizes.
-    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "CONTEXT.md"])
-
-    prompt = manager.build_system_prompt(
-        agent,
-        agent_body="You are the orchestrator.",
-        project_context=context,
-    )
-
-    # Body verbatim, then the project files (AGENTS.md first), each <file>-wrapped.
-    assert "You are the orchestrator." in prompt
-    assert '<file name="AGENTS.md">\nTeam rules\n</file>' in prompt
-    assert '<file name="CONTEXT.md">\nProject context\n</file>' in prompt
-    # Order: body before AGENTS.md before CONTEXT.md.
-    assert prompt.index("You are the orchestrator.") < prompt.index("AGENTS.md")
-    assert prompt.index("AGENTS.md") < prompt.index("CONTEXT.md")
-
-
-def test_config_agent_body_with_braces_is_not_expanded(
-    fragments: dict[str, str],
-    tmp_path: Path,
-) -> None:
-    # Plan risk "Body-Wörtlichkeit": a "{...}" in the imported body must survive
-    # verbatim — never treated as a vBot placeholder. Use real vBot placeholder
-    # names inside the body to prove they are not substituted.
-    manager = _project_manager(fragments, tmp_path)
-    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    body = "Use {memory} and {include:SOUL.md} and {runtime} literally; also {custom}."
-
-    prompt = manager.build_system_prompt(
-        agent,
-        agent_body=body,
-        project_context=None,
-    )
-
-    assert body in prompt
-
-
-def test_config_agent_empty_workspace_skips_includes_and_ignores_cwd(
-    fragments: dict[str, str],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    # A config agent's production workspace is "". An empty workspace must mean
-    # "no includes" — never Path("") == Path("."), which resolves {include:SOUL.md}
-    # against the server's process CWD. A decoy SOUL.md in the CWD proves it is
-    # never read, and no per-turn "missing include" warning is emitted.
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "SOUL.md").write_text("LEAKED SOUL FROM CWD", encoding="utf-8")
-    manager = _project_manager(fragments, tmp_path)
+def test_build_system_prompt_skill_registry_override_scopes_skills_block(tmp_path: Path) -> None:
+    global_skills = StubSkills([StubSkill("global-skill", "Global only.")])
+    project_skills = StubSkills([StubSkill("project-skill", "Project only.")])
+    manager = _manager(tmp_path, skills=global_skills)
     agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
 
-    with caplog.at_level(logging.WARNING):
-        prompt = manager.build_system_prompt(
-            agent,
-            agent_body="You are the orchestrator.",
-            project_context=None,
-        )
+    prompt = manager.build_system_prompt(agent, skill_registry=project_skills)
 
-    assert "You are the orchestrator." in prompt
-    assert "LEAKED SOUL FROM CWD" not in prompt
-    assert '<file name="SOUL.md">' not in prompt
-    assert "Skipping missing workspace include" not in caplog.text
+    assert "project-skill" in prompt
+    assert "global-skill" not in prompt
 
 
-def test_identity_agent_prompt_unchanged_without_body_or_project(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    # Identity agent at home: empty body, no project context → both placeholders
-    # collapse and the prompt equals the no-placeholder build of the same root.
-    manager = _project_manager(fragments, tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
+def test_provider_tool_definitions_skill_tool_gated_by_override_registry(tmp_path: Path) -> None:
+    global_skills = StubSkills([StubSkill("global-skill", "Global only.")])
+    manager = _manager(tmp_path, skills=global_skills)
+    agent = _agent("", allowed_tools=["read_file"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
 
-    with_placeholders = manager.build_system_prompt(agent)
-
-    baseline_manager = _project_manager(fragments, tmp_path, root="{include:SOUL.md}\n{memory}")
-    baseline = baseline_manager.build_system_prompt(agent)
-
-    # The collapsing placeholders leave only their surrounding blank lines, which
-    # the identity-at-home build had anyway; the substantive content is identical.
-    assert "Soul text" in with_placeholders
-    assert "Memory text" in with_placeholders
-    assert baseline.strip() == with_placeholders.strip()
-    assert "{agent_body}" not in with_placeholders
-    assert "{project_files}" not in with_placeholders
-
-
-def test_rooted_identity_agent_prompt_puts_identity_before_project(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    # Rooted identity agent: has a workspace (SOUL/memory) AND a project context.
-    # The only case where both appear in the system prompt — identity first.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    manager = _project_manager(fragments, tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
-    context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
-
-    prompt = manager.build_system_prompt(agent, project_context=context)
-
-    assert "Soul text" in prompt
-    assert "Memory text" in prompt
-    assert "Team rules" in prompt
-    # Identity (SOUL, then memory) before the project files.
-    assert prompt.index("Soul text") < prompt.index("Team rules")
-    assert prompt.index("Memory text") < prompt.index("Team rules")
-
-
-def test_project_files_render_only_existing_files(
-    fragments: dict[str, str],
-    tmp_path: Path,
-) -> None:
-    # Lazy rendering: a listed-but-absent file — including the seeded AGENTS.md
-    # before the repo has one — is skipped silently, no warning/placeholder leakage.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "CONTEXT.md").write_text("Context only", encoding="utf-8")
-    manager = _project_manager(fragments, tmp_path)
-    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "CONTEXT.md", "MISSING.md"])
-
-    prompt = manager.build_system_prompt(agent, agent_body="", project_context=context)
-
-    assert "AGENTS.md" not in prompt
-    assert "MISSING.md" not in prompt
-    assert '<file name="CONTEXT.md">\nContext only\n</file>' in prompt
-
-
-def test_project_files_allow_subfolders_at_any_depth(
-    fragments: dict[str, str],
-    tmp_path: Path,
-) -> None:
-    # Auto-load points at files inside subfolders (this project keeps its context
-    # under .vorch/). Subfolders at any depth load — no "unsafe" rejection. The
-    # path is the user's own config; where the file lives is not restricted.
-    repo = tmp_path / "repo"
-    (repo / ".vorch").mkdir(parents=True)
-    (repo / ".vorch" / "PROJECT.md").write_text("Project doc", encoding="utf-8")
-    deep = repo / "a" / "b" / "c" / "d"
-    deep.mkdir(parents=True)
-    (deep / "DEEP.md").write_text("Deep doc", encoding="utf-8")
-    manager = _project_manager(fragments, tmp_path)
-    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, [".vorch/PROJECT.md", "a/b/c/d/DEEP.md"])
-
-    prompt = manager.build_system_prompt(agent, project_context=context)
-
-    assert '<file name=".vorch/PROJECT.md">\nProject doc\n</file>' in prompt
-    assert '<file name="a/b/c/d/DEEP.md">\nDeep doc\n</file>' in prompt
-
-
-def test_project_files_allow_absolute_paths_outside_cwd(
-    fragments: dict[str, str],
-    tmp_path: Path,
-) -> None:
-    # An absolute path is read as-is, even outside the project cwd — the auto-load
-    # list may name any file the user wants, anywhere on the host.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    outside = tmp_path / "elsewhere" / "EXTERNAL.md"
-    outside.parent.mkdir(parents=True)
-    outside.write_text("External doc", encoding="utf-8")
-    manager = _project_manager(fragments, tmp_path)
-    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, [str(outside)])
-
-    prompt = manager.build_system_prompt(agent, project_context=context)
-
-    assert "External doc" in prompt
-    assert f'<file name="{outside}">' in prompt
-
-
-def test_project_files_never_abort_run_on_unreadable_file(
-    fragments: dict[str, str],
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    # A run must never die because an auto-load file is unreadable, for ANY reason.
-    # A directory standing where a file is expected (read fails on every OS) and a
-    # binary/non-UTF-8 file are both skipped with a warning; a good file alongside
-    # them still renders.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "GOOD.md").write_text("Good doc", encoding="utf-8")
-    (repo / "ADIR").mkdir()  # a directory standing where a file is expected
-    (repo / "BINARY.md").write_bytes(b"\xff\xfe\x00\x01 not utf-8")
-    manager = _project_manager(fragments, tmp_path)
-    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, ["ADIR", "BINARY.md", "GOOD.md"])
-
-    with caplog.at_level(logging.WARNING):
-        prompt = manager.build_system_prompt(agent, project_context=context)
-
-    assert '<file name="GOOD.md">\nGood doc\n</file>' in prompt
-    assert '<file name="ADIR">' not in prompt
-    assert '<file name="BINARY.md">' not in prompt
-    assert "Skipping unreadable project file" in caplog.text
-
-
-def test_workspace_include_never_aborts_run_on_unreadable_file(
-    fragments: dict[str, str],
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    # A workspace {include:…} whose target is present but unreadable (here a
-    # directory standing where SOUL.md is expected) must not abort the run — it is
-    # dropped like a missing include.
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    (workspace / "SOUL.md").mkdir()  # directory where the SOUL.md file is expected
-    manager = _project_manager(fragments, tmp_path, root="{include:SOUL.md}")
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    with caplog.at_level(logging.WARNING):
-        prompt = manager.build_system_prompt(agent)
-
-    assert '<file name="SOUL.md">' not in prompt
-    assert "Skipping unreadable workspace include" in caplog.text
-
-
-def test_render_project_files_collapses_to_empty_without_files(
-    fragments: dict[str, str],
-    tmp_path: Path,
-) -> None:
-    # A bare project (empty repo) renders no project block; the placeholder
-    # collapses, so render returns "".
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    manager = _project_manager(fragments, tmp_path)
-    context = ProjectPromptContext.from_project(repo, [])
-
-    assert manager.render_project_files(context) == ""
-    assert manager.render_project_files(None) == ""
-
-
-def test_render_project_files_one_source_for_reminder_and_prompt(
-    fragments: dict[str, str],
-    tmp_path: Path,
-) -> None:
-    # The visiting reminder reuses the same render as the {project_files} system
-    # prompt block — one source, identical framing.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    manager = _project_manager(fragments, tmp_path)
-    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
-
-    rendered = manager.render_project_files(context)
-    in_prompt = manager.build_system_prompt(agent, project_context=context)
-
-    assert rendered == '<file name="AGENTS.md">\nTeam rules\n</file>'
-    assert rendered in in_prompt
-
-
-def test_real_system_md_identity_at_home_is_byte_identical_without_placeholders(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    # Hard requirement ("Identitäts-Agent zu Hause byte-gleich"): with the real
-    # bundled root, an identity agent at home (empty body, no project) must get a
-    # prompt byte-identical to the same root with the two new placeholders removed.
-    # Resolve relative to this test file so the read is cwd-independent.
-    repo_root = Path(__file__).resolve().parents[3]
-    real_root = (repo_root / "resources" / "prompts" / "system.md").read_text(encoding="utf-8")
-    root_without_placeholders = real_root.replace("{agent_body}", "").replace("{project_files}", "")
-
-    with_placeholders = _project_manager(fragments, tmp_path, root=real_root).build_system_prompt(
-        _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
+    with_project_skills = manager.provider_tool_definitions(
+        agent, skill_registry=StubSkills([StubSkill("project-skill", "Project only.")])
     )
-    without_placeholders = _project_manager(
-        fragments, tmp_path, root=root_without_placeholders
-    ).build_system_prompt(_agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER))
+    without_project_skills = manager.provider_tool_definitions(agent, skill_registry=StubSkills([]))
 
-    assert with_placeholders == without_placeholders
-
-
-def test_identity_agent_block_assembly_matches_current_content_and_order(
-    fragments: dict[str, str],
-    workspace: Path,
-    tmp_path: Path,
-) -> None:
-    # Phase 1 regression (the keystone): an identity agent at home, built through
-    # the block-routed assembly with the REAL bundled root, must yield the same
-    # content in the same order as the current assembly — SOUL, then memory, then
-    # runtime, then tools, then channels, then skills — cleanly normalized.
-    repo_root = Path(__file__).resolve().parents[3]
-    real_root = (repo_root / "resources" / "prompts" / "system.md").read_text(encoding="utf-8")
-    manager = SystemPromptManager(
-        StubStorage({**fragments, "system.md": real_root}),
-        StubTools(),
-        StubSkills([StubSkill("debugging", "Debug failures")]),
-        channel_registry=StubChannels(
-            [
-                ChannelConfig(
-                    id="tg-main",
-                    platform="telegram",
-                    agent_id="coder",
-                    allowed_chat_ids=["1"],
-                    token_env_var="TELEGRAM_BOT_TOKEN",
-                    enabled=True,
-                )
-            ]
-        ),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-        host="test-host",
-        os_name="test-os",
-        current_date=lambda: "2026-05-04",
-    )
-
-    prompt = manager.build_system_prompt(
-        _agent(workspace, allowed_skills=["*"], memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
-    )
-
-    # Content: every section's substance is present.
-    assert "Soul text" in prompt
-    assert "<memory>" in prompt
-    assert "Memory text" in prompt
-    assert "User text" in prompt
-    assert "## Runtime" in prompt
-    assert "- Host: test-host" in prompt
-    assert "## Available Tools" in prompt
-    assert "## Channels" in prompt
-    assert "- tg-main: telegram (default target available)" in prompt
-    assert "## Available Skills" in prompt
-    assert "<name>debugging</name>" in prompt
-    # Order: SOUL < memory < runtime < tools < channels < skills (today's order).
-    sections = ["Soul text", "<memory>", "## Runtime", "## Available Tools", "## Channels"]
-    positions = [prompt.index(section) for section in sections]
-    assert positions == sorted(positions)
-    assert prompt.index("## Channels") < prompt.index("## Available Skills")
-    # Normalization: no leading/trailing blank line and no triple-newline residue.
-    assert prompt == prompt.strip()
-    assert "\n\n\n" not in prompt
+    assert any(definition["name"] == "skill" for definition in with_project_skills)
+    assert all(definition["name"] != "skill" for definition in without_project_skills)
 
 
 def _agent(
@@ -1184,63 +959,3 @@ def _filter_by_allowlist(
     if allowlist is None or "*" in allowlist:
         return definitions
     return [definition for definition in definitions if definition["name"] in allowlist]
-
-
-def _skills_manager(fragments: dict[str, str], tmp_path: Path, skills: StubSkills) -> Any:
-    return SystemPromptManager(
-        StubStorage(fragments),
-        StubTools(),
-        skills,
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
-        data_root=tmp_path / "data",
-    )
-
-
-def test_build_system_prompt_skill_registry_override_scopes_skills_block(
-    fragments: dict[str, str], tmp_path: Path
-) -> None:
-    # A per-call skill_registry (a project run's registry) overrides the global one
-    # for the skills block.
-    global_skills = StubSkills([StubSkill("global-skill", "Global only.")])
-    project_skills = StubSkills([StubSkill("project-skill", "Project only.")])
-    manager = _skills_manager(fragments, tmp_path, global_skills)
-    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    prompt = manager.build_system_prompt(agent, skill_registry=project_skills)
-
-    assert "project-skill" in prompt
-    assert "global-skill" not in prompt
-
-
-def test_build_system_prompt_without_override_uses_global_registry(
-    fragments: dict[str, str], tmp_path: Path
-) -> None:
-    global_skills = StubSkills([StubSkill("global-skill", "Global only.")])
-    manager = _skills_manager(fragments, tmp_path, global_skills)
-    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    prompt = manager.build_system_prompt(agent)
-
-    assert "global-skill" in prompt
-
-
-def test_provider_tool_definitions_skill_tool_gated_by_override_registry(
-    fragments: dict[str, str], tmp_path: Path
-) -> None:
-    # The internal skill tool appears only when the *override* registry has loadable
-    # skills: a project with skills exposes it; an empty project registry does not,
-    # even though the global registry has skills.
-    global_skills = StubSkills([StubSkill("global-skill", "Global only.")])
-    manager = _skills_manager(fragments, tmp_path, global_skills)
-    # Scope the agent's regular tools so the skill tool can only enter through the
-    # skills gate, not the wildcard tool list.
-    agent = _agent("", allowed_tools=["read_file"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    with_project_skills = manager.provider_tool_definitions(
-        agent, skill_registry=StubSkills([StubSkill("project-skill", "Project only.")])
-    )
-    without_project_skills = manager.provider_tool_definitions(agent, skill_registry=StubSkills([]))
-
-    assert any(definition["name"] == "skill" for definition in with_project_skills)
-    assert all(definition["name"] != "skill" for definition in without_project_skills)

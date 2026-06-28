@@ -157,6 +157,25 @@ class RecallBackendDeclaration:
     factory: Callable[..., Any]
 
 
+@dataclass(frozen=True)
+class PromptBlockDeclaration:
+    """One ``api.register_prompt_block`` declaration (D6): a System Prompt block.
+
+    Mirrors a tool/recall declaration — collected during ``register`` and turned
+    into a ``core.prompts.BlockDefinition`` by the registry's
+    :meth:`ExtensionRegistry.prompt_block_declarations` accessor (a lazy import, so
+    the extensions module stays decoupled from the prompts domain). An extension's
+    block is sourced/owned ``extension:<name>`` so gate 2 only renders it while the
+    extension is loaded. Exactly one of ``default_text`` (static, editable via the
+    override cascade) / ``render`` (dynamic, non-editable, build-time function) is
+    set — the same static-vs-dynamic split as a core block.
+    """
+
+    slug: str
+    default_text: str | None = None
+    render: Callable[..., str] | None = None
+
+
 @dataclass
 class ExtensionDeclarations:
     """What an extension declares through :class:`ExtensionAPI` during ``register``.
@@ -170,6 +189,7 @@ class ExtensionDeclarations:
     shutdown: list[LifecycleHandler] = field(default_factory=list)
     tools: list[ToolDeclaration] = field(default_factory=list)
     recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
+    prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
 
 
 @dataclass
@@ -263,6 +283,38 @@ class ExtensionAPI:
         """
         self._declarations.recall_backends.append(
             RecallBackendDeclaration(name=name, factory=factory)
+        )
+
+    def register_prompt_block(
+        self,
+        slug: str,
+        *,
+        default_text: str | None = None,
+        render: Callable[..., str] | None = None,
+    ) -> None:
+        """Declare a System Prompt block (D6), static **or** dynamic.
+
+        Only collects the declaration; the runtime rebuilds the block-definition
+        list on every extension (re)load and hands it to the prompt manager (no
+        live registry, no per-run reload). The block id is ``extension:<slug>`` and
+        its owner is ``extension:<extension-name>`` — so gate 2 renders the block
+        only while this extension is loaded, and an extension may declare several
+        blocks by using distinct slugs (e.g. a static one and a dynamic one).
+
+        Pass **exactly one** of ``default_text`` (a static, editable block whose
+        text flows through the override cascade) or ``render`` (a dynamic,
+        non-editable block whose text is produced at build time; a raising render
+        drops only that block). Passing both or neither raises ``ValueError`` at
+        declaration so the mistake surfaces in ``register()``, not deep in assembly.
+        A slug colliding with another contributor's block id is resolved first-wins
+        with a diagnostic when the definitions are built (mirroring tool collisions).
+        """
+        has_text = default_text is not None
+        has_render = render is not None
+        if has_text == has_render:
+            raise ValueError("register_prompt_block requires exactly one of default_text / render")
+        self._declarations.prompt_blocks.append(
+            PromptBlockDeclaration(slug=slug, default_text=default_text, render=render)
         )
 
     def on_startup(self, handler: LifecycleHandler) -> None:
@@ -393,6 +445,100 @@ class ExtensionRegistry:
                 f"tool {name!r} registered; also declared by extension(s) {joined} (skipped there)",
             )
 
+    def prompt_block_declarations(self) -> list[Any]:
+        """Return the loaded extensions' blocks as ``core.prompts.BlockDefinition``s.
+
+        The runtime calls this after extensions load (and on every reload) and
+        hands the list to the prompt manager — the contributor path D6 unifies with
+        tools. Only ``status == "loaded"`` records contribute; a disabled/failed
+        extension yields nothing, and gate 2 additionally requires the owning
+        extension to be in :meth:`loaded_extension_names`.
+
+        Each declaration becomes a block with id ``extension:<slug>`` and owner
+        ``extension:<extension-name>``. Id collisions (two extensions choosing the
+        same slug, or a slug colliding with a core/tool id later) are resolved
+        first-wins **with a diagnostic** on the losing record — the same policy as
+        :meth:`_apply_one_tool` — so a collision never silently changes behavior.
+
+        The ``core.prompts`` import is lazy so the extensions module carries no
+        import-time dependency on the prompts domain (this runs at collection, not
+        at module load).
+        """
+        from core.prompts import BlockDefinition
+
+        loaded = [record for record in self._records if record.status == "loaded"]
+        declarers: dict[str, list[str]] = defaultdict(list)
+        for record in loaded:
+            for declaration in record.declarations.prompt_blocks:
+                declarers[declaration.slug].append(record.name)
+
+        definitions: list[Any] = []
+        claimed: set[str] = set()
+        for record in loaded:
+            for declaration in record.declarations.prompt_blocks:
+                definition = self._build_one_prompt_block(
+                    BlockDefinition, record, declaration, declarers, claimed
+                )
+                if definition is not None:
+                    definitions.append(definition)
+        return definitions
+
+    def _build_one_prompt_block(
+        self,
+        block_definition_cls: Any,
+        record: ExtensionRecord,
+        declaration: PromptBlockDeclaration,
+        declarers: dict[str, list[str]],
+        claimed: set[str],
+    ) -> Any | None:
+        """Turn one block declaration into a ``BlockDefinition``, first-wins on slug.
+
+        Mirrors :meth:`_apply_one_tool`: an id already claimed by an earlier-loaded
+        extension is skipped and diagnosed on this record (naming the winner); the
+        first claimant also gets a diagnostic naming the skipped extension(s). A
+        construction error (e.g. a malformed slug yielding a bad id) is diagnosed
+        and the block dropped — never aborting the others.
+        """
+        slug = declaration.slug
+        block_id = f"extension:{slug}"
+        owner = f"extension:{record.name}"
+        other_declarers = [other for other in declarers[slug] if other != record.name]
+        if slug in claimed:
+            winner = repr(other_declarers[0]) if other_declarers else "another extension"
+            self._diagnose_capability(
+                record,
+                f"prompt block {block_id!r} skipped: slug already declared by extension {winner}",
+            )
+            return None
+        try:
+            definition = block_definition_cls(
+                id=block_id,
+                owner=owner,
+                default_text=declaration.default_text,
+                render=declaration.render,
+            )
+        except Exception as exc:
+            self._diagnose_capability(record, f"prompt block {block_id!r} skipped: {exc}")
+            return None
+        claimed.add(slug)
+        if other_declarers:
+            joined = ", ".join(repr(other) for other in other_declarers)
+            self._diagnose_capability(
+                record,
+                f"prompt block {block_id!r} registered; also declared by extension(s) "
+                f"{joined} (skipped there)",
+            )
+        return definition
+
+    def loaded_extension_names(self) -> set[str]:
+        """Return the set of loaded extension names (gate 2's ``extension:<name>``).
+
+        The prompt manager's owner-active gate checks ``extension:<name>`` presence
+        against this set, so a block whose extension failed/disabled/unloaded never
+        renders. Rebuilt and re-handed on every extension (re)load.
+        """
+        return {record.name for record in self._records if record.status == "loaded"}
+
     def apply_recall_backends(self, recall_registry: RecallBackendRegistry) -> None:
         """Register every loaded extension's recall backends into *recall_registry*.
 
@@ -506,24 +652,6 @@ class ExtensionRegistry:
         payload = {"session_id": session_id, "agent_id": agent_id, "outcome": outcome}
         for extension_name, handler in self._handlers.get("run_end", []):
             await self._invoke("run_end", extension_name, handler, ctx, payload)
-
-    async def dispatch_before_agent_start(
-        self, ctx: HookContext, *, agent: Any, session: Any, messages: Any, run: Any
-    ) -> list[str]:
-        """Accumulator event: collect every handler's ``system_prompt_append``.
-
-        Returns the appends in load order; applying them to the system message
-        stays in chat (domain knowledge about message shape).
-        """
-        payload = {"agent": agent, "session": session, "messages": messages, "run": run}
-        appends: list[str] = []
-        for extension_name, handler in self._handlers.get("before_agent_start", []):
-            result = await self._invoke("before_agent_start", extension_name, handler, ctx, payload)
-            if result is _HANDLER_FAILED:
-                continue
-            if isinstance(result, dict) and isinstance(result.get("system_prompt_append"), str):
-                appends.append(result["system_prompt_append"])
-        return appends
 
     async def dispatch_context(self, ctx: HookContext, *, messages: list) -> list:
         """Pipeline event: each handler may replace the running message list.
@@ -908,6 +1036,7 @@ __all__ = [
     "ExtensionRegistry",
     "HookContext",
     "Modify",
+    "PromptBlockDeclaration",
     "Replace",
     "ToolCallDecision",
     "ToolResultValidator",

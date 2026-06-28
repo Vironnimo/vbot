@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from core.agents.agents import AgentStore
 from core.attachments import AttachmentStore
@@ -26,7 +26,15 @@ from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.models import Model, ModelRegistry
 from core.projects import AgentResolver, ProjectStore, build_agent_resolver
-from core.prompts import SkillPromptRegistry, SystemPromptManager
+from core.prompts import (
+    AGENT_SCOPE_KEY_PREFIX,
+    DEFAULT_SCOPE_KEY,
+    BlockDefinition,
+    BlockStore,
+    LayoutEntry,
+    SkillPromptRegistry,
+    SystemPromptManager,
+)
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
@@ -84,7 +92,7 @@ from core.tools.cron import register_cron_tool
 from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
-from core.tools.tools import ToolRegistry
+from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
 
@@ -115,6 +123,62 @@ class _ProjectSkillBundle:
 
     registry: SkillRegistry
     names: frozenset[str]
+
+
+class _StorageBlockReader(Protocol):
+    """The block reads the storage-backed :class:`BlockStore` adapter bridges to.
+
+    Phase 2's ``StorageManager`` exposes these (``read_block_layout`` /
+    ``read_block_override``) with the storage scope convention: ``None`` = default,
+    a bare ``"<agent-id>"`` = that agent's scope. Declared as a Protocol so the
+    adapter depends on the read surface, not the concrete ``StorageManager``.
+    """
+
+    def read_block_layout(self, scope: str | None) -> list[LayoutEntry]:
+        """Return a scope's saved block layout (``[]`` when none)."""
+        ...
+
+    def read_block_override(self, scope: str | None, block_id: str) -> str | None:
+        """Return a block's saved override text in a scope (``None`` when absent)."""
+        ...
+
+
+class _StorageManagerBlockStore:
+    """Adapt the storage manager's block reads to the prompts ``BlockStore``.
+
+    This is the composition-root seam where the prompts-domain scope-key convention
+    (``"default"`` / ``"agent:<id>"``) meets the storage-domain scope-token
+    convention (``None`` / bare ``"<id>"``). It bridges **both** the method-name
+    difference (``read_layout`` → ``read_block_layout``) and the scope translation,
+    in one place.
+
+    Read-side only for now; the write side (set-layout / create / remove / update /
+    reset) is Phase 4's manager work. Phase 4 extends this class with those methods,
+    reusing :meth:`_to_store_scope` so the translation stays single-sourced.
+    """
+
+    def __init__(self, storage: _StorageBlockReader) -> None:
+        self._storage = storage
+
+    def read_layout(self, scope_key: str) -> list[LayoutEntry]:
+        return self._storage.read_block_layout(self._to_store_scope(scope_key))
+
+    def read_block_override(self, scope_key: str, block_id: str) -> str | None:
+        return self._storage.read_block_override(self._to_store_scope(scope_key), block_id)
+
+    @staticmethod
+    def _to_store_scope(scope_key: str) -> str | None:
+        """Translate a prompts scope key to the storage scope token.
+
+        ``"default"`` → ``None`` (the storage default scope); ``"agent:<id>"`` →
+        the bare ``"<id>"`` the storage layer keys an agent scope by. Any other
+        value is passed through unchanged as a defensive fallback.
+        """
+        if scope_key == DEFAULT_SCOPE_KEY:
+            return None
+        if scope_key.startswith(AGENT_SCOPE_KEY_PREFIX):
+            return scope_key[len(AGENT_SCOPE_KEY_PREFIX) :]
+        return scope_key
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +246,7 @@ class Runtime:
         self._speech_upload_max_size_bytes = _DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
         self._agents: AgentStore | None = None
         self._tools: ToolRegistry | None = None
+        self._tool_prompt_blocks: ToolPromptBlockRegistry | None = None
         self._memory_service: MemoryService | None = None
         self._process_manager: ProcessManager | None = None
         self._skills: SkillRegistry | None = None
@@ -276,6 +341,12 @@ class Runtime:
         self._process_manager = ProcessManager()
         self._start_process_manager()
         self._tools = ToolRegistry()
+        # Tool-owned System Prompt block declarations (D6): the tool side of the
+        # unified contributor path. No built-in tool declares a block today; the
+        # seam exists so a tool's register_* can contribute prompt content the
+        # runtime gathers and hands to the prompt manager (never importing tool
+        # classes into the prompts domain).
+        self._tool_prompt_blocks = ToolPromptBlockRegistry()
         self._memory_service = MemoryService()
         # One read-before-write guard shared by read/write/edit: read stamps each
         # file, write/edit refuse an unread or externally-changed file (file_state.py).
@@ -424,6 +495,9 @@ class Runtime:
             app_dir=_PROJECT_ROOT,
             data_root=self._storage.data_dir,
             memory_provider=self._memory_service,
+            block_definitions=self._collect_prompt_block_definitions(),
+            loaded_extensions=self._loaded_extension_names(),
+            block_store=self._resolve_prompt_block_store(),
         )
 
         self._log_startup_inventory()
@@ -946,6 +1020,59 @@ class Runtime:
             register_skill_tool(self._tools, self.skills_for)
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
+            self._refresh_prompt_block_definitions()
+
+    def _collect_prompt_block_definitions(self) -> list[BlockDefinition]:
+        """Gather the contributed block definitions (tool + extension blocks).
+
+        The runtime side of the unified contributor path (D6): it merges the
+        tool-owned blocks (from :class:`ToolPromptBlockRegistry`) with the loaded
+        extensions' blocks (from the extension registry) and hands the list to the
+        prompt manager. The core/data/memory blocks are built by the manager
+        itself; this method supplies only what contributors declare. Rebuilt on
+        every extension/skill reload so the list never goes stale.
+        """
+        definitions: list[BlockDefinition] = []
+        if self._tool_prompt_blocks is not None:
+            definitions.extend(self._tool_prompt_blocks.block_definitions())
+        if self._extensions is not None:
+            definitions.extend(self._extensions.prompt_block_declarations())
+        return definitions
+
+    def _loaded_extension_names(self) -> set[str]:
+        """Return the loaded-extension name set for the prompt manager's gate 2."""
+        if self._extensions is None:
+            return set()
+        return self._extensions.loaded_extension_names()
+
+    def _resolve_prompt_block_store(self) -> BlockStore | None:
+        """Return the persisted block store (layout + overrides) for the manager.
+
+        The β persistence (``layout.json`` + per-block overrides) lives on
+        ``StorageManager`` (Phase 2), which exposes ``read_block_layout`` /
+        ``read_block_override`` with the storage scope convention (``None`` =
+        default, bare ``"<id>"`` = agent). The manager depends on the prompts
+        ``BlockStore`` interface with its own scope-key convention, so an adapter
+        bridges the method names and the scope translation — this is the seam where
+        the two conventions meet (see :class:`_StorageManagerBlockStore`).
+        """
+        if self._storage is None:
+            return None
+        return _StorageManagerBlockStore(self._storage)
+
+    def _refresh_prompt_block_definitions(self) -> None:
+        """Re-hand the rebuilt block list + loaded-extension set to the manager.
+
+        Keeps the prompt manager's contributed-block list and gate-2 membership in
+        step with the live tool/extension/skill state after a reload — matching the
+        old ``update_skill_registry`` refresh, now extended to the block model.
+        """
+        if self._system_prompts is None:
+            return
+        self._system_prompts.update_block_definitions(
+            self._collect_prompt_block_definitions(),
+            self._loaded_extension_names(),
+        )
 
     def reload_provider_credentials(self) -> None:
         """Reload provider credential fallback values from the data-dir `.env`."""

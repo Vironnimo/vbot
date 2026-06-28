@@ -2,28 +2,37 @@
 
 from __future__ import annotations
 
+import json
 import platform
 import socket
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 from typing import Any, Protocol
 
-from core.memory import DEFAULT_MEMORY_PROMPT_MODE, MemoryPromptMode, MemoryService
+from core.memory import (
+    DEFAULT_MEMORY_PROMPT_MODE,
+    MEMORY_FILES_PRODUCER_NAME,
+    MemoryPromptMode,
+    MemoryService,
+    memory_block_definition,
+    read_memory_files,
+)
 from core.prompts.blocks import (
     BLOCK_KIND_DATA,
-    BLOCK_SEPARATOR,
     BlockDefinition,
     BlockProducer,
     BlockRenderContext,
+    BlockStore,
     CallableOwnerActivity,
+    EmptyBlockStore,
     LayoutEntry,
-    MappingOverrideResolver,
     PromptError,
     assemble_system_prompt,
     expand_workspace_includes,
+    load_layout_entries,
     wrap_include_file,
 )
 from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
@@ -79,11 +88,39 @@ PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"placeholder": "{skill_list}", "description": "List of available skills"},
     ],
 }
-# The two collapsing project placeholders. Both render to "" when their input is
-# empty, so the surrounding blank lines in ``system.md`` close up and an identity
-# agent at home gets byte-identical output to before these placeholders existed.
-AGENT_BODY_PLACEHOLDER = "{agent_body}"
-PROJECT_FILES_PLACEHOLDER = "{project_files}"
+# --- Block model: core/data block ids, owners, and the scope key ------------
+#
+# Every contribution to the System Prompt is a declared block (D6). The core
+# blocks ship from the prompt resources; the data blocks carry per-run content.
+# Owners drive gate 2 (is the owner active for this agent/run): ``always`` always
+# renders, ``channel`` drops when no channel is active. The bundled default layout
+# (``resources/prompts/layout.json``) lists these ids in their shipped order so an
+# identity agent at home reproduces today's content/order.
+CORE_RUNTIME_BLOCK_ID = "core:runtime"
+CORE_TOOLS_BLOCK_ID = "core:tools"
+CORE_CHANNELS_BLOCK_ID = "core:channels"
+CORE_SKILLS_BLOCK_ID = "core:skills"
+CORE_SOUL_BLOCK_ID = "core:soul"
+CORE_PROJECT_FILES_BLOCK_ID = "core:project_files"
+CORE_AGENT_BODY_BLOCK_ID = "core:agent_body"
+BLOCK_OWNER_ALWAYS = "always"
+BLOCK_OWNER_CHANNEL = "channel"
+# The persistence/render-context key for the default scope (an agent scope is
+# ``agent:<id>``). Kept here so the manager, the BlockStore, and the render context
+# share one literal. ``AGENT_SCOPE_KEY_PREFIX`` is the prefix an agent scope key
+# carries; a ``BlockStore`` adapter that bridges to a different scope token
+# convention (e.g. the storage layer's ``None``/bare-id) translates against these.
+DEFAULT_SCOPE_KEY = "default"
+AGENT_SCOPE_KEY_PREFIX = "agent:"
+# The SOUL data block renders the workspace SOUL.md through the one shared
+# ``{include:…}`` expansion path, so its framing and fail-soft behavior never drift
+# from a normal workspace include.
+SOUL_INCLUDE_MARKER = "{include:SOUL.md}"
+# The bundled default layout lives in a resource file (the honest "bundled default"
+# — it keeps the shipped order out of code). Resolved relative to the repo root so
+# the read is cwd-independent.
+_RESOURCES_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "resources" / "prompts"
+_LAYOUT_FILENAME = "layout.json"
 _LOGGER = get_logger("prompts")
 
 
@@ -308,10 +345,16 @@ class ChannelPromptRegistry(Protocol):
 
 
 class MemoryPromptProvider(Protocol):
-    """Pinned memory renderer used by prompt assembly."""
+    """Pinned-memory file renderer used by the ``memory_files`` producer.
 
-    def build_prompt_block(self, workspace: Path, mode: MemoryPromptMode) -> str:
-        """Return the prompt-visible memory block for one workspace."""
+    Only the **file** half of the memory block now lives here — the guidance and
+    the ``<memory>`` wrapper moved into the ``memory:guidance`` block the memory
+    domain declares (D6). This returns just the ``<file>``-wrapped contents (``""``
+    when empty/absent), which the ``{generated:memory_files}`` marker injects.
+    """
+
+    def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
+        """Return the ``<file>``-wrapped pinned-memory file contents for a mode."""
         ...
 
 
@@ -449,7 +492,10 @@ class SystemPromptManager:
         host: str | None = None,
         os_name: str | None = None,
         current_date: Callable[[], str] | None = None,
-        loaded_extensions: Sequence[str] = (),
+        loaded_extensions: Collection[str] = (),
+        block_definitions: Sequence[BlockDefinition] = (),
+        block_store: BlockStore | None = None,
+        default_layout: Sequence[LayoutEntry] | None = None,
     ) -> None:
         self._storage = storage
         self._tool_registry = tool_registry
@@ -463,9 +509,30 @@ class SystemPromptManager:
         self._os_name = os_name
         self._current_date = current_date or _current_utc_date
         # The set of loaded extension names, gate 2's input for ``extension:<name>``
-        # owners (D5/D6). Phase 1 has none; Phase 3 rebuilds and injects it on every
-        # extension (re)load. Held as a frozenset for cheap membership checks.
+        # owners (D5/D6). The runtime rebuilds and injects it on every extension
+        # (re)load. Held as a frozenset for cheap membership checks.
         self._loaded_extensions = frozenset(loaded_extensions)
+        # Contributed block definitions collected by the runtime: tool-owned and
+        # extension-owned blocks plus the memory block (D6). The core and data
+        # blocks are built per run by this manager (they need the run's
+        # agent_body/project_context and the runtime variables); the contributed
+        # ones are static and merged in on every build. The prompts domain consumes
+        # this list of definitions and never imports concrete tool/extension classes.
+        self._block_definitions = tuple(block_definitions)
+        # The persisted layout + per-block override source (Phase 2). Defaults to an
+        # empty store so a manager wired without persistence (unit tests, any path
+        # not yet handed Phase 2's store) defaults every block in at its rank and
+        # uses owner defaults.
+        self._block_store = block_store or EmptyBlockStore()
+        # The bundled default layout (the order + on/off the core blocks ship with),
+        # used for any scope that has no saved layout. Loaded from
+        # ``resources/prompts/layout.json`` by default so the shipped order lives in
+        # a resource file, not in code.
+        self._default_layout = (
+            tuple(default_layout)
+            if default_layout is not None
+            else tuple(load_bundled_default_layout())
+        )
 
     @property
     def app_dir(self) -> Path:
@@ -476,6 +543,21 @@ class SystemPromptManager:
         """Replace the skill registry used for prompt and provider tool decisions."""
         self._skill_registry = skill_registry
 
+    def update_block_definitions(
+        self,
+        block_definitions: Sequence[BlockDefinition],
+        loaded_extensions: Collection[str],
+    ) -> None:
+        """Replace the contributed block definitions + loaded-extension set.
+
+        Called by the runtime when extensions/skills reload so the block list and
+        gate-2's ``extension:<name>`` membership refresh without an app restart
+        (the block list is rebuilt on every (re)load and re-handed here — no live
+        registry, no per-run reload).
+        """
+        self._block_definitions = tuple(block_definitions)
+        self._loaded_extensions = frozenset(loaded_extensions)
+
     def build_system_prompt(
         self,
         agent: PromptAgent,
@@ -485,111 +567,216 @@ class SystemPromptManager:
         project_context: ProjectPromptContext | None = None,
         skill_registry: SkillPromptRegistry | None = None,
     ) -> str:
-        """Build the complete system prompt for an agent.
+        """Build the complete system prompt for an agent (the block-model path).
+
+        Collects the full block-definition list for this agent/run (the core text
+        blocks built from the prompt resources, the SOUL / project-files /
+        agent-body data blocks, and the contributed memory / tool / extension
+        blocks), reads the active scope's layout + overrides, and routes everything
+        through the deterministic assembly engine.
 
         ``agent_body`` is a config agent's imported prompt body, inserted verbatim
-        (empty for identity agents). ``project_context`` carries the project's cwd
-        and auto-load list so ``{project_files}`` renders the repo files (``None``
-        for an identity session). Both placeholders collapse to ``""`` when their
-        input is empty, so an identity agent at home gets the unchanged prompt.
-        ``skill_registry`` overrides the registry the skills block is filtered
-        against — a project run passes its project-scoped registry; ``None`` uses
-        the configured global one (identity runs, unchanged).
-        """
-        context = BlockRenderContext(agent=agent, project_context=project_context)
-        producers = self._build_producers(agent, skill_registry)
-        resolved_root = self._resolve_root_text(
-            agent,
-            scope,
-            agent_body=agent_body,
-            project_context=project_context,
-            producers=producers,
-            context=context,
-        )
-        # Route the finished root through the block engine's deterministic
-        # normalization (trim, single blank line between survivors, no leading /
-        # trailing blank line). In Phase 1 the manager has no storage-backed block
-        # definitions yet, so the whole resolved root is one verbatim ``data``
-        # block — its content was already fully expanded above and must not be
-        # re-interpreted (the verbatim agent body lives inside it). Phases 2–3
-        # replace this single block with the real definition list + layout while
-        # the engine, gates, and producers built here stay the assembly path.
-        root_block = BlockDefinition(
-            id="core:root",
-            owner="always",
-            kind=BLOCK_KIND_DATA,
-            default_text=resolved_root,
-        )
-        return assemble_system_prompt(
-            [root_block],
-            [LayoutEntry(id=root_block.id)],
-            context,
-            owner_activity=CallableOwnerActivity(self._is_owner_active),
-            override_resolver=MappingOverrideResolver(),
-            producers=producers,
-        )
-
-    def _resolve_root_text(
-        self,
-        agent: PromptAgent,
-        scope: Any,
-        *,
-        agent_body: str,
-        project_context: ProjectPromptContext | None,
-        producers: Mapping[str, BlockProducer],
-        context: BlockRenderContext,
-    ) -> str:
-        """Resolve the root ``system.md`` into fully-expanded text (no normalization).
-
-        Every vBot placeholder (``{memory}``/``{runtime}``/``{tools}``/… and the
-        two collapsing project placeholders), every ``{include:…}``, and finally
-        the verbatim ``{agent_body}`` are resolved here, exactly as before the
-        block engine existed. The list placeholders (``{tool_list}`` etc.) resolve
-        through the shared ``producers`` so the list formatting has one home. The
-        result is one finished string the engine then normalizes — Phase 1 keeps
-        the substantive content identical.
+        through the ``core:agent_body`` data block (empty for identity agents →
+        collapses). ``project_context`` carries the project's cwd and auto-load list
+        for the ``core:project_files`` data block (``None`` off a project →
+        collapses). ``skill_registry`` overrides the registry the skills block is
+        filtered against — a project run passes its project-scoped registry; ``None``
+        uses the configured global one (identity runs, unchanged).
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
-        prompt = self._read_prompt_fragment(prompt_scope, agent.id, "system.md")
+        scope_key = self._scope_key(prompt_scope)
+        context = BlockRenderContext(agent=agent, project_context=project_context, scope=scope_key)
+        producers = self._build_producers(agent, skill_registry)
+        definitions = self._collect_block_definitions(
+            agent,
+            prompt_scope,
+            agent_body=agent_body,
+        )
+        layout = self._resolve_scope_layout(scope_key)
+        return assemble_system_prompt(
+            definitions,
+            layout,
+            context,
+            owner_activity=CallableOwnerActivity(self._is_owner_active),
+            override_resolver=self._build_override_resolver(prompt_scope),
+            producers=producers,
+            replacements=self._runtime_replacements(agent),
+        )
 
-        if "{app_version}" in prompt:
-            prompt = prompt.replace("{app_version}", self._app_version)
-        if "{memory}" in prompt:
-            prompt = prompt.replace("{memory}", self._build_memory_block(agent))
-        if PROJECT_FILES_PLACEHOLDER in prompt:
-            project_files = self.render_project_files(project_context)
-            # Lead with the separator so an empty render collapses to "" and the
-            # surrounding template has no blank line of its own to leave behind.
-            project_block = f"{BLOCK_SEPARATOR}{project_files}" if project_files else ""
-            prompt = prompt.replace(PROJECT_FILES_PLACEHOLDER, project_block)
-        if "{runtime}" in prompt:
-            prompt = prompt.replace("{runtime}", self._build_runtime_block(agent, prompt_scope))
-        if "{tools}" in prompt:
-            tools = self._read_prompt_fragment(prompt_scope, agent.id, "tools.md")
-            prompt = prompt.replace(
-                "{tools}", tools.replace("{tool_list}", producers["tool_list"](context))
-            )
-        if "{channels}" in prompt:
-            channels = self._read_prompt_fragment(prompt_scope, agent.id, "channels.md")
-            prompt = prompt.replace(
-                "{channels}",
-                channels.replace("{channel_list}", producers["channel_list"](context)),
-            )
-        if "{skills}" in prompt:
-            skills = self._read_prompt_fragment(prompt_scope, agent.id, "skills.md")
-            prompt = prompt.replace(
-                "{skills}", skills.replace("{skill_list}", producers["skill_list"](context))
-            )
+    def _collect_block_definitions(
+        self,
+        agent: PromptAgent,
+        prompt_scope: PromptScope,
+        *,
+        agent_body: str,
+    ) -> list[BlockDefinition]:
+        """Build the full ordered-agnostic block-definition list for one build.
 
-        prompt = expand_workspace_includes(prompt, agent.workspace)
+        The core text blocks (runtime/tools/channels/skills) carry their default
+        text from the active scope's prompt resources; the data blocks (SOUL,
+        project files, agent body) carry their per-run content. The contributed
+        blocks (memory, tools, extensions) are merged in last — assembly dedupes by
+        id (first wins), so a core block can never be shadowed by a contributor.
+        """
+        definitions = [
+            *self._core_text_block_definitions(agent, prompt_scope),
+            memory_block_definition(),
+            *self._data_block_definitions(agent_body=agent_body),
+            *self._block_definitions,
+        ]
+        return definitions
 
-        # The agent body is substituted LAST and literally — like an {include},
-        # never as a template. Because every vBot placeholder and {include} is
-        # already resolved by now and nothing runs after this replace, any "{...}"
-        # inside the body is left untouched (plan risk "Body-Wörtlichkeit"). It
-        # trails with the separator so an empty body collapses spurlessly.
-        body_block = f"{agent_body}{BLOCK_SEPARATOR}" if agent_body else ""
-        return prompt.replace(AGENT_BODY_PLACEHOLDER, body_block)
+    def _core_text_block_definitions(
+        self,
+        agent: PromptAgent,
+        prompt_scope: PromptScope,
+    ) -> list[BlockDefinition]:
+        """Return the core ``always``/``channel`` text blocks for the active scope.
+
+        Each block's default text is the scope-aware prompt fragment (the bundled
+        resource for the default scope, the agent copy for an agent scope — with no
+        default fallback, exactly as today). The runtime block keeps its ``{host}``/
+        ``{model}``/… placeholders (filled by the build-time replacements); the
+        tools/channels/skills blocks carry the ``{generated:…}`` list markers. The
+        channels block is owner ``channel`` so it drops entirely when no channel is
+        active (no more ``- None``).
+        """
+        return [
+            BlockDefinition(
+                id=CORE_RUNTIME_BLOCK_ID,
+                owner=BLOCK_OWNER_ALWAYS,
+                default_text=self._read_prompt_fragment(prompt_scope, agent.id, "runtime.md"),
+            ),
+            BlockDefinition(
+                id=CORE_TOOLS_BLOCK_ID,
+                owner=BLOCK_OWNER_ALWAYS,
+                default_text=self._read_prompt_fragment(prompt_scope, agent.id, "tools.md"),
+            ),
+            BlockDefinition(
+                id=CORE_CHANNELS_BLOCK_ID,
+                owner=BLOCK_OWNER_CHANNEL,
+                default_text=self._read_prompt_fragment(prompt_scope, agent.id, "channels.md"),
+            ),
+            BlockDefinition(
+                id=CORE_SKILLS_BLOCK_ID,
+                owner=BLOCK_OWNER_ALWAYS,
+                default_text=self._read_prompt_fragment(prompt_scope, agent.id, "skills.md"),
+            ),
+        ]
+
+    def _data_block_definitions(self, *, agent_body: str) -> list[BlockDefinition]:
+        """Return the SOUL / project-files / agent-body data blocks (D2).
+
+        All three are ``kind="data"`` (positionable, not editable) and owner
+        ``always``; each collapses to nothing when its content is empty (gate 3):
+
+        - ``core:soul`` renders the workspace ``SOUL.md`` via a ``render`` that uses
+          the same ``{include:SOUL.md}`` expansion as before — empty when the file
+          is missing or the workspace is ``""`` (a config agent).
+        - ``core:project_files`` renders ``render_project_files(project_context)`` —
+          empty without a project context or readable files.
+        - ``core:agent_body`` carries the verbatim config-agent body as ``data``
+          default text, so its ``{…}`` is never re-interpreted; empty for identity
+          agents.
+        """
+        return [
+            BlockDefinition(
+                id=CORE_SOUL_BLOCK_ID,
+                owner=BLOCK_OWNER_ALWAYS,
+                kind=BLOCK_KIND_DATA,
+                render=self._render_soul_block,
+            ),
+            BlockDefinition(
+                id=CORE_PROJECT_FILES_BLOCK_ID,
+                owner=BLOCK_OWNER_ALWAYS,
+                kind=BLOCK_KIND_DATA,
+                render=self._render_project_files_block,
+            ),
+            BlockDefinition(
+                id=CORE_AGENT_BODY_BLOCK_ID,
+                owner=BLOCK_OWNER_ALWAYS,
+                kind=BLOCK_KIND_DATA,
+                default_text=agent_body,
+            ),
+        ]
+
+    def _render_soul_block(self, context: BlockRenderContext) -> str:
+        """Render the ``core:soul`` data block from the workspace ``SOUL.md``.
+
+        Reuses the single ``{include:…}`` expansion path so framing and fail-soft
+        behavior (missing/unreadable → dropped, unsafe path → ``PromptError``,
+        empty workspace → no read) never drift from a normal include.
+        """
+        return expand_workspace_includes(SOUL_INCLUDE_MARKER, context.agent.workspace)
+
+    def _render_project_files_block(self, context: BlockRenderContext) -> str:
+        """Render the ``core:project_files`` data block (the auto-load files)."""
+        return self.render_project_files(context.project_context)
+
+    def _runtime_replacements(self, agent: PromptAgent) -> dict[str, str]:
+        """Return the build-time runtime-variable substitutions (``{host}``, …).
+
+        Applied to every text block by the engine; only the runtime block carries
+        these placeholders today, but treating them as build-time globals matches
+        how ``{app_version}`` worked at the root before the block model.
+        """
+        thinking_effort = "default" if agent.thinking_effort is None else agent.thinking_effort
+        return {
+            "{host}": self._host or socket.gethostname(),
+            "{app_version}": self._app_version,
+            "{os}": self._os_name or platform.platform(),
+            "{model}": agent.model,
+            "{agent_workspace}": agent.workspace,
+            "{app_dir}": str(self._app_dir.resolve()),
+            "{data_root}": str(self._data_root.resolve()),
+            "{thinking_effort}": thinking_effort,
+            "{current_date}": self._current_date(),
+        }
+
+    def _resolve_scope_layout(self, scope_key: str) -> Sequence[LayoutEntry]:
+        """Return the active scope's saved layout, or the bundled default if none.
+
+        A scope with a saved ``layout.json`` owns its order + on/off (D3/D4); a
+        scope with none defaults to the bundled layout so the shipped order applies.
+        Either way, a definition absent from the layout still defaults in at its
+        rank (the assembly engine handles that), and an inert entry is skipped.
+        """
+        saved = self._block_store.read_layout(scope_key)
+        return saved if saved else self._default_layout
+
+    def _build_override_resolver(self, prompt_scope: PromptScope) -> Callable[..., str | None]:
+        """Build the per-scope override resolver feeding the assembly cascade (D3).
+
+        Implements the override cascade over the injected :class:`BlockStore`:
+        agent-scope override ← default-scope override ← owner default (the engine's
+        fallback to ``definition.default_text``). For a default build there is no
+        agent layer. With the empty store no override exists, so every block uses
+        its owner default text (its scope-aware fragment / data content).
+        """
+        agent_scope_key = self._scope_key(prompt_scope) if prompt_scope.type == "agent" else None
+
+        def resolve(definition: BlockDefinition, _scope: str) -> str | None:
+            if agent_scope_key is not None:
+                agent_override = self._block_store.read_block_override(
+                    agent_scope_key, definition.id
+                )
+                if agent_override is not None:
+                    return agent_override
+            return self._block_store.read_block_override(DEFAULT_SCOPE_KEY, definition.id)
+
+        return resolve
+
+    @staticmethod
+    def _scope_key(prompt_scope: PromptScope) -> str:
+        """Return the persistence key for a resolved build scope.
+
+        ``default`` for the default scope, ``agent:<id>`` for an agent scope — the
+        single string the :class:`BlockStore` and the render context use, so the
+        colon-free path mapping (Phase 2) and the override cascade agree on the key.
+        """
+        if prompt_scope.type == "agent" and prompt_scope.agent_id:
+            return f"{AGENT_SCOPE_KEY_PREFIX}{prompt_scope.agent_id}"
+        return DEFAULT_SCOPE_KEY
 
     def render_project_files(self, project_context: ProjectPromptContext | None) -> str:
         """Render the project's auto-loaded files as ``<file>``-wrapped blocks.
@@ -686,11 +873,11 @@ class SystemPromptManager:
 
         Each producer is a closure over the registries the manager already holds
         (and the per-call skill-registry override), so the list-formatting logic
-        lives in one place and serves both the legacy child-fragment placeholders
-        (``{tool_list}`` etc.) here in Phase 1 and the ``{generated:…}`` markers
-        the block engine expands in Phases 2–3. ``memory_files`` renders the
+        lives in one place. ``tool_list``/``channel_list``/``skill_list`` feed the
+        core tools/channels/skills blocks; ``memory_files`` renders the
         ``USER.md``/``MEMORY.md`` ``<file>`` contents per the agent's memory mode
-        (the data half of today's memory block, without the guidance).
+        (the embedded data half of the ``memory:guidance`` block — the file reading
+        itself lives in the memory domain's :func:`read_memory_files`).
         """
         active_skill_registry = self._resolve_skill_registry(skill_registry)
 
@@ -706,13 +893,16 @@ class SystemPromptManager:
             )
 
         def memory_files(context: BlockRenderContext) -> str:
-            return self._render_memory_files(context.agent)
+            mode = getattr(context.agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
+            return read_memory_files(
+                Path(context.agent.workspace), mode, provider=self._memory_provider
+            )
 
         return {
             "tool_list": tool_list,
             "channel_list": channel_list,
             "skill_list": skill_list,
-            "memory_files": memory_files,
+            MEMORY_FILES_PRODUCER_NAME: memory_files,
         }
 
     def _is_owner_active(self, owner: str, agent: PromptAgent) -> bool:
@@ -725,8 +915,8 @@ class SystemPromptManager:
         - ``memory`` → the memory tool is enabled for the agent.
         - ``tool:<name>`` → ``<name>`` is in the agent's effective allowed tools.
         - ``channel`` → the agent has at least one active+enabled+running channel.
-        - ``extension:<name>`` → the extension is in the loaded-extension set
-          (Phase 3 supplies that set; until then no extension owner is active).
+        - ``extension:<name>`` → the extension is in the loaded-extension set the
+          runtime rebuilds and injects on every extension (re)load.
         """
         if owner == "always":
             return True
@@ -753,39 +943,6 @@ class SystemPromptManager:
         """
         definitions = self._prompt_definitions_for_agent(agent)
         return any(definition.get("name") == tool_name for definition in definitions)
-
-    def _render_memory_files(self, agent: PromptAgent) -> str:
-        """Render the ``USER.md``/``MEMORY.md`` ``<file>`` contents, ``""`` if empty.
-
-        The data half of today's memory block. Phase 1 reuses
-        ``MemoryService.build_prompt_block`` and strips its ``<memory>`` wrapper
-        and guidance line so the producer yields only the file contents — Phase 3
-        moves the file reading into the producer outright and turns the guidance
-        into the memory block's own editable text.
-        """
-        mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
-        block = self._memory_provider.build_prompt_block(Path(agent.workspace), mode)
-        return _strip_memory_wrapper(block)
-
-    def _build_memory_block(self, agent: PromptAgent) -> str:
-        mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
-        return self._memory_provider.build_prompt_block(Path(agent.workspace), mode)
-
-    def _build_runtime_block(self, agent: PromptAgent, scope: PromptScope) -> str:
-        runtime = self._read_prompt_fragment(scope, agent.id, "runtime.md")
-        thinking_effort = "default" if agent.thinking_effort is None else agent.thinking_effort
-        replacements = {
-            "{host}": self._host or socket.gethostname(),
-            "{app_version}": self._app_version,
-            "{os}": self._os_name or platform.platform(),
-            "{model}": agent.model,
-            "{agent_workspace}": agent.workspace,
-            "{app_dir}": str(self._app_dir.resolve()),
-            "{data_root}": str(self._data_root.resolve()),
-            "{thinking_effort}": thinking_effort,
-            "{current_date}": self._current_date(),
-        }
-        return _replace_placeholders(runtime, replacements)
 
     def _provider_definitions_for_agent(self, agent: PromptAgent) -> list[JsonObject]:
         definitions = self._tool_registry.provider_definitions(agent.allowed_tools)
@@ -913,37 +1070,24 @@ def _current_utc_date() -> str:
     return datetime.now(UTC).date().isoformat()
 
 
-def _replace_placeholders(template: str, replacements: dict[str, str]) -> str:
-    result = template
-    for placeholder, value in replacements.items():
-        result = result.replace(placeholder, value)
-    return result
+def load_bundled_default_layout() -> list[LayoutEntry]:
+    """Load the bundled default block layout from ``resources/prompts/layout.json``.
 
-
-_MEMORY_CLOSE_TAG = "\n</memory>"
-_MEMORY_FILE_MARKER = "<file name="
-
-
-def _strip_memory_wrapper(block: str) -> str:
-    """Return only the ``<file>``-wrapped contents of a rendered memory block.
-
-    The ``memory_files`` producer wants just the file data — not the ``<memory>``
-    wrapper or the guidance line that ``build_prompt_block`` prepends. The block is
-    either ``""`` (no visible files) or
-    ``<memory>\\n{guidance}\\n\\n{file blocks}\\n</memory>``; slicing from the first
-    ``<file name=`` to the closing tag yields the file blocks intact, with no
-    dependence on the guidance wording. Phase 3 reads the files directly in the
-    producer and retires this helper.
+    The shipped order + on/off of the core blocks, kept in a resource file so the
+    default layout lives as data, not code. A missing or malformed file reads as an
+    empty layout — every block then defaults in at its rank, so the prompt still
+    assembles (a broken bundled layout must never take a build down).
     """
-    if not block:
-        return ""
-    marker_index = block.find(_MEMORY_FILE_MARKER)
-    if marker_index == -1:
-        return ""
-    inner = block[marker_index:]
-    if inner.endswith(_MEMORY_CLOSE_TAG):
-        inner = inner[: -len(_MEMORY_CLOSE_TAG)]
-    return inner
+    layout_path = _RESOURCES_PROMPTS_DIR / _LAYOUT_FILENAME
+    try:
+        raw = json.loads(layout_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        _LOGGER.warning("Bundled prompt layout not found: %s", layout_path)
+        return []
+    except (OSError, ValueError) as exc:
+        _LOGGER.warning("Skipping unreadable bundled prompt layout %s: %s", layout_path, exc)
+        return []
+    return load_layout_entries(raw)
 
 
 def _format_tool_list(tool_definitions: list[dict[str, Any]]) -> str:
@@ -953,9 +1097,9 @@ def _format_tool_list(tool_definitions: list[dict[str, Any]]) -> str:
 
 
 def _format_channel_list(channels: list[ChannelPromptMetadata]) -> str:
-    if not channels:
-        return "- None"
-
+    # No ``- None`` fallback anymore: the ``core:channels`` block is owner
+    # ``channel``, so with no active channels the whole block gates out (D5). This
+    # producer is only invoked when at least one channel is active.
     lines: list[str] = []
     for channel in channels:
         target_hint = (

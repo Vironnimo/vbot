@@ -2,6 +2,9 @@
 
 from core.memory.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
+    MEMORY_BLOCK_ID,
+    MEMORY_BLOCK_OWNER,
+    MEMORY_FILES_PRODUCER_NAME,
     MEMORY_PROMPT_MODE_AGENT,
     MEMORY_PROMPT_MODE_AGENT_USER,
     MEMORY_PROMPT_MODE_OFF,
@@ -12,12 +15,17 @@ from core.memory.memory import (
     MemoryPromptMode,
     MemoryScope,
     MemoryService,
+    memory_block_definition,
+    read_memory_files,
     validate_memory_prompt_mode,
 )
 
 __all__ = [
     "DEFAULT_MEMORY_PROMPT_MODE",
     "FilePinnedMemoryBackend",
+    "MEMORY_BLOCK_ID",
+    "MEMORY_BLOCK_OWNER",
+    "MEMORY_FILES_PRODUCER_NAME",
     "MEMORY_PROMPT_MODE_AGENT",
     "MEMORY_PROMPT_MODE_AGENT_USER",
     "MEMORY_PROMPT_MODE_OFF",
@@ -27,5 +35,7 @@ __all__ = [
     "MemoryPromptMode",
     "MemoryScope",
     "MemoryService",
+    "memory_block_definition",
+    "read_memory_files",
     "validate_memory_prompt_mode",
 ]
