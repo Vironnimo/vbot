@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import core.channels.discord as discord_module
-from core.attachments import AttachmentStore
+from core.attachments import AttachmentStore, AttachmentTooLargeError
 from core.channels.adapter import FileData
 from core.channels.channels import ChannelConfig, ChannelConfigError
 from core.channels.discord import (
@@ -106,9 +106,17 @@ class FakeClient:
 
 
 class FakeAttachment:
-    def __init__(self, attachment_id: int, filename: str, data: bytes) -> None:
+    def __init__(
+        self,
+        attachment_id: int,
+        filename: str,
+        data: bytes,
+        size: int | None = None,
+    ) -> None:
         self.id = attachment_id
         self.filename = filename
+        # Discord populates size from metadata; default to the real byte length.
+        self.size = len(data) if size is None else size
         self.read = AsyncMock(return_value=data)
 
 
@@ -614,6 +622,33 @@ async def test_inbound_attachments_become_canonical_blocks(tmp_path: Path) -> No
     assert isinstance(blocks[1], MediaBlock)
     assert blocks[1].filename == "image.png"
     assert blocks[1].media_type == "image/png"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_oversized_inbound_attachment_rejected_before_download(tmp_path: Path) -> None:
+    channel = FakeChannel(100, guild=None, recipient_id=50)
+    attachment_store = AttachmentStore(tmp_path, max_size_bytes=8)
+    adapter, _sessions, _trigger, _client = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+        attachment_store=attachment_store,
+    )
+    oversized = FakeAttachment(300, "huge.png", b"\x89PNG\r\n\x1a\nDATA", size=1_000_000)
+    message = make_message(
+        channel,
+        message_id=200,
+        author_id=50,
+        content="look",
+        attachments=[oversized],
+    )
+
+    with pytest.raises(AttachmentTooLargeError):
+        await adapter.build_media_blocks(message)
+
+    # The file must be refused on its reported size alone — never pulled into memory.
+    oversized.read.assert_not_awaited()
     await adapter.stop()
 
 
