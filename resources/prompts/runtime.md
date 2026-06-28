@@ -1,6 +1,6 @@
 ## Runtime
 
-Here is useful information about the environment you are running in:
+Useful information about the environment you are running in:
 
 - Host: {host}
 - OS: {os}
