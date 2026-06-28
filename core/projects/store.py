@@ -41,7 +41,7 @@ from core.projects.projects import (
     project_from_dict,
     seed_default_auto_load,
 )
-from core.settings import SettingsValidationError, load_validated_project_json
+from core.settings import PROJECT_ID_PATTERN, SettingsValidationError, load_validated_project_json
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("projects")
@@ -58,6 +58,22 @@ _WORKSPACE_DIRNAME = "workspace"
 _SESSION_FILE_GLOB = "*.jsonl"
 
 
+def _validate_project_id(project_id: str) -> str:
+    """Reject any project id that is not a bare slug before it becomes a path segment.
+
+    The id is a path segment under ``<data_dir>/projects/`` and :meth:`ProjectStore.delete`
+    archives that directory with ``shutil.move`` (over a ``shutil.rmtree`` of the prior
+    archive). A separator or ``..`` component (``../agents``, ``/etc``) would let an
+    operation escape the projects subtree and move or remove an arbitrary directory.
+    Every legitimately created id is a :func:`slugify_project_id` slug, so this only ever
+    rejects crafted input — and it does so at the path-building choke point every store
+    and session-path call funnels through, not only at config validation.
+    """
+    if not isinstance(project_id, str) or PROJECT_ID_PATTERN.fullmatch(project_id) is None:
+        raise ProjectError(f"Invalid project id: {project_id!r}")
+    return project_id
+
+
 def project_sessions_dir(data_dir: Path, project_id: str, agent_id: str) -> Path:
     """Return the project-scoped sessions directory for one agent.
 
@@ -68,7 +84,12 @@ def project_sessions_dir(data_dir: Path, project_id: str, agent_id: str) -> Path
     paths through here, so the layout literal lives in exactly one place.
     """
     return (
-        data_dir / _PROJECTS_DIRNAME / project_id / _AGENTS_DIRNAME / agent_id / _SESSIONS_DIRNAME
+        data_dir
+        / _PROJECTS_DIRNAME
+        / _validate_project_id(project_id)
+        / _AGENTS_DIRNAME
+        / agent_id
+        / _SESSIONS_DIRNAME
     )
 
 
@@ -364,7 +385,7 @@ class ProjectStore:
         return self._project_dir(project_id) / _AGENTS_DIRNAME / agent_id
 
     def _project_dir(self, project_id: str) -> Path:
-        return self._data_dir / _PROJECTS_DIRNAME / project_id
+        return self._data_dir / _PROJECTS_DIRNAME / _validate_project_id(project_id)
 
     def _config_path(self, project_id: str) -> Path:
         return self._project_dir(project_id) / _PROJECT_CONFIG_FILENAME

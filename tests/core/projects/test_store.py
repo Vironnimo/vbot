@@ -15,7 +15,7 @@ from core.projects.projects import (
     ProjectError,
     ProjectNotFoundError,
 )
-from core.projects.store import ProjectStore
+from core.projects.store import ProjectStore, _validate_project_id
 from core.sessions import ChatSessionManager
 
 
@@ -495,6 +495,53 @@ def test_delete_raises_for_unknown_project(data_dir: Path) -> None:
 
     with pytest.raises(ProjectNotFoundError):
         store.delete("missing")
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["../agents", "..", "foo/bar", "a\\b", "/etc", ".", "vbot/../x", "vbot/", "", "-vbot", "vb ot"],
+)
+def test_validate_project_id_rejects_path_components(bad_id: str) -> None:
+    # A project id is a storage path segment; separators and traversal must be refused.
+    with pytest.raises(ProjectError, match="Invalid project id"):
+        _validate_project_id(bad_id)
+
+
+def test_validate_project_id_accepts_valid_slug() -> None:
+    assert _validate_project_id("vbot-2") == "vbot-2"
+
+
+def test_get_rejects_path_traversal_id(data_dir: Path) -> None:
+    store = ProjectStore(data_dir)
+
+    with pytest.raises(ProjectError, match="Invalid project id"):
+        store.get("../somewhere")
+
+
+def test_sessions_dir_rejects_path_traversal_id(data_dir: Path) -> None:
+    # The second path-building choke point (project_sessions_dir) is guarded too.
+    store = ProjectStore(data_dir)
+
+    with pytest.raises(ProjectError, match="Invalid project id"):
+        store.sessions_dir("../somewhere", "orchestrator")
+
+
+def test_delete_rejects_path_traversal_id_leaves_sibling_untouched(
+    data_dir: Path, repo: Path
+) -> None:
+    # A traversal id must be refused before any archive move, so the data-dir sibling
+    # that the resolved path (projects/../secret) would target survives untouched.
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    sibling = data_dir / "secret"
+    sibling.mkdir(parents=True)
+    sibling.joinpath("keep.txt").write_text("important", encoding="utf-8")
+
+    with pytest.raises(ProjectError, match="Invalid project id"):
+        store.delete("../secret")
+
+    assert sibling.is_dir()
+    assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"
 
 
 def test_sessions_dir_is_project_scoped(data_dir: Path, repo: Path) -> None:
