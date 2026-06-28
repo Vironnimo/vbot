@@ -43,54 +43,6 @@ from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 
-EDITABLE_PROMPT_FRAGMENT_NAMES = (
-    "system.md",
-    "runtime.md",
-    "tools.md",
-    "channels.md",
-    "skills.md",
-)
-PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
-    "system.md": [
-        {
-            "placeholder": "{agent_body}",
-            "description": "Imported config-agent prompt body (empty for identity agents)",
-        },
-        {"placeholder": "{memory}", "description": "Rendered memory fragment"},
-        {
-            "placeholder": "{project_files}",
-            "description": "Auto-loaded project files (empty when no project context)",
-        },
-        {"placeholder": "{runtime}", "description": "Rendered runtime fragment"},
-        {"placeholder": "{tools}", "description": "Rendered tools fragment"},
-        {"placeholder": "{channels}", "description": "Rendered channels fragment"},
-        {"placeholder": "{skills}", "description": "Rendered skills fragment"},
-        {
-            "placeholder": "{include:filename}",
-            "description": "Include another fragment by filename",
-        },
-    ],
-    "runtime.md": [
-        {"placeholder": "{app_version}", "description": "Application version string"},
-        {"placeholder": "{host}", "description": "Host machine name"},
-        {"placeholder": "{os}", "description": "Operating system name"},
-        {"placeholder": "{model}", "description": "Active model identifier"},
-        {"placeholder": "{agent_workspace}", "description": "Agent workspace directory path"},
-        {"placeholder": "{app_dir}", "description": "Application source directory path"},
-        {"placeholder": "{data_root}", "description": "Data root directory path"},
-        {"placeholder": "{thinking_effort}", "description": "Agent thinking effort setting"},
-        {"placeholder": "{current_date}", "description": "Current date in ISO 8601 format"},
-    ],
-    "tools.md": [
-        {"placeholder": "{tool_list}", "description": "List of available tools"},
-    ],
-    "channels.md": [
-        {"placeholder": "{channel_list}", "description": "List of active agent-bound channels"},
-    ],
-    "skills.md": [
-        {"placeholder": "{skill_list}", "description": "List of available skills"},
-    ],
-}
 # --- Block model: core/data block ids, owners, and the scope key ------------
 #
 # Every contribution to the System Prompt is a declared block (D6). The core
@@ -228,36 +180,6 @@ class PromptFragmentReader(Protocol):
         ...
 
 
-class PromptFragmentStorage(PromptFragmentReader, Protocol):
-    """Prompt fragment storage operations used by the editable prompt surface."""
-
-    prompts_dir: Path
-
-    def write_prompt_fragment(self, fragment_name: str, content: str) -> Path:
-        """Write a user-copy prompt fragment."""
-        ...
-
-    def reset_prompt_fragment(self, fragment_name: str) -> Path:
-        """Reset a user-copy prompt fragment to the bundled default."""
-        ...
-
-    def agent_prompts_dir(self, agent_id: str) -> Path:
-        """Return the prompt-fragment directory for one Agent."""
-        ...
-
-    def agent_prompt_fragment_exists(self, agent_id: str, fragment_name: str) -> bool:
-        """Return whether one Agent prompt fragment exists."""
-        ...
-
-    def write_agent_prompt_fragment(self, agent_id: str, fragment_name: str, content: str) -> Path:
-        """Write one Agent prompt fragment."""
-        ...
-
-    def reset_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> Path:
-        """Reset one Agent prompt fragment to current default-scope content."""
-        ...
-
-
 class PromptAgentStore(Protocol):
     """Agent catalog methods needed for prompt scope validation."""
 
@@ -371,123 +293,6 @@ class MemoryPromptProvider(Protocol):
     def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
         """Return the ``<file>``-wrapped pinned-memory file contents for a mode."""
         ...
-
-
-@dataclass(frozen=True)
-class PromptFragment:
-    """Editable prompt fragment response model."""
-
-    name: str
-    content: str
-    is_modified: bool
-    variables: list[dict[str, str]]
-
-    def to_dict(self) -> JsonObject:
-        return {
-            "name": self.name,
-            "content": self.content,
-            "is_modified": self.is_modified,
-            "variables": list(self.variables),
-        }
-
-
-class PromptFragmentManager:
-    """Manage editable prompt fragments through a storage backend."""
-
-    def __init__(
-        self,
-        storage: PromptFragmentStorage,
-        agent_store: PromptAgentStore | None = None,
-    ) -> None:
-        self._storage = storage
-        self._agent_store = agent_store
-
-    def list_scopes(self) -> list[JsonObject]:
-        """Return prompt scopes available to the System Prompt editor."""
-        scopes: list[JsonObject] = [{"type": "default", "label": "Default"}]
-        if self._agent_store is None:
-            return scopes
-
-        for agent in sorted(self._agent_store.list(), key=lambda item: item.id):
-            if not agent.custom_system_prompt_enabled:
-                continue
-            scopes.append(
-                {
-                    "type": "agent",
-                    "agent_id": agent.id,
-                    "label": agent.name or agent.id,
-                }
-            )
-        return scopes
-
-    def validate_scope(self, scope: Any = None) -> PromptScope:
-        """Resolve and validate a public prompt scope payload."""
-        return self._resolve_scope(scope)
-
-    def list_fragments(self, scope: Any = None) -> list[JsonObject]:
-        """Return editable prompt fragments in stable UI order."""
-        prompt_scope = self._resolve_scope(scope)
-        fragments: list[JsonObject] = []
-        for name in EDITABLE_PROMPT_FRAGMENT_NAMES:
-            if prompt_scope.type == "agent":
-                agent_id = _require_scope_agent_id(prompt_scope)
-                fragment = PromptFragment(
-                    name=name,
-                    content=self._storage.read_agent_prompt_fragment(agent_id, name),
-                    is_modified=self._storage.agent_prompt_fragment_exists(agent_id, name),
-                    variables=PROMPT_FRAGMENT_VARIABLES.get(name, []),
-                )
-            else:
-                fragment = PromptFragment(
-                    name=name,
-                    content=self._storage.read_prompt_fragment(name),
-                    is_modified=(self._storage.prompts_dir / name).exists(),
-                    variables=PROMPT_FRAGMENT_VARIABLES.get(name, []),
-                )
-            fragments.append(fragment.to_dict())
-        return fragments
-
-    def update_fragment(self, name: str, content: str, scope: Any = None) -> JsonObject:
-        """Write an editable prompt fragment and return its public state."""
-        fragment_name = _validate_editable_prompt_fragment_name(name)
-        prompt_scope = self._resolve_scope(scope)
-        if prompt_scope.type == "agent":
-            agent_id = _require_scope_agent_id(prompt_scope)
-            self._storage.write_agent_prompt_fragment(agent_id, fragment_name, content)
-            return {"name": fragment_name, "content": content, "is_modified": True}
-
-        self._storage.write_prompt_fragment(fragment_name, content)
-        return {"name": fragment_name, "content": content, "is_modified": True}
-
-    def reset_fragment(self, name: str, scope: Any = None) -> JsonObject:
-        """Reset an editable prompt fragment to its default content."""
-        fragment_name = _validate_editable_prompt_fragment_name(name)
-        prompt_scope = self._resolve_scope(scope)
-        if prompt_scope.type == "agent":
-            agent_id = _require_scope_agent_id(prompt_scope)
-            self._storage.reset_agent_prompt_fragment(agent_id, fragment_name)
-            content = self._storage.read_agent_prompt_fragment(agent_id, fragment_name)
-            return {"name": fragment_name, "content": content, "is_modified": True}
-
-        self._storage.reset_prompt_fragment(fragment_name)
-        content = self._storage.read_prompt_fragment(fragment_name)
-        return {"name": fragment_name, "content": content, "is_modified": False}
-
-    def _resolve_scope(self, scope: Any = None) -> PromptScope:
-        prompt_scope = _normalize_prompt_scope(scope)
-        if prompt_scope.type == "default":
-            return prompt_scope
-        if self._agent_store is None:
-            raise PromptError("Agent prompt scopes are not available")
-
-        agent_id = _require_scope_agent_id(prompt_scope)
-        try:
-            agent = self._agent_store.get(agent_id)
-        except Exception as exc:
-            raise PromptError(f"unknown prompt scope agent: {agent_id}") from exc
-        if not agent.custom_system_prompt_enabled:
-            raise PromptError(f"Agent prompt scope is not enabled: {agent_id}")
-        return prompt_scope
 
 
 class SystemPromptManager:
@@ -1528,12 +1333,6 @@ def _require_scope_agent_id(scope: PromptScope) -> str:
     if scope.agent_id is None:
         raise PromptError("agent prompt scope requires agent_id")
     return scope.agent_id
-
-
-def _validate_editable_prompt_fragment_name(name: str) -> str:
-    if name not in EDITABLE_PROMPT_FRAGMENT_NAMES:
-        raise PromptError(f"unknown prompt fragment: {name}")
-    return name
 
 
 def _current_utc_date() -> str:
