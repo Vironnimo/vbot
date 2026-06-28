@@ -273,7 +273,7 @@ async def _handle_command_action(
     match command_action.name:
         case "compact":
             return await _handle_compact_command(
-                state, agent_id, session_id, command_action.argument
+                state, agent_id, session_id, command_action.argument, project_id=project_id
             )
         case "handoff":
             return await _handle_handoff_command(
@@ -839,11 +839,16 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _handle_compact_command(
-    state: Any, agent_id: str, session_id: str, instruction: str | None = None
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    instruction: str | None = None,
+    *,
+    project_id: str | None = None,
 ) -> JsonObject:
     try:
         reply = await state.runtime.trigger_service.compact_session(
-            agent_id, session_id, instruction
+            agent_id, session_id, instruction, project_id=project_id
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
