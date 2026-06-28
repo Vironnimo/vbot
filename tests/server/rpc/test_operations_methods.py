@@ -195,14 +195,14 @@ def test_list_returns_blocks_in_layout_order_with_scopes(tmp_path: Path) -> None
 
     block_ids = [block["id"] for block in result["blocks"]]
     assert block_ids == [
-        "core:agent_body",
         "core:soul",
         "memory:guidance",
-        "core:project_files",
         "core:runtime",
         "core:tools",
         "core:channels",
         "core:skills",
+        "core:agent_body",
+        "core:project_files",
     ]
     tools = next(block for block in result["blocks"] if block["id"] == "core:tools")
     assert tools["editable"] is True
@@ -402,7 +402,7 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
     result = _reset_prompt_layout(state, {})
 
     persisted = [entry.id for entry in store.read_layout("default")]
-    assert persisted[0] == "core:agent_body"
+    assert persisted[0] == "core:soul"
     assert "core:skills" in persisted
     assert [entry["id"] for entry in result["layout"]] == persisted
 
