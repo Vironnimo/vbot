@@ -162,6 +162,24 @@ def test_store_rejects_file_larger_than_max_size(tmp_path: Path) -> None:
         store.store("too-large.txt", b"12345")
 
 
+def test_ensure_within_limit_rejects_oversized_reported_size(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path, max_size_bytes=4)
+
+    # Act / Assert
+    with pytest.raises(AttachmentTooLargeError, match="exceeds limit"):
+        store.ensure_within_limit(5)
+
+
+def test_ensure_within_limit_allows_size_at_limit(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path, max_size_bytes=4)
+
+    # Act / Assert — at-or-below the limit and an unknown (None) size both pass.
+    store.ensure_within_limit(4)
+    store.ensure_within_limit(None)
+
+
 def test_store_rejects_blocked_mime_type(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)

@@ -13,6 +13,7 @@ Discord platform-I/O adapter behind the shared channel conversation engine.
 - Bot-authored inbound messages are ignored to prevent loops. Sender display name uses Discord `display_name`, then `global_name`, then account `name`.
 - Native user mentions and replies whose resolved referenced message belongs to this bot populate the engine's `mentioned_bot` / `is_reply_to_bot` facts. Built-in commands remain ordinary text commands handled by the engine, not Discord application-command interactions.
 - Inbound attachments are downloaded inside the engine worker and stored through `AttachmentStore`. Message content becomes a leading `TextBlock`; image/audio/video files become `MediaBlock`, text files become extracted `TextBlock`, and other files become `FileBlock`.
+- An oversized attachment is rejected before its bytes are read: `_store_inbound_attachment` calls `AttachmentStore.ensure_within_limit` with the Discord-reported `attachment.size`, so `attachment.read()` never pulls an over-limit file into memory (the store's post-download size check stays as the backstop). The resulting `AttachmentTooLargeError` flows through the engine's normal media-failure mapping to the "file too large" reply.
 
 ## History Backfill
 
