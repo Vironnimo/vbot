@@ -383,7 +383,7 @@ def test_soul_block_collapses_without_workspace_file(tmp_path: Path) -> None:
     assert '<file name="SOUL.md">' not in prompt
 
 
-def test_config_agent_body_renders_verbatim_before_soul_and_memory(tmp_path: Path) -> None:
+def test_config_agent_body_renders_verbatim(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
 
@@ -868,14 +868,14 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
 
     # Layout order follows the bundled default layout (resources/prompts/layout.json).
     assert [block["id"] for block in blocks] == [
-        "core:agent_body",
         "core:soul",
         "memory:guidance",
-        "core:project_files",
         "core:runtime",
         "core:tools",
         "core:channels",
         "core:skills",
+        "core:agent_body",
+        "core:project_files",
     ]
     # Ranks are the layout positions, 0-based and contiguous.
     assert [block["rank"] for block in blocks] == list(range(len(blocks)))
@@ -1091,14 +1091,14 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
     persisted = store.read_layout("default")
     # The bundled default layout is restored (the disabled-tools custom layout gone).
     assert [entry.id for entry in persisted] == [
-        "core:agent_body",
         "core:soul",
         "memory:guidance",
-        "core:project_files",
         "core:runtime",
         "core:tools",
         "core:channels",
         "core:skills",
+        "core:agent_body",
+        "core:project_files",
     ]
     assert all(entry.enabled for entry in persisted)
     assert [entry["id"] for entry in result["layout"]] == [entry.id for entry in persisted]
