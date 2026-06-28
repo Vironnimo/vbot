@@ -41,7 +41,12 @@ from core.projects.projects import (
     project_from_dict,
     seed_default_auto_load,
 )
-from core.settings import PROJECT_ID_PATTERN, SettingsValidationError, load_validated_project_json
+from core.settings import (
+    PROJECT_ID_PATTERN,
+    SettingsValidationError,
+    is_valid_agent_id,
+    load_validated_project_json,
+)
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("projects")
@@ -74,6 +79,19 @@ def _validate_project_id(project_id: str) -> str:
     return project_id
 
 
+def _validate_agent_id(agent_id: str) -> str:
+    """Reject any agent id that is not a bare slug before it becomes a path segment.
+
+    Mirrors :func:`_validate_project_id`: the agent id is a path segment under a
+    project anchor's ``agents/`` directory (sessions and workspace), so a separator
+    or ``..`` component must never reach the filesystem. Defense-in-depth — RPC entry
+    already validates agent addresses — applied at the same path-building choke point.
+    """
+    if not is_valid_agent_id(agent_id):
+        raise ProjectError(f"Invalid agent id: {agent_id!r}")
+    return agent_id
+
+
 def project_sessions_dir(data_dir: Path, project_id: str, agent_id: str) -> Path:
     """Return the project-scoped sessions directory for one agent.
 
@@ -88,7 +106,7 @@ def project_sessions_dir(data_dir: Path, project_id: str, agent_id: str) -> Path
         / _PROJECTS_DIRNAME
         / _validate_project_id(project_id)
         / _AGENTS_DIRNAME
-        / agent_id
+        / _validate_agent_id(agent_id)
         / _SESSIONS_DIRNAME
     )
 
@@ -382,7 +400,7 @@ class ProjectStore:
         return self._agent_anchor_dir(project_id, agent_id) / _WORKSPACE_DIRNAME
 
     def _agent_anchor_dir(self, project_id: str, agent_id: str) -> Path:
-        return self._project_dir(project_id) / _AGENTS_DIRNAME / agent_id
+        return self._project_dir(project_id) / _AGENTS_DIRNAME / _validate_agent_id(agent_id)
 
     def _project_dir(self, project_id: str) -> Path:
         return self._data_dir / _PROJECTS_DIRNAME / _validate_project_id(project_id)

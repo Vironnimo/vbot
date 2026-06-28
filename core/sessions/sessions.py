@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from core.chat.errors import ChatMessageValidationError, ChatSessionError
 from core.projects.store import project_sessions_dir
+from core.settings import is_valid_agent_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -336,8 +337,7 @@ class ChatSessionManager:
         through :func:`core.projects.store.project_sessions_dir`, so the
         anchor path stays defined in one place (the projects domain).
         """
-        if not agent_id:
-            raise ChatSessionError("agent id must not be empty")
+        _validate_agent_id(agent_id)
         if project_id is None:
             return self.data_dir / "agents" / agent_id / "sessions"
         return project_sessions_dir(self.data_dir, project_id, agent_id)
@@ -608,6 +608,7 @@ class ChatSessionManager:
         - identity: ``archive/sessions/agents/<agent-id>/``
         - project:  ``archive/sessions/projects/<project-id>/agents/<agent-id>/``
         """
+        _validate_agent_id(agent_id)
         root = self.data_dir / "archive" / "sessions"
         if project_id is None:
             return root / "agents" / agent_id
@@ -647,6 +648,17 @@ class ChatSessionManager:
         except OSError as exc:
             raise ChatSessionError(f"failed to read file metadata: {path}") from exc
         return _format_timestamp(modified_at)
+
+
+def _validate_agent_id(agent_id: str) -> None:
+    # The agent id becomes a path segment under ``agents/`` (live and archive), so a
+    # separator or ``..`` component must never reach the filesystem. Defense-in-depth:
+    # RPC entry already validates agent addresses, but the path-building choke point
+    # enforces the bare-slug rule too, mirroring project-id and session-id handling.
+    if not is_valid_agent_id(agent_id):
+        raise ChatSessionError(
+            "agent id must be 1-64 characters using only letters, numbers, hyphen, or underscore"
+        )
 
 
 def _validate_session_id(session_id: str) -> None:
