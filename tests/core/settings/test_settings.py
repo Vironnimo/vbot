@@ -14,8 +14,11 @@ from core.settings import (
     parse_settings_update,
     validate_agent_data,
     validate_channel_data,
+    validate_cron_jobs_data,
     validate_settings_file,
 )
+
+_AGENT_ID_SLUG_ERROR = "must be 1-64 characters using only letters, numbers, hyphen, or underscore"
 
 
 def diagnostics_as_tuples(report: SettingsValidationReport) -> list[tuple[str, str, str]]:
@@ -472,6 +475,37 @@ def test_validate_channel_data_rejects_non_boolean_observe_unaddressed() -> None
             diagnostics=tuple(diagnostics),
         )
     ) == [("error", "$.observe_unaddressed", "must be a boolean")]
+
+
+def test_validate_channel_data_rejects_path_traversal_agent_id() -> None:
+    # A channel's bound agent_id becomes a session path segment, so it must obey the
+    # agent-id slug rule, not merely be non-empty.
+    diagnostics = validate_channel_data(
+        {
+            "id": "tg-assistant",
+            "platform": "telegram",
+            "agent_id": "../escape",
+            "token_env_var": "TELEGRAM_BOT_TOKEN",
+        }
+    )
+
+    assert diagnostics_as_tuples(
+        SettingsValidationReport(
+            file_path=Path("channel.json"),
+            exists=True,
+            diagnostics=tuple(diagnostics),
+        )
+    ) == [("error", "$.agent_id", _AGENT_ID_SLUG_ERROR)]
+
+
+def test_validate_cron_jobs_data_rejects_path_traversal_agent_id() -> None:
+    diagnostics = validate_cron_jobs_data(
+        [{"id": "job-1", "agent_id": "../escape", "prompt": "do it"}]
+    )
+
+    assert ("error", "$[0].agent_id", _AGENT_ID_SLUG_ERROR) in [
+        (diagnostic.severity, diagnostic.path, diagnostic.message) for diagnostic in diagnostics
+    ]
 
 
 def _valid_agent_data() -> dict[str, object]:
