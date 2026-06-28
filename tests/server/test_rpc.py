@@ -28,6 +28,7 @@ from core.projects import ProjectNotFoundError
 from core.projects.paths import cwd_identity_key
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import AgentResolutionError, ConfigAgent
+from core.prompts import LayoutEntry, load_bundled_default_layout
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
     ProviderAccount,
@@ -547,6 +548,7 @@ class StubStorage:
             "skills.md": "# Skills\nDefault skills list.",
         }
         self._agent_prompt_fragments: dict[tuple[str, str], str] = {}
+        self._block_layouts: dict[str | None, list[LayoutEntry]] = {}
 
     def load_appearance_settings(self) -> JsonObject:
         return dict(self._appearance)
@@ -934,6 +936,35 @@ class StubStorage:
         if name not in self._prompt_fragments:
             raise StorageError(f"Unknown prompt fragment: {name}")
         self.write_agent_prompt_fragment(agent_id, name, self._prompt_fragments[name])
+
+    def read_block_layout(self, scope: str | None) -> list[LayoutEntry]:
+        return list(self._block_layouts.get(scope, []))
+
+    def write_block_layout(self, scope: str | None, entries: list[LayoutEntry]) -> Path:
+        self._block_layouts[scope] = list(entries)
+        return self._layout_path(scope)
+
+    def seed_agent_block_layout(
+        self,
+        agent_id: str,
+        default_layout: list[LayoutEntry],
+        *,
+        overwrite: bool = False,
+    ) -> Path | None:
+        if agent_id in self._block_layouts and not overwrite:
+            return None
+        self._block_layouts[agent_id] = list(default_layout)
+        layout_path = self._layout_path(agent_id)
+        layout_path.parent.mkdir(parents=True, exist_ok=True)
+        layout_path.write_text(
+            json.dumps([{"id": entry.id, "enabled": entry.enabled} for entry in default_layout]),
+            encoding="utf-8",
+        )
+        return layout_path
+
+    def _layout_path(self, scope: str | None) -> Path:
+        root = self.prompts_dir if scope is None else self.agent_prompts_dir(scope)
+        return root / "layout.json"
 
 
 class StubPrompts:
@@ -4023,6 +4054,71 @@ async def test_agent_update_reenabling_custom_prompt_preserves_agent_fragments(
 
     assert response["ok"] is True
     assert state.runtime.storage.read_agent_prompt_fragment("coder", "runtime.md") == "agent custom"
+
+
+@pytest.mark.asyncio
+async def test_agent_update_enabling_custom_prompt_seeds_agent_block_layout(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    effective_default = [
+        LayoutEntry(id="core:intro", enabled=True, source="core"),
+        LayoutEntry(id="tool:bash", enabled=False, source="tool"),
+    ]
+    state.runtime.storage.write_block_layout(None, effective_default)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.update",
+            "params": {"id": "coder", "custom_system_prompt_enabled": True},
+        },
+    )
+
+    assert response["ok"] is True
+    layout_path = state.runtime.storage.agent_prompts_dir("coder") / "layout.json"
+    assert layout_path.exists()
+    assert state.runtime.storage.read_block_layout("coder") == effective_default
+
+
+@pytest.mark.asyncio
+async def test_agent_update_enabling_custom_prompt_seeds_bundled_layout_without_default(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.update",
+            "params": {"id": "coder", "custom_system_prompt_enabled": True},
+        },
+    )
+
+    assert response["ok"] is True
+    # No default-scope layout is saved, so the seed falls back to the bundled default.
+    assert state.runtime.storage.read_block_layout("coder") == load_bundled_default_layout()
+
+
+@pytest.mark.asyncio
+async def test_agent_update_reenabling_custom_prompt_preserves_agent_block_layout(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    customized = [LayoutEntry(id="user:house-rules", enabled=True, source="user")]
+    state.runtime.storage.write_block_layout("coder", customized)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.update",
+            "params": {"id": "coder", "custom_system_prompt_enabled": True},
+        },
+    )
+
+    assert response["ok"] is True
+    # Re-activation must not clobber an already-customized agent layout.
+    assert state.runtime.storage.read_block_layout("coder") == customized
 
 
 @pytest.mark.asyncio
