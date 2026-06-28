@@ -625,6 +625,29 @@ class TestChatSessionManager:
         with pytest.raises(ChatSessionError, match="agent id"):
             manager.create("", session_id="session-one")
 
+    def test_sessions_dir_rejects_path_traversal_agent_id(self, tmp_path):
+        # The agent id becomes a path segment; a traversal component must be refused
+        # in both the identity and project layouts.
+        manager = ChatSessionManager(tmp_path)
+
+        with pytest.raises(ChatSessionError, match="agent id"):
+            manager.sessions_dir("../escape")
+        with pytest.raises(ChatSessionError, match="agent id"):
+            manager.sessions_dir("../escape", project_id="proj")
+
+    def test_delete_rejects_path_traversal_agent_id_leaves_sibling_untouched(self, tmp_path):
+        # A traversal agent id is refused before any file is touched, so a sibling the
+        # resolved path would target survives.
+        manager = ChatSessionManager(tmp_path)
+        sibling = tmp_path / "secret"
+        sibling.mkdir()
+        sibling.joinpath("keep.jsonl").write_text("important", encoding="utf-8")
+
+        with pytest.raises(ChatSessionError, match="agent id"):
+            manager.delete("../secret", "session-one")
+
+        assert sibling.joinpath("keep.jsonl").read_text(encoding="utf-8") == "important"
+
     def test_write_lock_is_shared_across_manager_instances(self, tmp_path):
         manager_a = ChatSessionManager(tmp_path)
         manager_b = ChatSessionManager(tmp_path)
