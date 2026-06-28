@@ -21,6 +21,10 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Marker = Join-Path $ProjectRoot ".vbot-bootstrap"
 
+# Start-menu shortcut filename. Kept in sync with scripts/install.ps1, which
+# creates a shortcut by this exact name under -Desktop / -DesktopClient.
+$DesktopShortcutName = "vBot Desktop.lnk"
+
 function Write-Step {
     param([string]$Message)
     Write-Host "==> $Message"
@@ -42,6 +46,23 @@ function New-CommandSpec {
     return [pscustomobject]@{
         Exe = $Exe
         PrefixArguments = $PrefixArguments
+    }
+}
+
+function Remove-DesktopShortcut {
+    if (-not (Test-RunningOnWindows)) {
+        return
+    }
+
+    $programsDir = [System.Environment]::GetFolderPath("Programs")
+    if ([string]::IsNullOrWhiteSpace($programsDir)) {
+        return
+    }
+
+    $shortcutPath = Join-Path $programsDir $DesktopShortcutName
+    if (Test-Path $shortcutPath) {
+        Remove-Item -LiteralPath $shortcutPath -Force
+        Write-Host "Removed Start-menu shortcut '$DesktopShortcutName'."
     }
 }
 
@@ -188,6 +209,9 @@ function Invoke-BootstrapUninstall {
     # The shim itself lives inside ProjectRoot (removed with it); drop its PATH entry.
     Remove-FromUserPath -PathToRemove (Join-Path $ProjectRoot "bin")
 
+    # The Start-menu shortcut lives outside ProjectRoot, so remove it explicitly.
+    Remove-DesktopShortcut
+
     Set-Location $HOME
     Remove-DirectoryWithRetry -Path $ProjectRoot
 
@@ -200,6 +224,8 @@ function Invoke-ManualUninstall {
     Write-Step "Uninstalling pip package: $PackageName"
     $python = Resolve-PythonCommand
     Invoke-External $python @("-m", "pip", "uninstall", "-y", $PackageName)
+
+    Remove-DesktopShortcut
 
     if ($RemoveAutostart) {
         Write-Step "Removing autostart task"

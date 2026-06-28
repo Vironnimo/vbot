@@ -6,6 +6,7 @@ param(
     [ValidateRange(1, 65535)]
     [int]$Port = 8420,
     [switch]$Desktop,
+    [switch]$DesktopClient,
     [switch]$Dev,
     [switch]$NoAutostart,
     [switch]$SkipWebuiBuild,
@@ -18,6 +19,10 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WebUiDir = Join-Path $ProjectRoot "webui"
+
+if ($Desktop -and $DesktopClient) {
+    throw "-Desktop and -DesktopClient are mutually exclusive: -Desktop adds the accessor to a full server install, -DesktopClient installs the accessor with no server stack."
+}
 
 function Write-Step {
     param([string]$Message)
@@ -272,6 +277,9 @@ function Install-PythonPackage {
     if ($Desktop) {
         $extra = ".[server,cli,desktop]"
     }
+    if ($DesktopClient) {
+        $extra = ".[cli,desktop]"
+    }
     if ($Dev) {
         $extra = ".[dev]"
     }
@@ -380,27 +388,74 @@ function Resolve-VbotCommandPath {
     throw "The vbot command was not found after installation. Check pip output for installation errors."
 }
 
+# Start-menu shortcut filename. Kept in sync with scripts/uninstall.ps1, which
+# removes a shortcut by this exact name on both the bootstrap and manual paths.
+$DesktopShortcutName = "vBot Desktop.lnk"
+
+function New-DesktopShortcut {
+    param([string]$TargetPath)
+
+    if (-not (Test-RunningOnWindows)) {
+        Write-Warning "Start-menu shortcut creation is only implemented for Windows."
+        return
+    }
+
+    $programsDir = [System.Environment]::GetFolderPath("Programs")
+    if ([string]::IsNullOrWhiteSpace($programsDir)) {
+        Write-Warning "Could not resolve the Start-menu Programs folder; skipping shortcut creation."
+        return
+    }
+
+    New-Item -ItemType Directory -Path $programsDir -Force | Out-Null
+    $shortcutPath = Join-Path $programsDir $DesktopShortcutName
+
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $TargetPath
+        $shortcut.Arguments = "desktop"
+        $shortcut.WorkingDirectory = (Split-Path -Parent $TargetPath)
+        $shortcut.Description = "Open the vBot desktop window"
+        $shortcut.Save()
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+    }
+
+    Write-Host "Created Start-menu shortcut: $shortcutPath"
+}
+
 $resolvedDataDir = Resolve-UserPath $DataDir
 $effectivePort = Resolve-EffectivePort `
     -ResolvedDataDir $resolvedDataDir `
     -DefaultPort $Port `
     -PortWasProvided ($PSBoundParameters.ContainsKey("Port"))
+# The desktop-client mode installs only the accessor: no server stack, no local
+# WebUI build, no data dir, no autostart. It still needs Python, the package, the
+# vbot command on PATH, and the Start-menu shortcut.
+$buildWebUi = (-not $SkipWebuiBuild) -and (-not $DesktopClient)
+
 $python = Resolve-PythonCommand
-if (-not $SkipWebuiBuild) {
+if ($buildWebUi) {
     $node = Resolve-CommandSpec @("node.exe", "node")
     $npm = Resolve-CommandSpec @("npm.cmd", "npm")
 }
 
 Write-Step "Checking prerequisites"
 Test-PythonVersion $python
-if (-not $SkipWebuiBuild) {
+if ($buildWebUi) {
     Invoke-External $node @("--version")
     Invoke-External $npm @("--version")
 }
 
-Initialize-DataDirectory $resolvedDataDir $effectivePort
+if (-not $DesktopClient) {
+    Initialize-DataDirectory $resolvedDataDir $effectivePort
+}
 Install-PythonPackage $python
-if ($SkipWebuiBuild) {
+if ($DesktopClient) {
+    Write-Step "Skipping WebUI build (desktop-client install has no local server)"
+}
+elseif ($SkipWebuiBuild) {
     Write-Step "Skipping WebUI build (-SkipWebuiBuild)"
     $skipBuildIndex = Join-Path $WebUiDir "dist\index.html"
     if (-not (Test-Path $skipBuildIndex)) {
@@ -417,11 +472,23 @@ Ensure-PathContains $scriptsPath
 $vbotPath = Resolve-VbotCommandPath $scriptsPath
 $vbotCommand = New-CommandSpec -Exe $vbotPath
 
-Write-Step "Verifying vBot command and settings"
-Invoke-External $vbotCommand @("--help")
-Invoke-External $vbotCommand @("doctor", "settings", "--data-dir", $resolvedDataDir)
+if ($DesktopClient) {
+    Write-Step "Verifying vBot command"
+    Invoke-External $vbotCommand @("--help")
+}
+else {
+    Write-Step "Verifying vBot command and settings"
+    Invoke-External $vbotCommand @("--help")
+    Invoke-External $vbotCommand @("doctor", "settings", "--data-dir", $resolvedDataDir)
+}
 
-if (-not $NoAutostart) {
+if ($Desktop -or $DesktopClient) {
+    Write-Step "Creating Start-menu shortcut"
+    New-DesktopShortcut -TargetPath $vbotPath
+}
+
+# A desktop-client install has no local server, so autostart never applies.
+if (-not $DesktopClient -and -not $NoAutostart) {
     Write-Step "Enabling autostart and starting the server"
     & $vbotPath autostart enable --host $HostName --port $effectivePort --data-dir $resolvedDataDir --task-name $TaskName
     if ($LASTEXITCODE -ne 0) {
@@ -431,6 +498,12 @@ if (-not $NoAutostart) {
 
 Write-Step "Installation complete"
 Write-Host "vBot command: $vbotPath"
-Write-Host "Data directory: $resolvedDataDir"
-Write-Host "Server URL: http://${HostName}:$effectivePort"
-Write-Host "Try: vbot server status --host $HostName --port $effectivePort --data-dir `"$resolvedDataDir`""
+if ($DesktopClient) {
+    Write-Host "Installed the desktop client (no local server)."
+    Write-Host "Launch it from the Start menu (vBot Desktop) or run: vbot desktop"
+}
+else {
+    Write-Host "Data directory: $resolvedDataDir"
+    Write-Host "Server URL: http://${HostName}:$effectivePort"
+    Write-Host "Try: vbot server status --host $HostName --port $effectivePort --data-dir `"$resolvedDataDir`""
+}
