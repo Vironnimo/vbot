@@ -58,7 +58,9 @@ def test_config_show_posts_get_raw_rpc(tmp_path: Path, monkeypatch: pytest.Monke
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(200, json={"ok": True, "result": {"settings": {"server_port": 8420}}})
 
@@ -86,7 +88,9 @@ def test_config_show_returns_empty_object_when_settings_empty(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, "result": {"settings": {}}})
 
     monkeypatch.setattr(config_management.httpx, "post", fake_post)
@@ -99,7 +103,9 @@ def test_config_show_returns_empty_object_when_settings_empty(
 def test_config_get_returns_json_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={"ok": True, "result": {"settings": {"server_port": 8420}}},
@@ -118,7 +124,9 @@ def test_config_get_exits_with_error_when_key_missing(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             json={"ok": True, "result": {"settings": {"other": 1, "server_port": 8420}}},
@@ -143,7 +151,9 @@ def test_config_set_posts_set_key_rpc(tmp_path: Path, monkeypatch: pytest.Monkey
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(200, json={"ok": True, "result": {"settings": {"x": 9000}}})
 
@@ -170,7 +180,9 @@ def test_config_set_confirms_with_key_equals_value(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, "result": {"settings": {"x": 9000}}})
 
     monkeypatch.setattr(config_management.httpx, "post", fake_post)
@@ -202,7 +214,9 @@ def test_config_show_returns_error_on_rpc_failure(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
         return httpx.Response(
             500,
             json={"ok": False, "error": {"code": "internal_error", "message": "boom"}},
