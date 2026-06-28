@@ -5,13 +5,17 @@ from __future__ import annotations
 from typing import Any, cast
 
 from core.projects import resolve_prompt_project, runtime_agent_body
-from core.prompts import ProjectPromptContext, PromptError, PromptFragmentManager
+from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
 from core.utils.log_viewer import LogViewer
 from core.utils.tokens import estimate_tokens
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.validation import _required_agent_address, _required_string
+from server.rpc.validation import (
+    _required_agent_address,
+    _required_block_slug,
+    _required_string,
+)
 
 JsonObject = dict[str, Any]
 
@@ -40,38 +44,26 @@ def _read_log(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _list_prompts(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"scope"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported prompt.list fields: {', '.join(unsupported_fields)}",
-        )
-
+    _reject_unsupported(params, {"scope"}, "prompt.list")
     try:
-        manager = _prompt_fragment_manager(state)
-        fragments = manager.list_fragments(params.get("scope"))
+        manager = _prompt_manager(state)
+        blocks = manager.list_blocks(params.get("scope"))
         scopes = manager.list_scopes()
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"fragments": fragments, "scopes": scopes}
+    return {"blocks": blocks, "scopes": scopes}
 
 
 def _update_prompt(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"name", "content", "scope"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported prompt.update fields: {', '.join(unsupported_fields)}",
-        )
-
-    name = _required_string(params, "name")
+    _reject_unsupported(params, {"id", "content", "scope"}, "prompt.update")
+    block_id = _required_string(params, "id")
     content = params.get("content")
     if not isinstance(content, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.content must be a string")
     try:
-        return _prompt_fragment_manager(state).update_fragment(name, content, params.get("scope"))
+        return _prompt_manager(state).update_block(block_id, content, params.get("scope"))
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
@@ -79,35 +71,97 @@ def _update_prompt(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _reset_prompt(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"name", "scope"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported prompt.reset fields: {', '.join(unsupported_fields)}",
-        )
-
-    name = _required_string(params, "name")
+    _reject_unsupported(params, {"id", "scope"}, "prompt.reset")
+    block_id = _required_string(params, "id")
     try:
-        return _prompt_fragment_manager(state).reset_fragment(name, params.get("scope"))
+        return _prompt_manager(state).reset_block(block_id, params.get("scope"))
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
 
-async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"agent_id", "scope"})
+def _set_prompt_layout(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"layout", "scope"}, "prompt.set_layout")
+    layout = params.get("layout")
+    if not isinstance(layout, list):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.layout must be a list")
+    try:
+        return _prompt_manager(state).set_layout(layout, params.get("scope"))
+    except PromptError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _create_prompt_block(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"slug", "content", "scope", "position"}, "prompt.create_block")
+    slug = _required_block_slug(params, "slug")
+    content = params.get("content")
+    if content is not None and not isinstance(content, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.content must be a string")
+    position = _optional_layout_position(params)
+    try:
+        return _prompt_manager(state).create_block(
+            slug, content, params.get("scope"), position=position
+        )
+    except PromptError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _remove_prompt_block(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id", "scope"}, "prompt.remove_block")
+    block_id = _required_string(params, "id")
+    try:
+        return _prompt_manager(state).remove_block(block_id, params.get("scope"))
+    except PromptError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _reset_prompt_layout(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"scope"}, "prompt.reset_layout")
+    try:
+        return _prompt_manager(state).reset_layout(params.get("scope"))
+    except PromptError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _optional_layout_position(params: JsonObject) -> int | None:
+    """Read an optional 0-based layout insertion index (``None`` = append).
+
+    A custom block can be created at a position in the layout; the index is
+    non-negative (0 inserts at the front) and the manager clamps it to the list
+    length. Distinct from :func:`_optional_positive_integer`, which forbids 0.
+    """
+    value = params.get("position")
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.position must be a non-negative integer")
+    return value
+
+
+def _reject_unsupported(params: JsonObject, allowed: set[str], method: str) -> None:
+    """Raise ``invalid_request`` when *params* carries a field outside *allowed*."""
+    unsupported_fields = sorted(set(params) - allowed)
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"unsupported prompt.preview fields: {', '.join(unsupported_fields)}",
+            f"unsupported {method} fields: {', '.join(unsupported_fields)}",
         )
 
+
+async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_id", "scope"}, "prompt.preview")
     scope = params.get("scope")
     try:
-        prompt_scope = (
-            _prompt_fragment_manager(state).validate_scope(scope) if scope is not None else None
-        )
+        prompt_scope = _prompt_manager(state).validate_scope(scope) if scope is not None else None
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
@@ -171,8 +225,14 @@ def _log_viewer(state: Any) -> LogViewer:
     return log_viewer
 
 
-def _prompt_fragment_manager(state: Any) -> PromptFragmentManager:
-    return PromptFragmentManager(state.runtime.storage, state.runtime.agents)
+def _prompt_manager(state: Any) -> SystemPromptManager:
+    """Return the runtime's live block-edit/assembly facade.
+
+    The single prompt-edit facade is the ``SystemPromptManager`` on the runtime —
+    the same instance that assembles prompts, so block listing/editing and the
+    preview share one definition collection, block store, and default layout.
+    """
+    return cast(SystemPromptManager, state.runtime.system_prompts)
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:
@@ -184,5 +244,9 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "prompt.list": _list_prompts,
         "prompt.update": _update_prompt,
         "prompt.reset": _reset_prompt,
+        "prompt.set_layout": _set_prompt_layout,
+        "prompt.create_block": _create_prompt_block,
+        "prompt.remove_block": _remove_prompt_block,
+        "prompt.reset_layout": _reset_prompt_layout,
         "prompt.preview": _preview_prompt,
     }
