@@ -7,11 +7,16 @@ from pathlib import Path
 import pytest
 
 from core.memory import (
+    MEMORY_BLOCK_ID,
+    MEMORY_BLOCK_OWNER,
+    MEMORY_FILES_PRODUCER_NAME,
     MEMORY_PROMPT_MODE_AGENT,
     MEMORY_PROMPT_MODE_AGENT_USER,
     MEMORY_PROMPT_MODE_OFF,
     MemoryError,
     MemoryService,
+    memory_block_definition,
+    read_memory_files,
 )
 from core.memory.memory import _MAX_ENTRY_LENGTH, _MAX_SCOPE_BUDGET, _MEMORY_GUIDANCE
 
@@ -107,49 +112,63 @@ def test_memory_service_rejects_invalid_entry_id(tmp_path: Path) -> None:
         service.remove_entry(tmp_path, "user", 1)
 
 
-def test_memory_service_builds_prompt_block_for_selected_files(tmp_path: Path) -> None:
+def test_read_prompt_files_returns_only_file_contents(tmp_path: Path) -> None:
+    # The producer's data half: just the <file>-wrapped contents, no <memory>
+    # wrapper and no guidance (those live in the declared memory:guidance block).
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
     (workspace / "USER.md").write_text("User memory", encoding="utf-8")
     service = MemoryService()
 
-    agent_only = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_AGENT)
-    agent_and_user = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
-    disabled = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_OFF)
+    agent_only = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT)
+    agent_and_user = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
+    disabled = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_OFF)
 
-    assert agent_only == (
-        f'<memory>\n{_MEMORY_GUIDANCE}\n\n<file name="MEMORY.md">\nAgent memory\n</file>\n</memory>'
-    )
+    assert agent_only == '<file name="MEMORY.md">\nAgent memory\n</file>'
+    assert "<memory>" not in agent_only
+    assert _MEMORY_GUIDANCE not in agent_only
     assert '<file name="MEMORY.md">' in agent_and_user
     assert '<file name="USER.md">' in agent_and_user
     assert disabled == ""
 
 
-def test_memory_service_prompt_block_includes_guidance_when_enabled(tmp_path: Path) -> None:
+def test_read_prompt_files_omits_missing_files(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
     service = MemoryService()
 
-    enabled = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_AGENT)
-    disabled = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_OFF)
+    files = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
 
-    assert _MEMORY_GUIDANCE in enabled
-    # Guidance never appears without a rendered memory block.
-    assert disabled == ""
+    assert "Agent memory" in files
+    assert "USER.md" not in files
 
 
-def test_memory_service_prompt_block_omits_missing_files(tmp_path: Path) -> None:
+def test_read_prompt_files_empty_when_no_files(tmp_path: Path) -> None:
+    # The empty-memory case the D5 fix relies on: no memory files → the embedded
+    # producer renders "", so the surrounding memory block keeps only its guidance.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
     service = MemoryService()
 
-    prompt_block = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
+    assert read_memory_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER, provider=service) == ""
 
-    assert "Agent memory" in prompt_block
-    assert "USER.md" not in prompt_block
+
+def test_memory_block_definition_declares_guidance_and_embedded_marker() -> None:
+    # The declared memory:guidance block ships the guidance prose plus the embedded
+    # {generated:memory_files} marker inside a <memory> wrapper, owner "memory".
+    definition = memory_block_definition()
+
+    assert definition.id == MEMORY_BLOCK_ID
+    assert definition.owner == MEMORY_BLOCK_OWNER
+    assert definition.kind == "text"  # static, editable
+    assert definition.editable is True
+    assert definition.default_text is not None
+    assert definition.default_text.startswith("<memory>")
+    assert definition.default_text.endswith("</memory>")
+    assert _MEMORY_GUIDANCE in definition.default_text
+    assert f"{{generated:{MEMORY_FILES_PRODUCER_NAME}}}" in definition.default_text
 
 
 def test_memory_service_rejects_add_exceeding_scope_budget(tmp_path: Path) -> None:

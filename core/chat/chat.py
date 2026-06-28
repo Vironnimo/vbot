@@ -619,32 +619,6 @@ class ChatLoop:
                 agent, skill_registry=skill_registry
             )
 
-            extension_registry = self._runtime.extensions
-            if extension_registry is not None:
-                extension_ctx = HookContext(
-                    session_id=run.session_id,
-                    agent_id=run.agent_id,
-                    run_id=run.id,
-                    add_note=session.add_note,
-                )
-                prompt_appends = await extension_registry.dispatch_before_agent_start(
-                    extension_ctx,
-                    agent=agent,
-                    session=session,
-                    messages=messages,
-                    run=run,
-                )
-                if prompt_appends and messages:
-                    system_content = messages[0].get("content")
-                    if isinstance(system_content, str):
-                        messages[0] = dict(messages[0])
-                        messages[0]["content"] = system_content + "\n" + "\n".join(prompt_appends)
-                    else:
-                        _LOGGER.debug(
-                            "before_agent_start: system message content is not a string; "
-                            "skipping append"
-                        )
-
             try:
                 return await self._send_until_final(
                     agent,

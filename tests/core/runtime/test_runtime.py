@@ -14,7 +14,7 @@ import pytest
 from core.agents.agents import AgentStore
 from core.channels import ChannelService
 from core.chat.chat import ChatLoop
-from core.prompts import SystemPromptManager
+from core.prompts import LayoutEntry, SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.recall import JsonlSessionRecallBackend, SqliteFtsRecallBackend
@@ -716,6 +716,56 @@ def test_reload_skills_updates_system_prompt_skill_registry(config: Config, tmp_
     assert f"<name>{RELOADED_SKILL_NAME}</name>" not in prompt_before_reload
     assert f"<name>{RELOADED_SKILL_NAME}</name>" in prompt_after_reload
     assert "Fresh skill loaded after settings update." in prompt_after_reload
+
+
+def test_persisted_block_layout_and_override_flow_through_real_storage(config: Config):
+    """The runtime wires the real StorageManager block store into the prompt manager.
+
+    Guards the composition-root seam (_StorageManagerBlockStore): a persisted block
+    override and a persisted layout written through StorageManager's block write API
+    must actually shape the assembled prompt — i.e. the manager is NOT silently on
+    the EmptyBlockStore fallback. The adapter bridges both the method names
+    (read_layout → read_block_layout) and the scope convention (default scope key →
+    None storage token).
+    """
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        agent = runtime.agents.get("main")
+
+        # Baseline: bundled tools block present, custom marker absent, skills present.
+        baseline = runtime.system_prompts.build_system_prompt(agent)
+        assert "## Tool Call Style" in baseline
+        assert "PERSISTED-OVERRIDE-MARKER" not in baseline
+        assert "## Available Skills" in baseline
+
+        # Persist a default-scope override for the tools block and a layout that
+        # disables the skills block — both through StorageManager's block write API
+        # (scope None = default). The adapter reads these live on the next build.
+        runtime.storage.write_block_override(
+            None,
+            "core:tools",
+            "## PERSISTED-OVERRIDE-MARKER\n{generated:tool_list}",
+        )
+        runtime.storage.write_block_layout(
+            None,
+            [
+                LayoutEntry(id="core:runtime", enabled=True, source="core"),
+                LayoutEntry(id="core:tools", enabled=True, source="core"),
+                LayoutEntry(id="core:skills", enabled=False, source="core"),
+            ],
+        )
+
+        updated = runtime.system_prompts.build_system_prompt(agent)
+
+        # The persisted override replaced the bundled tools text (override cascade).
+        assert "## PERSISTED-OVERRIDE-MARKER" in updated
+        assert "## Tool Call Style" not in updated
+        # The persisted layout disabled the skills block (gate 1).
+        assert "## Available Skills" not in updated
+    finally:
+        runtime.stop()
 
 
 def test_reload_skills_updates_provider_skill_tool_visibility(config: Config, tmp_path: Path):

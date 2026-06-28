@@ -1,7 +1,7 @@
 ## Channels
 
 You can proactively send messages through these active channels:
-{channel_list}
+{generated:channel_list}
 
 Rules:
 - Use `channel_send` only for proactive outbound messages or when the user explicitly asks you to deliver something through a channel.

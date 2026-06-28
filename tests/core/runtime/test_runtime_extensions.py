@@ -143,6 +143,46 @@ def test_startup_and_shutdown_hooks_fire_at_runtime_lifecycle(tmp_path: Path) ->
     assert _marker_lines(lifecycle_marker) == ["startup", "shutdown"]
 
 
+_PROMPT_BLOCK_EXT_SOURCE = (
+    "def register(api):\n"
+    "    api.register_prompt_block('intro', default_text='Static extension intro.')\n"
+    "    api.register_prompt_block('dynamic', render=lambda ctx: 'Dynamic extension text.')\n"
+)
+
+
+def test_extension_prompt_blocks_reach_the_system_prompt(tmp_path: Path) -> None:
+    # The runtime collects loaded extensions' declared blocks and hands them to the
+    # prompt manager; both a static and a dynamic block render in the system prompt,
+    # gated by the extension being loaded (owner extension:<name>).
+    config = Config(data_dir=tmp_path / "data")
+    _write_extension(config.data_dir, "promptext", _PROMPT_BLOCK_EXT_SOURCE)
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        agent = runtime.agents.get("main")
+        prompt = runtime.system_prompts.build_system_prompt(agent)
+        assert "Static extension intro." in prompt
+        assert "Dynamic extension text." in prompt
+    finally:
+        runtime.stop()
+
+
+def test_retired_prompt_append_dispatch_is_removed(tmp_path: Path) -> None:
+    # The legacy system-prompt tail-append event is gone entirely (D6): the
+    # registry exposes only the five kept dispatch events. The retired name is
+    # assembled at runtime so the literal never appears in source.
+    retired_dispatch = "dispatch_" + "before" + "_agent_start"
+    config = Config(data_dir=tmp_path / "data")
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        assert runtime.extensions is not None
+        assert not hasattr(runtime.extensions, retired_dispatch)
+    finally:
+        runtime.stop()
+
+
 def test_extension_tool_and_recall_backend_wired_into_runtime(tmp_path: Path) -> None:
     config = Config(data_dir=tmp_path / "data")
     data_dir = config.data_dir

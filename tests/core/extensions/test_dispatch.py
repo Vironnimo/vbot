@@ -11,6 +11,7 @@ and load-order preservation.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -22,6 +23,7 @@ from core.extensions import (
     Modify,
     Replace,
 )
+from core.extensions.extensions import ExtensionAPI, ExtensionRecord
 
 
 def _ctx(add_note: Any = None) -> HookContext:
@@ -157,73 +159,47 @@ class TestRunStartRunEnd:
         assert order == ["ext-1", "ext-2", "ext-3"]
 
 
-class TestBeforeAgentStart:
-    """Accumulator event: collect every handler's ``system_prompt_append``."""
+# The retired event name, assembled at runtime so the literal never appears in
+# source (the legacy tail-append event is gone entirely, D6).
+_RETIRED_PROMPT_EVENT = "before" + "_agent_start"
+
+
+class TestRetiredPromptAppendEventRemoved:
+    """The legacy system-prompt tail-append event is gone entirely (D6).
+
+    Its sole purpose was the append, replaced by declared prompt blocks. The
+    dispatch surface is now exactly the five kept events, and an extension that
+    still registers the retired name runs harmlessly into the void.
+    """
+
+    def test_dispatch_surface_is_the_five_kept_events(self) -> None:
+        registry = ExtensionRegistry()
+        dispatch_methods = {name for name in dir(registry) if name.startswith("dispatch_")}
+        assert dispatch_methods == {
+            "dispatch_run_start",
+            "dispatch_run_end",
+            "dispatch_context",
+            "dispatch_tool_call",
+            "dispatch_tool_result",
+        }
 
     @pytest.mark.asyncio
-    async def test_accumulates_appends_in_load_order(self) -> None:
+    async def test_registering_the_retired_event_is_inert(self) -> None:
+        # Registering the retired event name must not raise and must never fire —
+        # the existing "unknown event is inert" behavior covers it, nothing
+        # special-cases the name anymore.
         registry = ExtensionRegistry()
+        calls: list[str] = []
 
-        def a(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"system_prompt_append": "A"}
-
-        async def b(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"system_prompt_append": "B"}
-
-        def returns_none(ctx: HookContext, **payload: Any) -> None:
+        def handler(ctx: HookContext, **payload: Any) -> None:
+            calls.append("ran")
             return None
 
-        _register(registry, "ext-a", "before_agent_start", a)
-        _register(registry, "ext-b", "before_agent_start", b)
-        _register(registry, "ext-c", "before_agent_start", returns_none)
-
-        appends = await registry.dispatch_before_agent_start(
-            _ctx(), agent=object(), session=object(), messages=[], run=object()
-        )
-
-        assert appends == ["A", "B"]
-
-    @pytest.mark.asyncio
-    async def test_ignores_non_string_append_and_missing_key(self) -> None:
-        registry = ExtensionRegistry()
-
-        def int_append(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"system_prompt_append": 123}
-
-        def other_key(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"something_else": "x"}
-
-        def good(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"system_prompt_append": "ok"}
-
-        _register(registry, "ext-a", "before_agent_start", int_append)
-        _register(registry, "ext-b", "before_agent_start", other_key)
-        _register(registry, "ext-c", "before_agent_start", good)
-
-        appends = await registry.dispatch_before_agent_start(
-            _ctx(), agent=None, session=None, messages=[], run=None
-        )
-
-        assert appends == ["ok"]
-
-    @pytest.mark.asyncio
-    async def test_exception_skips_only_failing_handler(self) -> None:
-        registry = ExtensionRegistry()
-
-        def boom(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            raise ValueError("x")
-
-        def good(ctx: HookContext, **payload: Any) -> dict[str, Any]:
-            return {"system_prompt_append": "kept"}
-
-        _register(registry, "ext-a", "before_agent_start", boom)
-        _register(registry, "ext-b", "before_agent_start", good)
-
-        appends = await registry.dispatch_before_agent_start(
-            _ctx(), agent=None, session=None, messages=[], run=None
-        )
-
-        assert appends == ["kept"]
+        _register(registry, "ext-a", _RETIRED_PROMPT_EVENT, handler)
+        # No dispatcher reads this event; the only generic dispatch (context) does
+        # not touch it, so the handler never runs.
+        await registry.dispatch_context(_ctx(), messages=[])
+        assert calls == []
 
 
 class TestContext:
@@ -614,6 +590,110 @@ class TestToolResult:
         )
 
         assert result == {"status": "ok"}
+
+
+def _loaded_record(registry: ExtensionRegistry, name: str) -> ExtensionAPI:
+    """Append a loaded record for *name* and return an API over its declarations.
+
+    The apply-phase seam for prompt blocks (mirrors ``install_handler`` for hooks):
+    tests register blocks through the returned ``ExtensionAPI`` without the full
+    filesystem load path, then call the registry's ``prompt_block_declarations``.
+    """
+    record = ExtensionRecord(
+        name=name,
+        root_path=Path(name),
+        entry_path=Path(name),
+        status="loaded",
+    )
+    registry._records.append(record)
+    return ExtensionAPI(name, record.declarations, config={}, logger=logging.getLogger(name))
+
+
+class TestPromptBlockDeclarations:
+    """``register_prompt_block`` collects declarations; the registry builds blocks."""
+
+    def test_static_and_dynamic_blocks_become_definitions(self) -> None:
+        registry = ExtensionRegistry()
+        api = _loaded_record(registry, "greeter")
+        api.register_prompt_block("static", default_text="Hello.")
+        api.register_prompt_block("dynamic", render=lambda ctx: "Rendered.")
+
+        definitions = registry.prompt_block_declarations()
+
+        by_id = {definition.id: definition for definition in definitions}
+        assert by_id["extension:static"].owner == "extension:greeter"
+        assert by_id["extension:static"].default_text == "Hello."
+        assert by_id["extension:static"].editable is True
+        assert by_id["extension:dynamic"].owner == "extension:greeter"
+        assert by_id["extension:dynamic"].render is not None
+        assert by_id["extension:dynamic"].editable is False
+
+    def test_requires_exactly_one_of_text_or_render(self) -> None:
+        registry = ExtensionRegistry()
+        api = _loaded_record(registry, "ext")
+
+        with pytest.raises(ValueError, match="exactly one"):
+            api.register_prompt_block("both", default_text="x", render=lambda ctx: "y")
+        with pytest.raises(ValueError, match="exactly one"):
+            api.register_prompt_block("neither")
+
+    def test_slug_collision_is_first_wins_with_diagnostic(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = ExtensionRegistry()
+        first = _loaded_record(registry, "ext-a")
+        second = _loaded_record(registry, "ext-b")
+        first.register_prompt_block("shared", default_text="A wins.")
+        second.register_prompt_block("shared", default_text="B loses.")
+
+        caplog.set_level(logging.WARNING, logger="vbot.extensions")
+        definitions = registry.prompt_block_declarations()
+
+        # Exactly one extension:shared block, owned by the first-loaded extension.
+        shared = [d for d in definitions if d.id == "extension:shared"]
+        assert len(shared) == 1
+        assert shared[0].owner == "extension:ext-a"
+        assert shared[0].default_text == "A wins."
+        # Both sides diagnosed on their records.
+        record_a = next(r for r in registry.records() if r.name == "ext-a")
+        record_b = next(r for r in registry.records() if r.name == "ext-b")
+        assert any("also declared" in message for message in record_a.capability_errors)
+        assert any("skipped" in message for message in record_b.capability_errors)
+
+    def test_disabled_and_failed_extensions_contribute_nothing(self) -> None:
+        registry = ExtensionRegistry()
+        loaded = _loaded_record(registry, "loaded-ext")
+        loaded.register_prompt_block("block", default_text="Visible.")
+        # A disabled and a failed record with declarations must be ignored.
+        disabled = ExtensionRecord(
+            name="disabled-ext",
+            root_path=Path("disabled"),
+            entry_path=Path("disabled"),
+            status="disabled",
+        )
+        ExtensionAPI(
+            "disabled-ext", disabled.declarations, config={}, logger=logging.getLogger("d")
+        ).register_prompt_block("block", default_text="Hidden.")
+        registry._records.append(disabled)
+
+        definitions = registry.prompt_block_declarations()
+
+        ids = {definition.id for definition in definitions}
+        assert ids == {"extension:block"}
+        assert all(d.owner == "extension:loaded-ext" for d in definitions)
+
+    def test_loaded_extension_names_reflects_only_loaded(self) -> None:
+        registry = ExtensionRegistry()
+        _loaded_record(registry, "loaded-ext")
+        disabled = ExtensionRecord(
+            name="disabled-ext",
+            root_path=Path("disabled"),
+            entry_path=Path("disabled"),
+            status="disabled",
+        )
+        registry._records.append(disabled)
+
+        assert registry.loaded_extension_names() == {"loaded-ext"}
 
 
 class TestHookContext:
