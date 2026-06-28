@@ -734,11 +734,10 @@ def _write_model_resource(resources: Path) -> None:
 def _write_prompt_resources(resources: Path) -> None:
     # Block-model resources: the core text blocks read their default text from these
     # files (the tool/channel/skill lists are {generated:…} producers now); SOUL and
-    # memory render through their own blocks, not via system.md placeholders. system.md
-    # is no longer the assembly driver (the layout is) and is kept empty.
+    # memory render through their own blocks. The per-scope layout is the assembly
+    # driver — there is no root fragment.
     prompts_dir = resources / "prompts"
     prompts_dir.mkdir(parents=True)
-    (prompts_dir / "system.md").write_text("", encoding="utf-8")
     (prompts_dir / "runtime.md").write_text(
         "Version {app_version}\nModel {model}\nWorkspace {agent_workspace}\n"
         "Thinking {thinking_effort}\nDate {current_date}",
