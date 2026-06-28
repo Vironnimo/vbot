@@ -293,9 +293,9 @@ are never hot-reloaded, so the command prints a restart hint and you must run
 
 ```bash
 vbot prompt list
-vbot prompt update <fragment-name> --content <text>
-vbot prompt update <fragment-name> --file <path>
-vbot prompt reset <fragment-name>
+vbot prompt update <block-id> --content <text>
+vbot prompt update <block-id> --file <path>
+vbot prompt reset <block-id>
 vbot prompt preview <agent-id>
 ```
 
@@ -303,12 +303,12 @@ Examples:
 
 ```bash
 vbot prompt list
-vbot prompt update tools.md --file ./tools.md
-vbot prompt reset skills.md
+vbot prompt update core:tools --file ./tools.md
+vbot prompt reset core:skills
 vbot prompt preview assistant
 ```
 
-`prompt list` shows editable fragments, modified state, and variable placeholders. `prompt update` sends replacement content through server RPC; use `--file` for multi-line content. `prompt preview` prints token metadata and the rendered System Prompt for one agent.
+`prompt list` shows one row per System Prompt block (id, owner, kind, enabled, editable, source, modified). `prompt update` and `prompt reset` target a block by its id (for example `core:tools`) and apply only to editable blocks; update sends replacement content through server RPC, so use `--file` for multi-line content. `prompt preview` prints token metadata and the rendered System Prompt for one agent.
 
 ## Logs
 
