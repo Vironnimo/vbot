@@ -66,8 +66,8 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send |
 | `.vorch/domain-maps/channels/discord.md` | Discord channels | Gateway lifecycle, history backfill, thread routing, attachments, outbound behavior |
 | `.vorch/domain-maps/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
-| `.vorch/domain-maps/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
-| `.vorch/domain-maps/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |
+| `.vorch/domain-maps/cli.md` | `cli/` | Local server lifecycle + `desktop` GUI-launch commands, targeting rules, status/logging contract |
+| `.vorch/domain-maps/desktop.md` | `desktop/` | pywebview thin-client contract, in-window connection screen, remembered servers, native menu, per-user config, voice bridge |
 | `.vorch/domain-maps/webui.md` | `webui/` | Svelte app shell, API client, Chat/Agents views, queue behavior |
 | `.vorch/domain-maps/logs.md` | log viewer subsystem | Daily log parsing, log RPC/socket contract, WebUI Logs tab behavior |
 | `.vorch/domain-maps/debug.md` | `core/debug/` | Debug Mode, trace storage, secret redaction, recorder lifecycle, debug RPC contract |
@@ -98,18 +98,22 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 
 **Setup:** The user-facing path is the one-line bootstrap (`scripts/bootstrap.{sh,ps1}`): it installs prerequisites, clones into `~/vbot`, creates an isolated venv at `~/vbot/.venv`, fetches the prebuilt WebUI (release track), exposes only `vbot`, and enables autostart by default. It drops a `.vbot-bootstrap` marker so the bundled uninstaller knows this is a self-contained install and removes the **whole tree** (venv + source), the `vbot` launcher, and the autostart entry — never the data dir.
 
-Windows users can also run the conservative installer directly, which installs the editable Python package, always installs/builds the WebUI, creates missing `~/.vbot` files without overwriting an existing valid `settings.json` or `.env`, and registers a Windows Task Scheduler autostart task by default (opt out with `-NoAutostart`). Existing port settings are respected unless `-Port` is explicit:
+Windows users can also run the conservative installer directly, which installs the editable Python package, always installs/builds the WebUI, creates missing `~/.vbot` files without overwriting an existing valid `settings.json` or `.env`, and registers a Windows Task Scheduler autostart task by default (opt out with `-NoAutostart`). Existing port settings are respected unless `-Port` is explicit. Two desktop add-ons exist: `-Desktop` adds the pywebview accessor (`.[server,cli,desktop]`) to a full server install and creates a Start-menu shortcut ("vBot Desktop" → `vbot desktop`); `-DesktopClient` installs the accessor alone (`.[cli,desktop]`) — no server stack, no local WebUI build, no data-dir init, no autostart — for a machine that connects to a remote vBot server. The two flags are mutually exclusive:
 ```powershell
 .\scripts\install.ps1 [-NoAutostart]
+.\scripts\install.ps1 -Desktop          # full server install + desktop accessor + Start-menu shortcut
+.\scripts\install.ps1 -DesktopClient     # server-less desktop client (remote server) + Start-menu shortcut
 ```
 Uninstall is intentionally data-dir preserving. For a bootstrap install it removes the whole tree wholesale; for a manual install it uninstalls the pip package and (with `-RemoveAutostart`) the task:
 ```powershell
 .\scripts\uninstall.ps1 [-RemoveAutostart]
 ```
 
-Linux (e.g. Raspberry Pi) has an equivalent installer with the same conservative behavior, autostart on by default (`--no-autostart` to skip). Autostart uses a systemd **user** unit (`~/.config/systemd/user/vbot.service`, `KillMode=process` so agent-triggered `vbot server restart` survives unit deactivation) plus `loginctl enable-linger`. On PEP 668 systems (Debian/Raspberry Pi OS) it must run inside a venv and fails early with instructions otherwise. `--skip-webui-build` uses an existing `webui/dist` instead of requiring Node — for low-memory hosts (Pi 3 class), build the WebUI on another machine and copy `webui/dist` over; on a Pi 5 building on-device is fine:
+Linux (e.g. Raspberry Pi) has an equivalent installer with the same conservative behavior, autostart on by default (`--no-autostart` to skip). Autostart uses a systemd **user** unit (`~/.config/systemd/user/vbot.service`, `KillMode=process` so agent-triggered `vbot server restart` survives unit deactivation) plus `loginctl enable-linger`. On PEP 668 systems (Debian/Raspberry Pi OS) it must run inside a venv and fails early with instructions otherwise. `--skip-webui-build` uses an existing `webui/dist` instead of requiring Node — for low-memory hosts (Pi 3 class), build the WebUI on another machine and copy `webui/dist` over; on a Pi 5 building on-device is fine. It mirrors the Windows desktop add-ons: `--desktop` adds the accessor to a full install and writes a freedesktop application-menu entry (`~/.local/share/applications/vbot-desktop.desktop` → `vbot desktop`); `--desktop-client` installs the accessor alone (server-less). Both uninstallers remove the shortcut / `.desktop` entry. **Linux desktop support (shortcut, client mode, `.desktop` entry) is built but not real-hardware-tested** (see `FLAGGED.md`):
 ```bash
 scripts/install.sh [--no-autostart] [--skip-webui-build]
+scripts/install.sh --desktop          # full server install + desktop accessor + .desktop entry
+scripts/install.sh --desktop-client   # server-less desktop client (remote server) + .desktop entry
 scripts/uninstall.sh [--remove-autostart]
 ```
 
@@ -177,7 +181,7 @@ All project-specific live testing instructions — startup, health check, browse
 
 Use this section only for important strategic decisions, unusual global constraints, or things an agent would otherwise likely assume incorrectly.
 
-- **CLI is an accessor, not a second control plane.** Only `server start`, `server stop`, `server restart`, and `server status` act locally. Every other CLI area must use server RPC instead of reading or mutating files directly. CLI output is agent-facing: success, failure, help text, and suggestions must be explicit enough for an agent to choose the next command without guessing.
+- **CLI is an accessor, not a second control plane.** Only `server start`, `server stop`, `server restart`, `server status`, and the local `desktop` GUI launch act locally (alongside `update`/`autostart`/`doctor`). `vbot desktop [--host] [--port]` opens the pywebview window pointed at a local or remote server and builds no `ServerInstance`. Every other CLI area must use server RPC instead of reading or mutating files directly. CLI output is agent-facing: success, failure, help text, and suggestions must be explicit enough for an agent to choose the next command without guessing.
 - **Two times, one rule (the Model DB).** *Refresh* fetches (provider `/models` + the public models.dev `catalog.json`) and projects per file to disk — dumb, needs net/key, rare. *Load* assembles each effective model in memory from up to three layers — smart, no net/key, frequent. The rule: a hand-edit to an override takes effect on the next **load**, not on a refresh (override files are read at load time). Details in `.vorch/domain-maps/models.md`.
 - **Generated catalogs are refreshable; overrides and the canonical layer are durable inputs.** `resources/models/<provider>.json` is regenerated by refresh (don't hand-edit it). The canonical base `resources/models/models.json` is a refreshable projection of models.dev; `resources/models/models.overrides.json` and `resources/models/<provider>.overrides.json` are hand-maintained input layers, never written by refresh, applied at load. A discoverable provider fact belongs in adapter normalization/runtime policy; a durable, externally-verified fact the feeds don't expose belongs in the matching override layer.
 - **Two-channel transport architecture:** SSE is the per-Run streaming channel; WebSocket is persistent app-wide server-push for lifecycle summaries. Clients send commands through `POST /api/rpc`, not through WebSocket.

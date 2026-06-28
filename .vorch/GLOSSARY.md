@@ -180,3 +180,11 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 ## Producer
 **Definition:** A function registered under a marker name that renders a `{generated:NAME}` placeholder inside a block at build time — the auto-lists `tool_list` / `skill_list` / `channel_list` and `memory_files`. An unknown marker renders to empty with a warning (fail-soft); an empty producer result leaves no residue after normalization.
 **Not:** A dynamic block. A producer fills one marker inside an otherwise-static editable block; a dynamic block's entire body is a render function (a deliberate cache break).
+
+## Desktop Client
+**Definition:** A server-less Desktop install: the pywebview accessor installed alone (`.[cli,desktop]`) with no server stack, no local WebUI build, no data-dir, and no autostart, meant to connect to a *remote* vBot server (e.g. a Pi). Created by `install.ps1 -DesktopClient` / `install.sh --desktop-client`; a Desktop add-on (`-Desktop` / `--desktop`) instead bolts the same accessor onto a full server install.
+**Not:** A full install that happens to include the Desktop, and not the running window itself. The Desktop Client is the *install shape* — the absence of the whole server side — not the GUI process. The window it opens is still the same pywebview shell; what differs is that nothing local is there to connect to.
+
+## Connection screen
+**Definition:** The Desktop shell's own native, in-window server-selection/error screen (`desktop/connection.py`, rendered HTML — not a WebUI route). It lists remembered servers, takes a host/port to connect, and on any probe failure (unreachable / not-vBot / no-WebUI / invalid target) re-renders in place with the failed target prefilled and an inline error. It subsumes the retired static fallback page, so the Desktop never shows a dead-end.
+**Not:** A WebUI view or page. The Connection screen is shell-owned native HTML the controller swaps onto the same window via `Window.load_html`; the WebUI (loaded via `Window.load_url`) is the *other* thing that window shows once connected.
