@@ -1,9 +1,10 @@
-"""Tests for Desktop target configuration and local settings."""
+"""Tests for Desktop probing primitives and the controller-wired launch."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ import httpx
 import pytest
 
 from desktop import main as desktop_main
+from desktop.main import DesktopProbeResult, DesktopTarget
 
 
 @dataclass
@@ -24,17 +26,72 @@ class FakeResponse:
         return self.payload
 
 
+class FakeWindow:
+    """Live-window double recording the navigation the controller drives."""
+
+    def __init__(self) -> None:
+        self.loaded_urls: list[str] = []
+        self.loaded_html: list[str] = []
+
+    def load_url(self, url: str) -> None:
+        self.loaded_urls.append(url)
+
+    def load_html(self, content: str) -> None:
+        self.loaded_html.append(content)
+
+
 class FakeWebview:
+    """pywebview double honoring the create-before-start / func-after-start order.
+
+    ``create_window`` returns the :class:`FakeWindow` the controller later
+    navigates; ``start`` invokes the post-loop ``func`` (the controller's
+    ``auto_connect``) exactly as pywebview does once the GUI loop is live, so the
+    test exercises the real navigation path without a GUI.
+    """
+
     def __init__(self) -> None:
         self.created_windows: list[tuple[str, dict[str, Any]]] = []
+        self.window = FakeWindow()
         self.start_calls: list[dict[str, Any]] = []
+        self.start_func: Callable[[], Any] | None = None
 
-    def create_window(self, title: str, **kwargs: Any) -> object:
+    def create_window(self, title: str, **kwargs: Any) -> FakeWindow:
         self.created_windows.append((title, kwargs))
-        return object()
+        return self.window
 
-    def start(self, **kwargs: Any) -> None:
+    def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
         self.start_calls.append(kwargs)
+        self.start_func = func
+        if func is not None:
+            func()
+
+
+@dataclass
+class FakeMenuAction:
+    title: str
+    function: Callable[[], Any]
+
+
+@dataclass
+class FakeMenuSeparator:
+    pass
+
+
+@dataclass
+class FakeMenu:
+    title: str
+    items: list[Any]
+
+
+@dataclass
+class FakeMenuModule:
+    """Stand-in for ``webview.menu`` so the launch needs no GUI package."""
+
+    Menu: Callable[..., Any] = field(default=lambda title, items: FakeMenu(title, items))
+    MenuAction: Callable[..., Any] = field(
+        default=lambda title, function: FakeMenuAction(title, function)
+    )
+    MenuSeparator: Callable[..., Any] = field(default=lambda: FakeMenuSeparator())
 
 
 def fake_get_for(
@@ -51,129 +108,18 @@ def fake_get_for(
     return FakeGet()
 
 
+def _write_servers(settings_file: Path, servers: list[dict[str, Any]]) -> None:
+    settings_file.write_text(json.dumps({"servers": servers}), encoding="utf-8")
+
+
+# -- Argument parsing --------------------------------------------------------
+
+
 def test_parse_args_accepts_host_and_port() -> None:
     args = desktop_main.parse_args(["--host", "192.168.1.50", "--port", "9000"])
 
     assert args.host == "192.168.1.50"
     assert args.port == 9000
-
-
-def test_resolve_target_uses_defaults_when_settings_are_missing(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-
-    target = desktop_main.resolve_target([], settings_file=settings_file)
-
-    assert target.host == desktop_main.DEFAULT_HOST
-    assert target.port == desktop_main.DEFAULT_PORT
-    assert target.url == "http://127.0.0.1:8420/"
-    assert json.loads(settings_file.read_text(encoding="utf-8")) == {
-        "host": desktop_main.DEFAULT_HOST,
-        "port": desktop_main.DEFAULT_PORT,
-    }
-
-
-@pytest.mark.parametrize("settings_text", ["not json", "[]", '"not an object"'])
-def test_resolve_target_uses_defaults_for_corrupt_or_non_object_settings(
-    tmp_path: Path,
-    settings_text: str,
-) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(settings_text, encoding="utf-8")
-
-    target = desktop_main.resolve_target([], settings_file=settings_file)
-
-    assert target.host == desktop_main.DEFAULT_HOST
-    assert target.port == desktop_main.DEFAULT_PORT
-    assert target.url == "http://127.0.0.1:8420/"
-    assert target.configuration_error is None
-
-
-def test_cli_args_override_saved_settings_per_field(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps({"host": "10.0.0.8", "port": 8765}), encoding="utf-8")
-
-    host_override = desktop_main.resolve_target(
-        ["--host", "localhost"], settings_file=settings_file
-    )
-    port_override = desktop_main.resolve_target(["--port", "9001"], settings_file=settings_file)
-
-    assert host_override.host == "localhost"
-    assert host_override.port == 8765
-    assert host_override.url == "http://localhost:8765/"
-    assert port_override.host == "localhost"
-    assert port_override.port == 9001
-    assert port_override.url == "http://localhost:9001/"
-
-
-def test_resolve_target_preserves_wakeword_settings(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    wakeword = {
-        "enabled": True,
-        "engine": "openwakeword",
-        "microphone": None,
-        "sensitivity": 0.8,
-        "target_agent_id": "main",
-        "session_behavior": "active",
-        "wake_phrase": "hey_jarvis",
-    }
-    settings_file.write_text(
-        json.dumps({"host": "10.0.0.8", "port": 8765, "wakeword": wakeword}),
-        encoding="utf-8",
-    )
-
-    target = desktop_main.resolve_target(["--port", "9001"], settings_file=settings_file)
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert target.url == "http://10.0.0.8:9001/"
-    assert stored["host"] == "10.0.0.8"
-    assert stored["port"] == 9001
-    assert stored["wakeword"] == wakeword
-
-
-def test_settings_can_partially_override_defaults(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps({"host": "vbot.lan"}), encoding="utf-8")
-
-    target = desktop_main.resolve_target([], settings_file=settings_file)
-
-    assert target.host == "vbot.lan"
-    assert target.port == desktop_main.DEFAULT_PORT
-    assert target.url == "http://vbot.lan:8420/"
-
-
-@pytest.mark.parametrize("host", ["", "   ", "http://localhost", "bad host", "host/path"])
-def test_resolve_target_keeps_malformed_hosts_as_in_window_fallback(
-    tmp_path: Path,
-    host: str,
-) -> None:
-    settings_file = tmp_path / "settings.json"
-
-    target = desktop_main.resolve_target(["--host", host], settings_file=settings_file)
-    content = desktop_main.choose_window_content(target)
-
-    assert target.url == ""
-    assert target.configuration_error is not None
-    assert content.status == desktop_main.PROBE_INVALID_TARGET
-    assert content.url is None
-    assert content.html is not None
-    assert "Invalid Desktop target" in content.html
-
-
-def test_resolve_target_handles_malformed_saved_host_without_crashing(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"host": "http://localhost", "port": 8420}), encoding="utf-8"
-    )
-
-    target = desktop_main.resolve_target([], settings_file=settings_file)
-    content = desktop_main.choose_window_content(target)
-
-    assert (
-        target.configuration_error == "settings.host must be a host name or IP address, not a URL"
-    )
-    assert content.status == desktop_main.PROBE_INVALID_TARGET
-    assert content.html is not None
-    assert "Invalid Desktop target" in content.html
 
 
 @pytest.mark.parametrize("port", ["0", "65536", "not-a-port"])
@@ -182,35 +128,13 @@ def test_parse_args_rejects_invalid_ports(port: str) -> None:
         desktop_main.parse_args(["--port", port])
 
 
-@pytest.mark.parametrize("port", [0, 65536, "not-a-port", None])
-def test_resolve_target_rejects_invalid_settings_ports(tmp_path: Path, port: object) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps({"port": port}), encoding="utf-8")
+def test_parse_args_accepts_mock_wakeword_flag() -> None:
+    args = desktop_main.parse_args(["--mock-wakeword"])
 
-    with pytest.raises(ValueError, match="settings.port"):
-        desktop_main.resolve_target([], settings_file=settings_file)
+    assert args.mock_wakeword is True
 
 
-def test_settings_writes_use_desktop_local_file_not_server_data_dir(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    server_data_dir = tmp_path / "server-data"
-    settings_file = tmp_path / "desktop-config" / "settings.json"
-    monkeypatch.setenv("VBOT_DATA_DIR", str(server_data_dir))
-
-    target = desktop_main.resolve_target(
-        ["--host", "10.1.2.3", "--port", "8500"],
-        settings_file=settings_file,
-    )
-
-    assert target.url == "http://10.1.2.3:8500/"
-    assert settings_file.exists()
-    assert not (server_data_dir / "settings.json").exists()
-    assert json.loads(settings_file.read_text(encoding="utf-8")) == {
-        "host": "10.1.2.3",
-        "port": 8500,
-    }
+# -- Module boundaries -------------------------------------------------------
 
 
 def test_desktop_main_does_not_import_server_or_core_business_logic() -> None:
@@ -230,8 +154,19 @@ def test_desktop_main_does_not_import_cli_server_management() -> None:
     assert "import cli" not in source
 
 
+def test_desktop_main_keeps_out_of_server_lifecycle_management() -> None:
+    source = Path(desktop_main.__file__).read_text(encoding="utf-8")
+
+    assert "server start" not in source.lower()
+    assert "server stop" not in source.lower()
+    assert "server restart" not in source.lower()
+
+
+# -- Probe classification ----------------------------------------------------
+
+
 def test_probe_target_classifies_available_webui() -> None:
-    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
 
     result = desktop_main.probe_target(
         target,
@@ -248,7 +183,7 @@ def test_probe_target_classifies_available_webui() -> None:
 
 @pytest.mark.parametrize("status_code", [200, 204, 301, 302, 399])
 def test_probe_target_accepts_2xx_and_3xx_webui_responses(status_code: int) -> None:
-    target = desktop_main.DesktopTarget("vbot.lan", 9000, "http://vbot.lan:9000/")
+    target = DesktopTarget("vbot.lan", 9000, "http://vbot.lan:9000/")
 
     result = desktop_main.probe_target(
         target,
@@ -265,7 +200,7 @@ def test_probe_target_accepts_2xx_and_3xx_webui_responses(status_code: int) -> N
 
 @pytest.mark.parametrize("status_code", [400, 404, 500])
 def test_probe_target_classifies_missing_webui(status_code: int) -> None:
-    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
 
     result = desktop_main.probe_target(
         target,
@@ -281,7 +216,7 @@ def test_probe_target_classifies_missing_webui(status_code: int) -> None:
 
 
 def test_probe_target_classifies_root_request_error_as_missing_webui() -> None:
-    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
 
     result = desktop_main.probe_target(
         target,
@@ -297,7 +232,7 @@ def test_probe_target_classifies_root_request_error_as_missing_webui() -> None:
 
 
 def test_probe_target_classifies_unreachable_server() -> None:
-    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
 
     result = desktop_main.probe_target(
         target,
@@ -321,7 +256,7 @@ def test_probe_target_classifies_unreachable_server() -> None:
     ],
 )
 def test_probe_target_classifies_non_vbot_server(health_response: FakeResponse) -> None:
-    target = desktop_main.DesktopTarget("example.test", 8080, "http://example.test:8080/")
+    target = DesktopTarget("example.test", 8080, "http://example.test:8080/")
 
     result = desktop_main.probe_target(
         target,
@@ -331,226 +266,16 @@ def test_probe_target_classifies_non_vbot_server(health_response: FakeResponse) 
     assert result.status == desktop_main.PROBE_NOT_VBOT_SERVER
 
 
-def test_choose_window_content_returns_url_only_for_available_webui() -> None:
-    target = desktop_main.DesktopTarget("10.0.0.5", 9000, "http://10.0.0.5:9000/")
+def test_probe_target_classifies_configuration_error_as_invalid_target() -> None:
+    target = DesktopTarget("bad host", 8420, "", configuration_error="bad host")
 
-    content = desktop_main.choose_window_content(
-        target,
-        probe=lambda checked_target: desktop_main.DesktopProbeResult(
-            desktop_main.PROBE_WEBUI_AVAILABLE,
-            checked_target,
-        ),
-    )
+    result = desktop_main.probe_target(target)
 
-    assert content.status == desktop_main.PROBE_WEBUI_AVAILABLE
-    assert content.url == "http://10.0.0.5:9000/"
-    assert content.html is None
+    assert result.status == desktop_main.PROBE_INVALID_TARGET
 
 
-@pytest.mark.parametrize(
-    ("status", "expected_text"),
-    [
-        (desktop_main.PROBE_SERVER_UNREACHABLE, "Server unreachable"),
-        (desktop_main.PROBE_WEBUI_UNAVAILABLE, "WebUI unavailable"),
-        (desktop_main.PROBE_NOT_VBOT_SERVER, "Not a vBot server"),
-        (desktop_main.PROBE_INVALID_TARGET, "Invalid Desktop target"),
-    ],
-)
-def test_choose_window_content_returns_inline_html_for_failures(
-    status: str,
-    expected_text: str,
-) -> None:
-    target = desktop_main.DesktopTarget("vbot.lan", 8420, "http://vbot.lan:8420/")
-
-    content = desktop_main.choose_window_content(
-        target,
-        probe=lambda checked_target: desktop_main.DesktopProbeResult(status, checked_target),
-    )
-
-    assert content.status == status
-    assert content.url is None
-    assert content.html is not None
-    assert expected_text in content.html
-    assert "http://vbot.lan:8420/" in content.html
-
-
-def test_fallback_html_escapes_target_context() -> None:
-    target = desktop_main.DesktopTarget(
-        '<script>alert("x")</script>',
-        8420,
-        'http://<script>alert("x")</script>:8420/',
-    )
-
-    fallback_html = desktop_main.build_fallback_html(
-        desktop_main.DesktopProbeResult(desktop_main.PROBE_SERVER_UNREACHABLE, target)
-    )
-
-    assert '<script>alert("x")</script>' not in fallback_html
-    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in fallback_html
-
-
-def test_launch_window_creates_url_window_without_js_bridge(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    missing_icon = tmp_path / "missing-icon.png"
-
-    desktop_main.launch_window(
-        desktop_main.DesktopWindowContent(
-            status=desktop_main.PROBE_WEBUI_AVAILABLE,
-            url="http://127.0.0.1:8420/",
-        ),
-        webview_module=fake_webview,
-        app_icon_path=missing_icon,
-    )
-
-    assert fake_webview.created_windows == [
-        (
-            desktop_main.WINDOW_TITLE,
-            {"url": "http://127.0.0.1:8420/", "text_select": True},
-        )
-    ]
-    assert "js_api" not in fake_webview.created_windows[0][1]
-    assert fake_webview.start_calls == [{}]
-
-
-def test_launch_window_creates_html_window_without_js_bridge(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_window(
-        desktop_main.DesktopWindowContent(
-            status=desktop_main.PROBE_SERVER_UNREACHABLE,
-            html="<p>Server unreachable</p>",
-        ),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    assert fake_webview.created_windows == [
-        (
-            desktop_main.WINDOW_TITLE,
-            {"html": "<p>Server unreachable</p>", "text_select": True},
-        )
-    ]
-    assert "js_api" not in fake_webview.created_windows[0][1]
-    assert fake_webview.start_calls == [{}]
-
-
-def test_launch_window_passes_icon_only_when_icon_exists(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    icon_file = tmp_path / "icon.png"
-    icon_file.write_bytes(b"fake-icon")
-
-    desktop_main.launch_window(
-        desktop_main.DesktopWindowContent(
-            status=desktop_main.PROBE_WEBUI_AVAILABLE,
-            url="http://vbot.lan:9000/",
-        ),
-        webview_module=fake_webview,
-        app_icon_path=icon_file,
-    )
-
-    assert fake_webview.start_calls == [{"icon": str(icon_file)}]
-
-
-def test_launch_desktop_resolves_probes_and_creates_one_window(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    settings_file = tmp_path / "settings.json"
-    checked_targets: list[desktop_main.DesktopTarget] = []
-
-    def record_available_probe(
-        checked_target: desktop_main.DesktopTarget,
-    ) -> desktop_main.DesktopProbeResult:
-        checked_targets.append(checked_target)
-        return desktop_main.DesktopProbeResult(
-            desktop_main.PROBE_WEBUI_AVAILABLE,
-            checked_target,
-        )
-
-    target = desktop_main.launch_desktop(
-        ["--host", "10.0.0.10", "--port", "8500"],
-        settings_file=settings_file,
-        probe=record_available_probe,
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    assert target.url == "http://10.0.0.10:8500/"
-    assert checked_targets == [target]
-    assert len(fake_webview.created_windows) == 1
-    title, window_kwargs = fake_webview.created_windows[0]
-    assert title == desktop_main.WINDOW_TITLE
-    assert window_kwargs["url"] == "http://10.0.0.10:8500/?accessor=desktop"
-    assert "js_api" in window_kwargs
-    assert fake_webview.start_calls == [{}]
-
-
-def test_launch_desktop_uses_inline_html_for_expected_failures(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda checked_target: desktop_main.DesktopProbeResult(
-            desktop_main.PROBE_WEBUI_UNAVAILABLE,
-            checked_target,
-        ),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    assert len(fake_webview.created_windows) == 1
-    title, window_kwargs = fake_webview.created_windows[0]
-    assert title == desktop_main.WINDOW_TITLE
-    assert "url" not in window_kwargs
-    assert "html" in window_kwargs
-    assert "WebUI unavailable" in window_kwargs["html"]
-
-
-def test_launch_window_rejects_empty_window_content(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="requires either url or html"):
-        desktop_main.launch_window(
-            desktop_main.DesktopWindowContent(status=desktop_main.PROBE_WEBUI_AVAILABLE),
-            webview_module=FakeWebview(),
-            app_icon_path=tmp_path / "missing-icon.png",
-        )
-
-
-def test_phase_6_contract_keeps_desktop_out_of_server_lifecycle_management() -> None:
-    source = Path(desktop_main.__file__).read_text(encoding="utf-8")
-
-    assert "cli.server_management" not in source
-    assert "from cli" not in source
-    assert "import cli" not in source
-    assert "from server" not in source
-    assert "import server" not in source
-    assert "server start" not in source.lower()
-    assert "server stop" not in source.lower()
-    assert "server restart" not in source.lower()
-
-
-def test_phase_6_contract_formats_local_and_lan_targets_as_plain_http() -> None:
-    assert desktop_main.build_target_url("127.0.0.1", 8420) == "http://127.0.0.1:8420/"
-    assert desktop_main.build_target_url("192.168.1.44", 9000) == "http://192.168.1.44:9000/"
-    assert desktop_main.build_target_url("vbot.lan", 8500) == "http://vbot.lan:8500/"
-
-
-def test_phase_6_contract_uses_no_python_javascript_bridge(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_window(
-        desktop_main.DesktopWindowContent(
-            status=desktop_main.PROBE_WEBUI_AVAILABLE,
-            url="http://127.0.0.1:8420/",
-        ),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    assert len(fake_webview.created_windows) == 1
-    assert "js_api" not in fake_webview.created_windows[0][1]
-
-
-def test_phase_6_contract_probe_has_no_retry_loop() -> None:
-    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+def test_probe_target_has_no_retry_loop() -> None:
+    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
     requested_urls: list[str] = []
 
     def record_get(url: str, *, timeout: float) -> FakeResponse:
@@ -565,30 +290,343 @@ def test_phase_6_contract_probe_has_no_retry_loop() -> None:
     assert requested_urls == ["http://127.0.0.1:8420/health", "http://127.0.0.1:8420/"]
 
 
-@pytest.mark.parametrize(
-    ("status", "expected_text"),
-    [
-        (desktop_main.PROBE_SERVER_UNREACHABLE, "Server unreachable"),
-        (desktop_main.PROBE_WEBUI_UNAVAILABLE, "WebUI unavailable"),
-    ],
-)
-def test_phase_6_contract_failure_states_remain_in_window(
-    tmp_path: Path,
-    status: str,
-    expected_text: str,
-) -> None:
+# -- Host/port validation and URL building -----------------------------------
+
+
+@pytest.mark.parametrize("host", ["", "   ", "http://localhost", "bad host", "host/path"])
+def test_validate_host_rejects_non_host_values(host: str) -> None:
+    with pytest.raises(ValueError):
+        desktop_main.validate_host(host)
+
+
+def test_validate_host_rejects_url_with_clear_message() -> None:
+    with pytest.raises(ValueError, match="not a URL"):
+        desktop_main.validate_host("http://localhost", source="settings.host")
+
+
+@pytest.mark.parametrize("port", [0, 65536, "not-a-port", None])
+def test_validate_port_rejects_out_of_range_and_non_numeric(port: object) -> None:
+    with pytest.raises(ValueError):
+        desktop_main.validate_port(port)
+
+
+def test_build_target_url_formats_local_and_lan_targets_as_plain_http() -> None:
+    assert desktop_main.build_target_url("127.0.0.1", 8420) == "http://127.0.0.1:8420/"
+    assert desktop_main.build_target_url("192.168.1.44", 9000) == "http://192.168.1.44:9000/"
+    assert desktop_main.build_target_url("vbot.lan", 8500) == "http://vbot.lan:8500/"
+
+
+# -- Launch wiring -----------------------------------------------------------
+
+
+def test_launch_creates_window_before_loop_with_html_and_bridge_js_api(tmp_path: Path) -> None:
     fake_webview = FakeWebview()
 
     desktop_main.launch_desktop(
-        ["--host", "vbot.lan", "--port", "8420"],
+        [],
         settings_file=tmp_path / "settings.json",
-        probe=lambda checked_target: desktop_main.DesktopProbeResult(status, checked_target),
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
     assert len(fake_webview.created_windows) == 1
-    _, window_kwargs = fake_webview.created_windows[0]
-    assert "url" not in window_kwargs
-    assert expected_text in window_kwargs["html"]
-    assert "http://vbot.lan:8420/" in window_kwargs["html"]
+    title, kwargs = fake_webview.created_windows[0]
+    assert title == desktop_main.WINDOW_TITLE
+    # The window opens on the neutral connection screen (no URL pre-loop), and
+    # the same bridge object is its single js_api for both screen and WebUI.
+    assert "url" not in kwargs
+    assert "Connect to a server" in kwargs["html"]
+    assert kwargs["text_select"] is True
+    assert kwargs["js_api"] is not None
+    assert hasattr(kwargs["js_api"], "connect")
+    assert hasattr(kwargs["js_api"], "getWakewordStatus")
+
+
+def test_launch_runs_auto_connect_as_post_loop_func(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    settings_file = tmp_path / "settings.json"
+    _write_servers(settings_file, [{"host": "pi.lan", "port": 9000}])
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=settings_file,
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    # start() received auto_connect as func; running it navigated the live window
+    # to the saved server's WebUI with the accessor marker.
+    assert fake_webview.start_func is not None
+    assert fake_webview.window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+
+
+def test_launch_first_run_shows_connection_screen_via_auto_connect(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    # No saved server: auto_connect renders the connection screen, never a URL.
+    assert fake_webview.window.loaded_urls == []
+    assert len(fake_webview.window.loaded_html) == 1
+    assert "Connect to a server" in fake_webview.window.loaded_html[0]
+
+
+def test_launch_does_not_auto_connect_to_default_localhost(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    probed_targets: list[DesktopTarget] = []
+
+    def record_probe(target: DesktopTarget) -> DesktopProbeResult:
+        probed_targets.append(target)
+        return DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target)
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=record_probe,
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    # The old silent 127.0.0.1:8420 default is gone: with nothing saved, nothing
+    # is probed and the window never navigates to localhost.
+    assert probed_targets == []
+    assert fake_webview.window.loaded_urls == []
+
+
+# -- Launch with explicit --host/--port override -----------------------------
+
+
+def test_launch_host_port_override_connects_directly_even_on_first_run(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_desktop(
+        ["--host", "pi.lan", "--port", "9000"],
+        settings_file=tmp_path / "settings.json",
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    # An explicit override is a deliberate target: it connects straight to the
+    # WebUI (with the accessor marker), not to the connection screen, even with
+    # nothing saved.
+    assert fake_webview.window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+    assert fake_webview.window.loaded_html == []
+
+
+def test_launch_override_remembers_target_as_last_used(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    settings_file = tmp_path / "settings.json"
+
+    desktop_main.launch_desktop(
+        ["--host", "pi.lan", "--port", "9000"],
+        settings_file=settings_file,
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert stored["servers"] == [{"host": "pi.lan", "port": 9000}]
+    assert stored["last_used"] == {"host": "pi.lan", "port": 9000}
+
+
+def test_launch_port_only_override_fills_default_host(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_desktop(
+        ["--port", "9000"],
+        settings_file=tmp_path / "settings.json",
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    expected_url = f"http://{desktop_main.DEFAULT_HOST}:9000/?accessor=desktop"
+    assert fake_webview.window.loaded_urls == [expected_url]
+
+
+def test_launch_host_only_override_fills_default_port(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_desktop(
+        ["--host", "pi.lan"],
+        settings_file=tmp_path / "settings.json",
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    expected_url = f"http://pi.lan:{desktop_main.DEFAULT_PORT}/?accessor=desktop"
+    assert fake_webview.window.loaded_urls == [expected_url]
+
+
+def test_launch_override_takes_precedence_over_saved_last_used(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "servers": [{"host": "old.lan", "port": 8420}],
+                "last_used": {"host": "old.lan", "port": 8420},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    desktop_main.launch_desktop(
+        ["--host", "new.lan", "--port", "9000"],
+        settings_file=settings_file,
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    # The override wins over the saved last-used target.
+    assert fake_webview.window.loaded_urls == ["http://new.lan:9000/?accessor=desktop"]
+
+
+def test_resolve_launch_server_url_prefers_override_for_worker(tmp_path: Path) -> None:
+    from desktop.connection import ConnectionController
+
+    settings_file = tmp_path / "settings.json"
+    _write_servers(settings_file, [{"host": "saved.lan", "port": 8420}])
+    controller = ConnectionController(settings_file=settings_file)
+
+    # Override → the worker's server_url targets the override, not last-used, so
+    # window and voice point at the same server on an override first-run.
+    override_url = desktop_main._resolve_launch_server_url(("pi.lan", 9000), controller)
+    assert override_url == "http://pi.lan:9000/"
+
+    # No override → falls back to the controller's last-used resolution.
+    fallback_url = desktop_main._resolve_launch_server_url(None, controller)
+    assert fallback_url == "http://saved.lan:8420/"
+
+    # No override and nothing saved → empty (worker skips network calls).
+    empty_controller = ConnectionController(settings_file=tmp_path / "empty.json")
+    assert desktop_main._resolve_launch_server_url(None, empty_controller) == ""
+
+
+def test_launch_attaches_server_menu_to_start(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert len(fake_webview.start_calls) == 1
+    menu = fake_webview.start_calls[0]["menu"]
+    assert len(menu) == 1
+    assert menu[0].title == "Server"
+    assert "icon" not in fake_webview.start_calls[0]
+
+
+def test_launch_passes_icon_only_when_icon_exists(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    icon_file = tmp_path / "icon.png"
+    icon_file.write_bytes(b"fake-icon")
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=icon_file,
+    )
+
+    assert fake_webview.start_calls[0]["icon"] == str(icon_file)
+
+
+def test_launch_attaches_the_created_window_to_the_controller(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    settings_file = tmp_path / "settings.json"
+    _write_servers(settings_file, [{"host": "pi.lan", "port": 9000}])
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=settings_file,
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        menu_module=FakeMenuModule(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    # Proof the controller drove *the created window*: that exact FakeWindow saw
+    # the navigation. (If attach_window were skipped, the controller would have
+    # no window and raise.)
+    assert fake_webview.window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+
+
+def test_launch_stops_worker_even_when_start_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    # Pre-enable wakeword so the bridge starts the worker before the loop; the
+    # finally must still stop it when start() raises.
+    settings_file.write_text(json.dumps({"wakeword": {"enabled": True}}), encoding="utf-8")
+    stopped: list[bool] = []
+
+    class StartRaisesWebview(FakeWebview):
+        def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
+            raise RuntimeError("gui loop crashed")
+
+    class RecordingWorker:
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            stopped.append(True)
+
+        def is_running(self) -> bool:
+            return True
+
+    # Pin the worker factory to a recording worker via the public factory hook
+    # rather than the real audio stack, so the test stays headless.
+    def fake_bridge(args: Any, settings: Any, controller: Any, server_url: str) -> Any:
+        from desktop.wakeword.bridge import DesktopBridge
+
+        bridge = DesktopBridge(
+            settings_path=settings,
+            worker_factory=lambda _bridge: RecordingWorker(),
+            connection=controller,
+        )
+        bridge._start_worker()
+        return bridge
+
+    monkeypatch.setattr(desktop_main, "_create_wakeword_bridge", fake_bridge)
+
+    with pytest.raises(RuntimeError, match="gui loop crashed"):
+        desktop_main.launch_desktop(
+            [],
+            settings_file=settings_file,
+            probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+            webview_module=StartRaisesWebview(),
+            menu_module=FakeMenuModule(),
+            app_icon_path=tmp_path / "missing-icon.png",
+        )
+
+    assert stopped == [True]
