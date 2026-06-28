@@ -21,7 +21,7 @@ from core.debug.recorder import DebugContext
 from core.runs import ChatRunManager
 from core.skills.skills import SkillRegistry
 from core.tools import ToolRegistry, tool_success
-from tests.core.chat.test_chat_loop import StubProjects
+from tests.core.chat.test_chat_loop import StubModels, StubProjects
 
 JsonObject = dict[str, Any]
 
@@ -246,6 +246,7 @@ class StubRuntime:
         self.provider_credentials = StubProviderCredentials(
             {f"{agent.model.split('/', 1)[0]}:api-key"}
         )
+        self.models = StubModels({})
         self.adapter = adapter
         self.adapter_provider_id: str | None = None
         self.adapter_connection_id: str | None = None

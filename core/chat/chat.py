@@ -93,6 +93,7 @@ from core.chat.messages import (
 from core.chat.model_resolution import (
     _ensure_provider_exists,
     _first_usable_connection_id,
+    _model_connection_allowlist,
     _model_input_modalities,
     _resolve_agent_connection,
     _resolve_fallback,
@@ -1346,7 +1347,11 @@ class ChatLoop:
             if connection_suffix:
                 connection_id = f"{provider_id}:{connection_suffix}"
             else:
-                connection_id = _first_usable_connection_id(self._runtime, provider_id)
+                connection_id = _first_usable_connection_id(
+                    self._runtime,
+                    provider_id,
+                    _model_connection_allowlist(self._runtime, provider_id, summary_model_id),
+                )
             summary_adapter = self._runtime.get_adapter(provider_id, connection_id)
         except (ChatError, ConfigError, VBotError, KeyError):
             _LOGGER.warning(

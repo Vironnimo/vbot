@@ -491,7 +491,7 @@ class StubRuntime:
                 data_dir=data_dir,
             )
         )
-        self.models = models
+        self.models = models if models is not None else StubModels({})
         self.adapter = adapter
         self.adapters_by_connection = dict(adapters_by_connection or {})
         self.raise_on_connection = dict(raise_on_connection or {})
@@ -528,6 +528,7 @@ class StubProviderCredentials:
 @dataclass(frozen=True)
 class StubModelEntry:
     context_window: int | None
+    connections: tuple[str, ...] = ()
 
 
 class StubModels:

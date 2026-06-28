@@ -77,11 +77,14 @@ def _model_input_modalities(runtime: RuntimeServices, agent: Any) -> frozenset[s
 
 
 def _resolve_agent_connection(runtime: RuntimeServices, agent: Any) -> tuple[str, str]:
-    model_provider_id, _model_id, connection_suffix = parse_model_with_connection(agent.model)
+    model_provider_id, model_id, connection_suffix = parse_model_with_connection(agent.model)
     if connection_suffix:
         return model_provider_id, f"{model_provider_id}:{connection_suffix}"
 
-    return model_provider_id, _first_usable_connection_id(runtime, model_provider_id)
+    allowed_connections = _model_connection_allowlist(runtime, model_provider_id, model_id)
+    return model_provider_id, _first_usable_connection_id(
+        runtime, model_provider_id, allowed_connections
+    )
 
 
 def _resolve_fallback(runtime: RuntimeServices, agent: Any) -> tuple[str, str, str] | None:
@@ -90,7 +93,7 @@ def _resolve_fallback(runtime: RuntimeServices, agent: Any) -> tuple[str, str, s
         return None
 
     try:
-        fallback_provider_id, _fallback_model_id, fallback_connection_suffix = (
+        fallback_provider_id, fallback_model_id, fallback_connection_suffix = (
             parse_model_with_connection(fallback_model)
         )
     except ChatError:
@@ -104,14 +107,47 @@ def _resolve_fallback(runtime: RuntimeServices, agent: Any) -> tuple[str, str, s
         )
 
     try:
-        fallback_connection_id = _first_usable_connection_id(runtime, fallback_provider_id)
+        fallback_connection_id = _first_usable_connection_id(
+            runtime,
+            fallback_provider_id,
+            _model_connection_allowlist(runtime, fallback_provider_id, fallback_model_id),
+        )
     except ChatError:
         return None
 
     return fallback_model, fallback_provider_id, fallback_connection_id
 
 
-def _first_usable_connection_id(runtime: RuntimeServices, provider_id: str) -> str:
+def _model_connection_allowlist(
+    runtime: RuntimeServices, provider_id: str, model_id: str
+) -> tuple[str, ...]:
+    """Return the model's connection allowlist, empty when the model is unknown.
+
+    An empty tuple means "no restriction", matching ``Model.connections`` /
+    ``Model.allows_connection``. An unknown or custom model id (``KeyError``) is
+    treated as unrestricted, mirroring the save-time guard
+    ``_ensure_model_connection_supported``.
+    """
+    try:
+        model = runtime.models.get(provider_id, model_id)
+    except KeyError:
+        return ()
+    return tuple(model.connections)
+
+
+def _first_usable_connection_id(
+    runtime: RuntimeServices,
+    provider_id: str,
+    allowed_connections: tuple[str, ...] = (),
+) -> str:
+    """Return the first usable ``<provider>:<connection>`` for a bare (unpinned) model.
+
+    ``allowed_connections`` is the model's connection allowlist: when non-empty,
+    only those connection ids are eligible, so a connection-bound model (e.g. a
+    subscription-only model) can never silently resolve onto a forbidden
+    connection just because it is configured and listed first. Empty means no
+    restriction.
+    """
     try:
         provider_config = runtime.providers.get(provider_id)
     except KeyError as exc:
@@ -119,10 +155,17 @@ def _first_usable_connection_id(runtime: RuntimeServices, provider_id: str) -> s
 
     credential_resolver = runtime.provider_credentials
     for connection in provider_config.connections:
+        if allowed_connections and connection.id not in allowed_connections:
+            continue
         connection_id = f"{provider_id}:{connection.id}"
         if credential_resolver.has_credentials(provider_id, connection_id):
             return connection_id
 
+    if allowed_connections:
+        allowed = ", ".join(allowed_connections)
+        raise ChatError(
+            f"provider {provider_id} has no usable connection in the model's allowlist [{allowed}]"
+        )
     raise ChatError(f"provider has no usable connections: {provider_id}")
 
 
