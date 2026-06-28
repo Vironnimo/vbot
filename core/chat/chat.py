@@ -417,7 +417,12 @@ class ChatLoop:
         )
 
     async def compact_session(
-        self, agent_id: str, session_id: str, instruction: str | None = None
+        self,
+        agent_id: str,
+        session_id: str,
+        instruction: str | None = None,
+        *,
+        project_id: str | None = None,
     ) -> str:
         """Manually compact a session and return a user-facing command reply.
 
@@ -426,7 +431,8 @@ class ChatLoop:
         the compaction itself are converted into a reply string instead of
         raising, matching the `/compact` command contract. ``instruction`` is the
         optional free-text argument from `/compact <instruction>` and is woven
-        into the summarization prompt.
+        into the summarization prompt. ``project_id`` scopes the agent and session
+        to a project anchor (``None`` = the identity agent and its session).
         """
         if self._compaction_service is None:
             return "Compaction is not available."
@@ -435,11 +441,14 @@ class ChatLoop:
         if manager.active_run(agent_id=agent_id, session_id=session_id) is not None:
             return "Cannot compact while a run is active for this session."
 
-        # ``/compact`` is not project-scoped yet (Phase 5), so it resolves the
-        # identity agent (``project_id=None``) — byte-identical to the former
-        # ``agents.get`` while still routing through the one resolver seam.
-        agent = self._runtime.agent_resolver.resolve_agent(None, agent_id)
-        session = self._get_session(agent_id, session_id, create_missing=False)
+        # Resolve the agent and load the session in the caller's scope: a project
+        # chat compacts its project session and the project agent, an identity chat
+        # (``project_id=None``) the identity session — both through the one
+        # resolver/session seam.
+        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        session = self._get_session(
+            agent_id, session_id, create_missing=False, project_id=project_id
+        )
         messages = session.load()
         settings = self._load_compaction_settings()
 
