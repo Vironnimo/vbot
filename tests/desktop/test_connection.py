@@ -19,6 +19,7 @@ from desktop.main import (
     PROBE_WEBUI_UNAVAILABLE,
     DesktopProbeResult,
     DesktopTarget,
+    validate_host,
 )
 
 # -- Test doubles ------------------------------------------------------------
@@ -576,8 +577,14 @@ def test_connection_html_lists_saved_servers_with_connect_hooks() -> None:
     page = desktop_connection.build_connection_html(servers)
 
     assert "Pi (pi.lan:9000)" in page
-    assert "connectSaved('pi.lan', 9000)" in page
-    assert "connectSaved('10.0.0.5', 8500)" in page
+    # Saved hosts/ports ride data-* attributes; a static handler reads them as
+    # strings via dataset, never as interpolated JS (no inline onclick carries a
+    # host in a JS-string context).
+    assert 'data-host="pi.lan" data-port="9000"' in page
+    assert 'data-host="10.0.0.5" data-port="8500"' in page
+    assert "connectSaved('pi.lan'" not in page
+    assert "connectSaved('10.0.0.5'" not in page
+    assert "connectSaved(button.dataset.host" in page
 
 
 def test_connection_html_empty_state_when_no_servers() -> None:
@@ -640,6 +647,35 @@ def test_connection_html_escapes_saved_server_label_and_host() -> None:
     assert "<i>label</i>" not in page
     assert "&lt;b&gt;" in page
     assert "&lt;i&gt;label&lt;/i&gt;" in page
+
+
+def test_quote_bearing_host_rejected_and_never_breaks_out_of_data_attribute(
+    tmp_path: Path,
+) -> None:
+    # A host that would break out of the old inline onclick JS-string context.
+    malicious = "a');document.title='x';('"
+
+    # (a) Defense-in-depth: the host is rejected before it can ever be stored,
+    # both at the low-level validator and the persisting add_server path.
+    with pytest.raises(ValueError, match="host name or IP address"):
+        validate_host(malicious)
+    settings_file = tmp_path / "settings.json"
+    with pytest.raises(ValueError, match="host name or IP address"):
+        desktop_connection.add_server(malicious, 9000, settings_file=settings_file)
+    assert not settings_file.exists()
+
+    # (b) Even when a ServerEntry is constructed directly (bypassing validation)
+    # the renderer only emits the host html-escaped inside a data-host attribute,
+    # with no executable inline onclick breakout — the single quote is encoded
+    # and the raw "');" sequence never appears outside the escaped attribute.
+    page = desktop_connection.build_connection_html(
+        [desktop_connection.ServerEntry(malicious, 9000)]
+    )
+
+    assert 'data-host="a&#x27;);document.title=&#x27;x&#x27;;(&#x27;"' in page
+    assert "a');document.title='x';('" not in page
+    assert "');" not in page
+    assert 'onclick="connectSaved(' not in page
 
 
 def test_connection_module_does_not_import_server_or_core() -> None:

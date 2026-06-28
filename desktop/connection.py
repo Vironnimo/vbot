@@ -654,6 +654,11 @@ def build_connection_html(
           window.pywebview.api.connect(host, port);
         }}
       }}
+      document.querySelectorAll("ul.servers button[data-host]").forEach(function (button) {{
+        button.addEventListener("click", function () {{
+          connectSaved(button.dataset.host, parseInt(button.dataset.port, 10));
+        }});
+      }});
     </script>
   </body>
 </html>
@@ -687,8 +692,7 @@ def _render_servers_section(servers: list[ServerEntry]) -> str:
         escaped_name = html.escape(entry.display_name())
         items.append(
             "        <li>"
-            f'<button type="button" '
-            f"onclick=\"connectSaved('{escaped_host}', {escaped_port})\">"
+            f'<button type="button" data-host="{escaped_host}" data-port="{escaped_port}">'
             f"{escaped_name}</button></li>"
         )
     joined = "\n".join(items)
@@ -718,6 +722,10 @@ def _connection_error_copy(status: str) -> tuple[str, str]:
     """Return title/body copy for a failed probe status shown inline.
 
     Covers the four failure outcomes the old static fallback page rendered.
+    Precondition: ``status`` is one of those failure statuses — the sole caller
+    (:func:`_render_error_section`) filters out ``None`` and the success status
+    first. Any other status is a programming error and raises rather than
+    rendering an empty banner.
     """
 
     if status == PROBE_SERVER_UNREACHABLE:
