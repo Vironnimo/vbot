@@ -165,6 +165,12 @@ class IntegrationModels:
             ],
         }
 
+    def get(self, provider_id: str, model_id: str) -> Model:
+        for model in self._models.get(provider_id, []):
+            if model.model_id == model_id:
+                return model
+        raise KeyError(f"{provider_id}/{model_id}")
+
     def list_for_provider(self, provider_id: str) -> list[Model]:
         return list(self._models[provider_id])
 
