@@ -1,106 +1,16 @@
-"""Tests for Desktop wakeword settings read/write/merge."""
+"""Tests for Desktop entrypoint wakeword/accessor wiring in ``desktop.main``.
+
+The wakeword *settings* read/write/merge functions moved to ``desktop.settings``
+and are covered by ``test_settings.py``; what remains here is the entrypoint
+behavior that still lives in ``desktop.main`` — the ``--mock-wakeword`` flag and
+the accessor query-param helper.
+"""
 
 from __future__ import annotations
-
-import json
-from pathlib import Path
 
 import pytest
 
 from desktop import main as desktop_main
-
-
-def test_read_wakeword_settings_returns_defaults_when_file_missing(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-
-    config = desktop_main.read_wakeword_settings(settings_file)
-
-    assert config == desktop_main.DEFAULT_WAKEWORD_SETTINGS
-
-
-def test_read_wakeword_settings_merges_with_defaults(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"host": "127.0.0.1", "port": 8420, "wakeword": {"enabled": True}}),
-        encoding="utf-8",
-    )
-
-    config = desktop_main.read_wakeword_settings(settings_file)
-
-    assert config["enabled"] is True
-    assert config["engine"] == desktop_main.DEFAULT_WAKEWORD_SETTINGS["engine"]
-    assert config["wake_phrase"] == desktop_main.DEFAULT_WAKEWORD_SETTINGS["wake_phrase"]
-
-
-def test_read_wakeword_settings_falls_back_for_missing_wakeword_key(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"host": "127.0.0.1", "port": 8420}),
-        encoding="utf-8",
-    )
-
-    config = desktop_main.read_wakeword_settings(settings_file)
-
-    assert config == desktop_main.DEFAULT_WAKEWORD_SETTINGS
-
-
-def test_read_wakeword_settings_falls_back_for_non_dict_wakeword(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"host": "127.0.0.1", "port": 8420, "wakeword": "invalid"}),
-        encoding="utf-8",
-    )
-
-    config = desktop_main.read_wakeword_settings(settings_file)
-
-    assert config == desktop_main.DEFAULT_WAKEWORD_SETTINGS
-
-
-def test_write_wakeword_settings_persists_merged_with_host_port(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"host": "10.0.0.1", "port": 9000}),
-        encoding="utf-8",
-    )
-
-    wakeword_config = {
-        "enabled": True,
-        "engine": "openwakeword",
-        "microphone": None,
-        "sensitivity": 0.8,
-        "target_agent_id": "test-agent",
-        "session_behavior": "new",
-        "wake_phrase": "hey_jarvis",
-    }
-    desktop_main.write_wakeword_settings(wakeword_config, settings_file)
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["host"] == "10.0.0.1"
-    assert stored["port"] == 9000
-    assert stored["wakeword"] == wakeword_config
-
-
-def test_write_wakeword_settings_overwrites_existing_wakeword(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"host": "127.0.0.1", "port": 8420, "wakeword": {"enabled": True}}),
-        encoding="utf-8",
-    )
-
-    desktop_main.write_wakeword_settings({"enabled": False, "sensitivity": 0.3}, settings_file)
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["wakeword"]["enabled"] is False
-    assert stored["wakeword"]["sensitivity"] == 0.3
-
-
-def test_read_wakeword_settings_handles_corrupt_file(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text("not valid json", encoding="utf-8")
-
-    config = desktop_main.read_wakeword_settings(settings_file)
-
-    assert config == desktop_main.DEFAULT_WAKEWORD_SETTINGS
 
 
 @pytest.mark.parametrize("flag", [True, False])
