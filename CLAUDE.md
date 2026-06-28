@@ -45,6 +45,8 @@ There's no orchestrator here to keep these current — that's on you. When a cha
 
 **Never hard-wrap prose.** In every Markdown file you write or maintain — this one, PROJECT.md, GLOSSARY.md, the domain maps, FLAGGED.md, all of them — write each paragraph and list item as a single line and let the editor soft-wrap. No manual line breaks mid-sentence at some fixed column. Hard-wrapped prose is miserable to read and to edit, and the wrap points rot the moment text changes. Do not add them, and when you touch a file that has them, unwrap the lines you touch.
 
+**Write all project documents in English.** Plans, design documents, decision records (like the system-prompt handoff), domain maps, PROJECT.md, GLOSSARY.md, FLAGGED.md — every project artifact is written in English, regardless of the language you and the user speak in chat. User-facing chat follows the user's language; the documents do not.
+
 ## Glossary
 
 `.vorch/GLOSSARY.md` is read at every session start and is shared context for the whole project — keeping it right matters. Watch for glossary candidates as you work and while discussing with the user:
@@ -68,6 +70,8 @@ Only project-specific terms — never standard programming terms or anything sel
 ## Plans
 
 If the user wants to design a plan with you, read `.opencode/agents/planner.md` first for the format we use (file-scoped tasks, `⚡` parallel markers, never committed). The planner defines where plans are saved.
+
+**A plan is a build order, not a changelog — write the end state, flat and in place.** Never layer a plan: no `v1`/`v2` decision strata, no separate "refinements"/"updates" section that shadows or overrides earlier text, and no resolved item left parked under an "Open Questions"/"Open Decisions" heading. When something is decided or changes, fold it into the one place it belongs and delete the now-stale version — a section heading is a promise about its contents, so an "Open Questions" section holds *only* genuinely open questions and nothing else. History lives in git, not as strata inside the file. This bites hardest at high context, where a "refines D6" link or a mislabeled section silently desyncs and the builder ships the wrong thing.
 
 ## Verify Before Planning
 ALWAYS re-read the actual source code before producing any plan or analysis. Never base plans, file paths, or claims on memory or assumptions — verify each claim against the real code first.
