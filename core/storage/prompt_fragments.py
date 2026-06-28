@@ -18,7 +18,6 @@ from core.storage.errors import StorageError
 
 PROMPT_FRAGMENT_NAMES = frozenset(
     {
-        "system.md",
         "runtime.md",
         "tools.md",
         "channels.md",
@@ -28,7 +27,6 @@ PROMPT_FRAGMENT_NAMES = frozenset(
 )
 AGENT_PROMPT_FRAGMENT_NAMES = frozenset(
     {
-        "system.md",
         "runtime.md",
         "tools.md",
         "channels.md",
