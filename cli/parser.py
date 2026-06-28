@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
-from server.main import DEFAULT_HOST
+from core.utils.config import DEFAULT_HOST
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
 THINKING_EFFORTS = ("", "none", "minimal", "low", "medium", "high", "xhigh", "max")

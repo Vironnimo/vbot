@@ -3,14 +3,32 @@
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
-from typing import Any, TypedDict
 
-from core.settings import SettingsValidationError, load_validated_settings_json
-from core.utils.config import Config
+from core.utils.config import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    PORT_SETTING_KEYS,
+    Config,
+    ServerBind,
+    resolve_port,
+    resolve_server_bind,
+)
 from core.utils.logging import build_uvicorn_log_config
 from server.app import create_app
+
+# Re-exported from core.utils.config so existing `from server.main import ...`
+# consumers (and the server tests) keep working after the resolver moved to core.
+__all__ = [
+    "DEFAULT_HOST",
+    "DEFAULT_PORT",
+    "PORT_SETTING_KEYS",
+    "ServerBind",
+    "main",
+    "parse_args",
+    "resolve_port",
+    "resolve_server_bind",
+]
 
 _UVICORN_IMPORT_ERROR: ModuleNotFoundError | None
 
@@ -22,18 +40,6 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server e
 else:
     _UVICORN_IMPORT_ERROR = None
 
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8420
-PORT_SETTING_KEYS = ("server_port", "SERVER_PORT", "port", "PORT")
-
-
-class ServerBind(TypedDict):
-    """Resolved host/port metadata for server startup."""
-
-    listen_host: str
-    listen_port: int
-    port_source: str
-
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse server CLI arguments."""
@@ -42,62 +48,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int)
     parser.add_argument("--data-dir")
     return parser.parse_args(argv)
-
-
-def resolve_port(config: Config, explicit_port: int | None = None) -> int:
-    """Resolve port using --port > VBOT_SERVER_PORT > settings.json > default."""
-    server_bind = resolve_server_bind(config, host=DEFAULT_HOST, explicit_port=explicit_port)
-    return server_bind["listen_port"]
-
-
-def resolve_server_bind(
-    config: Config,
-    *,
-    host: str,
-    explicit_port: int | None = None,
-) -> ServerBind:
-    """Resolve server bind metadata for startup and Settings reads."""
-
-    if explicit_port is not None:
-        return {
-            "listen_host": host,
-            "listen_port": explicit_port,
-            "port_source": "cli",
-        }
-
-    environment_port = os.environ.get("VBOT_SERVER_PORT")
-    if environment_port:
-        return {
-            "listen_host": host,
-            "listen_port": _coerce_port(environment_port, source="VBOT_SERVER_PORT"),
-            "port_source": "VBOT_SERVER_PORT",
-        }
-
-    settings = _load_settings_for_port(config)
-    for key in PORT_SETTING_KEYS:
-        value = settings.get(key)
-        if value is not None:
-            return {
-                "listen_host": host,
-                "listen_port": _coerce_port(value, source=f"settings.{key}"),
-                "port_source": f"settings.{key}",
-            }
-
-    return {
-        "listen_host": host,
-        "listen_port": DEFAULT_PORT,
-        "port_source": "default",
-    }
-
-
-def _load_settings_for_port(config: Config) -> dict[str, Any]:
-    """Load settings.json directly so ambient environment cannot affect ports."""
-
-    settings_path = config.data_dir / "settings.json"
-    try:
-        return load_validated_settings_json(settings_path)
-    except SettingsValidationError as exc:
-        raise ValueError(str(exc)) from exc
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -117,16 +67,6 @@ def main(argv: list[str] | None = None) -> None:
         access_log=False,
         log_config=build_uvicorn_log_config(),
     )
-
-
-def _coerce_port(value: Any, *, source: str) -> int:
-    try:
-        port = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{source} must be an integer port") from exc
-    if port < 1 or port > 65535:
-        raise ValueError(f"{source} must be between 1 and 65535")
-    return port
 
 
 if __name__ == "__main__":
