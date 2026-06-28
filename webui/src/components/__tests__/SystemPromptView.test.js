@@ -22,7 +22,8 @@ vi.mock('$lib/api.js', () => ({
   showProject: (...args) => showProjectMock(...args),
 }));
 
-const { default: SystemPromptView } = await import('../SystemPromptView.svelte');
+const { default: SystemPromptView } =
+  await import('../SystemPromptView.svelte');
 
 const COMPONENT_SOURCE_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -66,7 +67,10 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     expect(blockIds()).toEqual([
       'core:intro',
@@ -87,7 +91,10 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     // Three editable text blocks → three textareas; the data block has none.
     const textareas = document.body.querySelectorAll('textarea.sp-textarea');
@@ -107,7 +114,10 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     const dataBlock = blockElement('data:soul');
     expect(dataBlock.querySelector('.sp-data-preview')).toBeNull();
@@ -126,9 +136,14 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
-    const toggle = blockElement('tool:bash').querySelector('button[role="switch"]');
+    const toggle = blockElement('tool:bash').querySelector(
+      'button[role="switch"]',
+    );
     expect(toggle.getAttribute('aria-checked')).toBe('true');
 
     toggle.click();
@@ -154,7 +169,10 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     vi.useFakeTimers();
 
@@ -186,7 +204,10 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     // Move the first block (core:intro) down via the keyboard, then edit it: the
     // autosave must target core:intro by id even though its index changed.
@@ -231,7 +252,10 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     const resetButton = Array.from(
       blockElement('core:intro').querySelectorAll('button.btn-secondary'),
@@ -261,7 +285,10 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     const dataTransfer = createDataTransfer();
     // Drag the first handle (core:intro) onto the third row (tool:bash).
@@ -269,7 +296,9 @@ describe('SystemPromptView', () => {
       dragEvent('dragstart', dataTransfer),
     );
     flushSync();
-    blockElement('tool:bash').dispatchEvent(dragEvent('dragover', dataTransfer));
+    blockElement('tool:bash').dispatchEvent(
+      dragEvent('dragover', dataTransfer),
+    );
     flushSync();
     blockElement('tool:bash').dispatchEvent(dragEvent('drop', dataTransfer));
     flushSync();
@@ -300,7 +329,10 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     const handle = blockHandle('memory:guidance');
     handle.focus();
@@ -335,17 +367,23 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     clickToolbarButton('New block');
     flushSync();
 
     await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.create_block'),
+      () =>
+        rpcMock.mock.calls.some((call) => call[0] === 'prompt.create_block'),
       100,
     );
 
-    expect(lastCall('prompt.create_block')[1]).toMatchObject({ slug: 'my-note' });
+    expect(lastCall('prompt.create_block')[1]).toMatchObject({
+      slug: 'my-note',
+    });
   });
 
   it('surfaces a bad slug as a toast without calling the backend', async () => {
@@ -359,7 +397,10 @@ describe('SystemPromptView', () => {
     });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     clickToolbarButton('New block');
     flushSync();
@@ -387,13 +428,17 @@ describe('SystemPromptView', () => {
     });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     clickToolbarButton('New block');
     flushSync();
 
     await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.create_block'),
+      () =>
+        rpcMock.mock.calls.some((call) => call[0] === 'prompt.create_block'),
       100,
     );
 
@@ -435,7 +480,8 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.remove_block'),
+      () =>
+        rpcMock.mock.calls.some((call) => call[0] === 'prompt.remove_block'),
       100,
     );
 
@@ -451,13 +497,17 @@ describe('SystemPromptView', () => {
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => blockIds().length === baseBlocks().length, 100);
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
 
     clickToolbarButton('Reset order & visibility');
     flushSync();
 
     await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.reset_layout'),
+      () =>
+        rpcMock.mock.calls.some((call) => call[0] === 'prompt.reset_layout'),
       100,
     );
 
@@ -574,7 +624,9 @@ describe('SystemPromptView', () => {
       100,
     );
 
-    expect(lastCall('prompt.preview')[1]).toMatchObject({ agent_id: 'agent-1' });
+    expect(lastCall('prompt.preview')[1]).toMatchObject({
+      agent_id: 'agent-1',
+    });
     await waitForCondition(
       () => document.body.textContent.includes('1234'),
       50,
@@ -599,7 +651,10 @@ describe('SystemPromptView', () => {
 
     selectPromptScope('Alpha');
     await waitForCondition(
-      () => document.body.querySelector('.sp-scope-chip')?.textContent.includes('Alpha'),
+      () =>
+        document.body
+          .querySelector('.sp-scope-chip')
+          ?.textContent.includes('Alpha'),
       100,
     );
 
@@ -869,13 +924,15 @@ function blockElements() {
 
 function blockIds() {
   return blockElements().map(
-    (element) => element.querySelector('.sp-block-id')?.textContent.trim() ?? '',
+    (element) =>
+      element.querySelector('.sp-block-id')?.textContent.trim() ?? '',
   );
 }
 
 function blockElement(blockId) {
   const element = blockElements().find(
-    (item) => item.querySelector('.sp-block-id')?.textContent.trim() === blockId,
+    (item) =>
+      item.querySelector('.sp-block-id')?.textContent.trim() === blockId,
   );
   expect(element, `block not found: ${blockId}`).toBeTruthy();
   return element;
