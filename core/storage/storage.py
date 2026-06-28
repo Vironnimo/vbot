@@ -15,7 +15,7 @@ import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from threading import RLock
-from typing import Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.settings import SettingsValidationError, load_validated_settings_json
@@ -41,8 +41,14 @@ from core.settings.normalizers import (
 )
 from core.storage.atomic import remove_temporary_file, temporary_path
 from core.storage.errors import StorageError
+from core.storage.prompt_blocks import PromptBlockStore
 from core.storage.prompt_fragments import PromptFragmentStore
 from core.utils.config import build_environment_snapshot, read_env_file
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from core.prompts import LayoutEntry
 
 SettingsUpdateResult = TypeVar("SettingsUpdateResult")
 
@@ -107,6 +113,10 @@ class StorageManager:
         self._prompt_fragments = PromptFragmentStore(
             data_dir=self.data_dir,
             resources_dir=self.resources_dir,
+            ensure_directories=self.ensure_directories,
+        )
+        self._prompt_blocks = PromptBlockStore(
+            data_dir=self.data_dir,
             ensure_directories=self.ensure_directories,
         )
 
@@ -746,6 +756,62 @@ class StorageManager:
         """Read a prompt fragment from the data directory, falling back to resources."""
 
         return self._prompt_fragments.read_prompt_fragment(fragment_name)
+
+    def read_block_layout(self, scope: str | None) -> list[LayoutEntry]:
+        """Read a scope's ordered block layout, or ``[]`` when none is written yet."""
+
+        return self._prompt_blocks.read_layout(scope)
+
+    def write_block_layout(self, scope: str | None, entries: Sequence[LayoutEntry]) -> Path:
+        """Atomically write a scope's ordered block layout."""
+
+        return self._prompt_blocks.write_layout(scope, entries)
+
+    def prune_block_layout(
+        self,
+        scope: str | None,
+        entries: Sequence[LayoutEntry],
+        known_ids: frozenset[str] | set[str],
+    ) -> Path:
+        """Write a scope's block layout keeping only entries with a live definition."""
+
+        return self._prompt_blocks.prune_layout(scope, entries, known_ids)
+
+    def seed_agent_block_layout(
+        self,
+        agent_id: str,
+        default_layout: Sequence[LayoutEntry],
+        *,
+        overwrite: bool = False,
+    ) -> Path | None:
+        """Seed an agent scope's block layout from the current default layout."""
+
+        return self._prompt_blocks.seed_agent_layout(agent_id, default_layout, overwrite=overwrite)
+
+    def read_block_override(self, scope: str | None, block_id: str) -> str | None:
+        """Read a block's text override in a scope, or ``None`` when absent."""
+
+        return self._prompt_blocks.read_block_override(scope, block_id)
+
+    def write_block_override(self, scope: str | None, block_id: str, content: str) -> Path:
+        """Atomically write a block's text override in a scope."""
+
+        return self._prompt_blocks.write_block_override(scope, block_id, content)
+
+    def remove_block_override(self, scope: str | None, block_id: str) -> bool:
+        """Remove a block's text override in a scope, returning whether one existed."""
+
+        return self._prompt_blocks.remove_block_override(scope, block_id)
+
+    def resolve_effective_block_text(
+        self,
+        agent_scope: str | None,
+        block_id: str,
+        owner_default: str | None,
+    ) -> str | None:
+        """Resolve a block's effective text through the agent ← default ← owner cascade."""
+
+        return self._prompt_blocks.resolve_effective_text(agent_scope, block_id, owner_default)
 
     @staticmethod
     def _resolve_data_dir(data_dir: str | Path | None, config: ConfigProtocol | None) -> Path:
