@@ -5,20 +5,21 @@ from __future__ import annotations
 import argparse
 import html
 import importlib
-import json
-import tempfile
-import time
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
 
+from desktop.settings import (
+    read_settings,
+    read_wakeword_settings,
+    write_settings,
+)
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
-SETTINGS_FILE_NAME = "settings.json"
 WINDOW_TITLE = "vBot"
 ICON_FILE_NAME = "icon.png"
 PROBE_TIMEOUT_SECONDS = 2.0
@@ -29,16 +30,6 @@ PROBE_NOT_VBOT_SERVER = "not_vbot_server"
 PROBE_INVALID_TARGET = "invalid_target"
 INVALID_HOST_CHARACTERS = frozenset("/\\:?#@[]")
 ACCESSOR_QUERY_PARAM = "accessor=desktop"
-
-DEFAULT_WAKEWORD_SETTINGS: dict[str, Any] = {
-    "enabled": False,
-    "engine": "openwakeword",
-    "microphone": None,
-    "sensitivity": 0.5,
-    "target_agent_id": None,
-    "session_behavior": "active",
-    "wake_phrase": "hey_jarvis",
-}
 
 
 class HttpResponse(Protocol):
@@ -109,107 +100,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def desktop_dir() -> Path:
-    """Return the source-run Desktop directory used for local settings."""
+    """Return the source-run Desktop directory used for the optional app icon."""
 
     return Path(__file__).resolve().parent
-
-
-def settings_path(base_dir: Path | None = None) -> Path:
-    """Return the Desktop-local settings path beside this entrypoint."""
-
-    return (base_dir if base_dir is not None else desktop_dir()) / SETTINGS_FILE_NAME
 
 
 def icon_path(base_dir: Path | None = None) -> Path:
     """Return the optional source-run Desktop icon path."""
 
     return (base_dir if base_dir is not None else desktop_dir()) / ICON_FILE_NAME
-
-
-def read_settings(path: Path | None = None) -> dict[str, Any]:
-    """Read Desktop-local JSON settings, defaulting to empty settings."""
-
-    resolved_path = path if path is not None else settings_path()
-    if not resolved_path.exists():
-        return {}
-
-    for attempt in range(3):
-        try:
-            data = json.loads(resolved_path.read_text(encoding="utf-8"))
-        except PermissionError:
-            if attempt < 2:
-                time.sleep(0.05 * (attempt + 1))
-                continue
-            return {}
-        except (OSError, json.JSONDecodeError):
-            return {}
-        else:
-            break
-    if not isinstance(data, dict):
-        return {}
-    return data
-
-
-def write_settings(settings: dict[str, Any], path: Path | None = None) -> None:
-    """Persist Desktop-local settings with a same-directory atomic replace."""
-
-    resolved_path = path if path is not None else settings_path()
-    resolved_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(settings, indent=2, sort_keys=True) + "\n"
-
-    temporary_path: Path | None = None
-    for attempt in range(3):
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=resolved_path.parent,
-                delete=False,
-                prefix=f".{resolved_path.name}.",
-                suffix=".tmp",
-            ) as temporary_file:
-                temporary_file.write(payload)
-                temporary_path = Path(temporary_file.name)
-            temporary_path.replace(resolved_path)
-            return
-        except PermissionError:
-            if temporary_path is not None and temporary_path.exists():
-                with suppress(OSError):
-                    temporary_path.unlink()
-            if attempt < 2:
-                time.sleep(0.05 * (attempt + 1))
-                continue
-        except OSError:
-            if temporary_path is not None and temporary_path.exists():
-                with suppress(OSError):
-                    temporary_path.unlink()
-            if attempt < 2:
-                time.sleep(0.05 * (attempt + 1))
-                continue
-            return
-
-
-def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
-    """Read wakeword config from Desktop settings, merged with defaults.
-
-    Malformed wakeword key (missing or non-dict) falls back to defaults.
-    """
-
-    full = read_settings(path)
-    wakeword_data = full.get("wakeword")
-    if not isinstance(wakeword_data, dict):
-        wakeword_data = {}
-    merged = dict(DEFAULT_WAKEWORD_SETTINGS)
-    merged.update(wakeword_data)
-    return merged
-
-
-def write_wakeword_settings(wakeword_config: dict[str, Any], path: Path | None = None) -> None:
-    """Merge wakeword config into full Desktop settings and persist atomically."""
-
-    full = read_settings(path)
-    full["wakeword"] = wakeword_config
-    write_settings(full, path)
 
 
 def resolve_target(
