@@ -42,19 +42,40 @@ def test_prompt_list_posts_rpc_and_formats_rows(
             json={
                 "ok": True,
                 "result": {
-                    "fragments": [
+                    "blocks": [
                         {
-                            "name": "system.md",
+                            "id": "core:tools",
+                            "owner": "always",
+                            "kind": "text",
+                            "editable": True,
+                            "enabled": True,
+                            "rank": 0,
+                            "source": "core",
+                            "text": "# Tools",
                             "is_modified": False,
-                            "variables": [{"placeholder": "{runtime}"}],
                         },
                         {
-                            "name": "runtime.md",
-                            "is_modified": False,
-                            "variables": [{"placeholder": "{app_version}"}],
+                            "id": "user:my-rules",
+                            "owner": "always",
+                            "kind": "text",
+                            "editable": True,
+                            "enabled": True,
+                            "rank": 1,
+                            "source": "user",
+                            "text": "# Rules",
+                            "is_modified": True,
                         },
-                        {"name": "tools.md", "is_modified": True, "variables": []},
-                    ]
+                        {
+                            "id": "memory:guidance",
+                            "owner": "memory",
+                            "kind": "data",
+                            "editable": False,
+                            "enabled": False,
+                            "rank": 2,
+                            "source": "memory",
+                        },
+                    ],
+                    "scopes": [{"type": "default", "label": "Default"}],
                 },
             },
         )
@@ -67,12 +88,33 @@ def test_prompt_list_posts_rpc_and_formats_rows(
         ok=True,
         message=(
             "prompts:\n"
-            "- system.md modified=no variables={runtime}\n"
-            "- runtime.md modified=no variables={app_version}\n"
-            "- tools.md modified=yes variables=-"
+            "- core:tools owner=always kind=text enabled=yes editable=yes "
+            "source=core modified=no\n"
+            "- user:my-rules owner=always kind=text enabled=yes editable=yes "
+            "source=user modified=yes\n"
+            "- memory:guidance owner=memory kind=data enabled=no editable=no "
+            "source=memory modified=-"
         ),
         instance=instance,
     )
+
+
+def test_prompt_list_reports_empty_block_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"blocks": [], "scopes": []}})
+
+    monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
+
+    result = prompt_management.prompt_list(instance)
+
+    assert result == CommandResult(ok=True, message="no prompt blocks", instance=instance)
 
 
 def test_prompt_update_posts_rpc(
@@ -86,15 +128,21 @@ def test_prompt_update_posts_rpc(
         url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
     ) -> httpx.Response:
         calls.append(json)
-        return httpx.Response(200, json={"ok": True, "result": {"name": "tools.md"}})
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {"id": "core:tools", "text": "# Custom tools", "is_modified": True},
+            },
+        )
 
     monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
 
-    result = prompt_management.prompt_update(instance, "tools.md", "# Custom tools")
+    result = prompt_management.prompt_update(instance, "core:tools", "# Custom tools")
 
-    assert result == CommandResult(ok=True, message="updated tools.md", instance=instance)
+    assert result == CommandResult(ok=True, message="updated core:tools", instance=instance)
     assert calls == [
-        {"method": "prompt.update", "params": {"name": "tools.md", "content": "# Custom tools"}}
+        {"method": "prompt.update", "params": {"id": "core:tools", "content": "# Custom tools"}}
     ]
 
 
@@ -107,14 +155,20 @@ def test_prompt_reset_posts_rpc(
     def fake_post(
         url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
     ) -> httpx.Response:
-        assert json == {"method": "prompt.reset", "params": {"name": "skills.md"}}
-        return httpx.Response(200, json={"ok": True, "result": {"name": "skills.md"}})
+        assert json == {"method": "prompt.reset", "params": {"id": "core:skills"}}
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {"id": "core:skills", "text": "# Skills", "is_modified": False},
+            },
+        )
 
     monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
 
-    result = prompt_management.prompt_reset(instance, "skills.md")
+    result = prompt_management.prompt_reset(instance, "core:skills")
 
-    assert result == CommandResult(ok=True, message="reset skills.md", instance=instance)
+    assert result == CommandResult(ok=True, message="reset core:skills", instance=instance)
 
 
 def test_prompt_preview_posts_rpc_and_includes_rendered_text(
@@ -147,11 +201,11 @@ def test_prompt_preview_posts_rpc_and_includes_rendered_text(
 
 
 def test_parse_args_supports_prompt_update_file() -> None:
-    args = cli_main.parse_args(["prompt", "update", "tools.md", "--file", "tools.txt"])
+    args = cli_main.parse_args(["prompt", "update", "core:tools", "--file", "tools.txt"])
 
     assert args.area == "prompt"
     assert args.command == "update"
-    assert args.name == "tools.md"
+    assert args.block_id == "core:tools"
     assert args.content_file == "tools.txt"
 
 
@@ -169,20 +223,22 @@ def test_run_dispatches_prompt_update_file(
 
     def fake_update(
         resolved_instance: ServerInstance,
-        name: str,
+        block_id: str,
         content: str,
     ) -> CommandResult:
-        calls.append(("update", {"instance": resolved_instance, "name": name, "content": content}))
-        return CommandResult(ok=True, message="updated tools.md", instance=resolved_instance)
+        calls.append(
+            ("update", {"instance": resolved_instance, "block_id": block_id, "content": content})
+        )
+        return CommandResult(ok=True, message="updated core:tools", instance=resolved_instance)
 
     exit_code = cli_main.run(
-        ["prompt", "update", "tools.md", "--file", str(content_file)],
+        ["prompt", "update", "core:tools", "--file", str(content_file)],
         resolve=fake_resolve,
         update_prompt_fn=fake_update,
     )
 
     assert exit_code == 0
     assert calls == [
-        ("update", {"instance": instance, "name": "tools.md", "content": "# Custom tools"})
+        ("update", {"instance": instance, "block_id": "core:tools", "content": "# Custom tools"})
     ]
-    assert capsys.readouterr().out.splitlines() == ["updated tools.md"]
+    assert capsys.readouterr().out.splitlines() == ["updated core:tools"]

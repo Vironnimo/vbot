@@ -171,17 +171,17 @@ vbot tool list
 
 ### Prompts
 
-Use prompt commands to inspect and update editable System Prompt fragments through server RPC:
+Use prompt commands to inspect and update editable System Prompt blocks through server RPC:
 
 ```bash
 vbot prompt list
-vbot prompt update tools.md --content "# Custom tools"
-vbot prompt update tools.md --file ./tools.md
-vbot prompt reset tools.md
+vbot prompt update core:tools --content "# Custom tools"
+vbot prompt update core:tools --file ./tools.md
+vbot prompt reset core:tools
 vbot prompt preview assistant
 ```
 
-Prefer `--file` for multi-line prompt content. Do not edit prompt fragment files directly when `vbot prompt update` or `vbot prompt reset` can express the change.
+`prompt list` shows one row per block (id, owner, kind, enabled, editable, source, modified). Update and reset target a block by its id (for example `core:tools`); only editable blocks accept them. Prefer `--file` for multi-line prompt content. Do not edit prompt block override files directly when `vbot prompt update` or `vbot prompt reset` can express the change.
 
 ### Logs
 
@@ -297,7 +297,7 @@ The Discord bot also needs the Message Content Intent enabled in the Developer P
 
 - Do not assume the server is running. Check `vbot server status` first for management tasks.
 - Do not edit `settings.json` directly when `vbot config set` can express the change.
-- Do not edit prompt fragments directly when `vbot prompt update` or `vbot prompt reset` can express the change.
+- Do not edit prompt block override files directly when `vbot prompt update` or `vbot prompt reset` can express the change.
 - Do not hand-edit `.env` for provider API keys when `vbot provider set-key` can express the change.
 - Do not configure channels with token literals. Store the token in the environment or data-dir `.env`, then pass the variable name with `--token-env`.
 - Do not edit agent JSON directly when `vbot agent create`, `vbot agent update`, or `vbot agent delete` can express the change. Workspace paths are not mutable through public agent CLI commands.
