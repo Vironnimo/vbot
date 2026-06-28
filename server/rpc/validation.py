@@ -8,6 +8,7 @@ from core.chat import ChatError
 from core.chat.content_blocks import ContentBlock, ContentBlockError, content_block_from_dict
 from core.chat.model_resolution import parse_model_with_connection
 from core.projects import InvalidAgentAddressError, parse_agent_address
+from core.settings import is_valid_agent_id
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
 JsonObject = dict[str, Any]
@@ -77,6 +78,24 @@ def _required_string(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
+    return value
+
+
+def _required_block_slug(params: JsonObject, key: str) -> str:
+    """Read a required custom-block slug and validate it with the canonical rule.
+
+    A ``user:<slug>`` custom prompt block's ``<slug>`` follows the same
+    filesystem-safe rule as an agent id (letters/digits, ``-``/``_``, leading
+    alphanumeric, bounded length) — path-traversal-safe, the single edge gate
+    behind the store's own re-validation (defense in depth). A bad slug is a client
+    error surfaced as ``invalid_request``.
+    """
+    value = _required_string(params, key)
+    if not is_valid_agent_id(value):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.{key} must be a valid block slug (letters, digits, '-', '_')",
+        )
     return value
 
 
