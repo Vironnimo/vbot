@@ -311,7 +311,6 @@ export function formatAllowedChatIds(value) {
 
 const EXTENSION_HOOK_EVENT_ORDER = [
   'run_start',
-  'before_agent_start',
   'context',
   'tool_call',
   'tool_result',

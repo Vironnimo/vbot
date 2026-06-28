@@ -1,8 +1,9 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
+  import Toggle from './ui/Toggle.svelte';
   import {
     buildAgentTargetDropdownOptions,
     projectIdsFromList,
@@ -12,11 +13,19 @@
   import { t } from '$lib/i18n.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+  // The custom-block slug rule mirrors the backend agent-id rule (validated again
+  // at the RPC edge and the store): letters/digits plus `-`/`_`, alphanumeric
+  // start, bounded length. This is a UX pre-check; the server stays authoritative.
+  const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
   const noop = () => {};
 
   let { onToast = noop } = $props();
 
-  let fragments = $state([]);
+  // Blocks come from `prompt.list` in layout order. Each block is keyed by its
+  // stable `id` (never an array index), so autosave timers and DnD identity
+  // survive a reorder. Editable text blocks carry `editedContent`/`isDirty`
+  // live-edit state; data blocks (`kind === 'data'`) have none.
+  let blocks = $state([]);
   let agents = $state([]);
   let promptScopes = $state([]);
   let selectedScopeKey = $state('default');
@@ -25,7 +34,18 @@
   let previewTokens = $state(null);
   let isLoadingData = $state(true);
   let isRefreshingPreview = $state(false);
-  let autoSaveTimers = [];
+  let reorderAnnouncement = $state('');
+
+  // Autosave timers keyed by block id (a reorder must not reassign a timer to a
+  // different block, which an index key would do). A plain null-proto object,
+  // not reactive state — it only holds setTimeout handles.
+  const autoSaveTimers = Object.create(null);
+  // The block id whose reorder handle should regain focus after a keyboard move,
+  // so the focus follows the moving row across the DOM re-render.
+  let pendingFocusBlockId = null;
+  // The drag source index for a native HTML5 drag (mirrored from dataTransfer so
+  // a same-document drop can reorder without parsing the payload defensively).
+  let dragSourceIndex = null;
 
   // Project teams power the project-agent options in the preview agent picker.
   // Identity agents come from `agent.list`; project agents are scanned lazily
@@ -35,13 +55,12 @@
   let projectTeamsLoaded = false;
   let projectTeamsRequestId = 0;
 
-  let isPromptSaveBusy = $derived(
-    fragments.some((fragment) => fragment.isSaving || fragment.isResetting),
-  );
+  let isBusy = $derived(blocks.some((block) => block.isSaving || block.isBusy));
   let selectedScope = $derived(
     promptScopes.find((scope) => scope.key === selectedScopeKey) ??
       defaultPromptScope(),
   );
+  let isAgentScope = $derived(selectedScope.type === 'agent');
   let scopeOptions = $derived(
     promptScopes.map((scope) => ({ value: scope.key, label: scope.label })),
   );
@@ -70,30 +89,6 @@
     };
   });
 
-  $effect(() => {
-    autoSaveTimers.forEach((timer, index) => {
-      if (timer && !fragments[index]) {
-        clearAutoSaveTimer(index);
-      }
-    });
-
-    fragments.forEach((fragment, index) => {
-      const shouldAutoSave =
-        fragment.isDirty && !fragment.isSaving && !fragment.isResetting;
-
-      if (!shouldAutoSave) {
-        clearAutoSaveTimer(index);
-        return;
-      }
-
-      if (autoSaveTimers[index]) {
-        return;
-      }
-
-      scheduleAutoSaveTimer(index);
-    });
-  });
-
   async function loadData() {
     isLoadingData = true;
 
@@ -107,7 +102,7 @@
       selectedAgentId = resolvePreviewAgentId(selectedAgentId);
       promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
       selectedScopeKey = resolveScopeKey(selectedScopeKey);
-      applyPromptFragments(promptsResult?.fragments);
+      applyBlocks(promptsResult?.blocks);
     } catch {
       showToast(
         t('systemPrompt.error.loadFailed', 'Failed to load prompt data'),
@@ -166,11 +161,12 @@
     selectedScopeKey = nextScopeKey;
     previewText = '';
     previewTokens = null;
+    reorderAnnouncement = '';
     clearAutoSaveTimers();
-    await loadFragmentsForScope(nextScopeKey);
+    await loadBlocksForScope(nextScopeKey);
   }
 
-  async function loadFragmentsForScope(scopeKey) {
+  async function loadBlocksForScope(scopeKey) {
     isLoadingData = true;
 
     try {
@@ -180,7 +176,7 @@
       );
       promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
       selectedScopeKey = resolveScopeKey(scopeKey);
-      applyPromptFragments(promptsResult?.fragments);
+      applyBlocks(promptsResult?.blocks);
     } catch {
       showToast(
         t('systemPrompt.error.loadFailed', 'Failed to load prompt data'),
@@ -191,18 +187,41 @@
     }
   }
 
-  function applyPromptFragments(rawFragments) {
-    const sourceFragments = Array.isArray(rawFragments) ? rawFragments : [];
-    fragments = sourceFragments.map((fragment) => ({
-      name: fragment.name,
-      content: fragment.content ?? '',
-      editedContent: fragment.content ?? '',
-      isDirty: false,
-      isModified: fragment.is_modified ?? false,
-      variables: Array.isArray(fragment.variables) ? fragment.variables : [],
-      isSaving: false,
-      isResetting: false,
-    }));
+  // Map the server block metadata into the local row model. Editable text blocks
+  // get the live-edit fields; non-editable data blocks get a `preview` of their
+  // current text. The id is the stable identity used everywhere.
+  function applyBlocks(rawBlocks) {
+    const source = Array.isArray(rawBlocks) ? rawBlocks : [];
+    const previousById = new Map(blocks.map((block) => [block.id, block]));
+    clearAutoSaveTimers();
+
+    blocks = source.map((raw) => {
+      const editable = raw.editable === true && raw.kind === 'text';
+      const content = typeof raw.text === 'string' ? raw.text : '';
+      const previous = previousById.get(raw.id);
+      // Preserve an in-flight unsaved edit across a re-list (e.g. after a
+      // toggle/reorder of another block) so the user's typing is not lost.
+      const keepDraft =
+        editable && previous?.isDirty && previous.editedContent !== content;
+      return {
+        id: raw.id,
+        owner: typeof raw.owner === 'string' ? raw.owner : 'always',
+        kind: raw.kind === 'data' ? 'data' : 'text',
+        source: typeof raw.source === 'string' ? raw.source : 'core',
+        editable,
+        enabled: raw.enabled !== false,
+        content,
+        editedContent: keepDraft ? previous.editedContent : content,
+        isDirty: keepDraft,
+        isModified: editable ? raw.is_modified === true : false,
+        inheritance:
+          typeof raw.inheritance === 'string' ? raw.inheritance : null,
+        preview: !editable ? content : '',
+        previewExpanded: false,
+        isSaving: false,
+        isBusy: false,
+      };
+    });
   }
 
   function normalizePromptScopes(rawScopes, currentAgents) {
@@ -318,61 +337,138 @@
     return Boolean(previewParams());
   }
 
-  function handleTextareaInput(index, event) {
-    const nextContent = event.currentTarget.value;
-    fragments[index].editedContent = nextContent;
-    fragments[index].isDirty = nextContent !== fragments[index].content;
+  // -- Owner / inheritance labels ------------------------------------------
 
-    if (fragments[index].isDirty) {
-      clearAutoSaveTimer(index);
-      scheduleAutoSaveTimer(index);
-      return;
+  function ownerLabel(owner) {
+    if (owner.startsWith('tool:')) {
+      return t('systemPrompt.blockList.owner.tool', 'tool: {name}', {
+        name: owner.slice('tool:'.length),
+      });
     }
-
-    clearAutoSaveTimer(index);
+    if (owner.startsWith('extension:')) {
+      return t('systemPrompt.blockList.owner.extension', 'extension: {name}', {
+        name: owner.slice('extension:'.length),
+      });
+    }
+    if (owner === 'memory') {
+      return t('systemPrompt.blockList.owner.memory', 'memory');
+    }
+    if (owner === 'channel') {
+      return t('systemPrompt.blockList.owner.channel', 'channels');
+    }
+    return t('systemPrompt.blockList.owner.always', 'always');
   }
 
-  async function saveFragment(index, options = {}) {
-    const fragment = fragments[index];
+  function appearsWhenLabel(owner) {
+    return t('systemPrompt.blockList.appearsWhen', 'appears when: {owner}', {
+      owner: ownerLabel(owner),
+    });
+  }
+
+  function dataKindLabel() {
+    return t(
+      'systemPrompt.blockList.dataLabel',
+      'Generated content (read-only)',
+    );
+  }
+
+  function isCustomBlock(block) {
+    return block.source === 'user';
+  }
+
+  // An inherited block shows the greyed default + "inherited" badge in an agent
+  // scope (T5). Inheritance is a text-cascade concept, so it applies only to
+  // editable blocks — a data block has no override to inherit or create.
+  function isInherited(block) {
+    return block.editable && block.inheritance === 'owner_default';
+  }
+
+  // -- Edit + autosave ------------------------------------------------------
+
+  function blockIndexById(blockId) {
+    return blocks.findIndex((block) => block.id === blockId);
+  }
+
+  function handleTextareaInput(blockId, event) {
+    const index = blockIndexById(blockId);
+    if (index === -1) {
+      return;
+    }
+    const nextContent = event.currentTarget.value;
+    blocks[index].editedContent = nextContent;
+    blocks[index].isDirty = nextContent !== blocks[index].content;
+
+    clearAutoSaveTimer(blockId);
+    if (blocks[index].isDirty) {
+      scheduleAutoSaveTimer(blockId);
+    }
+  }
+
+  function scheduleAutoSaveTimer(blockId) {
+    if (autoSaveTimers[blockId]) {
+      return;
+    }
+    autoSaveTimers[blockId] = setTimeout(() => {
+      delete autoSaveTimers[blockId];
+      void saveBlock(blockId);
+    }, AUTO_SAVE_DEBOUNCE_MS);
+  }
+
+  function clearAutoSaveTimer(blockId) {
+    const timer = autoSaveTimers[blockId];
+    if (timer) {
+      clearTimeout(timer);
+      delete autoSaveTimers[blockId];
+    }
+  }
+
+  function clearAutoSaveTimers() {
+    for (const blockId of Object.keys(autoSaveTimers)) {
+      clearTimeout(autoSaveTimers[blockId]);
+      delete autoSaveTimers[blockId];
+    }
+  }
+
+  async function saveBlock(blockId, options = {}) {
+    const index = blockIndexById(blockId);
+    if (index === -1) {
+      return false;
+    }
+    const block = blocks[index];
     const showSuccessToast = options.showSuccessToast ?? true;
 
-    if (
-      !fragment ||
-      !fragment.isDirty ||
-      fragment.isSaving ||
-      fragment.isResetting
-    ) {
+    if (!block.editable || !block.isDirty || block.isSaving || block.isBusy) {
       return false;
     }
 
-    const draftContent = fragment.editedContent;
-
-    fragments[index].isSaving = true;
+    const draftContent = block.editedContent;
+    blocks[index].isSaving = true;
 
     try {
       const result = await rpc('prompt.update', {
-        name: fragment.name,
+        id: block.id,
         content: draftContent,
         ...scopedParams(),
       });
 
-      const nextSavedContent = result.content ?? draftContent;
-
-      if (!fragments[index]) {
-        return;
+      const liveIndex = blockIndexById(blockId);
+      if (liveIndex === -1) {
+        return true;
       }
-
-      fragments[index].content = nextSavedContent;
-
-      if (fragments[index].editedContent === draftContent) {
-        fragments[index].editedContent = nextSavedContent;
-        fragments[index].isDirty = false;
+      const nextSaved =
+        typeof result.text === 'string' ? result.text : draftContent;
+      blocks[liveIndex].content = nextSaved;
+      if (blocks[liveIndex].editedContent === draftContent) {
+        blocks[liveIndex].editedContent = nextSaved;
+        blocks[liveIndex].isDirty = false;
       } else {
-        fragments[index].isDirty =
-          fragments[index].editedContent !== fragments[index].content;
+        blocks[liveIndex].isDirty =
+          blocks[liveIndex].editedContent !== blocks[liveIndex].content;
       }
-
-      fragments[index].isModified = result.is_modified ?? true;
+      blocks[liveIndex].isModified = result.is_modified === true;
+      if (typeof result.inheritance === 'string') {
+        blocks[liveIndex].inheritance = result.inheritance;
+      }
       if (showSuccessToast) {
         showToast(t('common.saved', 'Saved'), 'success');
       }
@@ -381,77 +477,34 @@
       showToast(t('systemPrompt.error.saveFailed', 'Failed to save'), 'error');
       return false;
     } finally {
-      if (fragments[index]) {
-        fragments[index].isSaving = false;
+      const liveIndex = blockIndexById(blockId);
+      if (liveIndex !== -1) {
+        blocks[liveIndex].isSaving = false;
       }
     }
-  }
-
-  function scheduleAutoSaveTimer(index) {
-    const fragment = fragments[index];
-    if (
-      !fragment ||
-      !fragment.isDirty ||
-      fragment.isSaving ||
-      fragment.isResetting ||
-      autoSaveTimers[index]
-    ) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      delete autoSaveTimers[index];
-      void saveFragment(index);
-    }, AUTO_SAVE_DEBOUNCE_MS);
-
-    autoSaveTimers[index] = timer;
-  }
-
-  function clearAutoSaveTimer(index) {
-    const timer = autoSaveTimers[index];
-    if (!timer) {
-      return;
-    }
-
-    clearTimeout(timer);
-    delete autoSaveTimers[index];
-  }
-
-  function clearAutoSaveTimers() {
-    for (const timer of autoSaveTimers) {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
-
-    autoSaveTimers = [];
   }
 
   async function handleManualSaveAll() {
-    if (isPromptSaveBusy) {
+    if (isBusy) {
       return;
     }
 
-    const dirtyIndexes = fragments.reduce((indexes, fragment, index) => {
-      if (fragment.isDirty) {
-        indexes.push(index);
-      }
+    const dirtyIds = blocks
+      .filter((block) => block.editable && block.isDirty)
+      .map((block) => block.id);
 
-      return indexes;
-    }, []);
-
-    if (dirtyIndexes.length === 0) {
+    if (dirtyIds.length === 0) {
       showToast(t('common.alreadySaved', 'Already saved'), 'success');
       return;
     }
 
-    for (const index of dirtyIndexes) {
-      clearAutoSaveTimer(index);
+    for (const blockId of dirtyIds) {
+      clearAutoSaveTimer(blockId);
     }
 
     const results = await Promise.all(
-      dirtyIndexes.map((index) =>
-        saveFragment(index, { showSuccessToast: false }),
+      dirtyIds.map((blockId) =>
+        saveBlock(blockId, { showSuccessToast: false }),
       ),
     );
 
@@ -460,44 +513,278 @@
     }
   }
 
-  async function resetFragment(index) {
-    const fragment = fragments[index];
-    const confirmKey =
-      selectedScope.type === 'agent'
-        ? 'systemPrompt.fragmentEditor.resetAgentConfirm'
-        : 'systemPrompt.fragmentEditor.resetConfirm';
+  async function resetBlock(blockId) {
+    const index = blockIndexById(blockId);
+    if (index === -1) {
+      return;
+    }
+    const block = blocks[index];
+    const confirmKey = isAgentScope
+      ? 'systemPrompt.fragmentEditor.resetAgentConfirm'
+      : 'systemPrompt.fragmentEditor.resetConfirm';
     const confirmed = window.confirm(
-      t(
-        confirmKey,
-        'Reset this fragment to its bundled default? This cannot be undone.',
-      ),
+      t(confirmKey, 'Reset this block to its default? This cannot be undone.'),
     );
-
     if (!confirmed) {
       return;
     }
 
-    fragments[index].isResetting = true;
+    clearAutoSaveTimer(blockId);
+    blocks[index].isBusy = true;
 
     try {
-      const result = await rpc(
-        'prompt.reset',
-        scopedParams({ name: fragment.name }),
-      );
-      const restoredContent = result.content ?? '';
-      fragments[index].content = restoredContent;
-      fragments[index].editedContent = restoredContent;
-      fragments[index].isDirty = false;
-      fragments[index].isModified = result.is_modified ?? false;
+      const result = await rpc('prompt.reset', scopedParams({ id: block.id }));
+      const liveIndex = blockIndexById(blockId);
+      if (liveIndex === -1) {
+        return;
+      }
+      const restored = typeof result.text === 'string' ? result.text : '';
+      blocks[liveIndex].content = restored;
+      blocks[liveIndex].editedContent = restored;
+      blocks[liveIndex].isDirty = false;
+      blocks[liveIndex].isModified = result.is_modified === true;
+      if (typeof result.inheritance === 'string') {
+        blocks[liveIndex].inheritance = result.inheritance;
+      }
     } catch {
       showToast(
         t('systemPrompt.error.resetFailed', 'Failed to reset'),
         'error',
       );
     } finally {
-      fragments[index].isResetting = false;
+      const liveIndex = blockIndexById(blockId);
+      if (liveIndex !== -1) {
+        blocks[liveIndex].isBusy = false;
+      }
     }
   }
+
+  // -- Toggle + layout persistence -----------------------------------------
+
+  // Build the `[{id, enabled, source}]` layout payload from the current row order
+  // and send it to `prompt.set_layout`, which persists immediately (T6).
+  async function persistLayout() {
+    try {
+      await rpc(
+        'prompt.set_layout',
+        scopedParams({
+          layout: blocks.map((block) => ({
+            id: block.id,
+            enabled: block.enabled,
+            source: block.source,
+          })),
+        }),
+      );
+    } catch {
+      showToast(
+        t('systemPrompt.error.layoutFailed', 'Failed to save layout'),
+        'error',
+      );
+      // Re-sync from the server so the on-screen order/toggle matches what is
+      // actually persisted after a failed write.
+      await loadBlocksForScope(selectedScopeKey);
+    }
+  }
+
+  async function toggleBlock(blockId) {
+    const index = blockIndexById(blockId);
+    if (index === -1) {
+      return;
+    }
+    blocks[index].enabled = !blocks[index].enabled;
+    await persistLayout();
+  }
+
+  function togglePreview(blockId) {
+    const index = blockIndexById(blockId);
+    if (index !== -1) {
+      blocks[index].previewExpanded = !blocks[index].previewExpanded;
+    }
+  }
+
+  // -- Drag-and-drop reorder (native HTML5) --------------------------------
+
+  function handleDragStart(index, event) {
+    dragSourceIndex = index;
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      // A payload is required for a valid drag in some browsers; the index is
+      // also mirrored in `dragSourceIndex` for the same-document drop path.
+      event.dataTransfer.setData('text/plain', String(index));
+    }
+  }
+
+  function handleDragOver(index, event) {
+    if (dragSourceIndex === null) {
+      return;
+    }
+    // preventDefault marks this row as a valid drop target.
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+  }
+
+  async function handleDrop(index, event) {
+    event.preventDefault();
+    const from = dragSourceIndex;
+    dragSourceIndex = null;
+    if (from === null || from === index) {
+      return;
+    }
+    moveBlock(from, index);
+    await persistLayout();
+  }
+
+  function handleDragEnd() {
+    dragSourceIndex = null;
+  }
+
+  // -- Keyboard reorder (accessibility, T2) --------------------------------
+
+  async function handleHandleKeydown(index, event) {
+    let target = null;
+    if (event.key === 'ArrowUp') {
+      target = index - 1;
+    } else if (event.key === 'ArrowDown') {
+      target = index + 1;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    if (target < 0 || target >= blocks.length) {
+      return;
+    }
+
+    const movedId = blocks[index].id;
+    moveBlock(index, target);
+    pendingFocusBlockId = movedId;
+    announceReorder(target);
+    await persistLayout();
+    await tick();
+    focusPendingHandle();
+  }
+
+  function moveBlock(from, to) {
+    const next = [...blocks];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    blocks = next;
+  }
+
+  function announceReorder(position) {
+    reorderAnnouncement = t(
+      'systemPrompt.blockList.reorderAnnouncement',
+      'Moved to position {position} of {total}',
+      { position: position + 1, total: blocks.length },
+    );
+  }
+
+  function focusPendingHandle() {
+    if (!pendingFocusBlockId) {
+      return;
+    }
+    const handle = document.querySelector(
+      `[data-block-handle="${cssEscape(pendingFocusBlockId)}"]`,
+    );
+    pendingFocusBlockId = null;
+    if (handle instanceof HTMLElement) {
+      handle.focus();
+    }
+  }
+
+  function cssEscape(value) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+      return CSS.escape(value);
+    }
+    return value.replace(/["\\]/gu, '\\$&');
+  }
+
+  // -- Custom block create / remove (T1) -----------------------------------
+
+  async function createCustomBlock() {
+    const slug = window.prompt(
+      t('systemPrompt.blockList.newBlockPrompt', 'New block slug'),
+    );
+    if (slug === null) {
+      return;
+    }
+    const trimmed = slug.trim();
+    if (!trimmed) {
+      return;
+    }
+    if (!SLUG_PATTERN.test(trimmed)) {
+      showToast(
+        t(
+          'systemPrompt.blockList.invalidSlug',
+          'Invalid slug — use letters, digits, “-” or “_”, starting with a letter or digit.',
+        ),
+        'error',
+      );
+      return;
+    }
+
+    try {
+      await rpc('prompt.create_block', scopedParams({ slug: trimmed }));
+      await loadBlocksForScope(selectedScopeKey);
+    } catch {
+      showToast(
+        t(
+          'systemPrompt.blockList.createFailed',
+          'Failed to create block. The slug may be invalid or already used.',
+        ),
+        'error',
+      );
+    }
+  }
+
+  async function removeCustomBlock(blockId) {
+    const confirmed = window.confirm(
+      t(
+        'systemPrompt.blockList.removeConfirm',
+        'Remove this custom block? This cannot be undone.',
+      ),
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    clearAutoSaveTimer(blockId);
+    try {
+      await rpc('prompt.remove_block', scopedParams({ id: blockId }));
+      await loadBlocksForScope(selectedScopeKey);
+    } catch {
+      showToast(
+        t('systemPrompt.blockList.removeFailed', 'Failed to remove block'),
+        'error',
+      );
+    }
+  }
+
+  async function resetLayout() {
+    const confirmed = window.confirm(
+      t(
+        'systemPrompt.blockList.resetLayoutConfirm',
+        'Reset block order and visibility to the default? This cannot be undone.',
+      ),
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await rpc('prompt.reset_layout', scopedParams());
+      await loadBlocksForScope(selectedScopeKey);
+    } catch {
+      showToast(
+        t('systemPrompt.error.layoutFailed', 'Failed to save layout'),
+        'error',
+      );
+    }
+  }
+
+  // -- Preview (unchanged behavior) ----------------------------------------
 
   async function refreshPreview() {
     const params = previewParams();
@@ -565,74 +852,220 @@
           {t('common.loading', 'Loading…')}
         </div>
       {:else}
-        <div class="sp-fragments">
-          {#each fragments as fragment, index (`${selectedScopeKey}:${fragment.name}`)}
-            <div class="sp-fragment">
-              <div class="sp-fragment-header">
-                <div class="sp-fragment-meta">
-                  <span class="sp-fragment-name">{fragment.name}</span>
-                  {#if fragment.isDirty}
-                    <span
-                      class="sp-badge sp-badge--dirty"
-                      title={t(
-                        'systemPrompt.fragmentEditor.dirtyIndicator',
-                        'Unsaved changes',
-                      )}
-                    >
-                      {t(
-                        'systemPrompt.fragmentEditor.dirtyIndicator',
-                        'unsaved',
-                      )}
-                    </span>
-                  {/if}
-                  {#if fragment.isModified}
-                    <span
-                      class="sp-badge sp-badge--modified"
-                      title={t(
-                        'systemPrompt.fragmentEditor.modifiedIndicator',
-                        'User copy — differs from bundled default',
-                      )}
-                    >
-                      {t(
-                        'systemPrompt.fragmentEditor.modifiedIndicator',
-                        'modified',
-                      )}
-                    </span>
-                  {/if}
-                </div>
-                <div class="sp-fragment-actions">
-                  <Button
-                    variant="secondary"
-                    class="sp-btn-sm"
-                    disabled={fragment.isResetting || fragment.isSaving}
-                    onClick={() => resetFragment(index)}
+        <div class="sp-blocklist-toolbar">
+          <span class="sp-blocklist-hint">
+            {t(
+              'systemPrompt.blockList.intro',
+              'Reorder, toggle, and edit the blocks that build the system prompt.',
+            )}
+          </span>
+          <div class="sp-blocklist-toolbar-actions">
+            <Button
+              variant="secondary"
+              class="sp-btn-sm"
+              onClick={createCustomBlock}
+            >
+              {t('systemPrompt.blockList.newBlock', 'New block')}
+            </Button>
+            <Button variant="secondary" class="sp-btn-sm" onClick={resetLayout}>
+              {t(
+                'systemPrompt.blockList.resetLayout',
+                'Reset order & visibility',
+              )}
+            </Button>
+          </div>
+        </div>
+
+        <ul class="sp-blocks" role="list">
+          {#each blocks as block, index (block.id)}
+            <li
+              class="sp-block"
+              class:sp-block--data={block.kind === 'data'}
+              class:sp-block--off={!block.enabled}
+              class:sp-block--inherited={isAgentScope && isInherited(block)}
+              ondragover={(event) => handleDragOver(index, event)}
+              ondrop={(event) => handleDrop(index, event)}
+            >
+              <div class="sp-block-row">
+                <button
+                  type="button"
+                  class="sp-drag-handle"
+                  draggable="true"
+                  data-block-handle={block.id}
+                  aria-label={t(
+                    'systemPrompt.blockList.reorderHandle',
+                    'Reorder {id} (use arrow keys)',
+                    { id: block.id },
+                  )}
+                  ondragstart={(event) => handleDragStart(index, event)}
+                  ondragend={handleDragEnd}
+                  onkeydown={(event) => handleHandleKeydown(index, event)}
+                >
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
+                    aria-hidden="true"
+                    focusable="false"
                   >
-                    {fragment.isResetting
-                      ? t('common.loading', 'Loading…')
-                      : t('systemPrompt.fragmentEditor.reset', 'Reset')}
-                  </Button>
+                    <circle cx="3.5" cy="2.5" r="1.1" fill="currentColor" />
+                    <circle cx="8.5" cy="2.5" r="1.1" fill="currentColor" />
+                    <circle cx="3.5" cy="6" r="1.1" fill="currentColor" />
+                    <circle cx="8.5" cy="6" r="1.1" fill="currentColor" />
+                    <circle cx="3.5" cy="9.5" r="1.1" fill="currentColor" />
+                    <circle cx="8.5" cy="9.5" r="1.1" fill="currentColor" />
+                  </svg>
+                </button>
+
+                <div class="sp-block-meta">
+                  <div class="sp-block-id-row">
+                    <span class="sp-block-id">{block.id}</span>
+                    {#if isCustomBlock(block)}
+                      <span class="sp-badge sp-badge--custom">
+                        {t('systemPrompt.blockList.customBadge', 'custom')}
+                      </span>
+                    {/if}
+                    {#if block.kind === 'data'}
+                      <span class="sp-badge sp-badge--data">
+                        {t('systemPrompt.blockList.dataBadge', 'auto')}
+                      </span>
+                    {/if}
+                    {#if isAgentScope && isInherited(block)}
+                      <span
+                        class="sp-badge sp-badge--inherited"
+                        title={t(
+                          'systemPrompt.blockList.inheritedHint',
+                          'Inherited from the Default scope — editing creates an override.',
+                        )}
+                      >
+                        {t(
+                          'systemPrompt.blockList.inheritedBadge',
+                          'inherited',
+                        )}
+                      </span>
+                    {:else if block.editable && block.isModified}
+                      <span
+                        class="sp-badge sp-badge--modified"
+                        title={t(
+                          'systemPrompt.fragmentEditor.modifiedIndicator',
+                          'User copy — differs from bundled default',
+                        )}
+                      >
+                        {t(
+                          'systemPrompt.fragmentEditor.modifiedIndicator',
+                          'modified',
+                        )}
+                      </span>
+                    {/if}
+                    {#if block.editable && block.isDirty}
+                      <span
+                        class="sp-badge sp-badge--dirty"
+                        title={t(
+                          'systemPrompt.fragmentEditor.dirtyIndicator',
+                          'Unsaved changes',
+                        )}
+                      >
+                        {t(
+                          'systemPrompt.fragmentEditor.dirtyIndicator',
+                          'unsaved',
+                        )}
+                      </span>
+                    {/if}
+                  </div>
+                  <span class="sp-block-owner"
+                    >{appearsWhenLabel(block.owner)}</span
+                  >
+                </div>
+
+                <div class="sp-block-actions">
+                  {#if block.editable && !(isAgentScope && isInherited(block) && !block.isModified)}
+                    <Button
+                      variant="secondary"
+                      class="sp-btn-sm"
+                      disabled={block.isBusy || block.isSaving}
+                      onClick={() => resetBlock(block.id)}
+                    >
+                      {block.isBusy
+                        ? t('common.loading', 'Loading…')
+                        : t('systemPrompt.fragmentEditor.reset', 'Reset')}
+                    </Button>
+                  {/if}
+                  {#if isCustomBlock(block)}
+                    <Button
+                      variant="danger"
+                      class="sp-btn-sm"
+                      onClick={() => removeCustomBlock(block.id)}
+                    >
+                      {t('common.remove', 'Remove')}
+                    </Button>
+                  {/if}
+                  <Toggle
+                    checked={block.enabled}
+                    size="sm"
+                    ariaLabel={t(
+                      'systemPrompt.blockList.toggleAria',
+                      'Toggle {id}',
+                      { id: block.id },
+                    )}
+                    onChange={() => toggleBlock(block.id)}
+                  />
                 </div>
               </div>
 
-              {#if fragment.variables.length > 0}
-                <div class="sp-variables">
-                  {#each fragment.variables as variable (variable.placeholder)}
-                    <span class="sp-variable" title={variable.description}
-                      >{variable.placeholder}</span
-                    >
-                  {/each}
+              {#if block.editable}
+                <textarea
+                  class="sp-textarea"
+                  spellcheck="false"
+                  value={block.editedContent}
+                  oninput={(event) => handleTextareaInput(block.id, event)}
+                ></textarea>
+              {:else}
+                <div class="sp-data-block">
+                  <div class="sp-data-block-head">
+                    <span class="sp-data-block-label">{dataKindLabel()}</span>
+                    {#if block.preview}
+                      <button
+                        type="button"
+                        class="sp-data-toggle"
+                        aria-expanded={block.previewExpanded}
+                        onclick={() => togglePreview(block.id)}
+                      >
+                        {block.previewExpanded
+                          ? t(
+                              'systemPrompt.blockList.hidePreview',
+                              'Hide preview',
+                            )
+                          : t(
+                              'systemPrompt.blockList.showPreview',
+                              'Show preview',
+                            )}
+                      </button>
+                    {/if}
+                  </div>
+                  {#if block.preview && block.previewExpanded}
+                    <pre class="sp-data-preview">{block.preview}</pre>
+                  {:else if !block.preview}
+                    <span class="sp-data-empty">
+                      {t(
+                        'systemPrompt.blockList.dataEmpty',
+                        'No content for the current scope.',
+                      )}
+                    </span>
+                  {/if}
                 </div>
               {/if}
-
-              <textarea
-                class="sp-textarea"
-                spellcheck="false"
-                value={fragment.editedContent}
-                oninput={(event) => handleTextareaInput(index, event)}
-              ></textarea>
-            </div>
+            </li>
           {/each}
-        </div>
+        </ul>
+
+        {#if blocks.length === 0}
+          <div class="sp-feedback sp-feedback--neutral">
+            {t(
+              'systemPrompt.blockList.empty',
+              'No prompt blocks for this scope.',
+            )}
+          </div>
+        {/if}
 
         <div class="sp-preview-section">
           <div class="sp-preview-header">
@@ -695,7 +1128,7 @@
               <div class="sp-preview-empty">
                 {t(
                   'systemPrompt.preview.empty',
-                  'Click Refresh to generate a preview for the selected agent.',
+                  'Click Refresh to generate a preview for the selected scope.',
                 )}
               </div>
             {/if}
@@ -706,16 +1139,20 @@
           <Button
             variant="primary"
             class="sp-btn-sm"
-            disabled={isPromptSaveBusy}
+            disabled={isBusy}
             onClick={handleManualSaveAll}
           >
-            {isPromptSaveBusy
+            {isBusy
               ? t('common.saving', 'Saving…')
               : t('systemPrompt.fragmentEditor.save', 'Save')}
           </Button>
         </div>
       {/if}
     </div>
+  </div>
+
+  <div class="sp-sr-only" aria-live="polite" role="status">
+    {reorderAnnouncement}
   </div>
 </section>
 
@@ -827,46 +1264,138 @@
     background: rgba(255, 255, 255, 0.02);
   }
 
-  .sp-fragments {
+  .sp-blocklist-toolbar {
     display: flex;
-    flex-direction: column;
-    gap: 16px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
   }
 
-  .sp-fragment {
+  .sp-blocklist-hint {
+    color: var(--text-med);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .sp-blocklist-toolbar-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .sp-blocks {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .sp-block {
     display: flex;
     flex-direction: column;
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
     overflow: hidden;
-    position: relative;
     background: var(--bg);
   }
 
-  .sp-fragment-header {
+  .sp-block--data {
+    background: var(--surface);
+  }
+
+  .sp-block--off {
+    opacity: 0.55;
+  }
+
+  /* An inherited block (agent scope, no override yet) shows its default greyed
+     out — both the id and the editable textarea — so it reads as "not your copy
+     yet" (T5). Editing it creates the override, which flips off this class. */
+  .sp-block--inherited .sp-block-id {
+    color: var(--text-med);
+  }
+
+  .sp-block--inherited .sp-textarea {
+    color: var(--text-med);
+  }
+
+  .sp-block-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 14px;
+    gap: 10px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
-    border-radius: var(--r-lg) var(--r-lg) 0 0;
     background: var(--surface);
+  }
+
+  .sp-block--data .sp-block-row {
+    background: var(--surface-2);
+  }
+
+  .sp-drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text-lo);
+    background: transparent;
+    cursor: grab;
     flex-shrink: 0;
   }
 
-  .sp-fragment-meta {
+  .sp-drag-handle:hover {
+    color: var(--text-med);
+    border-color: var(--border-2);
+  }
+
+  .sp-drag-handle:focus-visible {
+    outline: none;
+    color: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+  }
+
+  .sp-drag-handle:active {
+    cursor: grabbing;
+  }
+
+  .sp-block-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .sp-block-id-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
+    flex-wrap: wrap;
     min-width: 0;
   }
 
-  .sp-fragment-name {
+  .sp-block-id {
     color: var(--text-hi);
     font-family: var(--font-mono);
     font-size: 12.5px;
     font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sp-block-owner {
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.02em;
   }
 
   .sp-badge {
@@ -893,8 +1422,27 @@
     border: 1px solid rgba(232, 135, 10, 0.2);
   }
 
-  .sp-fragment-actions {
+  .sp-badge--inherited {
+    color: var(--text-med);
+    background: var(--surface-2);
+    border: 1px solid var(--border-2);
+  }
+
+  .sp-badge--custom {
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid rgba(232, 135, 10, 0.2);
+  }
+
+  .sp-badge--data {
+    color: var(--text-lo);
+    background: var(--surface-2);
+    border: 1px solid var(--border-2);
+  }
+
+  .sp-block-actions {
     display: flex;
+    align-items: center;
     gap: 6px;
     flex-shrink: 0;
   }
@@ -904,35 +1452,9 @@
     font-size: 12px;
   }
 
-  .sp-variables {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-  }
-
-  .sp-variable {
-    display: inline-block;
-    padding: 2px 7px;
-    border-radius: 3px;
-    border: 1px solid var(--border-2);
-    color: var(--text-lo);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    cursor: default;
-  }
-
-  .sp-variable:hover {
-    color: var(--text-med);
-    border-color: var(--accent);
-  }
-
   .sp-textarea {
     width: 100%;
-    min-height: 180px;
+    min-height: 150px;
     padding: 12px 14px;
     border: 0;
     color: var(--text-hi);
@@ -947,6 +1469,67 @@
   .sp-textarea:focus {
     outline: none;
     box-shadow: inset 0 0 0 1px rgba(232, 135, 10, 0.3);
+  }
+
+  .sp-data-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--surface);
+  }
+
+  .sp-data-block-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .sp-data-block-label {
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+
+  .sp-data-toggle {
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text-lo);
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .sp-data-toggle:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .sp-data-preview {
+    margin: 0;
+    max-height: 220px;
+    overflow: auto;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    color: var(--text-med);
+    background: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .sp-data-empty {
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-style: italic;
   }
 
   .sp-global-footer {
@@ -1056,12 +1639,24 @@
     text-align: center;
   }
 
+  .sp-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
   @media (max-width: 640px) {
     .sp-scroll {
       padding: 18px 16px;
     }
 
-    .sp-fragment-header {
+    .sp-block-row {
       flex-wrap: wrap;
     }
 

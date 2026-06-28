@@ -435,6 +435,42 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.error.resetFailed': 'Failed to reset',
   'systemPrompt.error.previewFailed': 'Failed to load preview',
   'systemPrompt.error.copyFailed': 'Failed to copy',
+  'systemPrompt.error.layoutFailed': 'Failed to save layout',
+  'systemPrompt.blockList.intro':
+    'Reorder, toggle, and edit the blocks that build the system prompt.',
+  'systemPrompt.blockList.newBlock': 'New block',
+  'systemPrompt.blockList.newBlockPrompt':
+    'New block slug (letters, digits, “-” or “_”):',
+  'systemPrompt.blockList.invalidSlug':
+    'Invalid slug — use letters, digits, “-” or “_”, starting with a letter or digit.',
+  'systemPrompt.blockList.createFailed':
+    'Failed to create block. The slug may be invalid or already used.',
+  'systemPrompt.blockList.removeConfirm':
+    'Remove this custom block? This cannot be undone.',
+  'systemPrompt.blockList.removeFailed': 'Failed to remove block',
+  'systemPrompt.blockList.resetLayout': 'Reset order & visibility',
+  'systemPrompt.blockList.resetLayoutConfirm':
+    'Reset block order and visibility to the default? This cannot be undone.',
+  'systemPrompt.blockList.customBadge': 'custom',
+  'systemPrompt.blockList.dataBadge': 'auto',
+  'systemPrompt.blockList.inheritedBadge': 'inherited',
+  'systemPrompt.blockList.inheritedHint':
+    'Inherited from the Default scope — editing creates an override.',
+  'systemPrompt.blockList.dataLabel': 'Generated content (read-only)',
+  'systemPrompt.blockList.dataEmpty': 'No content for the current scope.',
+  'systemPrompt.blockList.showPreview': 'Show preview',
+  'systemPrompt.blockList.hidePreview': 'Hide preview',
+  'systemPrompt.blockList.empty': 'No prompt blocks for this scope.',
+  'systemPrompt.blockList.toggleAria': 'Toggle {id}',
+  'systemPrompt.blockList.reorderHandle': 'Reorder {id} (use arrow keys)',
+  'systemPrompt.blockList.reorderAnnouncement':
+    'Moved to position {position} of {total}',
+  'systemPrompt.blockList.appearsWhen': 'appears when: {owner}',
+  'systemPrompt.blockList.owner.always': 'always',
+  'systemPrompt.blockList.owner.memory': 'memory',
+  'systemPrompt.blockList.owner.channel': 'channels',
+  'systemPrompt.blockList.owner.tool': 'tool: {name}',
+  'systemPrompt.blockList.owner.extension': 'extension: {name}',
 
   'settings.title': 'Settings',
   'settings.loading': 'Loading settings…',
