@@ -16,6 +16,10 @@ PACKAGE_NAME="vbot"
 REMOVE_AUTOSTART=0
 SERVICE_NAME="vbot"
 
+# Freedesktop application-menu entry written by scripts/install.sh (--desktop /
+# --desktop-client). Kept identical here so this removes exactly what was created.
+DESKTOP_ENTRY_PATH="${HOME}/.local/share/applications/vbot-desktop.desktop"
+
 usage() {
     cat <<USAGE
 Usage: scripts/uninstall.sh [options]
@@ -39,6 +43,15 @@ step() {
 fail() {
     echo "Error: $1" >&2
     exit 1
+}
+
+# Remove the Desktop accessor's application-menu entry if present. Data-dir
+# preserving like the rest of the uninstaller; a missing entry is a no-op.
+remove_desktop_entry() {
+    if [ -f "$DESKTOP_ENTRY_PATH" ]; then
+        rm -f "$DESKTOP_ENTRY_PATH"
+        echo "Removed application-menu entry ${DESKTOP_ENTRY_PATH}."
+    fi
 }
 
 while [ $# -gt 0 ]; do
@@ -87,6 +100,8 @@ bootstrap_uninstall() {
         esac
     fi
 
+    remove_desktop_entry
+
     # Removing PROJECT_ROOT deletes this running script's file; bash has already
     # read it, so this is safe. Step out of the tree first so the cwd survives.
     cd "$HOME"
@@ -124,6 +139,8 @@ manual_uninstall() {
     elif [ -f "$UNIT_FILE" ]; then
         echo "Warning: systemd user unit '${SERVICE_NAME}' still exists. Re-run with --remove-autostart to remove it." >&2
     fi
+
+    remove_desktop_entry
 
     step "Uninstall complete"
     echo "Data directories such as ~/.vbot were not modified."
