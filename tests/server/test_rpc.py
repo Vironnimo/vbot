@@ -541,7 +541,6 @@ class StubStorage:
         self._settings: JsonObject = {}
         self._credentials: dict[str, str] = {}
         self._prompt_fragments: dict[str, str] = {
-            "system.md": "# System\nDefault system prompt.",
             "runtime.md": "# Runtime\nDefault runtime info.",
             "tools.md": "# Tools\nDefault tools list.",
             "channels.md": "# Channels\nDefault channels list.",
@@ -3987,7 +3986,7 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_agent_update_enabling_custom_prompt_seeds_agent_fragments(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.write_prompt_fragment("system.md", "custom default system")
+    state.runtime.storage.write_prompt_fragment("runtime.md", "custom default runtime")
 
     response = await dispatch_rpc(
         state,
@@ -4000,8 +3999,8 @@ async def test_agent_update_enabling_custom_prompt_seeds_agent_fragments(tmp_pat
     assert response["ok"] is True
     assert response["result"]["custom_system_prompt_enabled"] is True
     assert (
-        state.runtime.storage.read_agent_prompt_fragment("coder", "system.md")
-        == "custom default system"
+        state.runtime.storage.read_agent_prompt_fragment("coder", "runtime.md")
+        == "custom default runtime"
     )
 
 
@@ -4011,7 +4010,7 @@ async def test_agent_update_reenabling_custom_prompt_preserves_agent_fragments(
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
-    state.runtime.storage.write_agent_prompt_fragment("coder", "system.md", "agent custom")
+    state.runtime.storage.write_agent_prompt_fragment("coder", "runtime.md", "agent custom")
     state.runtime.agents.update("coder", custom_system_prompt_enabled=False)
 
     response = await dispatch_rpc(
@@ -4023,7 +4022,7 @@ async def test_agent_update_reenabling_custom_prompt_preserves_agent_fragments(
     )
 
     assert response["ok"] is True
-    assert state.runtime.storage.read_agent_prompt_fragment("coder", "system.md") == "agent custom"
+    assert state.runtime.storage.read_agent_prompt_fragment("coder", "runtime.md") == "agent custom"
 
 
 @pytest.mark.asyncio

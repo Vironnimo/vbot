@@ -26,7 +26,7 @@ A **layout** is an ordered list of `LayoutEntry` (`id`, `enabled` default true, 
 
 The **bundled default layout** lives in `resources/prompts/layout.json` (data, not code) and ships the order an identity agent at home reproduces: `core:agent_body`, `core:soul`, `memory:guidance`, `core:project_files`, `core:runtime`, `core:tools`, `core:channels`, `core:skills`. A missing/malformed file reads as an empty layout (every block then defaults in at its rank — a broken layout never takes a build down).
 
-The four core text blocks read their **default text** from the editable fragment resources `runtime.md`, `tools.md`, `channels.md`, `skills.md` (the bundled resource for the default scope, the agent copy for an agent scope). `system.md` is no longer a prompt block — the old root fragment is gone; the block layout replaced it. `compaction.md` is storage-readable for backend compaction, is not a prompt block, and must never become a block. The old `PromptFragmentManager` / `prompt.update_fragment` editing surface is dead code, not wired anywhere; editing now goes through the block facade below.
+The four core text blocks read their **default text** from the editable fragment resources `runtime.md`, `tools.md`, `channels.md`, `skills.md` (the bundled resource for the default scope, the agent copy for an agent scope). `system.md` is no longer a prompt block — the old root fragment is gone; the block layout replaced it. `compaction.md` is storage-readable for backend compaction, is not a prompt block, and must never become a block. There is no fragment-edit facade anymore — the old `PromptFragmentManager` / `prompt.update_fragment` surface has been removed; the only prompt-edit surface is `SystemPromptManager`'s block facade below.
 
 ## Assembly Pipeline
 

@@ -377,7 +377,7 @@ def test_start_ensures_data_directories_and_prompt_fragments(config: Config):
         "logs",
     ):
         assert (data_dir / directory_name).is_dir()
-    assert (data_dir / "prompts" / "system.md").is_file()
+    assert (data_dir / "prompts" / "runtime.md").is_file()
 
 
 def test_runtime_resolve_environment_credential_prefers_process_env(
