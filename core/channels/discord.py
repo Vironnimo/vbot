@@ -498,8 +498,16 @@ class DiscordChannelAdapter(ChannelAdapter):
         if not isinstance(filename, str) or not filename.strip():
             attachment_id = _snowflake_string(getattr(attachment, "id", None)) or "attachment"
             filename = f"discord-{attachment_id}"
+
+        # Discord reports the size in the attachment metadata, so an oversized file is
+        # refused before read() ever pulls it into memory; store() re-checks as a backstop.
+        reported_size = getattr(attachment, "size", None)
+        attachment_store.ensure_within_limit(
+            reported_size if isinstance(reported_size, int) else None
+        )
+
         payload = await attachment.read()
-        return attachment_store.store(filename.strip(), bytes(payload))
+        return attachment_store.store(filename.strip(), payload)
 
     # -- State helpers ----------------------------------------------------------------
 
