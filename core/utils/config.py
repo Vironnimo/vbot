@@ -9,12 +9,18 @@ import json
 import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.errors import ConfigError
 
 _WORKTREE_FILE = Path(__file__).resolve().parent.parent.parent / ".vbot-worktree"
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8420
+# Ordered by resolution priority: the first key present in settings.json wins.
+# This is deliberately a tuple, not the unordered validation-side frozenset.
+PORT_SETTING_KEYS = ("server_port", "SERVER_PORT", "port", "PORT")
 
 
 def _read_worktree_data_dir(worktree_file: Path | None = None) -> Path | None:
@@ -263,3 +269,77 @@ class Config:
                 continue
 
         return value
+
+
+class ServerBind(TypedDict):
+    """Resolved host/port metadata for server startup."""
+
+    listen_host: str
+    listen_port: int
+    port_source: str
+
+
+def resolve_port(config: Config, explicit_port: int | None = None) -> int:
+    """Resolve port using --port > VBOT_SERVER_PORT > settings.json > default."""
+    server_bind = resolve_server_bind(config, host=DEFAULT_HOST, explicit_port=explicit_port)
+    return server_bind["listen_port"]
+
+
+def resolve_server_bind(
+    config: Config,
+    *,
+    host: str,
+    explicit_port: int | None = None,
+) -> ServerBind:
+    """Resolve server bind metadata for startup and Settings reads."""
+
+    if explicit_port is not None:
+        return {
+            "listen_host": host,
+            "listen_port": explicit_port,
+            "port_source": "cli",
+        }
+
+    environment_port = os.environ.get("VBOT_SERVER_PORT")
+    if environment_port:
+        return {
+            "listen_host": host,
+            "listen_port": _coerce_port(environment_port, source="VBOT_SERVER_PORT"),
+            "port_source": "VBOT_SERVER_PORT",
+        }
+
+    settings = _load_settings_for_port(config)
+    for key in PORT_SETTING_KEYS:
+        value = settings.get(key)
+        if value is not None:
+            return {
+                "listen_host": host,
+                "listen_port": _coerce_port(value, source=f"settings.{key}"),
+                "port_source": f"settings.{key}",
+            }
+
+    return {
+        "listen_host": host,
+        "listen_port": DEFAULT_PORT,
+        "port_source": "default",
+    }
+
+
+def _load_settings_for_port(config: Config) -> dict[str, Any]:
+    """Load settings.json directly so ambient environment cannot affect ports."""
+
+    settings_path = config.data_dir / "settings.json"
+    try:
+        return load_validated_settings_json(settings_path)
+    except SettingsValidationError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _coerce_port(value: Any, *, source: str) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be an integer port") from exc
+    if port < 1 or port > 65535:
+        raise ValueError(f"{source} must be between 1 and 65535")
+    return port
