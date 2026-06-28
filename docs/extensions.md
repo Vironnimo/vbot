@@ -61,6 +61,7 @@ The `api` object (`ExtensionAPI`) offers:
 | `api.on(event, handler)` | a hook handler for one event |
 | `api.register_tool(name, description, parameters, handler, *, internal=False, display=None)` | an agent tool |
 | `api.register_recall_backend(name, factory)` | a session-recall backend |
+| `api.register_prompt_block(slug, *, default_text=None, render=None)` | a System Prompt block |
 | `api.on_startup(handler)` / `api.on_shutdown(handler)` | a lifecycle callback (sync or async, no args) |
 | `api.config` | your config object from `settings.extensions.config.<name>` (default `{}`) |
 | `api.logger` | a ready-made `vbot.extensions.<name>` logger |
@@ -75,13 +76,12 @@ never aborts the run.
 `ctx` is a `HookContext` with `session_id`, `agent_id`, `run_id`, and
 `add_note(text)` — append a kernel-internal `<system-reminder>` for the model.
 
-There are exactly six events. Each has a fixed **composition rule** that decides
+There are exactly five events. Each has a fixed **composition rule** that decides
 how return values are used:
 
 | Event | Composition | Payload (after `ctx`) | Return |
 |---|---|---|---|
 | `run_start` | observer | `session_id, agent_id` | ignored |
-| `before_agent_start` | accumulator | `agent, session, messages, run` | `{"system_prompt_append": str}` |
 | `context` | pipeline | `messages` | a `list` that replaces the running messages, or `None` |
 | `tool_call` | decision pipeline | `tool_name, tool_call_id, input` | `None` / `Modify` / `Deny` / `Replace` |
 | `tool_result` | replace pipeline | `tool_name, tool_call_id, input, result` | a full replacement result envelope, or `None` |
@@ -89,6 +89,13 @@ how return values are used:
 
 `outcome` is `"success"`, `"error"`, or `"cancelled"`. `run_end` runs in a
 `finally`, so it always fires.
+
+To add **standing text to the System Prompt**, do not use a hook — declare a
+**prompt block** instead (see [Prompt blocks](#prompt-blocks)). The prompt block
+is positioned in the prompt layout, gated, and user-overridable; a hook would
+have to rebuild the prompt every turn. Use the `context` hook only for
+**per-request, message-dependent** changes (the kind that needs to inspect the
+running `messages`).
 
 ### The `tool_call` decision hook
 
@@ -165,6 +172,45 @@ lowercase snake_case and must not collide with a built-in. Once registered, a
 backend becomes selectable via `settings.recall.backend` (Settings → Recall).
 See [`.vorch/domain-maps/recall.md`](../.vorch/domain-maps/recall.md) for the backend
 protocol.
+
+## Prompt blocks
+
+To add standing content to the **System Prompt**, declare a block with
+`api.register_prompt_block`. The vBot System Prompt is built from ordered blocks;
+your block joins them — positioned in the layout, gated, and (for a static block)
+user-overridable from the System Prompt tab. This is the right tool for "always
+tell the model X"; do not try to append it from a hook.
+
+Pass **exactly one** of:
+
+- `default_text` — a **static** block. Its text is editable through the System
+  Prompt override cascade, so a user can tweak or disable it per scope.
+- `render` — a **dynamic** block: a build-time function `render(context) -> str`
+  that returns the text. It is not user-editable, and if it raises, only that one
+  block is dropped (the run is never aborted). `context` carries the agent and
+  run state but **no conversation messages** — message-dependent content belongs
+  in the `context` hook, not here.
+
+```python
+def register(api):
+    # A static block the user can edit/reorder/disable in the System Prompt tab.
+    api.register_prompt_block(
+        "house_style",
+        default_text="Prefer SI units and ISO 8601 dates.",
+    )
+
+    # A dynamic block computed at prompt-build time.
+    def render_quota(context):
+        return f"Daily quota remaining: {remaining_calls()}."
+
+    api.register_prompt_block("quota", render=render_quota)
+```
+
+Your block's id is `extension:<slug>` and its owner is `extension:<name>`, so it
+renders **only while your extension is loaded**. Declare several blocks by using
+distinct slugs. A slug that collides with another extension's block is resolved
+first-loaded-wins with a non-fatal diagnostic (same policy as tool names). The
+block list refreshes whenever extensions reload — no per-request cost.
 
 ## Lifecycle: startup and shutdown
 

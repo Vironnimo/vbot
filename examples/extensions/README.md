@@ -35,11 +35,16 @@ def register(api):
 
 `register(api)` only *declares* — it wires up:
 
-- **hooks** — `api.on(event, handler)` for `run_start`, `before_agent_start`,
-  `context`, `tool_call`, `tool_result`, `run_end`
+- **hooks** — `api.on(event, handler)` for `run_start`, `context`, `tool_call`,
+  `tool_result`, `run_end`
 - **tools** — `api.register_tool(name, description, parameters, handler)`
 - **recall backends** — `api.register_recall_backend(name, factory)`
+- **prompt blocks** — `api.register_prompt_block(slug, *, default_text=…)` (or
+  `render=…`) to add standing content to the System Prompt
 - **lifecycle** — `api.on_startup(fn)` / `api.on_shutdown(fn)`
+
+To add text to the System Prompt, declare a **prompt block** — there is no
+prompt-append hook (see the author guide for the static vs dynamic split).
 
 The runtime applies those declarations at the right points during startup;
 extensions never touch the live registries directly. Per-extension config

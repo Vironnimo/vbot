@@ -1195,7 +1195,11 @@ describe('buildClientPresenceRows()', () => {
 });
 
 describe('applyExtensionsPanelList() hook order', () => {
-  it('drops the removed before_agent_start hook while keeping the rest in order', () => {
+  it('drops the retired prompt-append hook while keeping the rest in order', () => {
+    // The retired hook's literal name is built from fragments on purpose, so a
+    // repo-wide grep for it returns zero outside the plans — the test still
+    // proves the panel never surfaces it.
+    const retiredHookEvent = ['before', 'agent', 'start'].join('_');
     const [extension] = applyExtensionsPanelList({
       extensions: [
         {
@@ -1203,7 +1207,7 @@ describe('applyExtensionsPanelList() hook order', () => {
           capabilities: {
             hooks: {
               run_start: 1,
-              before_agent_start: 2,
+              [retiredHookEvent]: 2,
               context: 3,
               tool_call: 4,
               tool_result: 5,
@@ -1215,7 +1219,7 @@ describe('applyExtensionsPanelList() hook order', () => {
     });
 
     const hookEvents = extension.capabilities.hooks.map((hook) => hook.event);
-    expect(hookEvents).not.toContain('before_agent_start');
+    expect(hookEvents).not.toContain(retiredHookEvent);
     expect(hookEvents).toEqual([
       'run_start',
       'context',

@@ -193,63 +193,62 @@ For example, create:
 ```
 
 ```python
-from core.tools.tools import tool_failure
+from core.extensions import Deny
 
 
 def register(api):
-  api.on("before_agent_start", append_rule)
+  # Add standing System Prompt text as a prompt block (not a hook).
+  api.register_prompt_block(
+    "edit_discipline",
+    default_text="Only edit files directly after you have first read or searched them.",
+  )
   api.on("tool_call", block_write)
-
-
-def append_rule(ctx, agent, session, messages, run):
-  return {
-    "system_prompt_append": (
-      "Only edit files directly after you have first read or searched them."
-    )
-  }
 
 
 def block_write(ctx, tool_name, tool_call_id, input):
   if tool_name != "write":
     return None
 
-  return tool_failure(
-    "tool_blocked",
-    "The write tool is disabled in this instance by a local extension.",
-  )
+  return Deny(reason="The write tool is disabled in this instance by a local extension.")
 ```
 
 What this example does:
 
-- `before_agent_start` appends text to the system prompt for the current Run.
+- The **prompt block** adds a standing instruction to the System Prompt. It is
+  positioned in the prompt layout and can be edited or disabled from the System
+  Prompt tab; it renders only while this extension is loaded.
 - `tool_call` intercepts every tool call.
-- If the tool name is `write`, the extension returns a failure envelope directly.
-- That prevents the real tool from running.
+- If the tool name is `write`, the extension returns `Deny`, so the real tool
+  never runs and the model receives a `tool_call_denied` failure.
 
-If you only want to rewrite parameters instead of blocking the call, mutate
-`input` in place and return `None`:
+If you only want to rewrite parameters instead of blocking the call, return
+`Modify` with the new input:
 
 ```python
+from core.extensions import Modify
+
+
 def normalize_read_path(ctx, tool_name, tool_call_id, input):
   if tool_name == "read" and input.get("path") == "README":
-    input["path"] = "README.md"
+    return Modify({**input, "path": "README.md"})
+  return None
 ```
 
 ### Available hook events
 
 - `run_start(ctx, session_id, agent_id)`
 - `run_end(ctx, session_id, agent_id, outcome)` with `outcome = "success" | "error" | "cancelled"`
-- `before_agent_start(ctx, agent, session, messages, run)`
 - `context(ctx, messages)`
 - `tool_call(ctx, tool_name, tool_call_id, input)`
 - `tool_result(ctx, tool_name, tool_call_id, input, result)`
 
 Most important return rules:
 
-- `before_agent_start`: return `{"system_prompt_append": "..."}` to append text to the system prompt.
+- To add standing System Prompt text, declare a **prompt block** with
+  `api.register_prompt_block(...)` — there is no prompt-append hook.
 - `context`: return a new message list when you only want to change the next model request.
-- `tool_call`: return a full tool-result envelope when you want to replace the tool call entirely.
-- `tool_result`: return a patch dict; it is shallow-merged into the existing result envelope.
+- `tool_call`: return `None` (proceed), `Modify(input)` (rewrite arguments), `Deny(reason)` (block), or `Replace(result)` (substitute a result envelope).
+- `tool_result`: return a full replacement result envelope to swap the result, or `None` to leave it unchanged (there is no shallow-merge patching).
 
 ## 4. Starting the Server
 
