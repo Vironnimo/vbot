@@ -3,6 +3,7 @@
 !.github/workflows/
 .vscode/
 .opencode/
+.agents/
 .venv/
 .tmp/
 .worktrees/
