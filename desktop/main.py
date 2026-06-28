@@ -44,7 +44,10 @@ PROBE_WEBUI_UNAVAILABLE = "webui_unavailable"
 PROBE_SERVER_UNREACHABLE = "server_unreachable"
 PROBE_NOT_VBOT_SERVER = "not_vbot_server"
 PROBE_INVALID_TARGET = "invalid_target"
-INVALID_HOST_CHARACTERS = frozenset("/\\:?#@[]")
+# Block URL-structure characters plus HTML/JS metacharacters: none appear in a
+# valid host name or IPv4 literal, and barring them keeps a stored host from
+# ever carrying a markup/script payload into the connection screen.
+INVALID_HOST_CHARACTERS = frozenset("/\\:?#@[]'\"`<>&();")
 ACCESSOR_QUERY_PARAM = "accessor=desktop"
 
 
