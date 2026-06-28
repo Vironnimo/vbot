@@ -15,7 +15,7 @@ from core.projects.projects import (
     ProjectError,
     ProjectNotFoundError,
 )
-from core.projects.store import ProjectStore, _validate_project_id
+from core.projects.store import ProjectStore, _validate_agent_id, _validate_project_id
 from core.sessions import ChatSessionManager
 
 
@@ -542,6 +542,36 @@ def test_delete_rejects_path_traversal_id_leaves_sibling_untouched(
 
     assert sibling.is_dir()
     assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["../builder", "..", "foo/bar", "a\\b", "/etc", ".", "x/../y", "agent/", "", "-agent"],
+)
+def test_validate_agent_id_rejects_path_components(bad_id: str) -> None:
+    # The agent id is a path segment under a project anchor; traversal must be refused.
+    with pytest.raises(ProjectError, match="Invalid agent id"):
+        _validate_agent_id(bad_id)
+
+
+def test_validate_agent_id_accepts_valid_slug() -> None:
+    assert _validate_agent_id("orchestrator") == "orchestrator"
+
+
+def test_sessions_dir_rejects_path_traversal_agent_id(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    with pytest.raises(ProjectError, match="Invalid agent id"):
+        store.sessions_dir("vbot", "../escape")
+
+
+def test_workspace_dir_rejects_path_traversal_agent_id(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    with pytest.raises(ProjectError, match="Invalid agent id"):
+        store.workspace_dir("vbot", "../escape")
 
 
 def test_sessions_dir_is_project_scoped(data_dir: Path, repo: Path) -> None:
