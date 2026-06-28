@@ -250,43 +250,6 @@ class PromptBlockStore:
             raise StorageError(f"Cannot remove block override {override_path}: {exc}") from exc
         return True
 
-    # -- Override cascade ---------------------------------------------------
-
-    def resolve_effective_text(
-        self,
-        agent_scope: str | None,
-        block_id: str,
-        owner_default: str | None,
-    ) -> str | None:
-        """Resolve a static block's effective text through the D3 cascade.
-
-        Precedence: **agent override ← default-scope override ← owner default**.
-        The agent scope is checked only when *agent_scope* is given (the agent
-        owns its form with ``custom_system_prompt_enabled``); otherwise the
-        cascade starts at the default scope. *owner_default* is the definition's
-        default text and is the final fallback.
-
-        A dynamic block has no default text (``owner_default is None``) and no
-        override path, so it resolves to ``None`` here — the engine renders it
-        from its render function instead, never from this store.
-        """
-
-        if owner_default is None:
-            # Dynamic block: no override path, no default text. The store must
-            # not invent one — the engine renders it from its render function.
-            return None
-
-        if agent_scope is not None:
-            agent_override = self.read_block_override(agent_scope, block_id)
-            if agent_override is not None:
-                return agent_override
-
-        default_override = self.read_block_override(None, block_id)
-        if default_override is not None:
-            return default_override
-
-        return owner_default
-
     # -- Validation & id-to-path mapping ------------------------------------
 
     @staticmethod

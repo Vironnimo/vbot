@@ -803,16 +803,6 @@ class StorageManager:
 
         return self._prompt_blocks.remove_block_override(scope, block_id)
 
-    def resolve_effective_block_text(
-        self,
-        agent_scope: str | None,
-        block_id: str,
-        owner_default: str | None,
-    ) -> str | None:
-        """Resolve a block's effective text through the agent ← default ← owner cascade."""
-
-        return self._prompt_blocks.resolve_effective_text(agent_scope, block_id, owner_default)
-
     @staticmethod
     def _resolve_data_dir(data_dir: str | Path | None, config: ConfigProtocol | None) -> Path:
         if data_dir is not None:
