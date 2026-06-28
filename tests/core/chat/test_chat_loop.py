@@ -1540,6 +1540,55 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_compact_session_scopes_to_project_session_and_agent(tmp_path: Path) -> None:
+    # A /compact issued in a project chat must compact the project session and
+    # resolve the project agent — never silently fall back to the identity session.
+    identity_agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    project_agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = ClosingStubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=identity_agent,
+        adapter=adapter,
+        project_agents={("proj", "coder"): project_agent},
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+    )
+    # Same session id in both scopes, distinct content: the identity session must
+    # stay untouched, proving the project scope is the one that was loaded.
+    identity_session = runtime.chat_sessions.create("coder", session_id="session-one")
+    identity_session.append(ChatMessage.user("identity tail"))
+    project_session = runtime.chat_sessions.create(
+        "coder", session_id="session-one", project_id="proj"
+    )
+    project_tail = ChatMessage.user("project tail")
+    project_session.append(project_tail)
+    project_session.append(ChatMessage.assistant(model=project_agent.model, content="project a"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted context.",
+        tail_boundary_id=project_tail.id,
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+
+    reply = await loop.compact_session("coder", "session-one", project_id="proj")
+
+    assert reply == "Context compacted."
+    # Resolved the project agent, never the identity fallback.
+    assert ("proj", "coder") in runtime.agent_resolver.calls
+    assert (None, "coder") not in runtime.agent_resolver.calls
+    # The project session got the checkpoint; the identity session is untouched.
+    assert persisted_roles(project_session.load()) == [
+        "user",
+        "assistant",
+        "compaction_checkpoint",
+    ]
+    assert persisted_roles(identity_session.load()) == ["user"]
+
+
+@pytest.mark.asyncio
 async def test_compact_session_forwards_instruction_to_service(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = ClosingStubAdapter([])

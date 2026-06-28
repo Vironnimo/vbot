@@ -102,11 +102,19 @@ class TriggerService:
         )
 
     async def compact_session(
-        self, agent_id: str, session_id: str, instruction: str | None = None
+        self,
+        agent_id: str,
+        session_id: str,
+        instruction: str | None = None,
+        *,
+        project_id: str | None = None,
     ) -> str:
         """Compact a session and return a user-facing command reply.
 
         ``instruction`` carries the optional free-text argument from
         ``/compact <instruction>`` down into the summarization prompt.
+        ``project_id`` scopes compaction to a project session (``None`` = identity).
         """
-        return await self._chat_loop.compact_session(agent_id, session_id, instruction)
+        return await self._chat_loop.compact_session(
+            agent_id, session_id, instruction, project_id=project_id
+        )
