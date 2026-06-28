@@ -160,3 +160,23 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 ## Project Skill Whitelist
 **Definition:** A Project's Skill Whitelist stored as a **rule, not a resolved set** (`project.json` → `skills_bundled_enabled` + `skills_project_disabled`). The project's own skills (scanned from `<cwd>/.opencode/skills/`) are active by default; `skills_project_disabled` turns some off, and `skills_bundled_enabled` opts in named bundled skills. Effective skills = `(project skills − disabled) ∪ enabled-bundled`. Storing the rule (not a snapshot) means a newly added repo skill lights up automatically. A project skill **wins** a name collision with a bundled one.
 **Not:** A flat allow-list of skill names, nor a per-agent setting (OpenCode does not narrow skills per agent in v1). Project skills are project-scoped — they never leak to other projects or the home agent.
+
+## Prompt Block
+**Definition:** The unit the System Prompt is assembled from — an ordered, gated contribution that is either an editable **text** block (its text may carry `{include:…}` and `{generated:…}` markers) or a non-editable **data** block (SOUL, project files, the config-agent body, an auto-list, or a dynamic render function). Every contributor (core, a tool, an extension, the user) hands the prompt domain a block *definition*; the System Prompt is the layout-ordered, three-gate-filtered, normalized concatenation of the surviving blocks.
+**Not:** A prompt fragment. The old closed set of five editable fragment files (`system.md`/`runtime.md`/`tools.md`/`channels.md`/`skills.md`) is gone — a block is fragment-sized but reorderable, toggleable, gated, and contributable from any source.
+
+## Block Layout
+**Definition:** The persisted, per-scope ordered list of `{id, enabled, source}` that owns a scope's block order and on/off state, stored as `layout.json` under the scope (default scope in `<data_dir>/prompts/`, agent scope under the agent dir). A block absent from the layout is inserted at its definition's `default_rank` (ranks never come from this file); a layout entry whose definition is gone is inert — skipped at build, pruned on the next write.
+**Not:** The block definitions or their text. The layout owns order + enabled only; a block's text/owner/kind/source live in its definition and per-scope text override, never in `layout.json`.
+
+## Block Owner (three-gate filter)
+**Definition:** A block renders only when **all three** gates hold: user-enabled (its layout entry is on) ∧ owner-active ∧ non-empty (rendered text non-empty after marker/include expansion). The **owner** — `always` / `memory` / `tool:<name>` / `channel` / `extension:<name>` — is gate 2: a `channel`-owned block drops entirely when the agent has no active channel (it no longer emits `- None`), and the memory block renders whenever the memory tool is on, even with empty memory files.
+**Not:** The Source prefix. Owner is the per-agent/run activation condition (gate 2); the source prefix is provenance. They reuse the words `tool:`/`extension:` but are distinct fields on the block.
+
+## Source prefix
+**Definition:** The namespace before the first colon in a block id — `core:` / `tool:` / `extension:` / `user:` / `memory:` — naming where the block came from and mapping to its on-disk override folder `blocks/<namespace>/<slug>.md` (the colon itself never reaches the path; Windows-safe). A separate field from the owner.
+**Not:** The Block Owner. Source is provenance (and the disk path); owner is the gate-2 activation condition — even though both can read `tool:`/`extension:`.
+
+## Producer
+**Definition:** A function registered under a marker name that renders a `{generated:NAME}` placeholder inside a block at build time — the auto-lists `tool_list` / `skill_list` / `channel_list` and `memory_files`. An unknown marker renders to empty with a warning (fail-soft); an empty producer result leaves no residue after normalization.
+**Not:** A dynamic block. A producer fills one marker inside an otherwise-static editable block; a dynamic block's entire body is a render function (a deliberate cache break).
