@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,7 @@ def make_result(
         ["server", "stop"],
         ["server", "restart"],
         ["server", "status"],
+        ["desktop"],
         ["agent"],
         ["agent", "list"],
         ["agent", "show"],
@@ -152,6 +154,71 @@ def test_each_server_command_accepts_target_options(command: str) -> None:
     assert args.host == "localhost"
     assert args.port == 8765
     assert args.data_dir == "data"
+
+
+def test_parse_args_desktop_without_target_leaves_host_and_port_unset() -> None:
+    args = cli_main.parse_args(["desktop"])
+
+    assert args.area == "desktop"
+    assert args.host is None
+    assert args.port is None
+
+
+def test_parse_args_desktop_accepts_host_and_port() -> None:
+    args = cli_main.parse_args(["desktop", "--host", "192.168.1.50", "--port", "8500"])
+
+    assert args.area == "desktop"
+    assert args.host == "192.168.1.50"
+    assert args.port == 8500
+
+
+def test_parse_args_desktop_rejects_data_dir() -> None:
+    with pytest.raises(SystemExit):
+        cli_main.parse_args(["desktop", "--data-dir", "data"])
+
+
+def test_run_desktop_forwards_supplied_target_flags_to_injected_launcher(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[Sequence[str]] = []
+
+    def fake_launch(launch_argv: Sequence[str]) -> None:
+        calls.append(list(launch_argv))
+
+    exit_code = cli_main.run(
+        ["desktop", "--host", "192.168.1.50", "--port", "8500"],
+        launch_desktop_fn=fake_launch,
+    )
+
+    assert exit_code == 0
+    assert calls == [["--host", "192.168.1.50", "--port", "8500"]]
+    assert capsys.readouterr().out.splitlines() == ["desktop window closed"]
+
+
+def test_run_desktop_without_flags_passes_empty_argv_to_launcher() -> None:
+    calls: list[Sequence[str]] = []
+
+    def fake_launch(launch_argv: Sequence[str]) -> None:
+        calls.append(list(launch_argv))
+
+    exit_code = cli_main.run(["desktop"], launch_desktop_fn=fake_launch)
+
+    assert exit_code == 0
+    assert calls == [[]]
+
+
+def test_run_desktop_reports_failure_when_launcher_raises_runtime_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_launch(launch_argv: Sequence[str]) -> None:
+        raise RuntimeError("pywebview is required to run vBot Desktop")
+
+    exit_code = cli_main.run(["desktop"], launch_desktop_fn=fake_launch)
+
+    assert exit_code == 1
+    assert capsys.readouterr().out.splitlines() == [
+        "error: pywebview is required to run vBot Desktop"
+    ]
 
 
 def test_parse_args_supports_agent_update_fields() -> None:

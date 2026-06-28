@@ -95,6 +95,20 @@ SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
 
 
+def _launch_desktop(argv: Sequence[str]) -> None:
+    """Open the Desktop window via its stable entrypoint.
+
+    The Desktop launcher is imported lazily so the default CLI path never
+    requires the optional ``[desktop]`` group (pywebview). A missing pywebview
+    surfaces through the launcher's own ``load_webview`` message, which is
+    raised as ``RuntimeError`` and turned into a failure exit by the caller.
+    """
+
+    from desktop.main import main as desktop_main
+
+    desktop_main(list(argv))
+
+
 @dataclass(frozen=True)
 class ServerCommandContext:
     """Parsed server command target and service dispatch functions."""
@@ -158,6 +172,7 @@ def run(
     set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] = config_set,
     doctor_settings_fn: Callable[[str | Path | None], CommandResult] = doctor_settings,
     doctor_config_fn: Callable[[str | Path | None], CommandResult] = doctor_config,
+    launch_desktop_fn: Callable[[Sequence[str]], None] = _launch_desktop,
 ) -> int:
     """Run the CLI and return an automation-safe process exit code."""
 
@@ -177,6 +192,9 @@ def run(
         result = dispatch_server_command(context)
         print_command_result(context.command, result)
         return exit_code_for(context.command, result)
+
+    if args.area == "desktop":
+        return dispatch_desktop_command(args, launch_desktop_fn=launch_desktop_fn)
 
     if args.area == "doctor":
         result = dispatch_doctor_command(
@@ -897,6 +915,43 @@ def dispatch_update_command(
         start=start,
         service_name=getattr(args, "service_name", None) or DEFAULT_SERVICE_NAME,
     )
+
+
+def dispatch_desktop_command(
+    args: argparse.Namespace,
+    *,
+    launch_desktop_fn: Callable[[Sequence[str]], None],
+) -> int:
+    """Launch the Desktop window locally and return a stable exit code.
+
+    This is a local GUI-launch action, not an RPC management command: it
+    branches before the shared ``resolve(...)`` and never builds a
+    ``ServerInstance``. Only the flags the user actually supplied are forwarded,
+    so a bare ``vbot desktop`` reaches the launcher's last-used auto-connect path
+    instead of a silent localhost target. The call blocks until the window
+    closes; a missing ``[desktop]`` group raises ``RuntimeError`` (the launcher's
+    own install hint), which maps to a failure exit.
+    """
+
+    launch_argv = _desktop_launch_argv(args)
+    try:
+        launch_desktop_fn(launch_argv)
+    except RuntimeError as exc:
+        print(f"error: {exc}")
+        return FAILURE_EXIT_CODE
+    print("desktop window closed")
+    return SUCCESS_EXIT_CODE
+
+
+def _desktop_launch_argv(args: argparse.Namespace) -> list[str]:
+    """Build the Desktop launcher argv from only the supplied target flags."""
+
+    launch_argv: list[str] = []
+    if args.host is not None:
+        launch_argv.extend(["--host", args.host])
+    if args.port is not None:
+        launch_argv.extend(["--port", str(args.port)])
+    return launch_argv
 
 
 def dispatch_server_command(context: ServerCommandContext) -> CommandResult:

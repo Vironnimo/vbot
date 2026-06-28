@@ -26,6 +26,7 @@ CRON_STATUSES = ("active", "paused", "completed")
 TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
+    "desktop": "Open the desktop window pointed at a local or remote server",
     "update": "Update the installation from git, refresh deps/WebUI, and restart",
     "autostart": "Enable, disable, or inspect OS autostart for the server",
     "agent": "Inspect and manage agent configs",
@@ -153,6 +154,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manage vBot from the command line")
     subparsers = parser.add_subparsers(dest="area", required=True)
     _add_server_parsers(subparsers)
+    _add_desktop_parsers(subparsers)
     _add_update_parsers(subparsers)
     _add_autostart_parsers(subparsers)
     _add_agent_parsers(subparsers)
@@ -209,6 +211,27 @@ def _add_server_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
                     "systemd user unit to restart when the install is unit-managed (default: vbot)"
                 ),
             )
+
+
+def _add_desktop_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    desktop_parser = subparsers.add_parser(
+        "desktop",
+        help=AREA_HELP["desktop"],
+        description=(
+            f"{AREA_HELP['desktop']}. Example: vbot desktop --host 192.168.1.50 --port 8420"
+        ),
+    )
+    desktop_parser.add_argument(
+        "--host",
+        metavar="<host>",
+        help="Server host to open; omitted auto-connects to the last-used server",
+    )
+    desktop_parser.add_argument(
+        "--port",
+        type=int,
+        metavar="<port>",
+        help="Server port to open; omitted auto-connects to the last-used server",
+    )
 
 
 def _add_agent_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

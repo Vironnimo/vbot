@@ -30,7 +30,22 @@ vbot server restart [--service-name <name>]
 vbot server status
 ```
 
-Only server lifecycle commands, `vbot update`, and `vbot doctor ...` can operate without an already-running vBot server. `start` refuses to launch over a non-vBot process on the target port. On a systemd-managed Linux install, `server restart` is routed through the service unit (default `vbot`; override with `--service-name`) so it does not fight the unit.
+Only server lifecycle commands, `vbot desktop`, `vbot update`, and `vbot doctor ...` can operate without an already-running vBot server. `start` refuses to launch over a non-vBot process on the target port. On a systemd-managed Linux install, `server restart` is routed through the service unit (default `vbot`; override with `--service-name`) so it does not fight the unit.
+
+## Desktop
+
+```bash
+vbot desktop [--host <host>] [--port <port>]
+```
+
+`vbot desktop` opens the native desktop window (a thin pywebview shell that loads a vBot server's WebUI and runs the local voice pipeline). It is a local GUI-launch action: it does not start or manage a server, builds no instance, and takes no `--data-dir` (the Desktop never uses the server data dir). With no flags it auto-connects to the last-used server, or shows the in-window connection screen on first run; `--host`/`--port` open that specific local or remote server instead. The command blocks until the window is closed. Requires the `[desktop]` group (`pip install -e ".[desktop]"`); without it the command prints an install hint and exits non-zero.
+
+Examples:
+
+```bash
+vbot desktop
+vbot desktop --host 192.168.1.50 --port 8420
+```
 
 ## Update
 
