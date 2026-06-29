@@ -104,6 +104,7 @@ class StubProject:
     project_id: str
     cwd: str
     auto_load: list[str]
+    display_name: str = ""
 
 
 class StubProjects:
@@ -228,6 +229,13 @@ class StubPrompts:
             else []
         )
         return PinnedSkillCatalog(catalog_text=f"catalog:{len(skills)}", has_loadable_skills=bool(skills))
+
+    def render_visiting_project_skills(self, project_name: str, skills: Any) -> str:
+        if not skills:
+            return ""
+        lines = [f"Skills from project '{project_name}' — read a skill's SKILL.md with the `read` tool to use it:"]
+        lines.extend(f"- {skill.name}: {skill.description} ({skill.path})" for skill in skills)
+        return "\n".join(lines)
 
     def render_project_files(self, project_context: Any) -> str:
         self.render_project_files_calls.append(project_context)
@@ -516,6 +524,8 @@ class StubRuntime:
         # (project_id, agent_id) a run resolves skills against — e.g. that a rooted
         # identity run resolves against its home project, not ``None``.
         self.skills_for_calls: list[tuple[str | None, str | None]] = []
+        # Project-own skills the visiting reminder lists; tests set this per project.
+        self.project_own_skills_result: list[Any] = []
 
     def get_adapter(self, provider_id: str, connection_id: str) -> StubAdapter:
         self.adapter_provider_id = provider_id
@@ -536,6 +546,11 @@ class StubRuntime:
 
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
         return frozenset()
+
+    def project_own_skills(self, _project_id: str) -> list[Any]:
+        # Visiting-reminder source: tests set ``project_own_skills_result`` to skill
+        # objects (name/description/path); default empty means no skills section.
+        return self.project_own_skills_result
 
 
 class StubProviderCredentials:

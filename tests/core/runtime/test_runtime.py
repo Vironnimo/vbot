@@ -1097,6 +1097,22 @@ def test_invalidate_project_skills_drops_matching_agent_cache(config: Config, tm
     assert runtime.skills_for(project.project_id, "main") is not first
 
 
+def test_project_own_skills_returns_scanned_project_metadata(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "deploy", "Ship it.")
+    project = runtime.projects.create("p", "P", repo)
+
+    skills = runtime.project_own_skills(project.project_id)
+
+    # Only the project's own skills (no bundled), with their real SKILL.md paths.
+    assert [skill.name for skill in skills] == ["deploy"]
+    assert skills[0].path == (repo / ".opencode" / "skills" / "deploy" / "SKILL.md").resolve()
+
+
 def test_skills_for_tags_origin_per_scope(config: Config, tmp_path: Path) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
@@ -1251,10 +1267,16 @@ class _StubPrompts:
         agent_body: str = "",
         project_context: object = None,
         skill_registry: object = None,
+        skill_catalog: object = None,
     ) -> str:
         return "System prompt"
 
+    def render_skill_catalog(self, _agent: object, skill_registry: object = None) -> object:
+        from core.prompts import PinnedSkillCatalog
+
+        return PinnedSkillCatalog(catalog_text="", has_loadable_skills=False)
+
     def provider_tool_definitions(
-        self, _agent: object, *, skill_registry: object = None
+        self, _agent: object, *, skill_registry: object = None, skill_catalog: object = None
     ) -> list[dict[str, object]]:
         return []
