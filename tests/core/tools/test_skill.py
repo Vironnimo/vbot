@@ -17,9 +17,11 @@ from core.tools import (
 from core.tools.skill import load_skill_content
 
 
-def _fixed_registry(registry: SkillRegistry) -> Callable[[str | None], SkillRegistry]:
-    """Wrap a fixed registry as the project→registry resolver the tool now expects."""
-    return lambda _project_id: registry
+def _fixed_registry(
+    registry: SkillRegistry,
+) -> Callable[[str | None, str | None], SkillRegistry]:
+    """Wrap a fixed registry as the (project, agent)→registry resolver the tool expects."""
+    return lambda _project_id, _agent_id: registry
 
 
 def test_skill_tool_loads_body_and_resources(tmp_path: Path) -> None:
@@ -165,7 +167,9 @@ def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
     project_registry = SkillRegistry.load(project_skills)
     registries: dict[str | None, SkillRegistry] = {"vbot": project_registry}
     tools = ToolRegistry()
-    register_skill_tool(tools, lambda project_id: registries.get(project_id, global_registry))
+    register_skill_tool(
+        tools, lambda project_id, _agent_id: registries.get(project_id, global_registry)
+    )
 
     project_result = asyncio.run(
         async_dispatch(tools, _context(tmp_path, project_id="vbot"), {"name": "proj-skill"})
@@ -175,6 +179,28 @@ def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
     assert project_result["ok"] is True
     # The project-only skill is not in the global registry, so the identity run fails.
     assert identity_result == tool_failure("skill_not_found", "Skill not found: proj-skill")
+
+
+def test_skill_tool_loads_agent_own_skill_bypassing_allowlist(tmp_path: Path) -> None:
+    # An agent's own private skill is always-allowed for it: the skill tool loads it
+    # even when the agent's allow-list would otherwise exclude everything.
+    agent_home = tmp_path / "agent-skills"
+    skill_dir = agent_home / "private"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: private\ndescription: Agent only.\n---\n\nSecret steps.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry.load(agent_home, always_allowed=frozenset({"private"}))
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry))
+
+    result = asyncio.run(
+        async_dispatch(tools, _context(tmp_path, allowed_skills=[]), {"name": "private"})
+    )
+
+    assert result["ok"] is True
+    assert cast(dict[str, Any], result["data"])["name"] == "private"
 
 
 def test_load_skill_content_escapes_skill_name_in_wrapper(tmp_path: Path) -> None:
@@ -233,6 +259,7 @@ def _context(
     activation_hook: object | None = None,
     *,
     project_id: str | None = None,
+    allowed_skills: list[str] | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id="coder",
@@ -245,6 +272,9 @@ def _context(
         app_root=tmp_path,
         data_root=tmp_path,
         project_id=project_id,
+        # The tool resolves against the effective skill project; outside the rooted
+        # case it equals project_id, so mirror it here.
+        skill_project_id=project_id,
         skill_activation_hook=activation_hook,  # type: ignore[arg-type]
-        allowed_skills=["*"],
+        allowed_skills=["*"] if allowed_skills is None else allowed_skills,
     )

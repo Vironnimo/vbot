@@ -154,13 +154,15 @@ class RuntimeServices(Protocol):
         """Loaded skill metadata registry (the global/identity pool)."""
         ...
 
-    def skills_for(self, project_id: str | None) -> SkillRegistry:
-        """Return the skill registry for a run, scoped to its project.
+    def skills_for(self, project_id: str | None, agent_id: str | None = None) -> SkillRegistry:
+        """Return the skill registry for a run, scoped to its project and agent.
 
-        ``None`` returns the global registry (identity runs, unchanged); a set
-        ``project_id`` returns the project's merged registry (its own
-        ``.opencode/skills`` first, then the bundled pool). The single seam every
-        run-time skill consumer resolves through.
+        ``project_id``/``agent_id`` both ``None`` returns the global registry
+        (identity runs, unchanged); a set ``project_id`` returns the project's
+        merged registry (its own ``.opencode/skills`` first, then the bundled pool);
+        an ``agent_id`` with a private skills home layers that on top (always-allowed
+        for the owner). The single seam every run-time skill consumer resolves
+        through.
         """
         ...
 

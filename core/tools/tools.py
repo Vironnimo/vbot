@@ -124,6 +124,13 @@ class ToolContext:
     # child session/run and a parent link that records the project. ``None`` means
     # the global/identity path, exactly unchanged.
     project_id: str | None = None
+    # The project whose skill pool this run resolves against. Equals ``project_id``
+    # for a project run and ``None`` for a plain identity run, but for a *rooted*
+    # identity agent (its workspace is a registered repo, so ``project_id`` is
+    # ``None``) this is its home project — so the ``skill`` tool loads the same
+    # skills the run's catalog advertises. Kept separate from ``project_id`` so
+    # skill resolution stays rooted-aware without changing subagent inheritance.
+    skill_project_id: str | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
     cancel_registration_hook: ToolCancelRegistrationHook | None = None
@@ -214,6 +221,8 @@ class ToolExecutionConfig:
     # Project of the owning run, threaded onto every ``ToolContext`` built from
     # this group. ``None`` is the identity path. See ``ToolContext.project_id``.
     project_id: str | None = None
+    # Effective skill project for this group; see ``ToolContext.skill_project_id``.
+    skill_project_id: str | None = None
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
@@ -604,6 +613,7 @@ class ToolExecutor:
                 data_root=config.data_root,
                 cwd=config.cwd,
                 project_id=config.project_id,
+                skill_project_id=config.skill_project_id,
                 emit_hook=config.emit_hook,
                 cancellation_hook=config.cancellation_hook,
                 cancel_registration_hook=cancel_registration_hook,

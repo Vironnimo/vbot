@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -82,10 +82,16 @@ class SkillRegistry:
         skills: dict[str, SkillMetadata],
         diagnostics: list[SkillDiagnostic] | None = None,
         environment: Mapping[str, str] | None = None,
+        always_allowed: Iterable[str] | None = None,
     ) -> None:
         self._skills = skills
         self._diagnostics = list(diagnostics or [])
         self._environment = dict(os.environ if environment is None else environment)
+        # Names that bypass an agent's ``allowed_skills`` filter for *this* registry
+        # only. The runtime sets this to an agent's own private skills, so an
+        # agent-scoped registry always exposes the agent's own skills while a
+        # shared registry (global/project) leaves it empty and filters as before.
+        self._always_allowed = frozenset(always_allowed or ())
 
     @classmethod
     def load(
@@ -93,13 +99,16 @@ class SkillRegistry:
         skills_dir: Path,
         extra_dirs: list[Path] | None = None,
         environment: Mapping[str, str] | None = None,
+        always_allowed: Iterable[str] | None = None,
     ) -> SkillRegistry:
         """Load all valid skills from immediate subdirectories of scan roots.
 
         Missing skill roots are treated as empty.  A directory is a skill only
         when it contains ``SKILL.md`` with loadable YAML front matter.  When
         duplicate names are found, the first scanned directory wins and the
-        rejected duplicate is preserved as a diagnostic.
+        rejected duplicate is preserved as a diagnostic.  ``always_allowed`` names
+        bypass the ``allowed_skills`` filter for this registry (the runtime passes
+        an agent's own private skills so they are always visible to their owner).
         """
         skills: dict[str, SkillMetadata] = {}
         diagnostics: list[SkillDiagnostic] = []
@@ -107,7 +116,7 @@ class SkillRegistry:
         for scan_root in scan_roots:
             _load_skill_root(scan_root, skills, diagnostics)
 
-        return cls(skills, diagnostics, environment=environment)
+        return cls(skills, diagnostics, environment=environment, always_allowed=always_allowed)
 
     def get(self, name: str) -> SkillMetadata:
         """Return one skill by name.
@@ -182,7 +191,9 @@ class SkillRegistry:
     def _allowed_names(self, allowed_skills: Sequence[str] | None) -> set[str]:
         if allowed_skills is None or WILDCARD_ALLOWLIST in allowed_skills:
             return set(self._skills)
-        return {name for name in allowed_skills if name in self._skills}
+        allowed = {name for name in allowed_skills if name in self._skills}
+        allowed |= {name for name in self._always_allowed if name in self._skills}
+        return allowed
 
     def _availability_for_skill(
         self,
@@ -501,6 +512,21 @@ def load_project_skill_registry(
     )
 
 
+def scan_skill_names(
+    skills_dir: Path,
+    environment: Mapping[str, str] | None = None,
+) -> frozenset[str]:
+    """Return the names of the skills defined directly under one skill directory.
+
+    Scans only ``skills_dir`` (no extra/bundled roots), so the result is exactly
+    the skills that directory owns. A missing directory yields an empty set. The
+    runtime uses this for both a project's own skills and an agent's private
+    skills home.
+    """
+    registry = SkillRegistry.load(skills_dir, environment=environment)
+    return frozenset(skill.name for skill in registry.list_all())
+
+
 def scan_project_skill_names(
     project_cwd: Path,
     environment: Mapping[str, str] | None = None,
@@ -512,8 +538,7 @@ def scan_project_skill_names(
     ``skills_project_disabled`` from when computing a config agent's effective
     skills. A missing directory yields an empty set.
     """
-    project_only = SkillRegistry.load(project_skills_dir(project_cwd), environment=environment)
-    return frozenset(skill.name for skill in project_only.list_all())
+    return scan_skill_names(project_skills_dir(project_cwd), environment)
 
 
 # Skill registries are reloaded often — once per project, per run, and on every

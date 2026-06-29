@@ -497,6 +497,10 @@ class StubRuntime:
         self.raise_on_connection = dict(raise_on_connection or {})
         self.adapter_provider_id: str | None = None
         self.adapter_connection_id: str | None = None
+        # Records every ``skills_for`` resolution so tests can assert the effective
+        # (project_id, agent_id) a run resolves skills against — e.g. that a rooted
+        # identity run resolves against its home project, not ``None``.
+        self.skills_for_calls: list[tuple[str | None, str | None]] = []
 
     def get_adapter(self, provider_id: str, connection_id: str) -> StubAdapter:
         self.adapter_provider_id = provider_id
@@ -507,10 +511,12 @@ class StubRuntime:
             return self.adapters_by_connection[connection_id]
         return self.adapter
 
-    def skills_for(self, _project_id: str | None = None) -> Any:
-        # The stub holds one skill registry; project scoping is exercised by the
-        # runtime tests. Read ``self.skills`` dynamically so tests that reassign it
-        # after construction still take effect.
+    def skills_for(self, project_id: str | None = None, agent_id: str | None = None) -> Any:
+        # The stub holds one skill registry; project/agent scoping is exercised by
+        # the runtime tests. Read ``self.skills`` dynamically so tests that reassign
+        # it after construction still take effect. The call is recorded so tests can
+        # assert the effective project/agent a run resolves skills against.
+        self.skills_for_calls.append((project_id, agent_id))
         return self.skills
 
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:

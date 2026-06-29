@@ -864,6 +864,11 @@ def _write_project_skill(repo: Path, name: str, description: str) -> None:
     _write_test_skill(repo / ".opencode" / "skills", name, description)
 
 
+def _write_agent_skill(data_dir: Path, agent_id: str, name: str, description: str) -> None:
+    """Write an agent-private skill under ``<data_dir>/agents/<id>/skills/<name>/``."""
+    _write_test_skill(data_dir / "agents" / agent_id / "skills", name, description)
+
+
 def test_skills_for_none_returns_global_registry(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
@@ -970,6 +975,128 @@ def test_reload_skills_drops_project_skill_cache(config: Config, tmp_path: Path)
     assert runtime.skills_for(project.project_id) is not first
 
 
+def test_agent_skills_dir_path(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+
+    assert runtime.agent_skills_dir("main") == runtime.storage.data_dir / "agents" / "main" / "skills"
+
+
+def test_skills_for_agent_includes_own_private_skills(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    _write_agent_skill(runtime.storage.data_dir, "main", "my-private", "An agent-only playbook.")
+
+    registry = runtime.skills_for(None, "main")
+
+    names = {skill.name for skill in registry.list_all()}
+    assert "my-private" in names
+    # The same skill is invisible to the agent-less global resolution.
+    assert "my-private" not in {skill.name for skill in runtime.skills.list_all()}
+
+
+def test_agent_own_skill_bypasses_owner_allowlist(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    _write_agent_skill(runtime.storage.data_dir, "main", "my-private", "An agent-only playbook.")
+
+    registry = runtime.skills_for(None, "main")
+
+    # An empty allow-list normally exposes nothing, but the agent's own skill is
+    # always allowed for its owner — and only it (no bundled skill leaks in).
+    assert registry.is_allowed("my-private", [])
+    assert [skill.name for skill in registry.filter_allowed([])] == ["my-private"]
+
+
+def test_agent_own_skills_isolated_between_agents(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    _write_agent_skill(runtime.storage.data_dir, "main", "main-only", "Main's private playbook.")
+
+    # Another agent with no private home falls through to the global pool, which never
+    # contains main's private skill.
+    other_registry = runtime.skills_for(None, "other")
+    assert "main-only" not in {skill.name for skill in other_registry.list_all()}
+
+
+def test_skills_for_identity_without_own_skills_is_global(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+
+    # No private skills home → byte-identical to the global registry (same object).
+    assert runtime.skills_for(None, "main") is runtime.skills
+
+
+def test_skills_for_agent_layers_own_over_project(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "proj-skill", "Project playbook.")
+    _write_project_skill(repo, "shared", "Project version.")
+    project = runtime.projects.create("p", "P", repo)
+    _write_agent_skill(runtime.storage.data_dir, "main", "agent-skill", "Agent playbook.")
+    _write_agent_skill(runtime.storage.data_dir, "main", "shared", "Agent version.")
+
+    registry = runtime.skills_for(project.project_id, "main")
+
+    names = {skill.name for skill in registry.list_all()}
+    assert {"agent-skill", "proj-skill"}.issubset(names)
+    # Agent skills are scanned first, so the agent wins a name collision with project.
+    assert registry.get("shared").description == "Agent version."
+
+
+def test_invalidate_agent_skills_drops_only_that_agent(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    _write_agent_skill(runtime.storage.data_dir, "main", "main-skill", "Main.")
+    _write_agent_skill(runtime.storage.data_dir, "two", "two-skill", "Two.")
+    main_first = runtime.skills_for(None, "main")
+    two_first = runtime.skills_for(None, "two")
+    assert runtime.skills_for(None, "main") is main_first  # cached
+
+    runtime.invalidate_agent_skills("main")
+
+    assert runtime.skills_for(None, "main") is not main_first  # main rebuilt
+    assert runtime.skills_for(None, "two") is two_first  # two untouched
+
+
+def test_reload_skills_drops_agent_cache(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    _write_agent_skill(runtime.storage.data_dir, "main", "main-skill", "Main.")
+    first = runtime.skills_for(None, "main")
+
+    runtime.reload_skills()
+
+    assert runtime.skills_for(None, "main") is not first
+
+
+def test_invalidate_project_skills_drops_matching_agent_cache(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "proj-skill", "Project.")
+    project = runtime.projects.create("p", "P", repo)
+    _write_agent_skill(runtime.storage.data_dir, "main", "agent-skill", "Agent.")
+    first = runtime.skills_for(project.project_id, "main")
+
+    # The agent registry embeds the project layer, so a project invalidation drops it.
+    runtime.invalidate_project_skills(project.project_id)
+
+    assert runtime.skills_for(project.project_id, "main") is not first
+
+
 class _BlockingChannelAdapter:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -1037,7 +1164,9 @@ class _ChatRuntimeStub:
     def get_adapter(self, _provider_id: str, _connection_id: str) -> _BlockingAdapter:
         return self._adapter
 
-    def skills_for(self, _project_id: str | None = None) -> SkillRegistry:
+    def skills_for(
+        self, _project_id: str | None = None, _agent_id: str | None = None
+    ) -> SkillRegistry:
         return SkillRegistry({})
 
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:

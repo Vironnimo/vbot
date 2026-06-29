@@ -371,7 +371,9 @@ class IntegrationRuntime:
             self.chat_runs = ChatRunManager()
         return self.chat_runs
 
-    def skills_for(self, _project_id: str | None = None) -> SkillRegistry:
+    def skills_for(
+        self, _project_id: str | None = None, _agent_id: str | None = None
+    ) -> SkillRegistry:
         return SkillRegistry({})
 
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
