@@ -85,6 +85,32 @@ HANDOFF_INSTRUCTION = (
     "your reply becomes their first message."
 )
 
+# The /learn authoring brief seeded into the internal run. Kept as a constant
+# (like HANDOFF_INSTRUCTION) rather than a resource file so the command needs no
+# RPC-time file I/O. It embeds the skill authoring standards and instructs the
+# agent to author exactly one skill into its own home via the skill_manage tool.
+LEARN_INSTRUCTION = (
+    "Author a reusable skill for yourself from the source described below. A skill is a "
+    "SKILL.md playbook that teaches you how to handle a specific task or domain.\n"
+    "\n"
+    'Use the `skill_manage` tool with operation "create" to write exactly one well-formed '
+    "skill into your own skill home. Give it a short, descriptive, hyphenated name; the "
+    "SKILL.md needs YAML front matter with `name` (matching the skill's directory) and a "
+    "`description` of at most 60 characters that says when to use the skill. Structure the "
+    "body with clear sections in a fixed order: Overview (what it is for and when to use "
+    "it), Steps (the procedure), then Notes (edge cases and gotchas). Keep it concise and "
+    "actionable.\n"
+    "\n"
+    "Frame any tool usage in terms of vBot's actual tools — `read`, `write`, `edit`, "
+    "`glob`, `grep`, `bash`, `web_fetch`, `web_search`, `process`, `status` — and do not "
+    "invent tools, commands, or facts that are not in the source. If the source is a folder "
+    "or URL, read it first with your file/web tools; if it is the recent conversation or "
+    "pasted text, work from that. Capture only what is genuinely there.\n"
+    "\n"
+    "After creating the skill, tell the user in one or two sentences what skill you created "
+    "and when it will help. Do not paste the full SKILL.md back."
+)
+
 # Sidecar marker on a channel-bound session; such sessions are excluded from
 # ``/agent`` moves so the channel pointer is never left dangling.
 CHANNEL_SOURCE_META_KEY = "source_channel_id"
@@ -279,6 +305,10 @@ async def _handle_command_action(
             return await _handle_handoff_command(
                 state, agent_id, session_id, command_action.argument, project_id=project_id
             )
+        case "learn":
+            return await _handle_learn_command(
+                state, agent_id, session_id, command_action.argument, project_id=project_id
+            )
         case "move_session":
             return await _handle_move_session_command(
                 state, agent_id, session_id, command_action.argument, project_id=project_id
@@ -459,7 +489,26 @@ def _build_handoff_prompt(instruction: str | None) -> str:
     )
 
 
-async def _start_handoff_run(
+def _build_learn_prompt(source: str | None) -> str:
+    """Weave the optional ``/learn`` source into the base authoring brief.
+
+    With a source (a folder, URL, description, or pasted text) the agent authors from
+    it; with no argument it asks the user what to learn or, when the recent
+    conversation clearly shows a reusable procedure, authors a skill from that.
+    """
+    cleaned = (source or "").strip()
+    if not cleaned:
+        return (
+            f"{LEARN_INSTRUCTION}\n"
+            "\n"
+            "No source was given. Ask the user what they want captured into a skill, or, "
+            "if the recent conversation clearly demonstrates a reusable procedure, author "
+            "a skill from that."
+        )
+    return f"{LEARN_INSTRUCTION}\n\nThe source to learn from:\n{cleaned}"
+
+
+async def _start_command_run(
     state: Any,
     agent_id: str,
     message: str,
@@ -468,13 +517,13 @@ async def _start_handoff_run(
     project_id: str | None,
     internal: bool,
 ) -> Any:
-    """Start a handoff run, identity through the trigger service, project on the loop.
+    """Start a command-driven run, identity via the trigger service, project on the loop.
 
-    An identity handoff (``project_id is None``) stays byte-identical to before:
-    it runs through ``trigger_service.trigger_run`` (with its queue-on-busy
-    fallback). A project handoff has no project-aware trigger service yet
-    (automation is a separate task), so it goes straight through the chat loop,
-    which already threads ``project_id`` into the session anchor and run.
+    Shared by ``/handoff``, agent takeover, and ``/learn``. An identity run
+    (``project_id is None``) goes through ``trigger_service.trigger_run`` (with its
+    queue-on-busy fallback); a project run has no project-aware trigger service yet
+    (automation is a separate task), so it goes straight through the chat loop, which
+    already threads ``project_id`` into the session anchor and run.
     """
     if project_id is None:
         return await state.runtime.trigger_service.trigger_run(
@@ -490,6 +539,41 @@ async def _start_handoff_run(
         internal=internal,
         project_id=project_id,
     )
+
+
+async def _handle_learn_command(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    argument: str | None,
+    *,
+    project_id: str | None = None,
+) -> JsonObject:
+    """Author a skill via an internal run seeded with the ``/learn`` brief.
+
+    Mirrors ``/handoff``: an internal run (the brief rides in as a note, the agent
+    acts on it with the always-available ``skill_manage`` tool) authors into the
+    agent's own home, then we report the agent's summary. Refused while another run
+    is active, like a handoff.
+    """
+    active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+    if active_run is not None:
+        return _command_handled_response("A skill can be authored after the current run finishes.")
+    try:
+        learn_run = await _start_command_run(
+            state,
+            agent_id,
+            _build_learn_prompt(argument),
+            session_id=session_id,
+            project_id=project_id,
+            internal=True,
+        )
+        learn_message = await learn_run.wait()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    summary = _extract_handoff_text(learn_message.content)
+    return _command_handled_response(summary or "Skill authoring run completed.")
 
 
 async def _handle_handoff_command(
@@ -531,7 +615,7 @@ async def _handle_handoff_command(
                     f"Cannot handoff to unknown agent: {target_display}",
                 )
 
-        handoff_run = await _start_handoff_run(
+        handoff_run = await _start_command_run(
             state,
             agent_id,
             _build_handoff_prompt(parsed.instruction),
@@ -560,7 +644,7 @@ async def _handle_handoff_command(
     new_session_id = _required_string(response, "session_id")
 
     try:
-        run = await _start_handoff_run(
+        run = await _start_command_run(
             state,
             target_agent_id,
             handoff_text,
@@ -682,7 +766,7 @@ async def _handle_move_session_command(
 
         run = None
         if parsed.task is not None:
-            run = await _start_handoff_run(
+            run = await _start_command_run(
                 state,
                 target_agent_id,
                 parsed.task,

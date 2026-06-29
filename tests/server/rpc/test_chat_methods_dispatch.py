@@ -326,6 +326,16 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "output": "transient",
                 },
                 {
+                    "name": "learn",
+                    "description": (
+                        "Author a reusable skill into your own home from a source "
+                        "(folder, URL, or text)."
+                    ),
+                    "type": "command",
+                    "argument": "optional",
+                    "output": "action",
+                },
+                {
                     "name": "model",
                     "description": (
                         "Show, set, or reset this session's model (/model reset to clear)."

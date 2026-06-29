@@ -252,6 +252,82 @@ async def test_handoff_bare_target_stays_in_source_scope(
 
 
 # ---------------------------------------------------------------------------
+# /learn: internal skill-authoring run seeded with the learn brief.
+# ---------------------------------------------------------------------------
+
+
+class _LearnDispatcher:
+    def dispatch(
+        self, agent_id: str, session_id: str, text: str, project_id: str | None = None
+    ) -> CommandAction:
+        argument = text[len("/learn") :].strip() or None
+        return CommandAction(name="learn", argument=argument)
+
+
+def _make_learn_state(captured: list[dict[str, Any]], *, active: bool = False) -> SimpleNamespace:
+    async def trigger_run(agent_id: str, message: Any, **kwargs: Any) -> _FakeRun:
+        captured.append({"agent_id": agent_id, "message": message, **kwargs})
+        return _FakeRun()
+
+    runtime = SimpleNamespace(trigger_service=SimpleNamespace(trigger_run=trigger_run))
+    active_run = _FakeRun() if active else None
+    return SimpleNamespace(
+        chat_loop=SimpleNamespace(),
+        streaming_chat_loop=SimpleNamespace(),
+        runtime=runtime,
+        chat_runs=SimpleNamespace(active_run=lambda **k: active_run),
+        command_dispatcher=_LearnDispatcher(),
+        event_bus=SimpleNamespace(publish=lambda *a, **k: None),
+    )
+
+
+@pytest.mark.asyncio
+async def test_learn_starts_internal_authoring_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, Any]] = []
+    state = _make_learn_state(captured)
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    response = await _send_chat(
+        state,
+        {"agent_id": "builder", "session_id": "s1", "content": "/learn the deploy steps"},
+    )
+
+    assert response["command_handled"] is True
+    assert response["reply"] == "handoff text"  # the run's final message content
+    assert len(captured) == 1
+    assert captured[0]["internal"] is True
+    assert "skill_manage" in captured[0]["message"]
+    assert "the deploy steps" in captured[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_learn_without_argument_still_starts_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, Any]] = []
+    state = _make_learn_state(captured)
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    await _send_chat(state, {"agent_id": "builder", "session_id": "s1", "content": "/learn"})
+
+    assert len(captured) == 1
+    assert "No source was given" in captured[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_learn_refused_while_run_active(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, Any]] = []
+    state = _make_learn_state(captured, active=True)
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    response = await _send_chat(
+        state, {"agent_id": "builder", "session_id": "s1", "content": "/learn x"}
+    )
+
+    assert response["command_handled"] is True
+    assert "after the current run finishes" in response["reply"]
+    assert captured == []
+
+
+# ---------------------------------------------------------------------------
 # /model set: identity vs project routing + usable-model validation.
 # ---------------------------------------------------------------------------
 
