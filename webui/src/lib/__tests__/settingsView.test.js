@@ -119,16 +119,26 @@ describe('SettingsView', () => {
 
   it('adds, removes, and saves skill directories', async () => {
     const toastMock = vi.fn();
-    rpcMock
-      .mockResolvedValueOnce(createSettingsPayload())
-      .mockImplementationOnce(async (_method, params) =>
-        createSettingsPayload({
+    // Route by method, not call order: the Skills panel now also mounts the skill
+    // manager, which self-loads agent.list + skill.read, so the settings.update is
+    // no longer the second RPC.
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'settings.update') {
+        return createSettingsPayload({
           skills: {
             default_directory: 'C:/Users/test/.vbot/skills',
             directories: params.skills.directories,
           },
-        }),
-      );
+        });
+      }
+      if (method === 'agent.list') {
+        return { agents: [] };
+      }
+      if (method === 'skill.read') {
+        return { skills: [] };
+      }
+      return createSettingsPayload();
+    });
 
     mountedComponent = mount(SettingsView, {
       target: document.body,
@@ -157,7 +167,7 @@ describe('SettingsView', () => {
 
     clickButton('Save');
 
-    expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       skills: {
         directories: ['D:/skills/team'],
       },

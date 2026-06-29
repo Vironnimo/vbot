@@ -529,6 +529,26 @@ export const englishCatalog = Object.freeze({
   'settings.skills.emptyDirectories':
     'No additional skill directories configured.',
   'settings.skills.saveSuccess': 'Skill directories updated.',
+  'settings.skills.manageLabel': 'Manage skills',
+  'settings.skills.manageDescription':
+    'View, create, edit, and delete skills in your global library or an agent’s private home.',
+  'settings.skills.scopeLabel': 'Skill scope',
+  'settings.skills.scopeGlobal': 'Global skills',
+  'settings.skills.scopeAgent': '{name} (private)',
+  'settings.skills.loadError': 'Skills could not be loaded.',
+  'settings.skills.empty': 'No skills in this scope yet.',
+  'settings.skills.newSkill': 'New skill',
+  'settings.skills.namePlaceholder': 'skill-name',
+  'settings.skills.contentPlaceholder':
+    '---\nname: skill-name\ndescription: When to use this skill.\n---\n\n# Overview',
+  'settings.skills.create': 'Create skill',
+  'settings.skills.created': 'Skill created.',
+  'settings.skills.createError': 'Skill could not be created.',
+  'settings.skills.saved': 'Skill saved.',
+  'settings.skills.contentSaveError': 'Skill could not be saved.',
+  'settings.skills.deleted': 'Skill deleted.',
+  'settings.skills.deleteError': 'Skill could not be deleted.',
+  'settings.skills.deleteConfirm': 'Delete skill “{name}”?',
   'settings.subagents.title': 'Sub-Agents',
   'settings.subagents.subtitle':
     'Depth, fan-out, and timeout limits for spawned agent sessions.',
