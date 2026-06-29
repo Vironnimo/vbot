@@ -40,6 +40,7 @@ else:
 CommandActionName = Literal[
     "compact",
     "handoff",
+    "learn",
     "move_session",
     "new_session",
     "rename_session",
@@ -213,6 +214,12 @@ class CommandDispatcher:
             argument="none",
             output="transient",
         ),
+        "learn": CommandSpec(
+            "learn",
+            "Author a reusable skill into your own home from a source (folder, URL, or text).",
+            argument="optional",
+            output="action",
+        ),
         "model": CommandSpec(
             "model",
             "Show, set, or reset this session's model (/model reset to clear).",
@@ -275,6 +282,7 @@ class CommandDispatcher:
             "compact": self._handle_compact,
             "handoff": self._handle_handoff,
             "help": self._handle_help,
+            "learn": self._handle_learn,
             "model": self._handle_model,
             "new": self._handle_new,
             "rename": self._handle_rename,
@@ -343,6 +351,11 @@ class CommandDispatcher:
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandAction:
         return CommandAction(name="handoff", argument=argument)
+
+    def _handle_learn(
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
+    ) -> CommandAction:
+        return CommandAction(name="learn", argument=argument)
 
     def _handle_agent(
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
