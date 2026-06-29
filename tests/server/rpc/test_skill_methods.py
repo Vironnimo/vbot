@@ -14,6 +14,7 @@ from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.skill_methods import (
     _skill_create,
     _skill_delete,
+    _skill_read,
     _skill_remove_file,
     _skill_update,
     _skill_write_file,
@@ -160,9 +161,28 @@ def test_missing_scope_is_rejected(tmp_path: Path) -> None:
         _skill_create(state, {"name": "demo", "content": _skill_md()})
 
 
+def test_read_returns_scope_skills_with_content(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md(body="# Demo\nGo.")})
+
+    result = _skill_read(state, {"scope": "global"})
+
+    assert [skill["name"] for skill in result["skills"]] == ["demo"]
+    entry = result["skills"][0]
+    assert entry["description"] == "Do a demo task."
+    assert "# Demo\nGo." in entry["content"]
+
+
+def test_read_empty_scope_returns_no_skills(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+
+    assert _skill_read(state, {"scope": "agent:builder"})["skills"] == []
+
+
 def test_method_handlers_registered() -> None:
     handlers = method_handlers()
     assert set(handlers) == {
+        "skill.read",
         "skill.create",
         "skill.update",
         "skill.delete",

@@ -316,6 +316,33 @@ describe('i18n t()', () => {
     expect(t('settings.providers.add.button')).toBe('Add provider');
   });
 
+  it('contains skill-manager copy for the Skills settings panel', () => {
+    const requiredKeys = [
+      'settings.skills.manageLabel',
+      'settings.skills.manageDescription',
+      'settings.skills.scopeLabel',
+      'settings.skills.scopeGlobal',
+      'settings.skills.scopeAgent',
+      'settings.skills.loadError',
+      'settings.skills.empty',
+      'settings.skills.newSkill',
+      'settings.skills.namePlaceholder',
+      'settings.skills.contentPlaceholder',
+      'settings.skills.create',
+      'settings.skills.created',
+      'settings.skills.createError',
+      'settings.skills.saved',
+      'settings.skills.contentSaveError',
+      'settings.skills.deleted',
+      'settings.skills.deleteError',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(t('settings.skills.scopeAgent', undefined, { name: 'Builder' })).toBe(
+      'Builder (private)',
+    );
+  });
+
   it('contains Connected clients copy for the General settings panel', () => {
     const requiredKeys = [
       'settings.general.clients.title',

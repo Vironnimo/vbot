@@ -3,6 +3,7 @@
 
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
+  import SettingsSkillManagerPanel from './SettingsSkillManagerPanel.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -227,3 +228,5 @@
     </Button>
   </div>
 </div>
+
+<SettingsSkillManagerPanel {onToast} {onError} />
