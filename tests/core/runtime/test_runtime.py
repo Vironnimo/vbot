@@ -1097,6 +1097,24 @@ def test_invalidate_project_skills_drops_matching_agent_cache(config: Config, tm
     assert runtime.skills_for(project.project_id, "main") is not first
 
 
+def test_skills_for_tags_origin_per_scope(config: Config, tmp_path: Path) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "proj-skill", "Project.")
+    project = runtime.projects.create("p", "P", repo)
+    _write_agent_skill(runtime.storage.data_dir, "main", "mine", "Mine.")
+    bundled_name = runtime.skills.list_all()[0].name
+
+    registry = runtime.skills_for(project.project_id, "main")
+
+    assert registry.get("mine").origin == "agent"
+    assert registry.get("proj-skill").origin == "project:P"
+    assert registry.get(bundled_name).origin == "bundled"
+
+
 class _BlockingChannelAdapter:
     def __init__(self) -> None:
         self.started = asyncio.Event()

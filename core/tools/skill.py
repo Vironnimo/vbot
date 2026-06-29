@@ -7,7 +7,12 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from core.skills.skills import FRONT_MATTER_DELIMITER, SkillRegistry, _scan_skill_resources
+from core.skills.skills import (
+    FRONT_MATTER_DELIMITER,
+    SkillRegistry,
+    _scan_skill_resources,
+    skill_origin_sort_key,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -26,7 +31,9 @@ SkillRegistryResolver = Callable[[str | None, str | None], SkillRegistry]
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
-    "Load an allowed skill by name and add its instructions to session context."
+    "Load an allowed skill by name to add its instructions to session context, or "
+    "call with no name to list the skills currently available to you (grouped by "
+    "origin), including any you have authored since this session's catalog was fixed."
 )
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"
@@ -35,10 +42,13 @@ SKILL_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "name": {
             "type": "string",
-            "description": "Name of the skill to activate from the available skills catalog.",
+            "description": (
+                "Name of the skill to activate. Omit to list the currently available "
+                "skills instead of activating one."
+            ),
         }
     },
-    "required": ["name"],
+    "required": [],
     "additionalProperties": False,
 }
 
@@ -53,16 +63,22 @@ def make_skill_handler(resolve_registry: SkillRegistryResolver) -> Any:
     """
 
     def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        skill_name = arguments.get("name")
-        if not isinstance(skill_name, str) or not skill_name:
-            return tool_failure("invalid_arguments", "name must be a non-empty string")
-
         unknown_arguments = set(arguments) - {"name"}
         if unknown_arguments:
             names = ", ".join(sorted(unknown_arguments))
             return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
         skill_registry = resolve_registry(context.skill_project_id, context.agent_id)
+
+        skill_name = arguments.get("name")
+        # No name → list mode: report the live, agent-aware catalog instead of
+        # activating, so an agent can see skills it authored after the session's
+        # pinned catalog was fixed.
+        if skill_name is None or (isinstance(skill_name, str) and not skill_name.strip()):
+            return _skill_list_result(skill_registry, context.allowed_skills)
+        if not isinstance(skill_name, str):
+            return tool_failure("invalid_arguments", "name must be a string")
+
         try:
             skill = skill_registry.get(skill_name)
         except KeyError:
@@ -156,6 +172,26 @@ def _minimal_skill_result(
             "resources": list(resources),
         }
     )
+
+
+def _skill_list_result(
+    skill_registry: SkillRegistry,
+    allowed_skills: Sequence[str] | None,
+) -> JsonObject:
+    """Return the currently available skills grouped by origin (the tool's list mode)."""
+    allowed = ["*"] if allowed_skills is None else list(allowed_skills)
+    skills = skill_registry.filter_allowed(allowed)
+    grouped: dict[str | None, list[JsonObject]] = {}
+    for skill in skills:
+        origin = getattr(skill, "origin", None)
+        grouped.setdefault(origin, []).append(
+            {"name": skill.name, "description": skill.description}
+        )
+    skill_groups = [
+        {"origin": origin, "skills": grouped[origin]}
+        for origin in sorted(grouped, key=skill_origin_sort_key)
+    ]
+    return tool_success({"skill_groups": skill_groups, "count": len(skills)})
 
 
 def _allowed_skill_names(

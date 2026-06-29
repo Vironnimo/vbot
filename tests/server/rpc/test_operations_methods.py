@@ -102,6 +102,7 @@ class StubTools:
 class StubSkill:
     name: str
     description: str
+    origin: str | None = None
 
 
 class StubSkills:

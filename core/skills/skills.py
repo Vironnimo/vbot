@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +46,39 @@ RESOURCE_DIRECTORIES = ("scripts", "references")
 # collision with a bundled one (decision 3/4 in the whitelist plan).
 PROJECT_SKILLS_SUBPATH = (".opencode", "skills")
 
+# Origin tags identify which scope a loaded skill came from, so the prompt catalog
+# and the ``skill`` tool can group skills by where they live. They are opaque
+# strings stored per skill at load (the runtime supplies them per scan root); the
+# skills domain only records and orders them — the human-facing labels live in the
+# prompt layer. A project's tag carries its display name after the prefix.
+SKILL_ORIGIN_AGENT = "agent"
+SKILL_ORIGIN_GLOBAL = "global"
+SKILL_ORIGIN_BUNDLED = "bundled"
+SKILL_ORIGIN_PROJECT_PREFIX = "project:"
+
 _LOGGER = get_logger("skills")
+
+
+def project_skill_origin(project_display_name: str) -> str:
+    """Return the origin tag for a project's own skills, carrying its display name."""
+    return f"{SKILL_ORIGIN_PROJECT_PREFIX}{project_display_name}"
+
+
+def skill_origin_sort_key(origin: str | None) -> tuple[int, str]:
+    """Order origins for catalog/list grouping: bundled, global, project(s), agent.
+
+    Within the project tier, group by display name. Unknown/absent origins sort
+    last so a registry built without origin tags still renders deterministically.
+    """
+    if origin == SKILL_ORIGIN_BUNDLED:
+        return (0, "")
+    if origin == SKILL_ORIGIN_GLOBAL:
+        return (1, "")
+    if origin is not None and origin.startswith(SKILL_ORIGIN_PROJECT_PREFIX):
+        return (2, origin[len(SKILL_ORIGIN_PROJECT_PREFIX) :])
+    if origin == SKILL_ORIGIN_AGENT:
+        return (3, "")
+    return (4, origin or "")
 
 
 @dataclass(frozen=True)
@@ -61,6 +93,10 @@ class SkillMetadata:
     metadata: dict[str, Any] = field(default_factory=dict)
     allowed_tools: list[str] = field(default_factory=list)
     requirements: SkillRequirements = field(default_factory=SkillRequirements)
+    # The scope this skill was scanned from (see the ``SKILL_ORIGIN_*`` tags), set
+    # at load by the registry from its scan-root origins. ``None`` when the loader
+    # was given no origins (e.g. a single-directory scan), which renders ungrouped.
+    origin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +136,7 @@ class SkillRegistry:
         extra_dirs: list[Path] | None = None,
         environment: Mapping[str, str] | None = None,
         always_allowed: Iterable[str] | None = None,
+        origins: Sequence[str | None] | None = None,
     ) -> SkillRegistry:
         """Load all valid skills from immediate subdirectories of scan roots.
 
@@ -109,12 +146,17 @@ class SkillRegistry:
         rejected duplicate is preserved as a diagnostic.  ``always_allowed`` names
         bypass the ``allowed_skills`` filter for this registry (the runtime passes
         an agent's own private skills so they are always visible to their owner).
+        ``origins`` is a parallel sequence of origin tags for ``[skills_dir,
+        *extra_dirs]``; each loaded skill records the tag of the root it came from
+        (missing/short → ``None``), so the catalog can group by scope.
         """
         skills: dict[str, SkillMetadata] = {}
         diagnostics: list[SkillDiagnostic] = []
         scan_roots = [skills_dir, *(extra_dirs or [])]
-        for scan_root in scan_roots:
-            _load_skill_root(scan_root, skills, diagnostics)
+        origin_tags = list(origins) if origins is not None else []
+        for index, scan_root in enumerate(scan_roots):
+            origin = origin_tags[index] if index < len(origin_tags) else None
+            _load_skill_root(scan_root, skills, diagnostics, origin)
 
         return cls(skills, diagnostics, environment=environment, always_allowed=always_allowed)
 
@@ -299,6 +341,7 @@ def _load_skill_root(
     skills_dir: Path,
     skills: dict[str, SkillMetadata],
     diagnostics: list[SkillDiagnostic],
+    origin: str | None = None,
 ) -> None:
     if not skills_dir.is_dir():
         return
@@ -354,6 +397,7 @@ def _load_skill_root(
             _log_validation_warnings(skill_dir.name, resolved_skill_file, result.warnings)
             continue
 
+        skill = replace(skill, origin=origin)
         if skill.name in skills:
             warnings = [
                 *result.warnings,
@@ -494,6 +538,9 @@ def load_project_skill_registry(
     project_cwd: Path,
     bundled_scan_roots: Sequence[Path],
     environment: Mapping[str, str] | None = None,
+    *,
+    project_origin: str | None = None,
+    bundled_origins: Sequence[str | None] | None = None,
 ) -> SkillRegistry:
     """Build a project-scoped registry: the project's own skills, then the bundled ones.
 
@@ -503,12 +550,22 @@ def load_project_skill_registry(
     registry scans, so a project run sees exactly the bundled pool plus its own
     skills — nothing leaks between projects. A missing project skill directory is
     treated as empty, so a project without ``.opencode/skills/`` simply gets the
-    bundled pool.
+    bundled pool. ``project_origin``/``bundled_origins`` tag the loaded skills with
+    their scope for catalog grouping (the project root then the bundled roots).
     """
+    origins: list[str | None] | None = None
+    if project_origin is not None or bundled_origins is not None:
+        bundled = (
+            list(bundled_origins)
+            if bundled_origins is not None
+            else [None] * len(bundled_scan_roots)
+        )
+        origins = [project_origin, *bundled]
     return SkillRegistry.load(
         project_skills_dir(project_cwd),
         extra_dirs=list(bundled_scan_roots),
         environment=environment,
+        origins=origins,
     )
 
 

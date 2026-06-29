@@ -139,6 +139,7 @@ def _skill_response(skill_registry: Any, skill: Any) -> JsonObject:
     return {
         "name": skill.name,
         "description": skill.description,
+        "origin": getattr(skill, "origin", None),
         "valid": len(warnings) == 0,
         "warnings": warnings,
         "state": availability["state"],

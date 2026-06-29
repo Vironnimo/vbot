@@ -38,6 +38,13 @@ from core.prompts.blocks import (
     wrap_include_file,
 )
 from core.settings import is_valid_agent_id
+from core.skills.skills import (
+    SKILL_ORIGIN_AGENT,
+    SKILL_ORIGIN_BUNDLED,
+    SKILL_ORIGIN_GLOBAL,
+    SKILL_ORIGIN_PROJECT_PREFIX,
+    skill_origin_sort_key,
+)
 from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
 from core.utils.logging import get_logger
 
@@ -219,6 +226,11 @@ class SkillPromptMetadata(Protocol):
     @property
     def description(self) -> str:
         """Prompt-visible skill description."""
+        ...
+
+    @property
+    def origin(self) -> str | None:
+        """Scope tag for catalog grouping (``None`` renders ungrouped)."""
         ...
 
 
@@ -1391,15 +1403,36 @@ def _format_channel_list(channels: list[ChannelPromptMetadata]) -> str:
 
 
 def _format_skill_list(skills: Sequence[SkillPromptMetadata]) -> str:
-    lines = ["<available_skills>"]
+    grouped: dict[str | None, list[SkillPromptMetadata]] = {}
     for skill in skills:
-        lines.extend(
-            [
-                "  <skill>",
-                f"    <name>{escape(skill.name)}</name>",
-                f"    <description>{escape(skill.description)}</description>",
-                "  </skill>",
-            ]
-        )
+        grouped.setdefault(skill.origin, []).append(skill)
+
+    lines = ["<available_skills>"]
+    for origin in sorted(grouped, key=skill_origin_sort_key):
+        label = escape(_skill_origin_label(origin), quote=True)
+        lines.append(f'  <skill_group label="{label}">')
+        for skill in grouped[origin]:
+            lines.extend(
+                [
+                    "    <skill>",
+                    f"      <name>{escape(skill.name)}</name>",
+                    f"      <description>{escape(skill.description)}</description>",
+                    "    </skill>",
+                ]
+            )
+        lines.append("  </skill_group>")
     lines.append("</available_skills>")
     return "\n".join(lines)
+
+
+def _skill_origin_label(origin: str | None) -> str:
+    """Human header for a skill origin group (path-free, English — a prompt string)."""
+    if origin == SKILL_ORIGIN_BUNDLED:
+        return "Bundled skills"
+    if origin == SKILL_ORIGIN_GLOBAL:
+        return "Your global skills"
+    if origin is not None and origin.startswith(SKILL_ORIGIN_PROJECT_PREFIX):
+        return f"Skills from project '{origin[len(SKILL_ORIGIN_PROJECT_PREFIX) :]}'"
+    if origin == SKILL_ORIGIN_AGENT:
+        return "Your own skills"
+    return "Skills"

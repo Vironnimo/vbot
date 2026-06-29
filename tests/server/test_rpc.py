@@ -3439,6 +3439,7 @@ async def test_skill_list_returns_loadable_and_invalid_diagnostics(tmp_path: Pat
                 {
                     "name": "debugging",
                     "description": "Debug failures.",
+                    "origin": None,
                     "valid": True,
                     "warnings": [],
                     "state": "available",
@@ -3447,6 +3448,7 @@ async def test_skill_list_returns_loadable_and_invalid_diagnostics(tmp_path: Pat
                 {
                     "name": "warned",
                     "description": "Loads with warnings.",
+                    "origin": None,
                     "valid": False,
                     "warnings": ["Name does not match directory."],
                     "state": "available",
@@ -3807,6 +3809,7 @@ async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
                 {
                     "name": "debugging",
                     "description": "debugging skill.",
+                    "origin": None,
                     "valid": True,
                     "warnings": [],
                     "state": "available",

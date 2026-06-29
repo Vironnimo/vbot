@@ -66,8 +66,12 @@ from core.runtime.interfaces import (
 from core.sessions import ChatSessionManager
 from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import (
+    SKILL_ORIGIN_AGENT,
+    SKILL_ORIGIN_BUNDLED,
+    SKILL_ORIGIN_GLOBAL,
     SkillRegistry,
     load_project_skill_registry,
+    project_skill_origin,
     project_skills_dir,
     scan_project_skill_names,
     scan_skill_names,
@@ -446,6 +450,7 @@ class Runtime:
             skill_scan_roots[0],
             extra_dirs=skill_scan_roots[1:],
             environment=self._skill_environment(data_dir_credentials),
+            origins=self._bundled_skill_origins(skill_scan_roots),
         )
         invalid_skill_count = len(self._skills.invalid_diagnostics())
         if invalid_skill_count > 0:
@@ -899,6 +904,18 @@ class Runtime:
             *self._extra_skill_directories(settings),
         ]
 
+    @staticmethod
+    def _bundled_skill_origins(scan_roots: list[Path]) -> list[str | None]:
+        """Origin tags parallel to ``_skill_scan_roots``: data-dir global, then bundled.
+
+        The first root is the data-dir global pool, the second the shipped bundled
+        pool; any configured extra ``skill_directories`` after them are user-curated,
+        so they are tagged global too.
+        """
+        origins: list[str | None] = [SKILL_ORIGIN_GLOBAL, SKILL_ORIGIN_BUNDLED]
+        origins.extend(SKILL_ORIGIN_GLOBAL for _ in scan_roots[2:])
+        return origins
+
     def agent_skills_dir(self, agent_id: str) -> Path:
         """Return an agent's private skill home (``<data_dir>/agents/<id>/skills``)."""
         if self._storage is None:
@@ -980,11 +997,15 @@ class Runtime:
         settings = self.storage.load_settings()
         environment = self._skill_environment(self.storage.load_environment())
         agent_root = self.agent_skills_dir(agent_id)
+        scan_roots = self._skill_scan_roots(settings, self._resolve_resources_path())
         roots: list[Path] = [agent_root]
+        origins: list[str | None] = [SKILL_ORIGIN_AGENT]
         if project_id is not None:
             project = self.projects.get(project_id)
             roots.append(project_skills_dir(Path(project.cwd)))
-        roots.extend(self._skill_scan_roots(settings, self._resolve_resources_path()))
+            origins.append(project_skill_origin(project.display_name))
+        roots.extend(scan_roots)
+        origins.extend(self._bundled_skill_origins(scan_roots))
         # First-found-wins ordering makes agent skills win over project, project over
         # bundled. The agent's own skills are always-allowed for it, so they bypass
         # the owner's ``allowed_skills`` filter without leaking to other agents
@@ -995,6 +1016,7 @@ class Runtime:
             extra_dirs=roots[1:],
             environment=environment,
             always_allowed=agent_own_names,
+            origins=origins,
         )
 
     def _project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
@@ -1011,7 +1033,13 @@ class Runtime:
         settings = self.storage.load_settings()
         scan_roots = self._skill_scan_roots(settings, self._resolve_resources_path())
         environment = self._skill_environment(self.storage.load_environment())
-        registry = load_project_skill_registry(project_cwd, scan_roots, environment)
+        registry = load_project_skill_registry(
+            project_cwd,
+            scan_roots,
+            environment,
+            project_origin=project_skill_origin(project.display_name),
+            bundled_origins=self._bundled_skill_origins(scan_roots),
+        )
         names = scan_project_skill_names(project_cwd, environment)
         return _ProjectSkillBundle(registry=registry, names=names)
 
@@ -1148,6 +1176,7 @@ class Runtime:
             skill_scan_roots[0],
             extra_dirs=skill_scan_roots[1:],
             environment=self._skill_environment(self.storage.load_environment()),
+            origins=self._bundled_skill_origins(skill_scan_roots),
         )
         # Project- and agent-scoped registries merge in the same bundled roots, so a
         # global skill reload makes every cached project *and* agent registry stale —
