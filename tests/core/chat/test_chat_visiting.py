@@ -158,6 +158,66 @@ async def test_file_tool_into_registered_project_injects_house_rules(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_visiting_reminder_lists_project_skills(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    skill_md = repo / ".opencode" / "skills" / "deploy" / "SKILL.md"
+    adapter = StubAdapter(
+        [_read_call(str(repo / "AGENTS.md")), {"content": "Done", "tool_calls": None}]
+    )
+    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["read"])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=_read_tool_registry(),
+        projects=StubProjects(
+            {
+                "vbot": StubProject(
+                    project_id="vbot",
+                    cwd=str(repo),
+                    auto_load=["AGENTS.md"],
+                    display_name="vBot",
+                )
+            }
+        ),
+    )
+    runtime.project_own_skills_result = [
+        SimpleNamespace(name="deploy", description="Ship the app.", path=skill_md)
+    ]
+    runtime.chat_sessions.create("coder", session_id="s1")
+
+    await ChatLoop(runtime).send("coder", "Look at the project", session_id="s1")
+
+    joined = "\n".join(_reminder_texts(adapter.requests[1]))
+    assert "Skills from project 'vBot'" in joined
+    assert "deploy: Ship the app." in joined
+    assert str(skill_md) in joined
+    assert "`read` tool" in joined
+
+
+@pytest.mark.asyncio
+async def test_visiting_reminder_omits_skills_section_when_project_has_none(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    adapter = StubAdapter(
+        [_read_call(str(repo / "AGENTS.md")), {"content": "Done", "tool_calls": None}]
+    )
+    runtime = _visiting_runtime(tmp_path, repo, adapter)
+    runtime.chat_sessions.create("coder", session_id="s1")
+
+    await ChatLoop(runtime).send("coder", "Look", session_id="s1")
+
+    joined = "\n".join(_reminder_texts(adapter.requests[1]))
+    assert "Team rules" in joined
+    assert "Skills from project" not in joined
+
+
+@pytest.mark.asyncio
 async def test_house_rules_shown_once_per_session(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
