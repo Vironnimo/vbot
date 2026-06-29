@@ -30,6 +30,7 @@ from core.prompts.blocks import (
     validate_workspace_include,
 )
 from core.prompts.prompts import (
+    PinnedSkillCatalog,
     ProjectPromptContext,
     PromptAgent,
     PromptError,
@@ -843,6 +844,56 @@ def test_skill_catalog_groups_skills_by_origin(tmp_path: Path) -> None:
     assert prompt.index("Bundled skills") < prompt.index("Acme") < prompt.index("Your own skills")
     # The catalog stays path-free.
     assert "/skills/" not in prompt
+
+
+def test_render_skill_catalog_snapshots_text_and_gate(tmp_path: Path) -> None:
+    skills = StubSkills([StubSkill("alpha", "First.", origin="bundled")])
+    manager = _manager(tmp_path, skills=skills)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    snapshot = manager.render_skill_catalog(agent)
+    assert snapshot.has_loadable_skills is True
+    assert "<name>alpha</name>" in snapshot.catalog_text
+
+    empty = manager.render_skill_catalog(agent, skill_registry=StubSkills([]))
+    assert empty.has_loadable_skills is False
+
+
+def test_build_system_prompt_pins_catalog_over_live_registry(tmp_path: Path) -> None:
+    # A skill written after the session pinned its catalog must not appear: the
+    # pinned snapshot text wins over the (now richer) live registry.
+    live = StubSkills([StubSkill("new-skill", "Written later.", origin="agent")])
+    manager = _manager(tmp_path, skills=live)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    pinned = PinnedSkillCatalog(
+        catalog_text="<available_skills>PINNED-CATALOG</available_skills>",
+        has_loadable_skills=True,
+    )
+
+    prompt = manager.build_system_prompt(agent, skill_catalog=pinned)
+
+    assert "PINNED-CATALOG" in prompt
+    assert "new-skill" not in prompt
+
+
+def test_provider_tool_definitions_respects_pinned_gate(tmp_path: Path) -> None:
+    skills = StubSkills([StubSkill("alpha", "First.", origin="bundled")])
+    manager = _manager(tmp_path, skills=skills)
+    agent = _agent("", allowed_tools=["read_file"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    # Pinned gate False suppresses the skill tool even though the registry has skills.
+    suppressed = manager.provider_tool_definitions(
+        agent, skill_catalog=PinnedSkillCatalog("", has_loadable_skills=False)
+    )
+    assert all(definition["name"] != "skill" for definition in suppressed)
+
+    # Pinned gate True offers the skill tool even with an empty live registry.
+    offered = manager.provider_tool_definitions(
+        agent,
+        skill_registry=StubSkills([]),
+        skill_catalog=PinnedSkillCatalog("x", has_loadable_skills=True),
+    )
+    assert any(definition["name"] == "skill" for definition in offered)
 
 
 def test_provider_tool_definitions_skill_tool_gated_by_override_registry(tmp_path: Path) -> None:

@@ -985,6 +985,7 @@ class StubPrompts:
         agent_body: str = "",
         project_context: object = None,
         skill_registry: object = None,
+        skill_catalog: object = None,
     ) -> str:
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
@@ -1003,8 +1004,13 @@ class StubPrompts:
             extras.append(f"project_cwd={getattr(project_context, 'cwd', '')}")
         return " ".join([base, *extras])
 
+    def render_skill_catalog(self, _agent: StubAgent, skill_registry: object = None) -> Any:
+        from core.prompts import PinnedSkillCatalog
+
+        return PinnedSkillCatalog(catalog_text="", has_loadable_skills=False)
+
     def provider_tool_definitions(
-        self, _agent: StubAgent, *, skill_registry: object = None
+        self, _agent: StubAgent, *, skill_registry: object = None, skill_catalog: object = None
     ) -> list[JsonObject]:
         return []
 
