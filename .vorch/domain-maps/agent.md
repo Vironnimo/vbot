@@ -4,7 +4,7 @@ Persisted agent configuration and workspace lifecycle management.
 
 ## Overview
 
-`core/agents/` owns `agent.json` CRUD under `<data_dir>/agents/<agent-id>/`. Creating an agent also creates its sessions directory and seeds a workspace from bundled templates. Deleting an agent archives its active agent directory and workspace instead of permanently deleting them.
+`core/agents/` owns `agent.json` CRUD under `<data_dir>/agents/<agent-id>/`. Creating an agent also creates its sessions directory and seeds a workspace from bundled templates. Deleting an agent archives its active agent directory and workspace instead of permanently deleting them. The agent directory may also hold a **per-agent private skills home** at `<data_dir>/agents/<agent-id>/skills/` — created on first write by the agent's `skill_manage` tool (or the `agent:<id>` skill RPCs), private and always-allowed for that agent (see `skills.md`). Because it lives inside the agent directory it is archived **with the agent** on delete for free; it is not seeded at creation, so an agent that never authored a skill has no `skills/` subdir.
 
 ## Data Model
 

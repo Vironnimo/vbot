@@ -110,6 +110,14 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 **Definition:** A reusable playbook for an agent — a `SKILL.md` file with instructions that teach the agent *how* to handle a specific task or domain. A skill may optionally bundle specialized CLI utilities under a `resources/` subdirectory, but most skills consist solely of the Markdown instructions.
 **Not:** A Tool. A tool does one thing; a skill teaches a workflow or convention. The utilities a skill may bundle are specialized CLI programs, not agent-tools.
 
+## Per-Agent Skill
+**Definition:** A Skill that lives in one agent's **private** home `<data_dir>/agents/<id>/skills/` (archived with the agent on delete, like its Workspace). It is visible and loadable **only** to that agent — layered on top of the project/global/bundled pool at the highest precedence (agent > project > global > bundled) — and is **always-allowed for its owner**, bypassing the agent's `allowed_skills` filter. An agent authors its own per-agent skills with the internal `skill_manage` tool (and via `/learn`); the user can curate any agent's per-agent skills via the WebUI/RPC (`agent:<id>` scope).
+**Not:** A global skill (`<data_dir>/skills/`, shared across the user's identity agents, user-curated), a project/team skill (`<cwd>/.opencode/skills/`, repo-owned), or a bundled skill (`resources/skills/`, read-only). Those shared-pool skills stay subject to the agent's allow-list; only an agent's own private skills bypass it.
+
+## Session-Pinned Catalog
+**Definition:** The system-prompt skill catalog (`<available_skills>`) and the `skill`-tool-presence gate **snapshotted on a Session's first build and reused for that Session's lifetime** (stored in session metadata as a `PinnedSkillCatalog`), so a skill written mid-session never changes a running Session's prompt prefix or tool list — keeping the provider prompt cache intact. The compaction rebuild reuses the same snapshot.
+**Not:** A freeze on *using* skills. Skill **activation** (the `skill` tool) and `/`–`$` triggers stay **live** against the current registry, so a newly authored skill is loadable by name immediately; only the *advertised catalog* and the tool-presence gate are pinned. A **new** Session pins a fresh snapshot and therefore sees the new skill.
+
 ## System Reminder
 **Definition:** A kernel-internal note that is persisted in a Session and later embedded into a provider request as a synthetic user message wrapped in `<system-reminder>` tags. It lets background producers inform the model about events without creating a normal user-visible chat message.
 **Not:** A system prompt, a real user turn, or a server/UI notification.
