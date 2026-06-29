@@ -183,14 +183,20 @@ class StubPrompts:
         agent_body: str = "",
         project_context: Any = None,
         skill_registry: Any = None,
+        skill_catalog: Any = None,
     ) -> str:
         return f"System for {agent.id}"
 
     def render_project_files(self, project_context: Any) -> str:
         return "" if project_context is None else "RENDERED-PROJECT-FILES"
 
+    def render_skill_catalog(self, agent: StubAgent, skill_registry: Any = None) -> Any:
+        from core.prompts import PinnedSkillCatalog
+
+        return PinnedSkillCatalog(catalog_text="", has_loadable_skills=False)
+
     def provider_tool_definitions(
-        self, agent: StubAgent, *, skill_registry: Any = None
+        self, agent: StubAgent, *, skill_registry: Any = None, skill_catalog: Any = None
     ) -> list[JsonObject]:
         return [
             {
