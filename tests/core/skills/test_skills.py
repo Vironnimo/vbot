@@ -11,6 +11,8 @@ from core.skills.skills import (
     SkillRegistry,
     _logged_skill_warnings,
     _scan_skill_resources,
+    project_skill_origin,
+    skill_origin_sort_key,
 )
 
 
@@ -553,3 +555,38 @@ description: Find source material.
 """,
     )
     return SkillRegistry.load(skills_dir)
+
+
+class TestSkillOrigin:
+    def test_load_records_origin_from_scan_roots(self, tmp_path: Path) -> None:
+        write_skill(tmp_path / "agent", "a", "---\nname: a\ndescription: A.\n---\n")
+        write_skill(tmp_path / "global", "g", "---\nname: g\ndescription: G.\n---\n")
+
+        registry = SkillRegistry.load(
+            tmp_path / "agent", extra_dirs=[tmp_path / "global"], origins=["agent", "global"]
+        )
+
+        assert registry.get("a").origin == "agent"
+        assert registry.get("g").origin == "global"
+
+    def test_load_without_origins_leaves_origin_none(self, tmp_path: Path) -> None:
+        write_skill(tmp_path / "s", "x", "---\nname: x\ndescription: X.\n---\n")
+
+        registry = SkillRegistry.load(tmp_path / "s")
+
+        assert registry.get("x").origin is None
+
+    def test_project_skill_origin_carries_display_name(self) -> None:
+        assert project_skill_origin("Acme") == "project:Acme"
+
+    def test_skill_origin_sort_key_orders_bundled_global_project_agent(self) -> None:
+        origins = [None, "agent", "project:Zeta", "global", "bundled", "project:Alpha"]
+
+        assert sorted(origins, key=skill_origin_sort_key) == [
+            "bundled",
+            "global",
+            "project:Alpha",
+            "project:Zeta",
+            "agent",
+            None,
+        ]
