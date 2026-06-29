@@ -181,6 +181,46 @@ def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
     assert identity_result == tool_failure("skill_not_found", "Skill not found: proj-skill")
 
 
+def test_skill_tool_list_mode_returns_grouped_skills(tmp_path: Path) -> None:
+    # No name → list mode: the live, agent-aware catalog grouped by origin.
+    agent_dir = tmp_path / "agent"
+    (agent_dir / "mine").mkdir(parents=True)
+    (agent_dir / "mine" / "SKILL.md").write_text(
+        "---\nname: mine\ndescription: Mine.\n---\n\nBody.\n", encoding="utf-8"
+    )
+    registry = SkillRegistry.load(
+        agent_dir, extra_dirs=[_skills_dir(tmp_path)], origins=["agent", "global"]
+    )
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry))
+
+    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {}))
+    data = cast(dict[str, Any], result["data"])
+
+    assert result["ok"] is True
+    groups = {group["origin"]: [s["name"] for s in group["skills"]] for group in data["skill_groups"]}
+    assert groups == {"agent": ["mine"], "global": ["debugging"]}
+    assert data["count"] == 2
+    # Sort order: global before agent.
+    origins_in_order = [group["origin"] for group in data["skill_groups"]]
+    assert origins_in_order.index("global") < origins_in_order.index("agent")
+    assert "<skill_content" not in str(result)
+
+
+def test_skill_tool_blank_name_lists_instead_of_activating(tmp_path: Path) -> None:
+    registry = SkillRegistry.load(_skills_dir(tmp_path), origins=["global"])
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry))
+
+    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
+    data = cast(dict[str, Any], result["data"])
+
+    assert result["ok"] is True
+    assert [skill["name"] for group in data["skill_groups"] for skill in group["skills"]] == [
+        "debugging"
+    ]
+
+
 def test_skill_tool_loads_agent_own_skill_bypassing_allowlist(tmp_path: Path) -> None:
     # An agent's own private skill is always-allowed for it: the skill tool loads it
     # even when the agent's allow-list would otherwise exclude everything.

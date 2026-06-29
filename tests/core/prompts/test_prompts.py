@@ -46,6 +46,7 @@ _CORE_FRAGMENT_NAMES = ("runtime.md", "tools.md", "channels.md", "skills.md")
 class StubSkill:
     name: str
     description: str
+    origin: str | None = None
 
 
 class StubStorage:
@@ -820,6 +821,28 @@ def test_build_system_prompt_skill_registry_override_scopes_skills_block(tmp_pat
 
     assert "project-skill" in prompt
     assert "global-skill" not in prompt
+
+
+def test_skill_catalog_groups_skills_by_origin(tmp_path: Path) -> None:
+    skills = StubSkills(
+        [
+            StubSkill("own-skill", "Mine.", origin="agent"),
+            StubSkill("bundled-skill", "Shipped.", origin="bundled"),
+            StubSkill("proj-skill", "From the repo.", origin="project:Acme"),
+        ]
+    )
+    manager = _manager(tmp_path, skills=skills)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert '<skill_group label="Bundled skills">' in prompt
+    assert '<skill_group label="Your own skills">' in prompt
+    assert "Skills from project" in prompt and "Acme" in prompt
+    # Plan order: bundled, then project, then the agent's own.
+    assert prompt.index("Bundled skills") < prompt.index("Acme") < prompt.index("Your own skills")
+    # The catalog stays path-free.
+    assert "/skills/" not in prompt
 
 
 def test_provider_tool_definitions_skill_tool_gated_by_override_registry(tmp_path: Path) -> None:
