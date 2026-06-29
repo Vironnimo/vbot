@@ -18,6 +18,7 @@ from server.rpc import (
     project_methods,
     provider_usage_methods,
     settings_methods,
+    skill_methods,
     statistics_methods,
 )
 from server.rpc.dispatcher import RpcMethodHandler
@@ -45,6 +46,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         statistics_methods,
         provider_usage_methods,
         client_methods,
+        skill_methods,
     ):
         handlers.update(registry.method_handlers())
     return handlers
