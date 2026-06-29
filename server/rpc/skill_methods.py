@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.settings import is_valid_agent_id
-from core.skills import SkillAuthoringError, SkillWriteResult
+from core.skills import SkillAuthoringError, SkillRegistry, SkillWriteResult
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _optional_string, _required_string
@@ -74,6 +74,25 @@ def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResult]) ->
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     _invalidate_scope(state, scope)
     return {"name": result.name, "operation": result.operation, "warnings": list(result.warnings)}
+
+
+def _skill_read(state: Any, params: JsonObject) -> JsonObject:
+    """Return the editable skills of one scope, each with its full ``SKILL.md`` text.
+
+    Scans only the scope's own directory (the data-dir global pool or an agent's
+    private home), so bundled and project skills never appear — those are not
+    editable here. The content lets the UI view and pre-fill an edit form.
+    """
+    scope = _validated_scope(params)
+    registry = SkillRegistry.load(_scope_root(state, scope))
+    skills: list[JsonObject] = []
+    for skill in registry.list_all():
+        try:
+            content = skill.path.read_text(encoding="utf-8")
+        except OSError:
+            content = ""
+        skills.append({"name": skill.name, "description": skill.description, "content": content})
+    return {"skills": skills}
 
 
 def _skill_create(state: Any, params: JsonObject) -> JsonObject:
@@ -136,6 +155,7 @@ def _skill_remove_file(state: Any, params: JsonObject) -> JsonObject:
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the skill mutation RPC handlers."""
     return {
+        "skill.read": _skill_read,
         "skill.create": _skill_create,
         "skill.update": _skill_update,
         "skill.delete": _skill_delete,
