@@ -261,6 +261,7 @@ def test_built_in_commands_include_current_catalog() -> None:
         "compact",
         "handoff",
         "help",
+        "learn",
         "model",
         "new",
         "rename",
@@ -280,6 +281,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "compact": "optional",
         "handoff": "optional",
         "help": "none",
+        "learn": "optional",
         "model": "optional",
         "new": "none",
         "rename": "optional",
@@ -292,6 +294,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "compact": "toast",
         "handoff": "action",
         "help": "transient",
+        "learn": "action",
         "model": "action",
         "new": "action",
         "rename": "toast",
@@ -334,6 +337,22 @@ def test_dispatch_handoff_without_argument_returns_action() -> None:
     result = dispatcher.dispatch("coder", "session-one", "/handoff")
 
     assert result == CommandAction(name="handoff", argument=None)
+
+
+def test_dispatch_learn_without_argument_returns_action() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/learn")
+
+    assert result == CommandAction(name="learn", argument=None)
+
+
+def test_dispatch_learn_takes_full_remainder_as_argument() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/learn the deploy steps we just did")
+
+    assert result == CommandAction(name="learn", argument="the deploy steps we just did")
 
 
 def test_dispatch_handoff_with_agent_id_returns_action() -> None:
