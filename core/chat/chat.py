@@ -127,7 +127,7 @@ from core.chat.tool_dispatch import (
 from core.debug import DebugContext
 from core.extensions import HookContext
 from core.projects import resolve_prompt_project, runtime_agent_body
-from core.prompts import ProjectPromptContext
+from core.prompts import PinnedSkillCatalog, ProjectPromptContext
 from core.providers.errors import NetworkError
 from core.providers.providers import resolve_context_window
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
@@ -159,6 +159,10 @@ MAX_TOOL_ITERATIONS = 1000
 # and survives across runs — the visited project lives in the session meta, not
 # the session path.
 VISITED_PROJECTS_META_KEY = "visited_projects"
+# Session-pinned skill catalog snapshot (rendered catalog text + tool-presence
+# gate), stored in session metadata so a mid-session skill write never shifts the
+# session's system prompt or tool list (the prompt-cache invariant).
+PINNED_SKILL_CATALOG_META_KEY = "pinned_skill_catalog"
 
 # Prepended (visiting path only) before a reached-into project's auto-loaded files
 # so the model knows why a foreign project's files appeared in its context.
@@ -574,6 +578,13 @@ class ChatLoop:
         # is byte-identical to before.
         skill_project_id = project_id if project_id is not None else rooted_project_id
         skill_registry = self._runtime.skills_for(skill_project_id, run.agent_id)
+        # The catalog block and skill-tool presence are pinned per session on the
+        # first build, so a skill written mid-session never shifts this session's
+        # prompt prefix (the cache invariant). Triggers and skill activation below
+        # still use the live ``skill_registry``.
+        skill_catalog = self._pinned_skill_catalog(
+            run.agent_id, run.session_id, agent, skill_registry, project_id
+        )
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
@@ -618,9 +629,10 @@ class ChatLoop:
                 agent_body=agent_body,
                 project_context=project_prompt_context,
                 skill_registry=skill_registry,
+                skill_catalog=skill_catalog,
             )
             tools = self._runtime.system_prompts.provider_tool_definitions(
-                agent, skill_registry=skill_registry
+                agent, skill_registry=skill_registry, skill_catalog=skill_catalog
             )
 
             try:
@@ -787,6 +799,40 @@ class ChatLoop:
             return None
         return ProjectPromptContext.from_project(project.cwd, project.auto_load)
 
+    def _pinned_skill_catalog(
+        self,
+        agent_id: str,
+        session_id: str,
+        agent: Any,
+        skill_registry: SkillRegistry,
+        project_id: str | None,
+    ) -> PinnedSkillCatalog:
+        """Return the session's pinned skill catalog, snapshotting it on first build.
+
+        The catalog text and the skill-tool-presence gate are fixed for the
+        session's lifetime (persisted in session metadata under the session's own
+        ``project_id`` anchor), so a skill written mid-session leaves the session's
+        system prompt and tool list byte-identical and the provider prompt cache
+        stays intact. Skill activation and ``/``-``$`` triggers still resolve the
+        live registry, so a newly written skill is loadable immediately even though
+        the catalog is frozen. A new session pins a fresh snapshot, so it sees the
+        new skill.
+        """
+        metadata = self._runtime.chat_sessions.get_metadata(agent_id, session_id, project_id)
+        pinned = metadata.get(PINNED_SKILL_CATALOG_META_KEY)
+        if isinstance(pinned, dict) and isinstance(pinned.get("catalog_text"), str):
+            return PinnedSkillCatalog(
+                catalog_text=pinned["catalog_text"],
+                has_loadable_skills=bool(pinned.get("has_loadable_skills")),
+            )
+        snapshot = self._runtime.system_prompts.render_skill_catalog(agent, skill_registry)
+        metadata[PINNED_SKILL_CATALOG_META_KEY] = {
+            "catalog_text": snapshot.catalog_text,
+            "has_loadable_skills": snapshot.has_loadable_skills,
+        }
+        self._runtime.chat_sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        return snapshot
+
     def inject_visiting_project_files(
         self, session: ChatSession, project_context: ProjectPromptContext
     ) -> bool:
@@ -877,17 +923,20 @@ class ChatLoop:
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
         skill_registry: SkillRegistry | None = None,
+        skill_catalog: PinnedSkillCatalog | None = None,
     ) -> list[JsonObject]:
         # For a project-born session the project files land in the system prompt;
         # for an identity session both are empty and the prompt is unchanged. The
         # config-agent body is inserted verbatim (never re-expanded) by the builder.
         # ``skill_registry`` scopes the skills block to the project pool (``None`` =
-        # the global registry).
+        # the global registry); ``skill_catalog`` is the session-pinned snapshot the
+        # skills block renders from, so a mid-session skill write never shifts it.
         system_prompt = self._runtime.system_prompts.build_system_prompt(
             agent,
             agent_body=agent_body,
             project_context=project_context,
             skill_registry=skill_registry,
+            skill_catalog=skill_catalog,
         )
         system_messages = (
             [ChatMessage.system(system_prompt, agent.model).to_dict()]
@@ -1261,6 +1310,7 @@ class ChatLoop:
 
         session.append(checkpoint)
         run.emit(COMPACTION_COMPLETED_EVENT, {"message": checkpoint.to_dict()})
+        compaction_skill_registry = self._runtime.skills_for(skill_project_id, run.agent_id)
         rebuilt_messages = await self._build_request_messages(
             agent,
             session,
@@ -1268,7 +1318,12 @@ class ChatLoop:
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
             agent_body=runtime_agent_body(agent),
             project_context=self._resolve_project_prompt_context(project_id, agent),
-            skill_registry=self._runtime.skills_for(skill_project_id, run.agent_id),
+            skill_registry=compaction_skill_registry,
+            # Reuse the session's pinned snapshot so the rebuilt prompt's catalog is
+            # byte-identical across the compaction checkpoint.
+            skill_catalog=self._pinned_skill_catalog(
+                run.agent_id, run.session_id, agent, compaction_skill_registry, project_id
+            ),
         )
         return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)
 

@@ -243,11 +243,17 @@ class IntegrationPrompts:
         agent_body: str = "",
         project_context: object = None,
         skill_registry: object = None,
+        skill_catalog: object = None,
     ) -> str:
         return f"System prompt for {agent.id}"
 
+    def render_skill_catalog(self, agent: IntegrationAgent, skill_registry: object = None) -> Any:
+        from core.prompts import PinnedSkillCatalog
+
+        return PinnedSkillCatalog(catalog_text="", has_loadable_skills=False)
+
     def provider_tool_definitions(
-        self, agent: IntegrationAgent, *, skill_registry: object = None
+        self, agent: IntegrationAgent, *, skill_registry: object = None, skill_catalog: object = None
     ) -> list[JsonObject]:
         return self._tools.provider_definitions(agent.allowed_tools)
 
