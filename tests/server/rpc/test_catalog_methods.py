@@ -51,7 +51,7 @@ def _state(
             raise AgentResolutionError(f"agent '{agent_id}' not found")
         return agent
 
-    def skills_for(project_id: str | None) -> _Registry:
+    def skills_for(project_id: str | None, agent_id: str | None = None) -> _Registry:
         return project_registry if project_id is not None else global_registry
 
     runtime = SimpleNamespace(

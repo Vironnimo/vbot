@@ -429,7 +429,7 @@ async def test_preview_includes_extension_block(tmp_path: Path) -> None:
     runtime_extra = {
         "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
         "projects": SimpleNamespace(find_by_cwd=lambda _cwd: None),
-        "skills_for": lambda _project: StubSkills(),
+        "skills_for": lambda _project, _agent=None: StubSkills(),
     }
     state = _state(manager, runtime_extra=runtime_extra)
 

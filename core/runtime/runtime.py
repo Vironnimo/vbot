@@ -7,7 +7,7 @@ all core services and manages the application lifecycle.
 import asyncio
 import os
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -67,7 +67,9 @@ from core.sessions import ChatSessionManager
 from core.skills.skills import (
     SkillRegistry,
     load_project_skill_registry,
+    project_skills_dir,
     scan_project_skill_names,
+    scan_skill_names,
 )
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
@@ -108,6 +110,7 @@ _DEFAULT_APP_VERSION = "0.1.0"
 _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES = 20_971_520
 _DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 20_971_520
 _SKILLS_DIRNAME = "skills"
+_AGENTS_DIRNAME = "agents"
 
 
 @dataclass(frozen=True)
@@ -309,6 +312,12 @@ class Runtime:
         # resolution build on miss and drop on project open, cwd change, project
         # removal, or a global skill reload.
         self._project_skills: dict[str, _ProjectSkillBundle] = {}
+        # Agent-aware skill registries, cached by ``(project_id, agent_id)``. Each
+        # layers an agent's own private skills (``<data_dir>/agents/<id>/skills``)
+        # over the project/global pool and marks them always-allowed for that owner.
+        # Dropped per agent on an agent skill write and per project on the same
+        # triggers as the project cache (so the embedded project layer stays fresh).
+        self._agent_skills: dict[tuple[str | None, str], SkillRegistry] = {}
         self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._projects: ProjectStore | None = None
@@ -630,6 +639,7 @@ class Runtime:
         self._process_manager = None
         self._skills = None
         self._project_skills = {}
+        self._agent_skills = {}
         self._extensions = None
         self._chat_sessions = None
         self._projects = None
@@ -871,17 +881,28 @@ class Runtime:
             *self._extra_skill_directories(settings),
         ]
 
-    def skills_for(self, project_id: str | None) -> SkillRegistry:
-        """Return the skill registry a run should use, scoped to its project.
+    def agent_skills_dir(self, agent_id: str) -> Path:
+        """Return an agent's private skill home (``<data_dir>/agents/<id>/skills``)."""
+        if self._storage is None:
+            raise RuntimeError("Storage service not available")
+        return self._storage.data_dir / _AGENTS_DIRNAME / agent_id / _SKILLS_DIRNAME
 
-        ``project_id is None`` (identity run) returns the global registry
-        byte-for-byte. A set ``project_id`` returns the project's merged registry —
-        the project's own ``.opencode/skills`` first, then the bundled pool — cached
-        per project like the Team. This is the single seam every run-time skill
-        consumer (prompt assembly, triggers, the ``skill`` tool, autocomplete)
-        resolves through, so project scoping lives in exactly one place.
+    def skills_for(self, project_id: str | None, agent_id: str | None = None) -> SkillRegistry:
+        """Return the skill registry a run should use, scoped to project and agent.
+
+        ``project_id is None`` and ``agent_id is None`` (a plain identity run) returns
+        the global registry byte-for-byte. A set ``project_id`` returns the project's
+        merged registry — the project's own ``.opencode/skills`` first, then the
+        bundled pool. When ``agent_id`` names an agent that has its own private skills
+        home, that home is layered on top (agent > project > global > bundled) and the
+        agent's own skills are always-allowed for it; an agent with no private skills
+        falls through to the project/global path unchanged. This is the single seam
+        every run-time skill consumer (prompt assembly, triggers, the ``skill`` tool,
+        autocomplete) resolves through, so scoping lives in exactly one place.
         """
         self._ensure_started()
+        if agent_id is not None and self.agent_skills_dir(agent_id).is_dir():
+            return self._agent_skill_registry(project_id, agent_id)
         if project_id is None:
             return self.skills
         return self._project_skill_bundle(project_id).registry
@@ -899,11 +920,64 @@ class Runtime:
         return self._project_skill_bundle(project_id).names
 
     def invalidate_project_skills(self, project_id: str | None = None) -> None:
-        """Drop the cached project skills for one project, or for all when ``None``."""
+        """Drop the cached project skills for one project, or for all when ``None``.
+
+        Agent-aware registries embed the project layer, so this also drops the
+        cached agent registries for that project (or all of them when ``None``) to
+        keep them coherent with the project pool.
+        """
         if project_id is None:
             self._project_skills.clear()
+            self._agent_skills.clear()
             return
         self._project_skills.pop(project_id, None)
+        self._drop_agent_skills(lambda key: key[0] == project_id)
+
+    def invalidate_agent_skills(self, agent_id: str | None = None) -> None:
+        """Drop the cached agent skills for one agent, or for all when ``None``.
+
+        Called after an agent's private skill home changes (a skill write) so the
+        next run rebuilds that agent's registry against the new pool. Drops only
+        that agent's cached registries across every project context it ran in.
+        """
+        if agent_id is None:
+            self._agent_skills.clear()
+            return
+        self._drop_agent_skills(lambda key: key[1] == agent_id)
+
+    def _drop_agent_skills(self, predicate: Callable[[tuple[str | None, str]], bool]) -> None:
+        for key in [key for key in self._agent_skills if predicate(key)]:
+            del self._agent_skills[key]
+
+    def _agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
+        key = (project_id, agent_id)
+        cached = self._agent_skills.get(key)
+        if cached is not None:
+            return cached
+        registry = self._build_agent_skill_registry(project_id, agent_id)
+        self._agent_skills[key] = registry
+        return registry
+
+    def _build_agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
+        settings = self.storage.load_settings()
+        environment = self._skill_environment(self.storage.load_environment())
+        agent_root = self.agent_skills_dir(agent_id)
+        roots: list[Path] = [agent_root]
+        if project_id is not None:
+            project = self.projects.get(project_id)
+            roots.append(project_skills_dir(Path(project.cwd)))
+        roots.extend(self._skill_scan_roots(settings, self._resolve_resources_path()))
+        # First-found-wins ordering makes agent skills win over project, project over
+        # bundled. The agent's own skills are always-allowed for it, so they bypass
+        # the owner's ``allowed_skills`` filter without leaking to other agents
+        # (whose registries never scan this home).
+        agent_own_names = scan_skill_names(agent_root, environment)
+        return SkillRegistry.load(
+            roots[0],
+            extra_dirs=roots[1:],
+            environment=environment,
+            always_allowed=agent_own_names,
+        )
 
     def _project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
         cached = self._project_skills.get(project_id)
@@ -1057,9 +1131,10 @@ class Runtime:
             extra_dirs=skill_scan_roots[1:],
             environment=self._skill_environment(self.storage.load_environment()),
         )
-        # Project-scoped registries merge in the same bundled roots, so a global
-        # skill reload makes every cached project registry stale — drop them all so
-        # the next project run rebuilds against the fresh pool.
+        # Project- and agent-scoped registries merge in the same bundled roots, so a
+        # global skill reload makes every cached project *and* agent registry stale —
+        # invalidate_project_skills() with no project drops both caches so the next
+        # run rebuilds against the fresh pool.
         self.invalidate_project_skills()
         invalid_skill_count = len(self._skills.invalid_diagnostics())
         if self.logger is not None:
