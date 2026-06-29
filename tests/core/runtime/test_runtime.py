@@ -980,7 +980,9 @@ def test_agent_skills_dir_path(config: Config) -> None:
     runtime = Runtime(config)
     runtime.start()
 
-    assert runtime.agent_skills_dir("main") == runtime.storage.data_dir / "agents" / "main" / "skills"
+    assert (
+        runtime.agent_skills_dir("main") == runtime.storage.data_dir / "agents" / "main" / "skills"
+    )
 
 
 def test_skills_for_agent_includes_own_private_skills(config: Config) -> None:
@@ -1080,7 +1082,9 @@ def test_reload_skills_drops_agent_cache(config: Config) -> None:
     assert runtime.skills_for(None, "main") is not first
 
 
-def test_invalidate_project_skills_drops_matching_agent_cache(config: Config, tmp_path: Path) -> None:
+def test_invalidate_project_skills_drops_matching_agent_cache(
+    config: Config, tmp_path: Path
+) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
@@ -1097,7 +1101,9 @@ def test_invalidate_project_skills_drops_matching_agent_cache(config: Config, tm
     assert runtime.skills_for(project.project_id, "main") is not first
 
 
-def test_project_own_skills_returns_scanned_project_metadata(config: Config, tmp_path: Path) -> None:
+def test_project_own_skills_returns_scanned_project_metadata(
+    config: Config, tmp_path: Path
+) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
