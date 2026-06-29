@@ -542,7 +542,7 @@ describe('ChatComposer', () => {
     });
   });
 
-  it('sends uploaded text files as embedded text blocks', async () => {
+  it('sends uploaded text files as a file reference plus embedded content', async () => {
     const onSendMessage = vi.fn();
     uploadAttachment.mockResolvedValue({
       attachment_id: 'attachment-text-1',
@@ -564,11 +564,17 @@ describe('ChatComposer', () => {
     submitComposer();
 
     expect(onSendMessage).toHaveBeenCalledWith([
+      {
+        type: 'file',
+        attachment_id: 'attachment-text-1',
+        filename: 'note.txt',
+        media_type: 'text/plain',
+      },
       { type: 'text', text: 'hello' },
     ]);
   });
 
-  it('sends uploaded empty text files as embedded text blocks', async () => {
+  it('sends an uploaded empty text file as a file reference only', async () => {
     const onSendMessage = vi.fn();
     uploadAttachment.mockResolvedValue({
       attachment_id: 'attachment-text-empty-1',
@@ -589,7 +595,14 @@ describe('ChatComposer', () => {
     );
     submitComposer();
 
-    expect(onSendMessage).toHaveBeenCalledWith([{ type: 'text', text: '' }]);
+    expect(onSendMessage).toHaveBeenCalledWith([
+      {
+        type: 'file',
+        attachment_id: 'attachment-text-empty-1',
+        filename: 'empty.txt',
+        media_type: 'text/plain',
+      },
+    ]);
   });
 
   it('sends uploaded images as media blocks', async () => {

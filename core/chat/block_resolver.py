@@ -85,15 +85,17 @@ class ContentBlockResolver:
             return resolved_message
 
         is_current_turn = message.get("id") == current_user_message_id
-        resolved_message["content"] = [
-            await self._resolve_block(
-                block,
-                is_current_turn=is_current_turn,
-                input_modalities=input_modalities,
-                wire_media_types=wire_media_types,
+        resolved_content: list[JsonObject] = []
+        for block in content:
+            resolved_content.extend(
+                await self._resolve_block(
+                    block,
+                    is_current_turn=is_current_turn,
+                    input_modalities=input_modalities,
+                    wire_media_types=wire_media_types,
+                )
             )
-            for block in content
-        ]
+        resolved_message["content"] = resolved_content
         return resolved_message
 
     async def _resolve_block(
@@ -103,13 +105,13 @@ class ContentBlockResolver:
         is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
-    ) -> JsonObject:
+    ) -> list[JsonObject]:
         if not isinstance(block, dict):
             raise ChatError("content blocks must be objects")
 
         block_type = block.get("type")
         if block_type == "text":
-            return {"type": "text", "text": self._require_string(block, "text")}
+            return [{"type": "text", "text": self._require_string(block, "text")}]
         if block_type == "media":
             return await self._resolve_media_block(
                 block,
@@ -133,7 +135,7 @@ class ContentBlockResolver:
         is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
-    ) -> JsonObject:
+    ) -> list[JsonObject]:
         attachment_id = self._require_string(block, "attachment_id")
         filename = self._require_string(block, "filename")
         media_type = self._require_string(block, "media_type")
@@ -159,7 +161,7 @@ class ContentBlockResolver:
         if media_type.startswith("video/"):
             # No supported provider wire accepts raw video; the path note lets the
             # agent work on the file with tools instead.
-            return self._path_note_block("Video", attachment_id, filename, media_type)
+            return [self._path_note_block("Video", attachment_id, filename, media_type)]
 
         raise ChatError(f"unsupported media attachment type: {media_type}")
 
@@ -172,7 +174,7 @@ class ContentBlockResolver:
         is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
-    ) -> JsonObject:
+    ) -> list[JsonObject]:
         # A current-turn image sent to a model that cannot see is a hard error —
         # the agent intended the model to look at it. (Historical images degrade
         # quietly regardless of model capability, so this gate is current-turn only.)
@@ -183,14 +185,20 @@ class ContentBlockResolver:
             # Either an earlier turn, or a vision model whose wire cannot carry this
             # image type: keep the blob path visible so the agent can open it.
             label = "Image" if is_current_turn else "Image from an earlier turn"
-            return self._path_note_block(label, attachment_id, filename, media_type)
+            return [self._path_note_block(label, attachment_id, filename, media_type)]
 
         blob_data = self._read_attachment_bytes(attachment_id)
-        return {
+        native_block = {
             "type": "media",
             "base64": base64.b64encode(blob_data).decode("ascii"),
             "media_type": media_type,
         }
+        # The native image rides with a path note so the agent also holds a handle to
+        # the original file (e.g. to forward it), not only the pixels.
+        return [
+            native_block,
+            self._path_note_block("Image", attachment_id, filename, media_type),
+        ]
 
     async def _resolve_audio_block(
         self,
@@ -201,16 +209,21 @@ class ContentBlockResolver:
         is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
-    ) -> JsonObject:
+    ) -> list[JsonObject]:
         record = self._load_record_or_none(attachment_id)
 
         if record is not None and isinstance(record.transcription, str):
-            return self._transcription_block(filename, media_type, record.transcription)
+            return [
+                self._transcription_block(filename, media_type, record.transcription),
+                self._path_note_block("Audio", attachment_id, filename, media_type),
+            ]
 
         if not is_current_turn:
-            return self._path_note_block(
-                "Audio from an earlier turn", attachment_id, filename, media_type
-            )
+            return [
+                self._path_note_block(
+                    "Audio from an earlier turn", attachment_id, filename, media_type
+                )
+            ]
 
         if record is None:
             raise AttachmentResolveError(
@@ -219,14 +232,21 @@ class ContentBlockResolver:
 
         if "audio" in input_modalities and media_type in wire_media_types:
             blob_data = self._read_attachment_bytes(attachment_id)
-            return {
+            native_block = {
                 "type": "media",
                 "base64": base64.b64encode(blob_data).decode("ascii"),
                 "media_type": media_type,
             }
+            return [
+                native_block,
+                self._path_note_block("Audio", attachment_id, filename, media_type),
+            ]
 
         transcription = await self._transcribe_attachment(record, filename, media_type)
-        return self._transcription_block(filename, media_type, transcription)
+        return [
+            self._transcription_block(filename, media_type, transcription),
+            self._path_note_block("Audio", attachment_id, filename, media_type),
+        ]
 
     async def _transcribe_attachment(
         self,
@@ -297,29 +317,39 @@ class ContentBlockResolver:
         is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
-    ) -> JsonObject:
+    ) -> list[JsonObject]:
         attachment_id = self._require_string(block, "attachment_id")
         filename = self._require_string(block, "filename")
         media_type = self._require_string(block, "media_type")
 
         modality = "pdf" if media_type == "application/pdf" else "file"
-        native = is_current_turn and modality in input_modalities and media_type in wire_media_types
+        # A text file's content rides inline in its sibling text block, so the file
+        # reference only contributes the path note — never a native document, which
+        # would send the same content a second time.
+        native = (
+            is_current_turn
+            and not media_type.startswith("text/")
+            and modality in input_modalities
+            and media_type in wire_media_types
+        )
         if native:
             blob_data = self._read_attachment_bytes(attachment_id)
-            return {
+            document_block = {
                 "type": "document",
                 "base64": base64.b64encode(blob_data).decode("ascii"),
                 "media_type": media_type,
                 "filename": filename,
             }
+            # The native document rides with a path note so the agent also holds a
+            # handle to the original file, not only the parsed document.
+            return [
+                document_block,
+                self._path_note_block("File", attachment_id, filename, media_type),
+            ]
 
-        # Not native (unsupported model/wire, or an earlier turn): keep the blob
-        # path visible so the agent can open the document with the read tool.
-        record = self._read_attachment_record(attachment_id)
-        return {
-            "type": "text",
-            "text": f"[File: {filename} ({media_type}) — Path: {record.file_path}]",
-        }
+        # Not native (text, unsupported model/wire, or an earlier turn): the path
+        # note keeps the blob openable with the read tool and forwardable as a file.
+        return [self._path_note_block("File", attachment_id, filename, media_type)]
 
     def _load_record_or_none(self, attachment_id: str) -> Any | None:
         try:

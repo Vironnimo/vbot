@@ -440,32 +440,36 @@
         .filter(
           (attachment) => !attachment.uploading && attachment.attachment_id,
         )
-        .map((attachment) => {
+        .flatMap((attachment) => {
           if (hasMediaMediaType(attachment.media_type)) {
-            return {
-              type: 'media',
-              attachment_id: attachment.attachment_id,
-              filename: attachment.filename,
-              media_type: attachment.media_type,
-            };
+            return [
+              {
+                type: 'media',
+                attachment_id: attachment.attachment_id,
+                filename: attachment.filename,
+                media_type: attachment.media_type,
+              },
+            ];
           }
 
-          if (
-            hasTextMediaType(attachment.media_type) &&
-            typeof attachment.text_content === 'string'
-          ) {
-            return {
-              type: 'text',
-              text: attachment.text_content,
-            };
-          }
-
-          return {
+          const fileBlock = {
             type: 'file',
             attachment_id: attachment.attachment_id,
             filename: attachment.filename,
             media_type: attachment.media_type,
           };
+
+          // A text attachment is carried as a file reference (resolved to a path
+          // note so the agent can forward or reopen the original) plus its content.
+          if (
+            hasTextMediaType(attachment.media_type) &&
+            typeof attachment.text_content === 'string' &&
+            attachment.text_content.length > 0
+          ) {
+            return [fileBlock, { type: 'text', text: attachment.text_content }];
+          }
+
+          return [fileBlock];
         });
 
       if (trimmedContent) {

@@ -1458,9 +1458,12 @@ async def test_inbound_text_document_triggers_text_block_with_content(
     assert await_args is not None
     blocks = await_args.args[1]
     assert isinstance(blocks, list)
-    assert len(blocks) == 1
-    assert isinstance(blocks[0], TextBlock)
-    assert blocks[0].text == "hello from text file"
+    assert len(blocks) == 2
+    assert isinstance(blocks[0], FileBlock)
+    assert blocks[0].filename == "notes.txt"
+    assert blocks[0].media_type == "text/plain"
+    assert isinstance(blocks[1], TextBlock)
+    assert blocks[1].text == "hello from text file"
     await adapter.stop()
 
 
