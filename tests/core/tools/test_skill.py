@@ -198,7 +198,9 @@ def test_skill_tool_list_mode_returns_grouped_skills(tmp_path: Path) -> None:
     data = cast(dict[str, Any], result["data"])
 
     assert result["ok"] is True
-    groups = {group["origin"]: [s["name"] for s in group["skills"]] for group in data["skill_groups"]}
+    groups = {
+        group["origin"]: [s["name"] for s in group["skills"]] for group in data["skill_groups"]
+    }
     assert groups == {"agent": ["mine"], "global": ["debugging"]}
     assert data["count"] == 2
     # Sort order: global before agent.

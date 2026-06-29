@@ -22,7 +22,9 @@ from server.rpc.skill_methods import (
 )
 
 
-def _skill_md(name: str = "demo", description: str = "Do a demo task.", body: str = "# Demo\n") -> str:
+def _skill_md(
+    name: str = "demo", description: str = "Do a demo task.", body: str = "# Demo\n"
+) -> str:
     return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
 
 
@@ -114,9 +116,7 @@ def test_write_and_remove_support_file(tmp_path: Path) -> None:
     resource = state.runtime.agent_skills_dir("builder") / "demo" / "scripts" / "run.py"
     assert resource.is_file()
 
-    _skill_remove_file(
-        state, {"scope": "agent:builder", "name": "demo", "path": "scripts/run.py"}
-    )
+    _skill_remove_file(state, {"scope": "agent:builder", "name": "demo", "path": "scripts/run.py"})
     assert not resource.exists()
 
 
@@ -163,7 +163,9 @@ def test_missing_scope_is_rejected(tmp_path: Path) -> None:
 
 def test_read_returns_scope_skills_with_content(tmp_path: Path) -> None:
     state = _state(tmp_path)
-    _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md(body="# Demo\nGo.")})
+    _skill_create(
+        state, {"scope": "global", "name": "demo", "content": _skill_md(body="# Demo\nGo.")}
+    )
 
     result = _skill_read(state, {"scope": "global"})
 

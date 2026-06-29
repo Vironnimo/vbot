@@ -854,7 +854,9 @@ def test_render_visiting_project_skills_lists_names_descriptions_and_paths(tmp_p
     skills = [
         SimpleNamespace(name="deploy", description="Ship it.", path=deploy_path),
         SimpleNamespace(
-            name="audit", description="Check it.", path=Path("/repo/.opencode/skills/audit/SKILL.md")
+            name="audit",
+            description="Check it.",
+            path=Path("/repo/.opencode/skills/audit/SKILL.md"),
         ),
     ]
 
