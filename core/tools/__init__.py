@@ -98,6 +98,13 @@ from core.tools.skill import (
     make_skill_handler,
     register_skill_tool,
 )
+from core.tools.skill_manage import (
+    SKILL_MANAGE_TOOL_DESCRIPTION,
+    SKILL_MANAGE_TOOL_NAME,
+    SKILL_MANAGE_TOOL_PARAMETERS,
+    make_skill_manage_handler,
+    register_skill_manage_tool,
+)
 from core.tools.speech import (
     TEXT_TO_SPEECH_TOOL_DESCRIPTION,
     TEXT_TO_SPEECH_TOOL_NAME,
@@ -213,6 +220,9 @@ __all__ = [
     "SESSION_SEARCH_TOOL_DESCRIPTION",
     "SESSION_SEARCH_TOOL_NAME",
     "SESSION_SEARCH_TOOL_PARAMETERS",
+    "SKILL_MANAGE_TOOL_DESCRIPTION",
+    "SKILL_MANAGE_TOOL_NAME",
+    "SKILL_MANAGE_TOOL_PARAMETERS",
     "SKILL_TOOL_DESCRIPTION",
     "SKILL_TOOL_NAME",
     "SKILL_TOOL_PARAMETERS",
@@ -254,6 +264,7 @@ __all__ = [
     "make_memory_handler",
     "make_process_handler",
     "make_skill_handler",
+    "make_skill_manage_handler",
     "make_text_to_speech_handler",
     "make_image_generation_handler",
     "make_read_handler",
@@ -269,6 +280,7 @@ __all__ = [
     "register_process_tool",
     "register_read_tool",
     "register_session_search_tool",
+    "register_skill_manage_tool",
     "register_skill_tool",
     "register_subagent_tools",
     "register_text_to_speech_tool",
