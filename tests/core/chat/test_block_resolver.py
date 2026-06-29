@@ -136,7 +136,11 @@ def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> No
             "type": "media",
             "base64": base64.b64encode(image_bytes).decode("ascii"),
             "media_type": "image/png",
-        }
+        },
+        {
+            "type": "text",
+            "text": f"[Image: photo.png (image/png) — Path: {record.file_path}]",
+        },
     ]
     assert messages[0]["content"][0] == {
         "type": "media",
@@ -239,6 +243,50 @@ def test_file_block_resolves_to_text_path_note(tmp_path: Path, current_turn: boo
     ]
 
 
+@pytest.mark.parametrize("current_turn", [True, False])
+def test_text_file_block_resolves_to_path_note_only(tmp_path: Path, current_turn: bool) -> None:
+    # A text attachment arrives as a file reference (for the path note) plus a
+    # sibling text block (for the content). The file reference must resolve to a
+    # path note only, never a native document — even on the current turn and even
+    # when the model advertises a generic file modality the wire could carry, since
+    # that would send the content a second time.
+    store = AttachmentStore(tmp_path)
+    record = store.store("notes.txt", b"line one\nline two\n")
+    resolver = ContentBlockResolver(store)
+    message_id = "user-current" if current_turn else "user-historical"
+    messages = [
+        {
+            "id": message_id,
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "attachment_id": record.id,
+                    "filename": record.filename,
+                    "media_type": record.media_type,
+                },
+                {"type": "text", "text": "line one\nline two\n"},
+            ],
+        }
+    ]
+
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=frozenset({"text", "image", "file"}),
+        wire_media_types=frozenset({"text/plain"}),
+    )
+
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": f"[File: notes.txt (text/plain) — Path: {record.file_path}]",
+        },
+        {"type": "text", "text": "line one\nline two\n"},
+    ]
+
+
 def _file_message(record: Any, *, message_id: str = "user-current") -> dict:
     return {
         "id": message_id,
@@ -276,7 +324,11 @@ def test_current_turn_pdf_resolves_to_native_document_block(tmp_path: Path) -> N
             "base64": base64.b64encode(PDF_BYTES).decode("ascii"),
             "media_type": "application/pdf",
             "filename": "report.pdf",
-        }
+        },
+        {
+            "type": "text",
+            "text": f"[File: report.pdf (application/pdf) — Path: {record.file_path}]",
+        },
     ]
 
 
@@ -410,7 +462,11 @@ def test_current_turn_native_audio_resolves_to_base64_for_audio_model(tmp_path: 
             "type": "media",
             "base64": base64.b64encode(WAV_BYTES).decode("ascii"),
             "media_type": "audio/wav",
-        }
+        },
+        {
+            "type": "text",
+            "text": f"[Audio: clip.wav (audio/wav) — Path: {record.file_path}]",
+        },
     ]
     assert transcriber.calls == []
 
@@ -441,7 +497,11 @@ def test_current_turn_audio_degrades_to_transcription_without_audio_modality(
                 "[Audio attachment voice.ogg (audio/ogg) — automatic transcription, "
                 "may contain recognition errors]:\nhallo welt"
             ),
-        }
+        },
+        {
+            "type": "text",
+            "text": f"[Audio: voice.ogg (audio/ogg) — Path: {record.file_path}]",
+        },
     ]
     assert transcriber.calls == [("voice.ogg", "audio/ogg")]
     assert store.get(record.id).transcription == "hallo welt"
@@ -673,6 +733,10 @@ def test_mixed_text_and_image_blocks_resolve_in_order(tmp_path: Path) -> None:
             "type": "media",
             "base64": base64.b64encode(image_bytes).decode("ascii"),
             "media_type": "image/png",
+        },
+        {
+            "type": "text",
+            "text": f"[Image: photo.png (image/png) — Path: {record.file_path}]",
         },
     ]
 
