@@ -923,6 +923,13 @@ class Runtime:
             raise RuntimeError("Storage service not available")
         return self._storage.data_dir / _AGENTS_DIRNAME / agent_id / _SKILLS_DIRNAME
 
+    @property
+    def global_skills_dir(self) -> Path:
+        """Return the user-curated global skills directory (``<data_dir>/skills``)."""
+        if self._storage is None:
+            raise RuntimeError("Storage service not available")
+        return self._storage.data_dir / _SKILLS_DIRNAME
+
     def skills_for(self, project_id: str | None, agent_id: str | None = None) -> SkillRegistry:
         """Return the skill registry a run should use, scoped to project and agent.
 
