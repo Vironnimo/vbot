@@ -248,6 +248,23 @@ class SkillPromptRegistry(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class PinnedSkillCatalog:
+    """A session-pinned snapshot of an agent's skill catalog.
+
+    Captured on a session's first build and reused for the session's lifetime so a
+    skill written mid-session never changes the session's system prompt or its tool
+    list, keeping the provider prompt cache intact. ``catalog_text`` is the rendered
+    ``<available_skills>`` block; ``has_loadable_skills`` pins whether the internal
+    ``skill`` tool is offered. Skill *activation* and ``/``-``$`` triggers stay live
+    (they resolve the current registry), so a newly written skill is loadable at
+    once even though the catalog text is frozen.
+    """
+
+    catalog_text: str
+    has_loadable_skills: bool
+
+
 class ChannelPromptMetadata(Protocol):
     """Channel fields needed for prompt-visible channel rendering."""
 
@@ -832,6 +849,7 @@ class SystemPromptManager:
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
         skill_registry: SkillPromptRegistry | None = None,
+        skill_catalog: PinnedSkillCatalog | None = None,
     ) -> str:
         """Build the complete system prompt for an agent (the block-model path).
 
@@ -847,12 +865,15 @@ class SystemPromptManager:
         for the ``core:project_files`` data block (``None`` off a project →
         collapses). ``skill_registry`` overrides the registry the skills block is
         filtered against — a project run passes its project-scoped registry; ``None``
-        uses the configured global one (identity runs, unchanged).
+        uses the configured global one (identity runs, unchanged). ``skill_catalog``
+        is a session-pinned snapshot: when present the skills block renders its frozen
+        text instead of re-filtering the registry, so a mid-session skill write never
+        shifts the prompt prefix.
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._scope_key(prompt_scope)
         context = BlockRenderContext(agent=agent, project_context=project_context, scope=scope_key)
-        producers = self._build_producers(agent, skill_registry)
+        producers = self._build_producers(agent, skill_registry, skill_catalog)
         layout = self._resolve_scope_layout(scope_key)
         definitions = self._collect_block_definitions(
             agent,
@@ -1122,22 +1143,49 @@ class SystemPromptManager:
             return None
         return wrap_include_file(filename, content)
 
+    def render_skill_catalog(
+        self,
+        agent: PromptAgent,
+        skill_registry: SkillPromptRegistry | None = None,
+    ) -> PinnedSkillCatalog:
+        """Render an agent's current skill catalog snapshot (text + tool-presence gate).
+
+        The chat loop pins this per session on the first build and reuses it for the
+        session's lifetime, so a later skill write does not shift the session's
+        prompt or tool list. ``None`` uses the configured global registry.
+        """
+        registry = self._resolve_skill_registry(skill_registry)
+        skills = registry.filter_allowed(agent.allowed_skills)
+        return PinnedSkillCatalog(
+            catalog_text=_format_skill_list(skills),
+            has_loadable_skills=bool(skills),
+        )
+
     def provider_tool_definitions(
         self,
         agent: PromptAgent,
         *,
         skill_registry: SkillPromptRegistry | None = None,
+        skill_catalog: PinnedSkillCatalog | None = None,
     ) -> list[dict[str, Any]]:
         """Return provider tool definitions filtered by the agent allowlist.
 
         ``skill_registry`` scopes the "does this agent have loadable skills?" check
         that decides whether the internal ``skill`` tool is exposed — a project run
         passes its project registry so the tool appears only when the project's
-        effective skills are non-empty; ``None`` uses the global registry.
+        effective skills are non-empty; ``None`` uses the global registry. A
+        session-pinned ``skill_catalog`` overrides that check so the ``skill`` tool's
+        presence stays fixed for the session (the cache invariant) even if a skill is
+        written mid-session.
         """
         active_skill_registry = self._resolve_skill_registry(skill_registry)
         definitions = self._provider_definitions_for_agent(agent)
-        if not self._agent_has_loadable_skills(agent, active_skill_registry):
+        has_loadable_skills = (
+            skill_catalog.has_loadable_skills
+            if skill_catalog is not None
+            else self._agent_has_loadable_skills(agent, active_skill_registry)
+        )
+        if not has_loadable_skills:
             return definitions
 
         return [
@@ -1155,6 +1203,7 @@ class SystemPromptManager:
         self,
         agent: PromptAgent,
         skill_registry: SkillPromptRegistry | None,
+        skill_catalog: PinnedSkillCatalog | None = None,
     ) -> dict[str, BlockProducer]:
         """Build the ``{generated:NAME}`` producer registry for this build.
 
@@ -1164,7 +1213,9 @@ class SystemPromptManager:
         core tools/channels/skills blocks; ``memory_files`` renders the
         ``USER.md``/``MEMORY.md`` ``<file>`` contents per the agent's memory mode
         (the embedded data half of the ``memory:guidance`` block — the file reading
-        itself lives in the memory domain's :func:`read_memory_files`).
+        itself lives in the memory domain's :func:`read_memory_files`). When a
+        session-pinned ``skill_catalog`` is given, ``skill_list`` returns its frozen
+        text instead of re-filtering the live registry.
         """
         active_skill_registry = self._resolve_skill_registry(skill_registry)
 
@@ -1175,6 +1226,8 @@ class SystemPromptManager:
             return _format_channel_list(self._agent_active_channels(context.agent))
 
         def skill_list(context: BlockRenderContext) -> str:
+            if skill_catalog is not None:
+                return skill_catalog.catalog_text
             return _format_skill_list(
                 active_skill_registry.filter_allowed(context.agent.allowed_skills)
             )

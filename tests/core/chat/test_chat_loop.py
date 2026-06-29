@@ -197,6 +197,7 @@ class StubPrompts:
         self.app_dir = Path("app")
         self.build_calls: list[tuple[str, str, Any]] = []
         self.render_project_files_calls: list[Any] = []
+        self.render_skill_catalog_calls = 0
 
     def build_system_prompt(
         self,
@@ -206,6 +207,7 @@ class StubPrompts:
         agent_body: str = "",
         project_context: Any = None,
         skill_registry: Any = None,
+        skill_catalog: Any = None,
     ) -> str:
         self.build_calls.append((agent.id, agent_body, project_context))
         # Echo the body and rendered project files so chat tests can assert what
@@ -213,6 +215,19 @@ class StubPrompts:
         # (body in the identity slot, project files after it).
         parts = [agent_body, f"System for {agent.id}", self.render_project_files(project_context)]
         return "\n".join(part for part in parts if part)
+
+    def render_skill_catalog(self, agent: StubAgent, skill_registry: Any = None) -> Any:
+        from core.prompts import PinnedSkillCatalog
+
+        # Reflect the live registry's skill count so tests can detect a re-render
+        # (a fresh snapshot) versus a reused session-pinned one.
+        self.render_skill_catalog_calls += 1
+        skills = (
+            skill_registry.list_all()
+            if skill_registry is not None and hasattr(skill_registry, "list_all")
+            else []
+        )
+        return PinnedSkillCatalog(catalog_text=f"catalog:{len(skills)}", has_loadable_skills=bool(skills))
 
     def render_project_files(self, project_context: Any) -> str:
         self.render_project_files_calls.append(project_context)
@@ -229,7 +244,7 @@ class StubPrompts:
         return "\n".join(blocks)
 
     def provider_tool_definitions(
-        self, agent: StubAgent, *, skill_registry: Any = None
+        self, agent: StubAgent, *, skill_registry: Any = None, skill_catalog: Any = None
     ) -> list[JsonObject]:
         self.agent_for_tools = agent
         return [
@@ -670,6 +685,7 @@ async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
             agent_body: str = "",
             project_context: Any = None,
             skill_registry: Any = None,
+            skill_catalog: Any = None,
         ) -> str:
             return "\n"
 
@@ -1292,6 +1308,52 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     assert rebuilt[2]["content"] == "Tail user"
     assert rebuilt[3]["content"] == "Tail assistant"
     assert any(event.type == COMPACTION_COMPLETED_EVENT for event in run.events)
+
+
+@pytest.mark.asyncio
+async def test_compaction_reuses_pinned_skill_catalog(tmp_path: Path) -> None:
+    # The compaction rebuild must reuse the session's pinned catalog snapshot, so the
+    # rebuilt system prompt's catalog is byte-identical across the checkpoint even if
+    # the live registry grew since the session was pinned.
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    runtime.skills = StubSkills([StubSkill("one", "One.", Path("a"))])
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted tail context.",
+        tail_boundary_id=tail_user.id,
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    # Pin the session's catalog (as the first build would), then grow the registry.
+    loop._pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
+    runtime.skills = StubSkills(
+        [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
+    )
+    calls_before = runtime.system_prompts.render_skill_catalog_calls
+
+    messages = await loop._build_request_messages(agent, session)
+    await loop._maybe_auto_compact(
+        agent, adapter, "gpt-5.2", session, messages, usage={"input_tokens": 90}, run=run
+    )
+
+    # No fresh render during compaction: the pinned snapshot was reused.
+    assert runtime.system_prompts.render_skill_catalog_calls == calls_before
 
 
 @pytest.mark.asyncio
