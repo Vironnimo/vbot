@@ -85,31 +85,37 @@ def channel_system_reminder(
     )
 
 
-def content_block_for_attachment(record: AttachmentRecord) -> ContentBlock:
-    """Classify one stored inbound attachment into its canonical content block.
+def content_blocks_for_attachment(record: AttachmentRecord) -> list[ContentBlock]:
+    """Classify one stored inbound attachment into its canonical content blocks.
 
     Shared by every channel adapter so inbound-file handling cannot drift between
-    platforms: image/audio/video become a MediaBlock (the chat-layer resolver then
-    decides native input vs. transcription vs. a path note), text files become an
-    extracted TextBlock, and everything else stays a generic FileBlock. This is the
-    single classification point regardless of how the platform delivered the file
-    (e.g. a Telegram MP3 sent as a "document" is media, not a generic file).
+    platforms. image/audio/video become a MediaBlock (the chat-layer resolver then
+    decides native input vs. transcription vs. a path note). A text file becomes a
+    FileBlock reference — which the resolver renders as a path note, so the agent can
+    forward or reopen the original — plus a TextBlock with the extracted content; a
+    text file with no extracted content yields the reference alone. Everything else
+    stays a generic FileBlock. This is the single classification point regardless of
+    how the platform delivered the file (e.g. a Telegram MP3 sent as a "document" is
+    media, not a generic file).
     """
     if record.media_type.startswith(("image/", "audio/", "video/")):
-        return MediaBlock(
-            type="media",
-            attachment_id=record.id,
-            filename=record.filename,
-            media_type=record.media_type,
-        )
-    if record.media_type.startswith("text/"):
-        return TextBlock(type="text", text=record.text_content or "")
-    return FileBlock(
+        return [
+            MediaBlock(
+                type="media",
+                attachment_id=record.id,
+                filename=record.filename,
+                media_type=record.media_type,
+            )
+        ]
+    file_block = FileBlock(
         type="file",
         attachment_id=record.id,
         filename=record.filename,
         media_type=record.media_type,
     )
+    if record.media_type.startswith("text/") and record.text_content:
+        return [file_block, TextBlock(type="text", text=record.text_content)]
+    return [file_block]
 
 
 class ChannelAdapter(ABC):

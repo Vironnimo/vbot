@@ -17,7 +17,7 @@ from core.channels.adapter import (
     ConversationFacts,
     FileData,
     RouteFacts,
-    content_block_for_attachment,
+    content_blocks_for_attachment,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
@@ -411,7 +411,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         record = await self._store_inbound_attachment(file_id=file_id, filename=filename)
         # A document is classified by its sniffed type, not by Telegram's delivery channel:
         # an MP3/MP4 sent as a "file" becomes a media attachment like any voice/video message.
-        blocks.append(content_block_for_attachment(record))
+        blocks.extend(content_blocks_for_attachment(record))
         return blocks
 
     async def _build_audio_video_block(self, message: Any) -> MediaBlock | None:

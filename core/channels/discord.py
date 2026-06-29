@@ -15,7 +15,7 @@ from core.channels.adapter import (
     ConversationFacts,
     FileData,
     RouteFacts,
-    content_block_for_attachment,
+    content_blocks_for_attachment,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
@@ -188,7 +188,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         attachments = _message_attachments(raw_message)
         for attachment in attachments:
             record = await self._store_inbound_attachment(attachment)
-            blocks.append(content_block_for_attachment(record))
+            blocks.extend(content_blocks_for_attachment(record))
         return blocks
 
     # -- Inbound handling -------------------------------------------------------------
