@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from core.providers.providers import ProviderRegistry
     from core.runs import ChatRunManager
     from core.sessions import ChatSessionManager
-    from core.skills.skills import SkillRegistry
+    from core.skills.skills import SkillMetadata, SkillRegistry
     from core.storage import StorageManager
     from core.tools.process_manager import ProcessManager
     from core.tools.tools import ToolRegistry
@@ -168,6 +168,10 @@ class RuntimeServices(Protocol):
 
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         """Return the names of a project's own scanned skills (empty for ``None``)."""
+        ...
+
+    def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
+        """Return a project's own scanned skills (name/description/path) for the visit reminder."""
         ...
 
     @property

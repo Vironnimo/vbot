@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -834,30 +834,41 @@ class ChatLoop:
         return snapshot
 
     def inject_visiting_project_files(
-        self, session: ChatSession, project_context: ProjectPromptContext
+        self,
+        session: ChatSession,
+        project_context: ProjectPromptContext,
+        *,
+        project_name: str = "",
+        project_skills: Sequence[Any] = (),
     ) -> bool:
-        """Inject a visited project's files into a session as a system reminder.
+        """Inject a visited project's files (and skills) into a session as a reminder.
 
         The visiting case (plan: a main/identity agent told "work on the project
         at <path>", cwd unchanged): the project files must reach the model as a
         ``<system-reminder>`` — **not** the system prompt — because the session is
         not born in the project. It renders the files with the **same**
         ``render_project_files`` used for the system-prompt placeholder (one
-        source), prepends a one-line preamble naming the reached-into project,
-        then persists the result through ``session.add_note``, vBot's
-        existing reminder mechanism (a ``role: "note"`` the chat loop later embeds
-        in ``<system-reminder>`` tags). Returns whether a reminder was added (no
-        files → no empty reminder).
+        source), prepends a one-line preamble naming the reached-into project, then —
+        after the files — lists the project's own skills (name + description +
+        absolute ``SKILL.md`` path) so the visitor can read a playbook directly with
+        the ``read`` tool. The result is persisted through ``session.add_note``,
+        vBot's existing reminder mechanism (a ``role: "note"`` the chat loop later
+        embeds in ``<system-reminder>`` tags). Returns whether a reminder was added
+        (no files and no skills → no empty reminder).
 
         This is the reminder **mechanism**; the structural visit *trigger* is
         ``_inject_visiting_projects``, which calls this when an identity session's
         file tools reach into a registered project's repo.
         """
-        rendered = self._runtime.system_prompts.render_project_files(project_context)
-        if not rendered.strip():
+        rendered_files = self._runtime.system_prompts.render_project_files(project_context)
+        rendered_skills = self._runtime.system_prompts.render_visiting_project_skills(
+            project_name, project_skills
+        )
+        sections = [section for section in (rendered_files, rendered_skills) if section.strip()]
+        if not sections:
             return False
         preamble = VISITING_PROJECT_FILES_PREAMBLE.format(path=project_context.cwd)
-        session.add_note(f"{preamble}\n{rendered}")
+        session.add_note("\n".join([preamble, *sections]))
         return True
 
     def _inject_visiting_projects(
@@ -905,6 +916,8 @@ class ChatLoop:
             self.inject_visiting_project_files(
                 session,
                 ProjectPromptContext.from_project(project.cwd, project.auto_load),
+                project_name=project.display_name,
+                project_skills=self._runtime.project_own_skills(project.project_id),
             )
             visited_persisted.add(project.project_id)
             changed = True

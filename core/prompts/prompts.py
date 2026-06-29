@@ -265,6 +265,25 @@ class PinnedSkillCatalog:
     has_loadable_skills: bool
 
 
+class VisitingProjectSkill(Protocol):
+    """Skill fields the visit reminder lists (path-bearing, unlike the catalog)."""
+
+    @property
+    def name(self) -> str:
+        """Stable skill identifier."""
+        ...
+
+    @property
+    def description(self) -> str:
+        """Prompt-visible skill description."""
+        ...
+
+    @property
+    def path(self) -> Path:
+        """Absolute ``SKILL.md`` path a visiting agent reads directly."""
+        ...
+
+
 class ChannelPromptMetadata(Protocol):
     """Channel fields needed for prompt-visible channel rendering."""
 
@@ -1112,6 +1131,29 @@ class SystemPromptManager:
             if block is not None:
                 blocks.append(block)
         return "\n".join(blocks)
+
+    def render_visiting_project_skills(
+        self, project_name: str, skills: Sequence[VisitingProjectSkill]
+    ) -> str:
+        """Render a visited project's skills as a path-bearing reminder section.
+
+        Unlike the system-prompt catalog (deliberately path-free), the visit reminder
+        names each skill's absolute ``SKILL.md`` path and tells the visiting agent to
+        read it with the ``read`` tool — the agent is not a member of that project, so
+        it loads a playbook by reading the file, not via the ``skill`` tool. Returns
+        ``""`` when the project has no skills, so no empty section is emitted.
+        """
+        if not skills:
+            return ""
+        lines = [
+            f"Skills from project '{project_name}' — read a skill's SKILL.md with the "
+            "`read` tool to use it:"
+        ]
+        lines.extend(
+            f"- {skill.name}: {skill.description} ({skill.path})"
+            for skill in sorted(skills, key=lambda item: item.name)
+        )
+        return "\n".join(lines)
 
     def _read_project_file_block(self, cwd: Path, filename: str) -> str | None:
         """Read one project auto-load file and wrap it, or ``None`` when absent.

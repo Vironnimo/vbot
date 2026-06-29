@@ -69,6 +69,7 @@ from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
     SKILL_ORIGIN_GLOBAL,
+    SkillMetadata,
     SkillRegistry,
     load_project_skill_registry,
     project_skill_origin,
@@ -941,6 +942,22 @@ class Runtime:
         if project_id is None:
             return self.skills
         return self._project_skill_bundle(project_id).registry
+
+    def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
+        """Return a project's own skills (name/description/path) for the visit reminder.
+
+        Scans only the project's ``.opencode/skills`` directory, so the result is
+        exactly the project-owned skills with their ``SKILL.md`` paths — a visiting
+        agent reads those files directly with the ``read`` tool. A missing directory
+        yields an empty list.
+        """
+        self._ensure_started()
+        project = self.projects.get(project_id)
+        environment = self._skill_environment(self.storage.load_environment())
+        registry = SkillRegistry.load(
+            project_skills_dir(Path(project.cwd)), environment=environment
+        )
+        return registry.list_all()
 
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         """Return the names of a project's own scanned skills (empty for identity).

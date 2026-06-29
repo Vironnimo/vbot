@@ -846,6 +846,32 @@ def test_skill_catalog_groups_skills_by_origin(tmp_path: Path) -> None:
     assert "/skills/" not in prompt
 
 
+def test_render_visiting_project_skills_lists_names_descriptions_and_paths(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    manager = _manager(tmp_path)
+    deploy_path = Path("/repo/.opencode/skills/deploy/SKILL.md")
+    skills = [
+        SimpleNamespace(name="deploy", description="Ship it.", path=deploy_path),
+        SimpleNamespace(
+            name="audit", description="Check it.", path=Path("/repo/.opencode/skills/audit/SKILL.md")
+        ),
+    ]
+
+    rendered = manager.render_visiting_project_skills("vBot", skills)
+
+    assert "Skills from project 'vBot'" in rendered
+    assert "`read` tool" in rendered
+    assert f"- deploy: Ship it. ({deploy_path})" in rendered
+    # Sorted by name: audit before deploy.
+    assert rendered.index("audit") < rendered.index("deploy")
+
+
+def test_render_visiting_project_skills_empty_is_blank(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    assert manager.render_visiting_project_skills("vBot", []) == ""
+
+
 def test_render_skill_catalog_snapshots_text_and_gate(tmp_path: Path) -> None:
     skills = StubSkills([StubSkill("alpha", "First.", origin="bundled")])
     manager = _manager(tmp_path, skills=skills)
