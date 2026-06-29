@@ -292,6 +292,7 @@ async def _dispatch_tool_calls(
     nesting_depth: int,
     project_cwd: Path | None = None,
     project_id: str | None = None,
+    skill_project_id: str | None = None,
 ) -> tuple[list[ChatMessage], list[JsonObject]]:
     run.raise_if_cancelled()
     emitting_registry = _EmittingToolRegistry(
@@ -322,6 +323,9 @@ async def _dispatch_tool_calls(
             # The owning run's project rides onto every ToolContext so the
             # subagent tool can inherit it; None keeps the identity path.
             project_id=project_id,
+            # The run's effective skill project (rooted-aware) so the skill tool
+            # resolves the same pool the run's catalog advertises.
+            skill_project_id=skill_project_id,
             allowed_tools=_runtime_allowed_tools(agent, runtime.tools),
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
             emit_hook=lambda event_type, payload: _emit_tool_context_event(

@@ -211,6 +211,33 @@ async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_rooted_identity_agent_resolves_skills_against_home_project(tmp_path: Path) -> None:
+    # A rooted identity agent runs on an identity session (project_id is None) but is
+    # homed in a registered repo. Its skill pool must be that project's, so the run
+    # resolves skills against the home project id + its own agent id, not None — the
+    # fix for the rooted-identity skill gap.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=repo)
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        projects=StubProjects(
+            {PROJECT_ID: StubProject(project_id=PROJECT_ID, cwd=str(repo), auto_load=["AGENTS.md"])}
+        ),
+    )
+    runtime.chat_sessions.create("coder", session_id="s1")
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="s1")
+
+    assert (PROJECT_ID, "coder") in runtime.skills_for_calls
+    assert (None, "coder") not in runtime.skills_for_calls
+
+
+@pytest.mark.asyncio
 async def test_identity_agent_workspace_not_a_project_stays_unchanged(tmp_path: Path) -> None:
     # An identity agent whose workspace is its own home (not any registered repo)
     # gets no project context — the prompt is the unchanged identity prompt.

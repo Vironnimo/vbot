@@ -256,7 +256,9 @@ class StubRuntime:
         self.adapter_connection_id = connection_id
         return self.adapter
 
-    def skills_for(self, _project_id: str | None = None) -> SkillRegistry:
+    def skills_for(
+        self, _project_id: str | None = None, _agent_id: str | None = None
+    ) -> SkillRegistry:
         return SkillRegistry({})
 
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
