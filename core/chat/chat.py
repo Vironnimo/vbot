@@ -565,11 +565,15 @@ class ChatLoop:
         rooted_project_id = (
             prompt_project.project_id if project_id is None and prompt_project is not None else None
         )
-        # The project-scoped skill registry (project skills first, then bundled) for
-        # every skill consumer in this run: triggers, the prompt skills block, and
-        # the provider skill-tool gate. ``project_id is None`` → the global registry,
-        # so an identity run is byte-identical to before.
-        skill_registry = self._runtime.skills_for(project_id)
+        # The agent- and project-scoped skill registry (agent's own skills first,
+        # then project, then bundled) for every skill consumer in this run: triggers,
+        # the prompt skills block, and the provider skill-tool gate. The effective
+        # skill project is the run's own project or, for a rooted identity agent
+        # (``project_id is None`` but homed in a repo), its home project — so a rooted
+        # agent sees its project skills. A plain identity run with no agent-own skills
+        # is byte-identical to before.
+        skill_project_id = project_id if project_id is not None else rooted_project_id
+        skill_registry = self._runtime.skills_for(skill_project_id, run.agent_id)
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
@@ -978,6 +982,10 @@ class ChatLoop:
         replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
         wire_media_types = _resolve_wire_media_support(adapter, model_id)
         chunk_timeout_seconds = self._resolve_chunk_timeout(provider_id, connection_id)
+        # Effective skill project: the run's own, or a rooted identity agent's home
+        # project. Threaded onto tool contexts and the compaction rebuild so the
+        # ``skill`` tool and a post-compaction catalog resolve the same skill pool.
+        skill_project_id = project_id if project_id is not None else rooted_project_id
         tool_iteration_count = 0
         iteration_number = 1
         # Project-visit detection (identity sessions only — a project-born session
@@ -1064,6 +1072,7 @@ class ChatLoop:
                             usage=assistant_message.usage,
                             run=run,
                             project_id=project_id,
+                            skill_project_id=skill_project_id,
                         )
                     return assistant_message
 
@@ -1083,6 +1092,7 @@ class ChatLoop:
                         nesting_depth=self._nesting_depth,
                         project_cwd=project_cwd,
                         project_id=project_id,
+                        skill_project_id=skill_project_id,
                     )
                     for tool_message in tool_messages:
                         session.append(tool_message)
@@ -1136,6 +1146,7 @@ class ChatLoop:
                     usage=None,
                     run=run,
                     project_id=project_id,
+                    skill_project_id=skill_project_id,
                 )
 
         raise ToolIterationLimitError("maximum tool iterations exceeded")
@@ -1194,6 +1205,7 @@ class ChatLoop:
         *,
         run: Run,
         project_id: str | None = None,
+        skill_project_id: str | None = None,
     ) -> list[JsonObject]:
         """Auto-compact when configured token thresholds are exceeded."""
         if self._compaction_service is None:
@@ -1256,7 +1268,7 @@ class ChatLoop:
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
             agent_body=runtime_agent_body(agent),
             project_context=self._resolve_project_prompt_context(project_id, agent),
-            skill_registry=self._runtime.skills_for(project_id),
+            skill_registry=self._runtime.skills_for(skill_project_id, run.agent_id),
         )
         return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)
 

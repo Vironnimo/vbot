@@ -1168,7 +1168,7 @@ class StubRuntime:
             self.chat_runs = ChatRunManager()
         return self.chat_runs
 
-    def skills_for(self, _project_id: str | None = None) -> Any:
+    def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:
         return self.skills
 
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
