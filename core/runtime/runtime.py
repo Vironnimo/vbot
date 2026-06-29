@@ -64,6 +64,7 @@ from core.runtime.interfaces import (
     ProviderCredentialResolverProtocol,
 )
 from core.sessions import ChatSessionManager
+from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import (
     SkillRegistry,
     load_project_skill_registry,
@@ -85,6 +86,7 @@ from core.tools import (
     register_process_tool,
     register_read_tool,
     register_session_search_tool,
+    register_skill_manage_tool,
     register_skill_tool,
     register_text_to_speech_tool,
     register_web_fetch_tool,
@@ -318,6 +320,10 @@ class Runtime:
         # Dropped per agent on an agent skill write and per project on the same
         # triggers as the project cache (so the embedded project layer stays fresh).
         self._agent_skills: dict[tuple[str | None, str], SkillRegistry] = {}
+        # Shared, validated skill-authoring write core (Phase 1), constructed at
+        # start() with the bundled skills root as a protected target. Used by the
+        # agent ``skill_manage`` tool and (later) the skill-mutation RPCs.
+        self._skill_authoring: SkillAuthoringService | None = None
         self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._projects: ProjectStore | None = None
@@ -449,6 +455,17 @@ class Runtime:
                 invalid_skill_count,
             )
         register_skill_tool(self._tools, self.skills_for)
+        # The agent skill-authoring write core refuses the bundled skills root; the
+        # ``skill_manage`` tool writes only the calling agent's private home.
+        self._skill_authoring = SkillAuthoringService(
+            protected_roots=[resources_path / _SKILLS_DIRNAME]
+        )
+        register_skill_manage_tool(
+            self._tools,
+            self._skill_authoring,
+            self.agent_skills_dir,
+            self.invalidate_agent_skills,
+        )
         extension_dirs = self._extra_extension_directories(settings)
         disabled_extensions, extension_config = self._extension_load_options(settings)
         self._extensions = ExtensionRegistry.load(
@@ -640,6 +657,7 @@ class Runtime:
         self._skills = None
         self._project_skills = {}
         self._agent_skills = {}
+        self._skill_authoring = None
         self._extensions = None
         self._chat_sessions = None
         self._projects = None
@@ -1148,6 +1166,14 @@ class Runtime:
         if self._tools is not None:
             self._tools.unregister("skill")
             register_skill_tool(self._tools, self.skills_for)
+            if self._skill_authoring is not None:
+                self._tools.unregister("skill_manage")
+                register_skill_manage_tool(
+                    self._tools,
+                    self._skill_authoring,
+                    self.agent_skills_dir,
+                    self.invalidate_agent_skills,
+                )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
             self._refresh_prompt_block_definitions()
@@ -1357,6 +1383,14 @@ class Runtime:
         if self._skills is None:
             raise RuntimeError("Skill service not available")
         return self._skills
+
+    @property
+    def skill_authoring(self) -> SkillAuthoringService:
+        """Shared, validated skill-authoring write core (agent tool + skill RPCs)."""
+        self._ensure_started()
+        if self._skill_authoring is None:
+            raise RuntimeError("Skill authoring service not available")
+        return self._skill_authoring
 
     @property
     def extensions(self) -> ExtensionRegistry | None:
