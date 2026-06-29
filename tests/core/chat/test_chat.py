@@ -164,7 +164,13 @@ async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
     # The catalog snapshot is taken once on a session's first build and reused, so a
     # skill written mid-session never changes the session's pinned catalog.
     from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime, StubSkill, StubSkills
+    from tests.core.chat.test_chat_loop import (
+        StubAdapter,
+        StubAgent,
+        StubRuntime,
+        StubSkill,
+        StubSkills,
+    )
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
@@ -181,7 +187,9 @@ async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
     )
 
     # A mid-session skill write: the live registry grows by one skill.
-    runtime.skills = StubSkills([StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))])
+    runtime.skills = StubSkills(
+        [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
+    )
     await loop.send("coder", "again", session_id="s1")
     pinned_after_second = runtime.chat_sessions.get_metadata("coder", "s1")[
         PINNED_SKILL_CATALOG_META_KEY
@@ -198,7 +206,13 @@ async def test_new_session_pins_a_fresh_catalog(tmp_path: Path) -> None:
     # A different session pins its own snapshot from the then-current registry, so a
     # skill added before it starts is included.
     from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime, StubSkill, StubSkills
+    from tests.core.chat.test_chat_loop import (
+        StubAdapter,
+        StubAgent,
+        StubRuntime,
+        StubSkill,
+        StubSkills,
+    )
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
@@ -211,7 +225,9 @@ async def test_new_session_pins_a_fresh_catalog(tmp_path: Path) -> None:
     loop = ChatLoop(runtime)
 
     await loop.send("coder", "hi", session_id="s1")
-    runtime.skills = StubSkills([StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))])
+    runtime.skills = StubSkills(
+        [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
+    )
     await loop.send("coder", "hi", session_id="s2")
 
     s1_catalog = runtime.chat_sessions.get_metadata("coder", "s1")[PINNED_SKILL_CATALOG_META_KEY]

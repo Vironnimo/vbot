@@ -15,9 +15,8 @@ vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
 }));
 
-const { default: SettingsSkillManagerPanel } = await import(
-  '../settings/SettingsSkillManagerPanel.svelte'
-);
+const { default: SettingsSkillManagerPanel } =
+  await import('../settings/SettingsSkillManagerPanel.svelte');
 
 function defaultRpc(method) {
   if (method === 'agent.list') {
@@ -29,7 +28,8 @@ function defaultRpc(method) {
         {
           name: 'deploy',
           description: 'Ship the app.',
-          content: '---\nname: deploy\ndescription: Ship the app.\n---\n\n# Deploy',
+          content:
+            '---\nname: deploy\ndescription: Ship the app.\n---\n\n# Deploy',
         },
       ],
     });
@@ -104,7 +104,9 @@ describe('SettingsSkillManagerPanel', () => {
     buttonByText('Create skill').click();
     await flushAsync();
 
-    const call = rpcMock.mock.calls.find((entry) => entry[0] === 'skill.create');
+    const call = rpcMock.mock.calls.find(
+      (entry) => entry[0] === 'skill.create',
+    );
     expect(call).toBeTruthy();
     expect(call[1].scope).toBe('global');
     expect(call[1].name).toBe('newskill');
@@ -120,7 +122,9 @@ describe('SettingsSkillManagerPanel', () => {
     buttonByText('Save').click();
     await flushAsync();
 
-    const call = rpcMock.mock.calls.find((entry) => entry[0] === 'skill.update');
+    const call = rpcMock.mock.calls.find(
+      (entry) => entry[0] === 'skill.update',
+    );
     expect(call).toBeTruthy();
     expect(call[1]).toMatchObject({ scope: 'global', name: 'deploy' });
   });
@@ -131,7 +135,9 @@ describe('SettingsSkillManagerPanel', () => {
     buttonByText('Delete').click();
     await flushAsync();
 
-    const call = rpcMock.mock.calls.find((entry) => entry[0] === 'skill.delete');
+    const call = rpcMock.mock.calls.find(
+      (entry) => entry[0] === 'skill.delete',
+    );
     expect(call).toEqual(['skill.delete', { scope: 'global', name: 'deploy' }]);
   });
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -17,7 +18,9 @@ from core.skills.requirements import REQUIREMENTS_METADATA_KEY
 from core.skills.skills import SkillRegistry
 
 
-def skill_document(name: str = "demo", description: str = "Do a demo task.", body: str = "# Demo\n") -> str:
+def skill_document(
+    name: str = "demo", description: str = "Do a demo task.", body: str = "# Demo\n"
+) -> str:
     return f"""---
 name: {name}
 description: {description}
@@ -26,7 +29,7 @@ description: {description}
 {body}"""
 
 
-def read_front_matter(skill_file: Path) -> dict:
+def read_front_matter(skill_file: Path) -> Any:
     text = skill_file.read_text(encoding="utf-8")
     _, front, _ = text.split("---", 2)
     return yaml.safe_load(front)
@@ -38,8 +41,12 @@ def service() -> SkillAuthoringService:
 
 
 class TestCreate:
-    def test_creates_skill_file_with_body(self, service: SkillAuthoringService, tmp_path: Path) -> None:
-        result = service.create(tmp_path, "demo", skill_document(body="# Demo\nSteps."), author="agent")
+    def test_creates_skill_file_with_body(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        result = service.create(
+            tmp_path, "demo", skill_document(body="# Demo\nSteps."), author="agent"
+        )
 
         skill_file = tmp_path / "demo" / "SKILL.md"
         assert skill_file.is_file()
@@ -65,7 +72,9 @@ class TestCreate:
 
 
 class TestProvenance:
-    def test_records_author_and_source(self, service: SkillAuthoringService, tmp_path: Path) -> None:
+    def test_records_author_and_source(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
         service.create(
             tmp_path, "demo", skill_document(), author="human", source="https://example.com/howto"
         )
@@ -132,7 +141,9 @@ class TestEdit:
 
 
 class TestPatch:
-    def test_applies_unique_replacement(self, service: SkillAuthoringService, tmp_path: Path) -> None:
+    def test_applies_unique_replacement(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
         service.create(tmp_path, "demo", skill_document(body="# Demo\nold line"), author="agent")
 
         service.patch(tmp_path, "demo", "old line", "new line", author="agent")
@@ -166,7 +177,9 @@ class TestDelete:
 
         assert not (tmp_path / "demo").exists()
 
-    def test_delete_missing_skill_fails(self, service: SkillAuthoringService, tmp_path: Path) -> None:
+    def test_delete_missing_skill_fails(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
         with pytest.raises(SkillAuthoringError, match="not found"):
             service.delete(tmp_path, "demo")
 
@@ -198,7 +211,9 @@ class TestSupportFiles:
         with pytest.raises(SkillAuthoringError, match="must live under"):
             service.write_file(tmp_path, "demo", "SKILL.md", "x")
 
-    def test_remove_missing_file_fails(self, service: SkillAuthoringService, tmp_path: Path) -> None:
+    def test_remove_missing_file_fails(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
         service.create(tmp_path, "demo", skill_document(), author="agent")
 
         with pytest.raises(SkillAuthoringError, match="not found"):
@@ -243,7 +258,9 @@ body
         with pytest.raises(SkillAuthoringError, match="valid YAML"):
             service.create(tmp_path, "demo", content, author="agent")
 
-    def test_name_must_match_directory(self, service: SkillAuthoringService, tmp_path: Path) -> None:
+    def test_name_must_match_directory(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
         with pytest.raises(SkillAuthoringError, match="must match its directory"):
             service.create(tmp_path, "demo", skill_document(name="other"), author="agent")
 
@@ -261,7 +278,8 @@ class TestPathTraversalRejection:
             service.create(tmp_path, bad_name, skill_document(name=bad_name), author="agent")
 
     @pytest.mark.parametrize(
-        "bad_path", ["scripts/../../escape.py", "../outside.py", "/abs/path.py", "scripts/../SKILL.md"]
+        "bad_path",
+        ["scripts/../../escape.py", "../outside.py", "/abs/path.py", "scripts/../SKILL.md"],
     )
     def test_rejects_illegal_support_paths(
         self, service: SkillAuthoringService, tmp_path: Path, bad_path: str

@@ -169,7 +169,7 @@ async def test_visiting_reminder_lists_project_skills(tmp_path: Path) -> None:
         [_read_call(str(repo / "AGENTS.md")), {"content": "Done", "tool_calls": None}]
     )
     agent = StubAgent(id="coder", model=MODEL, allowed_tools=["read"])
-    runtime = StubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
         adapter=adapter,

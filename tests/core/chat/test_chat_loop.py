@@ -228,12 +228,17 @@ class StubPrompts:
             if skill_registry is not None and hasattr(skill_registry, "list_all")
             else []
         )
-        return PinnedSkillCatalog(catalog_text=f"catalog:{len(skills)}", has_loadable_skills=bool(skills))
+        return PinnedSkillCatalog(
+            catalog_text=f"catalog:{len(skills)}", has_loadable_skills=bool(skills)
+        )
 
     def render_visiting_project_skills(self, project_name: str, skills: Any) -> str:
         if not skills:
             return ""
-        lines = [f"Skills from project '{project_name}' — read a skill's SKILL.md with the `read` tool to use it:"]
+        lines = [
+            f"Skills from project '{project_name}' — read a skill's SKILL.md "
+            "with the `read` tool to use it:"
+        ]
         lines.extend(f"- {skill.name}: {skill.description} ({skill.path})" for skill in skills)
         return "\n".join(lines)
 

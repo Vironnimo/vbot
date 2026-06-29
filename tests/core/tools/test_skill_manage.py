@@ -16,7 +16,9 @@ from core.tools import (
 )
 
 
-def _skill_md(name: str = "demo", description: str = "Do a demo task.", body: str = "# Demo\n") -> str:
+def _skill_md(
+    name: str = "demo", description: str = "Do a demo task.", body: str = "# Demo\n"
+) -> str:
     return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
 
 
@@ -106,7 +108,9 @@ def test_patch_applies_unique_replacement(tmp_path: Path) -> None:
 
 def test_patch_empty_new_string_deletes_text(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
-    harness.run({"operation": "create", "name": "demo", "content": _skill_md(body="drop me\nkeep\n")})
+    harness.run(
+        {"operation": "create", "name": "demo", "content": _skill_md(body="drop me\nkeep\n")}
+    )
 
     result = harness.run(
         {"operation": "patch", "name": "demo", "old_string": "drop me\n", "new_string": ""}
@@ -138,7 +142,9 @@ def test_write_and_remove_support_file(tmp_path: Path) -> None:
     assert write_result["ok"] is True
     assert (harness.home("main") / "demo" / "scripts" / "run.py").is_file()
 
-    remove_result = harness.run({"operation": "remove_file", "name": "demo", "path": "scripts/run.py"})
+    remove_result = harness.run(
+        {"operation": "remove_file", "name": "demo", "path": "scripts/run.py"}
+    )
     assert remove_result["ok"] is True
     assert not (harness.home("main") / "demo" / "scripts" / "run.py").exists()
 
@@ -188,7 +194,9 @@ def test_missing_content_is_invalid_arguments(tmp_path: Path) -> None:
 def test_unknown_argument_rejected(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
 
-    result = harness.run({"operation": "create", "name": "demo", "content": _skill_md(), "scope": "global"})
+    result = harness.run(
+        {"operation": "create", "name": "demo", "content": _skill_md(), "scope": "global"}
+    )
 
     assert result["ok"] is False
     assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"

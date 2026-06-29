@@ -253,7 +253,11 @@ class IntegrationPrompts:
         return PinnedSkillCatalog(catalog_text="", has_loadable_skills=False)
 
     def provider_tool_definitions(
-        self, agent: IntegrationAgent, *, skill_registry: object = None, skill_catalog: object = None
+        self,
+        agent: IntegrationAgent,
+        *,
+        skill_registry: object = None,
+        skill_catalog: object = None,
     ) -> list[JsonObject]:
         return self._tools.provider_definitions(agent.allowed_tools)
 

@@ -338,9 +338,9 @@ describe('i18n t()', () => {
     ];
 
     expectCatalogKeys(requiredKeys);
-    expect(t('settings.skills.scopeAgent', undefined, { name: 'Builder' })).toBe(
-      'Builder (private)',
-    );
+    expect(
+      t('settings.skills.scopeAgent', undefined, { name: 'Builder' }),
+    ).toBe('Builder (private)');
   });
 
   it('contains Connected clients copy for the General settings panel', () => {
