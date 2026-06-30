@@ -123,9 +123,10 @@ class Project:
     # explicit empty list is a real value (every tool off) and is preserved.
     allowed_tools: list[str] = field(default_factory=lambda: list(PROJECT_DEFAULT_ALLOWED_TOOLS))
     # The Project Skill Whitelist as a rule, not a resolved set (decision 3): which
-    # bundled skills are opted in, and which project skills are exceptionally off.
-    # Both empty by default → only the project's own scanned skills are active.
+    # bundled and global skills are opted in, and which project skills are exceptionally
+    # off. All empty by default → only the project's own scanned skills are active.
     skills_bundled_enabled: list[str] = field(default_factory=list)
+    skills_global_enabled: list[str] = field(default_factory=list)
     skills_project_disabled: list[str] = field(default_factory=list)
     # Per-agent model overrides keyed by scanned ``agent_id`` → user-facing
     # ``<provider>/<model-id>[::connection]`` (GLOSSARY → Model). vBot-owned and
@@ -148,6 +149,7 @@ class Project:
             "auto_load": list(self.auto_load),
             "allowed_tools": list(self.allowed_tools),
             "skills_bundled_enabled": list(self.skills_bundled_enabled),
+            "skills_global_enabled": list(self.skills_global_enabled),
             "skills_project_disabled": list(self.skills_project_disabled),
             "model_overrides": dict(self.model_overrides),
             "created_at": self.created_at,
@@ -167,6 +169,7 @@ def build_project(
     auto_load: list[str] | None = None,
     allowed_tools: list[str] | None = None,
     skills_bundled_enabled: list[str] | None = None,
+    skills_global_enabled: list[str] | None = None,
     skills_project_disabled: list[str] | None = None,
     model_overrides: dict[str, str] | None = None,
     created_at: str | None = None,
@@ -193,6 +196,7 @@ def build_project(
     validated_skills_bundled = _validate_string_list(
         "skills_bundled_enabled", skills_bundled_enabled
     )
+    validated_skills_global = _validate_string_list("skills_global_enabled", skills_global_enabled)
     validated_skills_disabled = _validate_string_list(
         "skills_project_disabled", skills_project_disabled
     )
@@ -209,6 +213,7 @@ def build_project(
         auto_load=validated_auto_load,
         allowed_tools=validated_allowed_tools,
         skills_bundled_enabled=validated_skills_bundled,
+        skills_global_enabled=validated_skills_global,
         skills_project_disabled=validated_skills_disabled,
         model_overrides=validated_model_overrides,
         created_at=created_at or now,
@@ -236,6 +241,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
         allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
+        skills_global_enabled=list(cast("list[str]", data.get("skills_global_enabled") or [])),
         skills_project_disabled=list(cast("list[str]", data.get("skills_project_disabled") or [])),
         model_overrides=dict(cast("dict[str, str]", data.get("model_overrides") or {})),
         created_at=data["created_at"],
