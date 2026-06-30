@@ -30,6 +30,8 @@ from core.skills.requirements import (
 )
 from core.skills.skill_validator import (
     MALFORMED_YAML_FALLBACK_WARNING,
+    MAX_SKILL_NAME_LENGTH,
+    SKILL_NAME_TRIGGER_PATTERN,
     repair_colon_scalars,
     validate_skill_metadata,
 )
@@ -294,6 +296,15 @@ def _validate_skill_name(skill_name: str) -> None:
         raise SkillAuthoringError(f"Skill name must be a single path segment: {skill_name!r}")
     if skill_name != skill_name.strip():
         raise SkillAuthoringError("Skill name must not have leading or trailing whitespace.")
+    # Stricter than the lenient loader (which only warns): an authored skill's name
+    # must stay within what the `/name`/`$name` chat triggers can match, so a newly
+    # created skill is never silently untriggerable.
+    if not SKILL_NAME_TRIGGER_PATTERN.match(skill_name):
+        raise SkillAuthoringError(
+            "Skill name must start with a letter or digit, contain only letters, "
+            f"digits, '-', or '_', and be at most {MAX_SKILL_NAME_LENGTH} characters "
+            f"long: {skill_name!r}"
+        )
 
 
 def _split_front_matter(content: str) -> tuple[str, str]:
