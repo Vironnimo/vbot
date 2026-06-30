@@ -22,6 +22,7 @@ from core.chat import (
     MessageSender,
     ToolCall,
 )
+from core.chat.messages import _notes_to_synthetic_user_message
 from core.chat.streaming import StreamingChunkTimeoutError, StreamingDeltaError
 from core.projects import AgentResolutionError, ConfigAgent
 from core.projects.paths import cwd_identity_key
@@ -51,6 +52,7 @@ from core.runs import (
     RunCancelledError,
     RunStatus,
 )
+from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, is_skill_available_note
 from core.skills.skills import SkillRegistry
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
@@ -228,9 +230,7 @@ class StubPrompts:
             if skill_registry is not None and hasattr(skill_registry, "list_all")
             else []
         )
-        return PinnedSkillCatalog(
-            catalog_text=f"catalog:{len(skills)}", has_loadable_skills=bool(skills)
-        )
+        return PinnedSkillCatalog(catalog_text=f"catalog:{len(skills)}")
 
     def render_visiting_project_skills(self, project_name: str, skills: Any) -> str:
         if not skills:
@@ -4819,3 +4819,47 @@ class TestErrorKindClassification:
         from core.providers.errors import NetworkError
 
         assert _is_model_fallback_trigger(NetworkError("offline")) is False
+
+
+def test_announce_newly_available_skills_seeds_then_announces_once(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_skills=["*"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    runtime.chat_sessions.create("coder", session_id="s1")
+    session = runtime.chat_sessions.get("coder", "s1")
+    loop = ChatLoop(runtime)
+
+    def announce(skills: Any) -> None:
+        loop._announce_newly_available_skills("coder", "s1", session, agent, skills, None)
+
+    def available_notes() -> list[ChatMessage]:
+        return [message for message in session.load() if is_skill_available_note(message)]
+
+    # The first build seeds the baseline (here empty) without announcing anything.
+    announce(StubSkills([]))
+    assert available_notes() == []
+
+    # A skill that becomes available is announced exactly once, with name + description.
+    deploy = StubSkills([StubSkill("deploy", "Ship the app.", tmp_path / "deploy")])
+    announce(deploy)
+    notes = available_notes()
+    assert len(notes) == 1
+    assert "deploy: Ship the app." in cast(str, notes[0].content)
+
+    # Re-running with the same registry does not re-announce it.
+    announce(deploy)
+    assert len(available_notes()) == 1
+
+    # A skill going away is deliberately not announced (additions only).
+    announce(StubSkills([]))
+    assert len(available_notes()) == 1
+
+
+def test_skill_available_note_renders_as_reminder_without_prefix() -> None:
+    note = ChatMessage.note(SKILL_AVAILABLE_NOTE_PREFIX + "New skills:\n- deploy: Ship the app.")
+
+    rendered = cast(str, _notes_to_synthetic_user_message([note])["content"])
+
+    assert "<system-reminder>" in rendered
+    assert "New skills:" in rendered
+    assert "- deploy: Ship the app." in rendered
+    assert SKILL_AVAILABLE_NOTE_PREFIX not in rendered
