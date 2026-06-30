@@ -138,9 +138,19 @@ class StubTools:
                 "description": "Load a skill",
                 "parameters": {"type": "object"},
             },
+            {
+                "name": "skill_manage",
+                "description": "Author a skill",
+                "parameters": {"type": "object"},
+            },
         ]
-        if allowed_tools == ["skill"]:
-            return [tools[-1]]
+        internal_names = {"skill", "skill_manage"}
+        if (
+            allowed_tools is not None
+            and set(allowed_tools)
+            and set(allowed_tools) <= internal_names
+        ):
+            return [tool for tool in tools if tool["name"] in allowed_tools]
         return _filter_by_allowlist(tools, allowed_tools)
 
 
@@ -495,8 +505,18 @@ def test_provider_tool_definitions_use_same_agent_allowlist(
             "description": "Manage pinned memory",
             "parameters": {"type": "object"},
         },
+        {
+            "name": "skill",
+            "description": "Load a skill",
+            "parameters": {"type": "object"},
+        },
+        {
+            "name": "skill_manage",
+            "description": "Author a skill",
+            "parameters": {"type": "object"},
+        },
     ]
-    assert tools.provider_allowlist_calls == [["read_file"], ["memory"]]
+    assert tools.provider_allowlist_calls == [["read_file"], ["memory"], ["skill", "skill_manage"]]
 
 
 def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
@@ -510,7 +530,7 @@ def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
     assert "memory" not in [definition["name"] for definition in definitions]
 
 
-def test_provider_tool_definitions_include_internal_skill_when_agent_has_skills(
+def test_provider_tool_definitions_offer_skill_and_skill_manage_for_identity_agent(
     workspace: Path, tmp_path: Path
 ) -> None:
     manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
@@ -518,18 +538,33 @@ def test_provider_tool_definitions_include_internal_skill_when_agent_has_skills(
 
     definitions = manager.provider_tool_definitions(agent)
 
-    assert [definition["name"] for definition in definitions] == ["memory", "skill"]
+    assert [definition["name"] for definition in definitions] == ["memory", "skill", "skill_manage"]
 
 
-def test_provider_tool_definitions_omit_internal_skill_when_agent_has_no_skills(
+def test_provider_tool_definitions_offer_skill_even_without_skills(
     workspace: Path, tmp_path: Path
 ) -> None:
-    manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
+    # The skill tool is never gated on the agent already having a skill: a skill can
+    # be authored or activated mid-session, so the loader must always be present.
+    manager = _manager(tmp_path, skills=StubSkills([]))
     agent = _agent(workspace, allowed_tools=["read_file"], allowed_skills=[])
 
-    definitions = manager.provider_tool_definitions(agent)
+    names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
 
-    assert "skill" not in [definition["name"] for definition in definitions]
+    assert "skill" in names
+    assert "skill_manage" in names
+
+
+def test_provider_tool_definitions_omit_skill_manage_for_config_agent(tmp_path: Path) -> None:
+    # A config/project agent (empty workspace) has no private skill home, so the
+    # authoring tool is withheld; the loader stays.
+    manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
+    agent = _agent("", allowed_tools=["read_file"], allowed_skills=["debugging"])
+
+    names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
+
+    assert "skill" in names
+    assert "skill_manage" not in names
 
 
 # --- Contributed tool/extension blocks via the manager ------------------------
@@ -874,17 +909,16 @@ def test_render_visiting_project_skills_empty_is_blank(tmp_path: Path) -> None:
     assert manager.render_visiting_project_skills("vBot", []) == ""
 
 
-def test_render_skill_catalog_snapshots_text_and_gate(tmp_path: Path) -> None:
+def test_render_skill_catalog_snapshots_text(tmp_path: Path) -> None:
     skills = StubSkills([StubSkill("alpha", "First.", origin="bundled")])
     manager = _manager(tmp_path, skills=skills)
     agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
 
     snapshot = manager.render_skill_catalog(agent)
-    assert snapshot.has_loadable_skills is True
     assert "<name>alpha</name>" in snapshot.catalog_text
 
     empty = manager.render_skill_catalog(agent, skill_registry=StubSkills([]))
-    assert empty.has_loadable_skills is False
+    assert "<name>" not in empty.catalog_text
 
 
 def test_build_system_prompt_pins_catalog_over_live_registry(tmp_path: Path) -> None:
@@ -895,47 +929,12 @@ def test_build_system_prompt_pins_catalog_over_live_registry(tmp_path: Path) -> 
     agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
     pinned = PinnedSkillCatalog(
         catalog_text="<available_skills>PINNED-CATALOG</available_skills>",
-        has_loadable_skills=True,
     )
 
     prompt = manager.build_system_prompt(agent, skill_catalog=pinned)
 
     assert "PINNED-CATALOG" in prompt
     assert "new-skill" not in prompt
-
-
-def test_provider_tool_definitions_respects_pinned_gate(tmp_path: Path) -> None:
-    skills = StubSkills([StubSkill("alpha", "First.", origin="bundled")])
-    manager = _manager(tmp_path, skills=skills)
-    agent = _agent("", allowed_tools=["read_file"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    # Pinned gate False suppresses the skill tool even though the registry has skills.
-    suppressed = manager.provider_tool_definitions(
-        agent, skill_catalog=PinnedSkillCatalog("", has_loadable_skills=False)
-    )
-    assert all(definition["name"] != "skill" for definition in suppressed)
-
-    # Pinned gate True offers the skill tool even with an empty live registry.
-    offered = manager.provider_tool_definitions(
-        agent,
-        skill_registry=StubSkills([]),
-        skill_catalog=PinnedSkillCatalog("x", has_loadable_skills=True),
-    )
-    assert any(definition["name"] == "skill" for definition in offered)
-
-
-def test_provider_tool_definitions_skill_tool_gated_by_override_registry(tmp_path: Path) -> None:
-    global_skills = StubSkills([StubSkill("global-skill", "Global only.")])
-    manager = _manager(tmp_path, skills=global_skills)
-    agent = _agent("", allowed_tools=["read_file"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    with_project_skills = manager.provider_tool_definitions(
-        agent, skill_registry=StubSkills([StubSkill("project-skill", "Project only.")])
-    )
-    without_project_skills = manager.provider_tool_definitions(agent, skill_registry=StubSkills([]))
-
-    assert any(definition["name"] == "skill" for definition in with_project_skills)
-    assert all(definition["name"] != "skill" for definition in without_project_skills)
 
 
 # --- Block-edit facade (the prompt.* RPC surface) ----------------------------

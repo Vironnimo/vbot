@@ -1007,7 +1007,7 @@ class StubPrompts:
     def render_skill_catalog(self, _agent: StubAgent, skill_registry: object = None) -> Any:
         from core.prompts import PinnedSkillCatalog
 
-        return PinnedSkillCatalog(catalog_text="", has_loadable_skills=False)
+        return PinnedSkillCatalog(catalog_text="")
 
     def provider_tool_definitions(
         self, _agent: StubAgent, *, skill_registry: object = None, skill_catalog: object = None
