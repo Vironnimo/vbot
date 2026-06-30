@@ -32,18 +32,32 @@ def effective_agent_allowed_tools(
     memory_prompt_mode: MemoryPromptMode,
     *,
     registered_tool_names: Sequence[str],
+    workspace: str = "",
 ) -> list[str] | None:
-    """Return the runtime allowlist after applying Agent memory mode."""
-    if allowed_tools is None:
-        if memory_tool_enabled(memory_prompt_mode):
-            return None
-        return _without_memory(registered_tool_names)
+    """Return the runtime allowlist after applying Agent memory mode and identity-only gating.
 
-    configured_tools = sanitize_configured_allowed_tools(allowed_tools)
+    A config/project agent (empty ``workspace``) never gets an ``IDENTITY_ONLY_TOOLS``
+    member (``skill_manage``) in its effective set, even under a wildcard allow-list —
+    the same shape as the ``memory`` mode gate below. This is the dispatch-time
+    allowlist ``ToolRegistry.dispatch`` actually enforces, so it must not grant more
+    than what the prompt layer already advertises to the agent; the prompt-layer
+    visibility pass alone (``_apply_identity_only_tool_visibility``) only hides the
+    tool definition from the model, it does not block a call that reaches dispatch.
+    """
+    excluded: set[str] = set() if workspace else set(IDENTITY_ONLY_TOOLS)
+    if not memory_tool_enabled(memory_prompt_mode):
+        excluded.add(MEMORY_TOOL_NAME)
+
+    if allowed_tools is None:
+        return None if not excluded else _without(registered_tool_names, excluded)
+
+    configured_tools = [
+        tool_name
+        for tool_name in sanitize_configured_allowed_tools(allowed_tools)
+        if tool_name not in excluded
+    ]
     if "*" in configured_tools:
-        if memory_tool_enabled(memory_prompt_mode):
-            return configured_tools
-        return _without_memory(registered_tool_names)
+        return configured_tools if not excluded else _without(registered_tool_names, excluded)
 
     if memory_tool_enabled(memory_prompt_mode):
         return [*configured_tools, MEMORY_TOOL_NAME]
@@ -51,8 +65,8 @@ def effective_agent_allowed_tools(
     return configured_tools
 
 
-def _without_memory(tool_names: Sequence[str]) -> list[str]:
-    return sorted({tool_name for tool_name in tool_names if tool_name != MEMORY_TOOL_NAME})
+def _without(tool_names: Sequence[str], excluded: set[str]) -> list[str]:
+    return sorted({tool_name for tool_name in tool_names if tool_name not in excluded})
 
 
 __all__ = [
