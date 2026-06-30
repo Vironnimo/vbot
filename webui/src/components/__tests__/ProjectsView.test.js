@@ -364,6 +364,29 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('re-scans the expanded project on refresh to pick up disk changes', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: { team: [], report: { clean: true, findings: [] }, skills: {} },
+    });
+    mockToolCatalog([], []);
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await expandDemo();
+    await waitForCondition(() => showProjectMock.mock.calls.length === 1);
+
+    buttonByTestId('projects-refresh').click();
+
+    // The refresh re-scans the expanded project (project.show), which reloads the
+    // global skill registry on the backend so disk drops surface in the pool.
+    await waitForCondition(() => showProjectMock.mock.calls.length === 2);
+  });
+
   it('seeds the temperature field and thinking-effort dropdown from the project', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [
