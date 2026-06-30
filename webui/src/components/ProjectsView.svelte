@@ -405,6 +405,17 @@
     }
   }
 
+  // The Refresh button re-reads everything the tab shows from disk: the project
+  // list plus, when a project is expanded, its scan — which on the backend reloads
+  // the global skill registry, so a skill hand-dropped into the global skills folder
+  // shows up in the opt-in pool instead of waiting for a restart.
+  async function refreshProjects() {
+    await loadProjects();
+    if (expandedProjectId) {
+      await loadScan(expandedProjectId);
+    }
+  }
+
   function openAdd() {
     addForm = createAddForm();
     addError = '';
@@ -880,7 +891,11 @@
     </div>
 
     <div class="projects-view__header-actions">
-      <Button variant="secondary" onClick={() => loadProjects()}>
+      <Button
+        variant="secondary"
+        data-testid="projects-refresh"
+        onClick={() => refreshProjects()}
+      >
         {t('projects.refresh', 'Refresh')}
       </Button>
     </div>
