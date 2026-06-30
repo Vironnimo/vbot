@@ -820,8 +820,9 @@ def test_block_edit_facade_writes_flow_through_real_storage(config: Config):
         runtime.stop()
 
 
-def test_reload_skills_updates_provider_skill_tool_visibility(config: Config, tmp_path: Path):
-    """Runtime.reload_skills() makes provider tools use the fresh skill registry."""
+def test_reload_skills_keeps_provider_tool_set_stable(config: Config, tmp_path: Path):
+    """The skill/skill_manage tools are always offered to an identity agent, so a skill
+    reload never changes the tool set — only which skills the live registry exposes."""
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
@@ -843,11 +844,9 @@ def test_reload_skills_updates_provider_skill_tool_visibility(config: Config, tm
     runtime.reload_skills()
     definitions_after_reload = runtime.system_prompts.provider_tool_definitions(agent)
 
-    assert [definition["name"] for definition in definitions_before_reload] == ["memory"]
-    assert [definition["name"] for definition in definitions_after_reload] == [
-        "memory",
-        "skill",
-    ]
+    expected_tools = ["memory", "skill", "skill_manage"]
+    assert [definition["name"] for definition in definitions_before_reload] == expected_tools
+    assert [definition["name"] for definition in definitions_after_reload] == expected_tools
 
 
 def _write_test_skill(skill_root: Path, name: str, description: str) -> None:
@@ -1280,7 +1279,7 @@ class _StubPrompts:
     def render_skill_catalog(self, _agent: object, skill_registry: object = None) -> object:
         from core.prompts import PinnedSkillCatalog
 
-        return PinnedSkillCatalog(catalog_text="", has_loadable_skills=False)
+        return PinnedSkillCatalog(catalog_text="")
 
     def provider_tool_definitions(
         self, _agent: object, *, skill_registry: object = None, skill_catalog: object = None

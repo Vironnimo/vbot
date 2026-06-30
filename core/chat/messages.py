@@ -28,6 +28,7 @@ from core.providers.reasoning import (
 from core.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
     PARTIAL_THINKING_NOTE_PREFIX,
+    SKILL_AVAILABLE_NOTE_PREFIX,
     ChatSession,
     is_channel_message_note,
     is_partial_thinking_note,
@@ -902,8 +903,11 @@ def _is_empty_assistant_history_message(
 def _system_reminder_block(message: ChatMessage) -> str:
     message.validate()
     content = message.content
-    if isinstance(content, str) and content.startswith(PARTIAL_THINKING_NOTE_PREFIX):
-        content = content.removeprefix(PARTIAL_THINKING_NOTE_PREFIX)
+    if isinstance(content, str):
+        for prefix in (PARTIAL_THINKING_NOTE_PREFIX, SKILL_AVAILABLE_NOTE_PREFIX):
+            if content.startswith(prefix):
+                content = content.removeprefix(prefix)
+                break
     return f"{SYSTEM_REMINDER_OPEN_TAG}\n{content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
 
 

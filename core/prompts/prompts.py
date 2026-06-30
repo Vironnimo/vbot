@@ -250,19 +250,18 @@ class SkillPromptRegistry(Protocol):
 
 @dataclass(frozen=True)
 class PinnedSkillCatalog:
-    """A session-pinned snapshot of an agent's skill catalog.
+    """A session-pinned snapshot of an agent's skill catalog text.
 
     Captured on a session's first build and reused for the session's lifetime so a
-    skill written mid-session never changes the session's system prompt or its tool
-    list, keeping the provider prompt cache intact. ``catalog_text`` is the rendered
-    ``<available_skills>`` block; ``has_loadable_skills`` pins whether the internal
-    ``skill`` tool is offered. Skill *activation* and ``/``-``$`` triggers stay live
-    (they resolve the current registry), so a newly written skill is loadable at
-    once even though the catalog text is frozen.
+    skill written mid-session never changes the session's system prompt, keeping the
+    provider prompt cache intact. ``catalog_text`` is the rendered
+    ``<available_skills>`` block. Skill *activation* and ``/``-``$`` triggers stay
+    live (they resolve the current registry), so a newly written skill is loadable at
+    once even though the catalog text is frozen. The ``skill`` tool itself is always
+    offered (and ``skill_manage`` to identity agents), so tool presence is not pinned.
     """
 
     catalog_text: str
-    has_loadable_skills: bool
 
 
 class VisitingProjectSkill(Protocol):
@@ -1190,49 +1189,33 @@ class SystemPromptManager:
         agent: PromptAgent,
         skill_registry: SkillPromptRegistry | None = None,
     ) -> PinnedSkillCatalog:
-        """Render an agent's current skill catalog snapshot (text + tool-presence gate).
+        """Render an agent's current skill catalog snapshot (the ``<available_skills>`` text).
 
         The chat loop pins this per session on the first build and reuses it for the
         session's lifetime, so a later skill write does not shift the session's
-        prompt or tool list. ``None`` uses the configured global registry.
+        prompt. ``None`` uses the configured global registry.
         """
         registry = self._resolve_skill_registry(skill_registry)
         skills = registry.filter_allowed(agent.allowed_skills)
-        return PinnedSkillCatalog(
-            catalog_text=_format_skill_list(skills),
-            has_loadable_skills=bool(skills),
-        )
+        return PinnedSkillCatalog(catalog_text=_format_skill_list(skills))
 
-    def provider_tool_definitions(
-        self,
-        agent: PromptAgent,
-        *,
-        skill_registry: SkillPromptRegistry | None = None,
-        skill_catalog: PinnedSkillCatalog | None = None,
-    ) -> list[dict[str, Any]]:
+    def provider_tool_definitions(self, agent: PromptAgent) -> list[dict[str, Any]]:
         """Return provider tool definitions filtered by the agent allowlist.
 
-        ``skill_registry`` scopes the "does this agent have loadable skills?" check
-        that decides whether the internal ``skill`` tool is exposed — a project run
-        passes its project registry so the tool appears only when the project's
-        effective skills are non-empty; ``None`` uses the global registry. A
-        session-pinned ``skill_catalog`` overrides that check so the ``skill`` tool's
-        presence stays fixed for the session (the cache invariant) even if a skill is
-        written mid-session.
+        The internal ``skill`` tool (load/list) is always offered — skills can be
+        authored or activated mid-session, so the loader must never be gated on the
+        agent currently having one. The internal ``skill_manage`` (authoring) tool is
+        offered only to **identity** agents: its sole write target is the agent's own
+        private skill home, which a config/project agent (empty ``workspace``) does
+        not own.
         """
-        active_skill_registry = self._resolve_skill_registry(skill_registry)
         definitions = self._provider_definitions_for_agent(agent)
-        has_loadable_skills = (
-            skill_catalog.has_loadable_skills
-            if skill_catalog is not None
-            else self._agent_has_loadable_skills(agent, active_skill_registry)
-        )
-        if not has_loadable_skills:
-            return definitions
-
+        internal_names = ["skill"]
+        if agent.workspace:
+            internal_names.append("skill_manage")
         return [
             *definitions,
-            *self._tool_registry.provider_definitions(["skill"], include_internal=True),
+            *self._tool_registry.provider_definitions(internal_names, include_internal=True),
         ]
 
     def _resolve_skill_registry(
@@ -1387,11 +1370,6 @@ class SystemPromptManager:
         if scope.type == "agent":
             return self._storage.read_agent_prompt_fragment(agent_id, fragment_name)
         return self._storage.read_prompt_fragment(fragment_name)
-
-    def _agent_has_loadable_skills(
-        self, agent: PromptAgent, skill_registry: SkillPromptRegistry
-    ) -> bool:
-        return bool(skill_registry.filter_allowed(agent.allowed_skills))
 
     def _agent_active_channels(self, agent: PromptAgent) -> list[ChannelPromptMetadata]:
         channel_registry = self._channel_registry

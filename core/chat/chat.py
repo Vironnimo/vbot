@@ -139,7 +139,7 @@ from core.runs import (
     Run,
     RunExecutor,
 )
-from core.sessions import ChatSession
+from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, ChatSession
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
@@ -159,10 +159,19 @@ MAX_TOOL_ITERATIONS = 1000
 # and survives across runs — the visited project lives in the session meta, not
 # the session path.
 VISITED_PROJECTS_META_KEY = "visited_projects"
-# Session-pinned skill catalog snapshot (rendered catalog text + tool-presence
-# gate), stored in session metadata so a mid-session skill write never shifts the
-# session's system prompt or tool list (the prompt-cache invariant).
+# Session-pinned skill catalog snapshot (the rendered ``<available_skills>`` text),
+# stored in session metadata so a mid-session skill write never shifts the session's
+# system prompt (the prompt-cache invariant).
 PINNED_SKILL_CATALOG_META_KEY = "pinned_skill_catalog"
+# Skill names the session has already surfaced to the model: the pinned catalog at
+# first build, plus any later additions already announced. Diffed each run against the
+# agent's currently available+allowed skills so a newly available one is announced once.
+SEEN_SKILLS_META_KEY = "seen_skills"
+# Header of the mid-session "new skills available" reminder. The pinned prompt catalog
+# cannot grow without breaking the prompt cache, so additions reach the model here.
+SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
+    "New skills are now available to you. Load one by name with the `skill` tool when relevant:"
+)
 
 # Prepended (visiting path only) before a reached-into project's auto-loaded files
 # so the model knows why a foreign project's files appeared in its context.
@@ -605,6 +614,9 @@ class ChatLoop:
                 )
 
             run.raise_if_cancelled()
+            self._announce_newly_available_skills(
+                run.agent_id, run.session_id, session, agent, skill_registry, project_id
+            )
             if retry:
                 pass
             elif internal:
@@ -631,9 +643,7 @@ class ChatLoop:
                 skill_registry=skill_registry,
                 skill_catalog=skill_catalog,
             )
-            tools = self._runtime.system_prompts.provider_tool_definitions(
-                agent, skill_registry=skill_registry, skill_catalog=skill_catalog
-            )
+            tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
             try:
                 return await self._send_until_final(
@@ -821,17 +831,55 @@ class ChatLoop:
         metadata = self._runtime.chat_sessions.get_metadata(agent_id, session_id, project_id)
         pinned = metadata.get(PINNED_SKILL_CATALOG_META_KEY)
         if isinstance(pinned, dict) and isinstance(pinned.get("catalog_text"), str):
-            return PinnedSkillCatalog(
-                catalog_text=pinned["catalog_text"],
-                has_loadable_skills=bool(pinned.get("has_loadable_skills")),
-            )
+            return PinnedSkillCatalog(catalog_text=pinned["catalog_text"])
         snapshot = self._runtime.system_prompts.render_skill_catalog(agent, skill_registry)
-        metadata[PINNED_SKILL_CATALOG_META_KEY] = {
-            "catalog_text": snapshot.catalog_text,
-            "has_loadable_skills": snapshot.has_loadable_skills,
-        }
+        metadata[PINNED_SKILL_CATALOG_META_KEY] = {"catalog_text": snapshot.catalog_text}
         self._runtime.chat_sessions.set_metadata(agent_id, session_id, metadata, project_id)
         return snapshot
+
+    def _announce_newly_available_skills(
+        self,
+        agent_id: str,
+        session_id: str,
+        session: ChatSession,
+        agent: Any,
+        skill_registry: SkillRegistry,
+        project_id: str | None,
+    ) -> None:
+        """Tell the model about skills that became available to it since this session began.
+
+        The session's ``<available_skills>`` prompt block is pinned for prompt-cache
+        stability, so a skill authored or activated mid-session never appears in the
+        prompt. This appends a one-time ``<system-reminder>`` note at the conversation
+        tail for any newly available+allowed skill, leaving the cached prompt prefix
+        untouched. Additions only — a skill that becomes unavailable is not announced.
+        The first run seeds the baseline (the skills already in the pinned catalog)
+        without announcing them. The diff runs against the registry already resolved for
+        this run, so it is a small in-memory set comparison, not a fresh scan.
+        """
+        # Minimal/degraded skill registries (e.g. some test doubles) may not expose
+        # ``filter_allowed``; the announcement is an optional enhancement, so skip it
+        # cleanly rather than break the run — the real ``SkillRegistry`` always has it.
+        filter_allowed = getattr(skill_registry, "filter_allowed", None)
+        if not callable(filter_allowed):
+            return
+        allowed_skills = getattr(agent, "allowed_skills", None)
+        allowed = ["*"] if allowed_skills is None else allowed_skills
+        available = {skill.name: skill.description for skill in filter_allowed(allowed)}
+        metadata = self._runtime.chat_sessions.get_metadata(agent_id, session_id, project_id)
+        seen = metadata.get(SEEN_SKILLS_META_KEY)
+        if not isinstance(seen, list):
+            metadata[SEEN_SKILLS_META_KEY] = sorted(available)
+            self._runtime.chat_sessions.set_metadata(agent_id, session_id, metadata, project_id)
+            return
+        new_names = sorted(set(available) - set(seen))
+        if not new_names:
+            return
+        lines = [SKILL_AVAILABLE_NEW_SKILLS_HEADER]
+        lines.extend(f"- {name}: {available[name]}" for name in new_names)
+        session.add_note(SKILL_AVAILABLE_NOTE_PREFIX + "\n".join(lines))
+        metadata[SEEN_SKILLS_META_KEY] = sorted(set(seen) | set(new_names))
+        self._runtime.chat_sessions.set_metadata(agent_id, session_id, metadata, project_id)
 
     def inject_visiting_project_files(
         self,
