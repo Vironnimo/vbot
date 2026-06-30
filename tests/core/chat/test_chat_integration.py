@@ -19,8 +19,6 @@ from core.runtime import Runtime
 from core.skills.skills import SkillRegistry
 from core.tools import tool_success
 from core.tools.memory import MEMORY_TOOL_DESCRIPTION
-from core.tools.skill import SKILL_TOOL_DESCRIPTION, SKILL_TOOL_PARAMETERS
-from core.tools.skill_manage import SKILL_MANAGE_TOOL_DESCRIPTION, SKILL_MANAGE_TOOL_PARAMETERS
 from core.utils.config import Config
 
 JsonObject = dict[str, Any]
@@ -633,17 +631,12 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
                     "additionalProperties": False,
                 },
             },
-            {
-                "name": "skill",
-                "description": SKILL_TOOL_DESCRIPTION,
-                "parameters": SKILL_TOOL_PARAMETERS,
-            },
-            {
-                "name": "skill_manage",
-                "description": SKILL_MANAGE_TOOL_DESCRIPTION,
-                "parameters": SKILL_MANAGE_TOOL_PARAMETERS,
-            },
         ]
+        # skill/skill_manage are ordinary tools now: this agent allows only read_file,
+        # so neither is offered — the per-agent toggle filters them like any tool.
+        offered_names = {definition["name"] for definition in tool_definitions}
+        assert "skill" not in offered_names
+        assert "skill_manage" not in offered_names
     finally:
         runtime.stop()
 

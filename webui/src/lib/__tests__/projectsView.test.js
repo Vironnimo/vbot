@@ -473,15 +473,24 @@ describe('normalizeScanReport', () => {
 });
 
 describe('buildToolToggleList', () => {
-  it('marks catalog tools enabled when in the whitelist and drops memory', () => {
+  it('marks catalog tools enabled when in the whitelist and drops memory and skill_manage', () => {
     const rows = buildToolToggleList({
-      catalog: [{ name: 'read' }, { name: 'edit' }, { name: 'memory' }],
-      allowedTools: ['read'],
+      catalog: [
+        { name: 'read' },
+        { name: 'edit' },
+        { name: 'memory' },
+        { name: 'skill' },
+        { name: 'skill_manage' },
+      ],
+      allowedTools: ['read', 'skill'],
     });
 
+    // memory (runtime-derived) and skill_manage (identity-only) are excluded; skill
+    // stays an ordinary, toggleable project tool.
     expect(rows).toEqual([
       { name: 'edit', enabled: false },
       { name: 'read', enabled: true },
+      { name: 'skill', enabled: true },
     ]);
   });
 

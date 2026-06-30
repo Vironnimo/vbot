@@ -117,13 +117,18 @@ def make_skill_handler(resolve_registry: SkillRegistryResolver) -> Any:
 
 
 def register_skill_tool(registry: ToolRegistry, resolve_registry: SkillRegistryResolver) -> None:
-    """Register the internal skill activation tool with a per-project registry resolver."""
+    """Register the skill activation tool with a per-project registry resolver.
+
+    A normal allow-list tool: an agent offers it only when ``skill`` is in its allowed
+    tools, so it can be toggled per agent like any other tool. It is **not** gated on the
+    agent currently having a loadable skill — a skill can be authored or activated
+    mid-session, so the loader stays available whenever the tool itself is allowed.
+    """
     registry.register(
         SKILL_TOOL_NAME,
         SKILL_TOOL_DESCRIPTION,
         SKILL_TOOL_PARAMETERS,
         make_skill_handler(resolve_registry),
-        internal=True,
         display=ToolDisplay(summary_fields=("name",)),
     )
 
