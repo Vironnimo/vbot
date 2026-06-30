@@ -13,6 +13,19 @@ MALFORMED_YAML_FALLBACK_WARNING = (
     "YAML front matter was repaired by quoting scalar values with colons."
 )
 
+# Fragment (no anchors) for a skill name that the `/name` and `$name` chat triggers
+# (core.chat.tool_dispatch's trigger regexes) can actually match: a leading letter or
+# digit, then up to MAX_SKILL_NAME_LENGTH - 1 more letters/digits/``-``/``_``. The
+# trigger regexes are built from this same fragment, and SkillAuthoringService enforces
+# SKILL_NAME_TRIGGER_PATTERN as a hard requirement, so a newly authored skill is always
+# trigger-compatible. The loader stays lenient (see the charset warning below) so an
+# already-existing on-disk skill with an unusual name keeps loading unchanged.
+SKILL_NAME_CHARSET_FRAGMENT = rf"[A-Za-z0-9][A-Za-z0-9_-]{{0,{MAX_SKILL_NAME_LENGTH - 1}}}"
+SKILL_NAME_TRIGGER_PATTERN = re.compile(f"^{SKILL_NAME_CHARSET_FRAGMENT}$")
+# Charset only, no length bound, so a name that is merely too long is not also (and
+# misleadingly) reported as having bad characters by the warning below.
+_SKILL_NAME_SAFE_CHARSET_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
 _SCALAR_WITH_COLON_PATTERN = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?P<space>\s+)(?P<value>.+)$")
 _QUOTED_OR_STRUCTURED_PREFIXES = ('"', "'", "[", "{", "&", "*", "!", ">", "|", "#")
 
@@ -68,6 +81,12 @@ def validate_skill_metadata(
         warnings.append(f"Skill name '{name}' does not match directory name '{directory_name}'.")
     if len(name) > MAX_SKILL_NAME_LENGTH:
         warnings.append(f"Skill name '{name}' is longer than {MAX_SKILL_NAME_LENGTH} characters.")
+    if not _SKILL_NAME_SAFE_CHARSET_PATTERN.match(name):
+        warnings.append(
+            f"Skill name '{name}' uses characters other than letters, digits, '-', or "
+            "'_' (or does not start with a letter or digit); it cannot be triggered "
+            "with /name or $name, only loaded by name with the skill tool."
+        )
 
     return ValidationResult(valid=True, warnings=warnings)
 
