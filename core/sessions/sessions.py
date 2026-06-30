@@ -38,6 +38,7 @@ SESSION_TITLE_MAX_LENGTH = 200
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 PARTIAL_THINKING_NOTE_PREFIX = "[partial-thinking] "
 CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
+SKILL_AVAILABLE_NOTE_PREFIX = "[skill-available] "
 _TAIL_CHUNK_SIZE = 8192
 _LOGGER = get_logger("sessions")
 
@@ -719,6 +720,15 @@ def is_channel_message_note(message: ChatMessage) -> bool:
         message.role == "note"
         and isinstance(message.content, str)
         and message.content.startswith(CHANNEL_MESSAGE_NOTE_PREFIX)
+    )
+
+
+def is_skill_available_note(message: ChatMessage) -> bool:
+    """Return whether a note announces skills that became available mid-session."""
+    return (
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith(SKILL_AVAILABLE_NOTE_PREFIX)
     )
 
 
