@@ -244,6 +244,7 @@ class ProjectStore:
             "auto_load",
             "allowed_tools",
             "skills_bundled_enabled",
+            "skills_global_enabled",
             "skills_project_disabled",
         }
         unknown_fields = sorted(set(changes) - allowed_fields)
@@ -266,6 +267,9 @@ class ProjectStore:
             allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
             skills_bundled_enabled=changes.get(
                 "skills_bundled_enabled", list(project.skills_bundled_enabled)
+            ),
+            skills_global_enabled=changes.get(
+                "skills_global_enabled", list(project.skills_global_enabled)
             ),
             skills_project_disabled=changes.get(
                 "skills_project_disabled", list(project.skills_project_disabled)
@@ -333,6 +337,7 @@ class ProjectStore:
             auto_load=list(project.auto_load),
             allowed_tools=list(project.allowed_tools),
             skills_bundled_enabled=list(project.skills_bundled_enabled),
+            skills_global_enabled=list(project.skills_global_enabled),
             skills_project_disabled=list(project.skills_project_disabled),
             model_overrides=overrides,
             created_at=project.created_at,

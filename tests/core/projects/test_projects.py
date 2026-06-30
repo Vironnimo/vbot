@@ -77,6 +77,19 @@ def test_build_project_rejects_non_list_skills_bundled(tmp_path: Path) -> None:
         build_project("vbot", "vBot", tmp_path, skills_bundled_enabled="frontend")  # type: ignore[arg-type]
 
 
+def test_build_project_round_trips_skills_global_enabled(tmp_path: Path) -> None:
+    project = build_project("vbot", "vBot", tmp_path, skills_global_enabled=["pdf", "deploy"])
+
+    assert project.skills_global_enabled == ["pdf", "deploy"]
+    assert project.to_dict()["skills_global_enabled"] == ["pdf", "deploy"]
+    assert project_from_dict(project.to_dict()).skills_global_enabled == ["pdf", "deploy"]
+
+
+def test_build_project_rejects_non_list_skills_global(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError):
+        build_project("vbot", "vBot", tmp_path, skills_global_enabled="pdf")  # type: ignore[arg-type]
+
+
 def test_build_project_accepts_model_overrides(tmp_path: Path) -> None:
     project = build_project(
         "vbot",
@@ -223,6 +236,7 @@ def test_to_dict_has_stable_field_set(tmp_path: Path) -> None:
         "auto_load",
         "allowed_tools",
         "skills_bundled_enabled",
+        "skills_global_enabled",
         "skills_project_disabled",
         "model_overrides",
         "created_at",

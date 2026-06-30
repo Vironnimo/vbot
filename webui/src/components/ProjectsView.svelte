@@ -91,9 +91,9 @@
   let autoLoadDraft = $state('');
   let activeTeam = $state([]);
   let activeReport = $state(null);
-  // The expanded project's skill pool (own + bundled names) from the scan, for the
-  // skill toggle sections. Reset whenever the expansion changes.
-  let activeScanSkills = $state({ project: [], bundled: [] });
+  // The expanded project's skill pool (own + bundled + global names) from the scan,
+  // for the skill toggle sections. Reset whenever the expansion changes.
+  let activeScanSkills = $state({ project: [], bundled: [], global: [] });
   let scanLoading = $state(false);
   let removingProjectId = $state('');
   // The team agent whose model override is being cleared, so its `x` disables
@@ -185,6 +185,7 @@
             auto_load: editForm.auto_load,
             allowed_tools: editForm.allowed_tools,
             skills_bundled_enabled: editForm.skills_bundled_enabled,
+            skills_global_enabled: editForm.skills_global_enabled,
             skills_project_disabled: editForm.skills_project_disabled,
           },
           expandedProject,
@@ -206,7 +207,9 @@
     buildSkillToggleSections({
       projectSkills: activeScanSkills.project,
       bundledSkills: activeScanSkills.bundled,
+      globalSkills: activeScanSkills.global,
       skillsBundledEnabled: editForm.skills_bundled_enabled,
+      skillsGlobalEnabled: editForm.skills_global_enabled,
       skillsProjectDisabled: editForm.skills_project_disabled,
     }),
   );
@@ -271,6 +274,7 @@
       auto_load: [...(project?.auto_load ?? [])],
       allowed_tools: [...(project?.allowed_tools ?? [])],
       skills_bundled_enabled: [...(project?.skills_bundled_enabled ?? [])],
+      skills_global_enabled: [...(project?.skills_global_enabled ?? [])],
       skills_project_disabled: [...(project?.skills_project_disabled ?? [])],
     };
   }
@@ -484,7 +488,7 @@
     editError = '';
     activeTeam = [];
     activeReport = null;
-    activeScanSkills = { project: [], bundled: [] };
+    activeScanSkills = { project: [], bundled: [], global: [] };
 
     if (scan) {
       activeTeam = projectTeam(scan);
@@ -500,7 +504,7 @@
     expandedProjectId = '';
     activeTeam = [];
     activeReport = null;
-    activeScanSkills = { project: [], bundled: [] };
+    activeScanSkills = { project: [], bundled: [], global: [] };
     editError = '';
   }
 
@@ -559,6 +563,15 @@
   function toggleBundledSkill(name, enabled) {
     editForm.skills_bundled_enabled = setListMembership(
       editForm.skills_bundled_enabled,
+      name,
+      enabled,
+    );
+    editError = '';
+  }
+
+  function toggleGlobalSkill(name, enabled) {
+    editForm.skills_global_enabled = setListMembership(
+      editForm.skills_global_enabled,
       name,
       enabled,
     );
@@ -1203,7 +1216,7 @@
                     <p class="projects-view__help">
                       {t(
                         'projects.manage.allowedSkillsHelp',
-                        'Project skills are active by default; bundled skills are opt-in.',
+                        'Project skills are active by default; bundled and global skills are opt-in.',
                       )}
                     </p>
                     {#if skillToggleSections.project.length > 0}
@@ -1258,7 +1271,33 @@
                         {/each}
                       </ul>
                     {/if}
-                    {#if skillToggleSections.project.length === 0 && skillToggleSections.bundled.length === 0}
+                    {#if skillToggleSections.global.length > 0}
+                      <span class="projects-view__sublabel">
+                        {t('projects.manage.globalSkills', 'Global skills')}
+                      </span>
+                      <ul class="projects-view__file-list">
+                        {#each skillToggleSections.global as skill (skill.name)}
+                          <li class="projects-view__file-row">
+                            <span class="projects-view__file-name">
+                              {skill.name}
+                            </span>
+                            <Toggle
+                              size="sm"
+                              checked={skill.enabled}
+                              disabled={editSaving}
+                              ariaLabel={t(
+                                'projects.manage.toggleSkill',
+                                'Toggle skill {name}',
+                                { name: skill.name },
+                              )}
+                              onChange={(next) =>
+                                toggleGlobalSkill(skill.name, next)}
+                            />
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    {#if skillToggleSections.project.length === 0 && skillToggleSections.bundled.length === 0 && skillToggleSections.global.length === 0}
                       <p class="projects-view__file-empty">
                         {t(
                           'projects.manage.skillsEmpty',

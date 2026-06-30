@@ -361,6 +361,30 @@ def test_effective_skills_apply_disabled_and_bundled_rule(
     assert runtime_agent.allowed_skills == ["debugging", "pdf"]
 
 
+def test_effective_skills_include_enabled_global(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # (project skills − disabled) ∪ enabled-bundled ∪ enabled-global, sorted.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    project = projects.update(
+        "vbot",
+        skills_project_disabled=["refactoring"],
+        skills_bundled_enabled=["pdf"],
+        skills_global_enabled=["deploy"],
+    )
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        project_skill_names={"vbot": frozenset({"debugging", "refactoring"})},
+    )
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.allowed_skills == ["debugging", "deploy", "pdf"]
+
+
 def test_model_chain_falls_back_to_project_default(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
