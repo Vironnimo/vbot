@@ -330,6 +330,40 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('shows global skills off by default and persists an opt-in', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [],
+        report: { clean: true, findings: [] },
+        skills: { project: [], bundled: [], global: ['deploy'] },
+      },
+    });
+    mockToolCatalog([], []);
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await expandDemo();
+    await waitForCondition(() => toggleByAriaLabel('Toggle skill deploy'));
+    // A global skill is off by default (opt-in).
+    expect(
+      toggleByAriaLabel('Toggle skill deploy').getAttribute('aria-checked'),
+    ).toBe('false');
+
+    // Turning it on records it as a global opt-in.
+    toggleByAriaLabel('Toggle skill deploy').click();
+    buttonByTestId('project-save-demo').click();
+
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      skills_global_enabled: ['deploy'],
+    });
+  });
+
   it('seeds the temperature field and thinking-effort dropdown from the project', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [

@@ -40,6 +40,7 @@ const MANAGE_FIELDS = Object.freeze([
 const WHITELIST_LIST_FIELDS = Object.freeze([
   'allowed_tools',
   'skills_bundled_enabled',
+  'skills_global_enabled',
   'skills_project_disabled',
 ]);
 
@@ -204,19 +205,23 @@ export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
   return unique.map((name) => ({ name, enabled: enabled.has(name) }));
 }
 
-// Build the two skill toggle sections for the editor from a project's skill pool
-// and its stored whitelist rule. Project skills are on by default (off only when
-// named in `skills_project_disabled`); bundled skills are off by default (on only
-// when named in `skills_bundled_enabled`). A bundled skill shadowed by a project
-// skill of the same name is dropped from the bundled section (project wins).
+// Build the skill toggle sections for the editor from a project's skill pool and
+// its stored whitelist rule. Project skills are on by default (off only when named
+// in `skills_project_disabled`); bundled and global skills are off by default (on
+// only when named in `skills_bundled_enabled` / `skills_global_enabled`). A bundled
+// or global skill shadowed by a project skill of the same name is dropped from its
+// section (project wins).
 export function buildSkillToggleSections({
   projectSkills = [],
   bundledSkills = [],
+  globalSkills = [],
   skillsBundledEnabled = [],
+  skillsGlobalEnabled = [],
   skillsProjectDisabled = [],
 } = {}) {
   const disabled = new Set(normalizeStringList(skillsProjectDisabled));
   const enabledBundled = new Set(normalizeStringList(skillsBundledEnabled));
+  const enabledGlobal = new Set(normalizeStringList(skillsGlobalEnabled));
   const projectNames = normalizeStringList(projectSkills);
   const projectSet = new Set(projectNames);
   return {
@@ -227,6 +232,9 @@ export function buildSkillToggleSections({
     bundled: normalizeStringList(bundledSkills)
       .filter((name) => !projectSet.has(name))
       .map((name) => ({ name, enabled: enabledBundled.has(name) })),
+    global: normalizeStringList(globalSkills)
+      .filter((name) => !projectSet.has(name))
+      .map((name) => ({ name, enabled: enabledGlobal.has(name) })),
   };
 }
 
@@ -248,12 +256,13 @@ export function setListMembership(list, name, include) {
   return normalized;
 }
 
-// Normalize the scan response's skill pool into the editor's two name lists.
+// Normalize the scan response's skill pool into the editor's name lists.
 export function normalizeScanSkills(scan) {
   const skills = scan?.skills ?? {};
   return {
     project: normalizeStringList(skills.project),
     bundled: normalizeStringList(skills.bundled),
+    global: normalizeStringList(skills.global),
   };
 }
 
@@ -327,6 +336,7 @@ export function normalizeProject(project) {
     skills_bundled_enabled: normalizeStringList(
       project?.skills_bundled_enabled,
     ),
+    skills_global_enabled: normalizeStringList(project?.skills_global_enabled),
     skills_project_disabled: normalizeStringList(
       project?.skills_project_disabled,
     ),

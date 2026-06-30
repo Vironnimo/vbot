@@ -42,6 +42,7 @@ from core.settings import (
     validate_temperature,
     validate_thinking_effort,
 )
+from core.skills import SKILL_ORIGIN_GLOBAL
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -82,6 +83,7 @@ _SET_MUTABLE_FIELDS = frozenset(
         "auto_load",
         "allowed_tools",
         "skills_bundled_enabled",
+        "skills_global_enabled",
         "skills_project_disabled",
     }
 )
@@ -351,11 +353,12 @@ def _scan_preview(state: Any, project: Project) -> JsonObject:
 def _project_skill_pool(state: Any, project_id: str) -> JsonObject:
     """Return the project's skill pool for the whitelist editor.
 
-    ``project`` is the project's own scanned skills (auto-on, off-exception list);
-    ``bundled`` is the global bundled pool minus any name a project skill shadows
-    (project wins the collision), the opt-in list. Both sorted. Guarded with
-    ``getattr`` so a minimal test runtime without the skill seams degrades to empty
-    pools rather than raising.
+    ``project`` is the project's own scanned skills (auto-on, off-exception list).
+    ``global`` is the user's global-home skills and ``bundled`` is everything else
+    shippable (bundled plus any configured extra dirs) — both opt-in lists, each with
+    names a project skill shadows removed (project wins the collision). All sorted.
+    Guarded with ``getattr`` so a minimal test runtime without the skill seams degrades
+    to empty pools rather than raising.
     """
     runtime = state.runtime
     project_skill_names = getattr(runtime, "project_skill_names", None)
@@ -363,12 +366,20 @@ def _project_skill_pool(state: Any, project_id: str) -> JsonObject:
         sorted(project_skill_names(project_id)) if callable(project_skill_names) else []
     )
     skills_registry = getattr(runtime, "skills", None)
-    bundled_all = (
-        sorted(skill.name for skill in skills_registry.list_all()) if skills_registry else []
-    )
+    all_skills = list(skills_registry.list_all()) if skills_registry else []
     project_set = set(project_skills)
-    bundled = [name for name in bundled_all if name not in project_set]
-    return {"project": project_skills, "bundled": bundled}
+    global_names = sorted(
+        skill.name
+        for skill in all_skills
+        if getattr(skill, "origin", None) == SKILL_ORIGIN_GLOBAL and skill.name not in project_set
+    )
+    global_set = set(global_names)
+    bundled = sorted(
+        skill.name
+        for skill in all_skills
+        if skill.name not in project_set and skill.name not in global_set
+    )
+    return {"project": project_skills, "bundled": bundled, "global": global_names}
 
 
 def _set_changes(params: JsonObject) -> JsonObject:
@@ -397,7 +408,12 @@ def _set_changes(params: JsonObject) -> JsonObject:
     # The Tool/Skill Whitelist fields are lists of non-empty strings; an explicit
     # empty list is a real value (e.g. every tool off), so presence in params — not
     # truthiness — decides whether the field changes.
-    for list_field in ("allowed_tools", "skills_bundled_enabled", "skills_project_disabled"):
+    for list_field in (
+        "allowed_tools",
+        "skills_bundled_enabled",
+        "skills_global_enabled",
+        "skills_project_disabled",
+    ):
         if list_field in params:
             changes[list_field] = _string_list_field(params, list_field)
     return changes
@@ -487,6 +503,7 @@ def _project_response(project: Project) -> JsonObject:
         "auto_load": list(project.auto_load),
         "allowed_tools": list(project.allowed_tools),
         "skills_bundled_enabled": list(project.skills_bundled_enabled),
+        "skills_global_enabled": list(project.skills_global_enabled),
         "skills_project_disabled": list(project.skills_project_disabled),
         "created_at": project.created_at,
         "updated_at": project.updated_at,

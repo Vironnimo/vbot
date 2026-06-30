@@ -364,9 +364,10 @@ export const englishCatalog = Object.freeze({
   'projects.manage.toolsEmpty': 'No tools available',
   'projects.manage.allowedSkills': 'Skill whitelist',
   'projects.manage.allowedSkillsHelp':
-    'Project skills are active by default; bundled skills are opt-in.',
+    'Project skills are active by default; bundled and global skills are opt-in.',
   'projects.manage.projectSkills': 'Project skills',
   'projects.manage.bundledSkills': 'Bundled skills',
+  'projects.manage.globalSkills': 'Global skills',
   'projects.manage.toggleSkill': 'Toggle skill {name}',
   'projects.manage.skillsEmpty': 'No skills available',
   'projects.manage.save': 'Save changes',

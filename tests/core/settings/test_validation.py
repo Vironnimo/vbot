@@ -149,6 +149,7 @@ def test_validate_project_data_accepts_whitelist_fields() -> None:
     data = _valid_project_data()
     data["allowed_tools"] = ["read", "grep"]
     data["skills_bundled_enabled"] = ["frontend-design"]
+    data["skills_global_enabled"] = ["pdf"]
     data["skills_project_disabled"] = ["debugging"]
 
     assert validate_project_data(data) == []
@@ -176,6 +177,17 @@ def test_validate_project_data_rejects_empty_skill_entry() -> None:
     assert (
         "error",
         "$.skills_bundled_enabled[1]",
+        "must be a non-empty string",
+    ) in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_empty_global_skill_entry() -> None:
+    data = _valid_project_data()
+    data["skills_global_enabled"] = ["pdf", "  "]
+
+    assert (
+        "error",
+        "$.skills_global_enabled[1]",
         "must be a non-empty string",
     ) in _diagnostics(data)
 

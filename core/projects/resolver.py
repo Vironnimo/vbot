@@ -573,16 +573,17 @@ def _effective_allowed_tools(project: Project, scanned: ScannedAgent) -> list[st
 def _effective_allowed_skills(project: Project, project_skill_names: frozenset[str]) -> list[str]:
     """Return the config agent's skills from the project Skill Whitelist rule.
 
-    ``(project skills − skills_project_disabled) ∪ skills_bundled_enabled`` — the
-    project's own scanned skills are active by default, the named ones turned off,
-    plus any bundled skills explicitly opted in (decision 3). OpenCode does not
-    narrow skills per agent in v1, so this is purely project-derived. The result is
-    sorted for determinism; ``filter_allowed`` harmlessly ignores any name that no
-    longer resolves to a loadable skill.
+    ``(project skills − skills_project_disabled) ∪ skills_bundled_enabled ∪
+    skills_global_enabled`` — the project's own scanned skills are active by default,
+    the named ones turned off, plus any bundled or global skills explicitly opted in
+    (decision 3). OpenCode does not narrow skills per agent in v1, so this is purely
+    project-derived. The result is sorted for determinism; ``filter_allowed``
+    harmlessly ignores any name that no longer resolves to a loadable skill.
     """
     disabled = set(project.skills_project_disabled)
     enabled_bundled = set(project.skills_bundled_enabled)
-    return sorted((project_skill_names - disabled) | enabled_bundled)
+    enabled_global = set(project.skills_global_enabled)
+    return sorted((project_skill_names - disabled) | enabled_bundled | enabled_global)
 
 
 def _build_config_agent(

@@ -36,6 +36,7 @@ from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager, Run
 from core.runtime.runtime import Runtime
+from core.skills import SKILL_ORIGIN_BUNDLED, SKILL_ORIGIN_GLOBAL
 from core.utils.config import Config
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
@@ -419,6 +420,7 @@ def test_add_returns_default_whitelist_fields(tmp_path: Path) -> None:
 
     assert result["project"]["allowed_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     assert result["project"]["skills_bundled_enabled"] == []
+    assert result["project"]["skills_global_enabled"] == []
     assert result["project"]["skills_project_disabled"] == []
 
 
@@ -432,12 +434,14 @@ def test_set_changes_whitelist_fields(tmp_path: Path) -> None:
             "project_id": "vbot",
             "allowed_tools": ["read", "grep"],
             "skills_bundled_enabled": ["frontend-design"],
+            "skills_global_enabled": ["pdf"],
             "skills_project_disabled": ["debugging"],
         },
     )
 
     assert result["project"]["allowed_tools"] == ["read", "grep"]
     assert result["project"]["skills_bundled_enabled"] == ["frontend-design"]
+    assert result["project"]["skills_global_enabled"] == ["pdf"]
     assert result["project"]["skills_project_disabled"] == ["debugging"]
 
 
@@ -461,16 +465,18 @@ def test_set_rejects_non_string_tool_entry(tmp_path: Path) -> None:
 
 
 def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:
-    # The scan response carries the editor's skill pool: the project's own skills
-    # plus the bundled pool with name collisions removed (project wins).
+    # The scan response carries the editor's skill pool: the project's own skills,
+    # plus the bundled and global opt-in pools with name collisions removed (project
+    # wins) and global-home skills split out from bundled by origin.
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
     state.runtime.project_skill_names = lambda _project_id: frozenset({"refactoring", "glossary"})
     state.runtime.skills = SimpleNamespace(
         list_all=lambda: [
-            SimpleNamespace(name="glossary"),
-            SimpleNamespace(name="pdf"),
+            SimpleNamespace(name="glossary", origin=SKILL_ORIGIN_BUNDLED),
+            SimpleNamespace(name="pdf", origin=SKILL_ORIGIN_BUNDLED),
+            SimpleNamespace(name="deploy", origin=SKILL_ORIGIN_GLOBAL),
         ]
     )
 
@@ -481,6 +487,8 @@ def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:
         # "glossary" is shadowed by the project skill of the same name, so it is not
         # offered again as a bundled opt-in.
         "bundled": ["pdf"],
+        # Global-home skills are a separate opt-in pool, split out by origin.
+        "global": ["deploy"],
     }
 
 
