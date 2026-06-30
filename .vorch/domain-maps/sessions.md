@@ -56,6 +56,7 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 ## Constraints & Gotchas
 
 - Skill contexts are not a separate store: they are persisted as ordinary `role: "note"` messages prefixed `[skill-context] ` and lazily rebuilt by scanning `load()` on first access (cached in-memory thereafter). Use the exported `is_skill_context_note()` predicate to recognize them — never treat these notes as normal user-visible or provider-injected notes.
+- Other kernel-internal `role: "note"` types follow the same prefix + `is_*_note()` predicate pattern: `[partial-thinking] `, `[channel-message] `, and `[skill-available] ` (`SKILL_AVAILABLE_NOTE_PREFIX` / `is_skill_available_note()`) — a one-time mid-session announcement that a skill became available (see `chat.md` → availability announcement). The prefix is stripped when the note renders into the provider request as a `<system-reminder>` (`core/chat/messages.py`).
 
 ## SQLite Migration Notes
 
