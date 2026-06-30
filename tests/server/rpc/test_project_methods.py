@@ -492,6 +492,20 @@ def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:
     }
 
 
+def test_show_project_reloads_global_skills_from_disk(tmp_path: Path) -> None:
+    # A show reloads the global skill registry so a skill hand-dropped into the global
+    # skills folder surfaces in the editor pool without a server restart.
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    reload_calls: list[bool] = []
+    state.runtime.reload_skills = lambda: reload_calls.append(True)
+
+    _show_project(state, {"project_id": "vbot"})
+
+    assert reload_calls == [True]
+
+
 def test_team_member_reports_denied_tools(tmp_path: Path) -> None:
     # An OpenCode agent denying task → the team response surfaces the mapped vBot
     # tool it turns off, so the editor can show it uses less than the ceiling.
