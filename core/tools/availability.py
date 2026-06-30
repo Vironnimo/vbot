@@ -7,6 +7,14 @@ from collections.abc import Sequence
 from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 
 MEMORY_TOOL_NAME = "memory"
+SKILL_MANAGE_TOOL_NAME = "skill_manage"
+
+# Tools usable only by an identity agent (one with a Workspace). ``skill_manage``
+# writes to the agent's own private skill home under ``<data_dir>/agents/<id>/skills/``,
+# which a config/project agent (empty workspace) does not own — so it is withheld from
+# those agents even under a wildcard allow-list, the same way ``memory`` is gated by the
+# agent's memory mode.
+IDENTITY_ONLY_TOOLS: frozenset[str] = frozenset({SKILL_MANAGE_TOOL_NAME})
 
 
 def memory_tool_enabled(memory_prompt_mode: MemoryPromptMode) -> bool:
@@ -48,7 +56,9 @@ def _without_memory(tool_names: Sequence[str]) -> list[str]:
 
 
 __all__ = [
+    "IDENTITY_ONLY_TOOLS",
     "MEMORY_TOOL_NAME",
+    "SKILL_MANAGE_TOOL_NAME",
     "effective_agent_allowed_tools",
     "memory_tool_enabled",
     "sanitize_configured_allowed_tools",

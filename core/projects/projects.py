@@ -44,7 +44,9 @@ DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 # UI "reset to defaults" — change the base list here and all three move together.
 # The default-off-but-UI-toggleable tools (``session_search``, ``image_generation``,
 # ``text_to_speech``, ``cron``, ``channel_send``, the Home-Assistant tools) are
-# deliberately absent; ``memory`` and the internal tools are never here at all.
+# deliberately absent. ``memory`` (runtime-derived from memory mode) and the
+# identity-only ``skill_manage`` (writes to an identity agent's private skill home) are
+# never project tools at all; ``skill`` itself is an ordinary project tool, default-on.
 PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "read",
     "write",
@@ -57,6 +59,7 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "web_search",
     "status",
     "subagent",
+    "skill",
 )
 
 # The tool-neutral project-instruction convention (the agents.md standard). Seeded

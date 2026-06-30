@@ -53,8 +53,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `tools/memory.md` - `memory`
 - `tools/image.md` - `image_generation`
 - `tools/session_search.md` - `session_search`
-- `tools/skill.md` - internal `skill`
-- internal `skill_manage` - agent skill authoring (no child map; see `skills.md` → Authoring & Write Scope). Always registered, but **model-exposed only to identity agents** (the prompt layer gates it on a non-empty `workspace`).
+- `tools/skill.md` - `skill` (ordinary allow-list tool; default-on in the Project Tool Whitelist)
+- `skill_manage` - agent skill authoring (no child map; see `skills.md` → Authoring & Write Scope). An ordinary allow-list tool, but **identity-only** — model-exposed only to identity agents (the prompt layer's identity-only visibility strips it for an empty `workspace`) and excluded from the Project Tool Whitelist.
 - `tools/subagent.md` - `subagent` and `subagent_result` registration wrapper
 - `tools/cron.md` - `cron`
 - `tools/channel_send.md` - `channel_send`

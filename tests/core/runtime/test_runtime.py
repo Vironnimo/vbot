@@ -39,6 +39,8 @@ CANONICAL_BUILTIN_TOOLS = [
     "process",
     "read",
     "session_search",
+    "skill",
+    "skill_manage",
     "status",
     "subagent",
     "subagent_result",
@@ -821,14 +823,14 @@ def test_block_edit_facade_writes_flow_through_real_storage(config: Config):
 
 
 def test_reload_skills_keeps_provider_tool_set_stable(config: Config, tmp_path: Path):
-    """The skill/skill_manage tools are always offered to an identity agent, so a skill
-    reload never changes the tool set — only which skills the live registry exposes."""
+    """When an identity agent allows the skill tools, a skill reload never changes the
+    tool set — only which skills the live registry exposes."""
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
     agent = runtime.agents.update(
         "main",
-        allowed_tools=[],
+        allowed_tools=["skill", "skill_manage"],
         allowed_skills=[RELOADED_SKILL_NAME],
     )
     skill_root = tmp_path / "team-skills"
@@ -844,7 +846,7 @@ def test_reload_skills_keeps_provider_tool_set_stable(config: Config, tmp_path: 
     runtime.reload_skills()
     definitions_after_reload = runtime.system_prompts.provider_tool_definitions(agent)
 
-    expected_tools = ["memory", "skill", "skill_manage"]
+    expected_tools = ["skill", "skill_manage", "memory"]
     assert [definition["name"] for definition in definitions_before_reload] == expected_tools
     assert [definition["name"] for definition in definitions_after_reload] == expected_tools
 

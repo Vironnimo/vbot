@@ -44,9 +44,15 @@ const WHITELIST_LIST_FIELDS = Object.freeze([
   'skills_project_disabled',
 ]);
 
-// The memory tool is runtime-derived from the agent's memory mode and never part
-// of a project Tool Whitelist, so the editor hides it from the toggle catalog.
-export const PROJECT_TOOL_WHITELIST_EXCLUDED = Object.freeze(['memory']);
+// Tools that are never part of a project Tool Whitelist, so the editor hides them from
+// the toggle catalog: `memory` is runtime-derived from the agent's memory mode, and
+// `skill_manage` is identity-only (it authors into an identity agent's private skill
+// home — a project/config agent never owns one). `skill` itself stays a normal,
+// toggleable project tool.
+export const PROJECT_TOOL_WHITELIST_EXCLUDED = Object.freeze([
+  'memory',
+  'skill_manage',
+]);
 
 // The dropdown sentinel for "no project default" thinking effort. Defined here
 // (not imported from settingsView.js) to keep the two view modules decoupled; it
@@ -191,10 +197,11 @@ export function buildManageProjectPayload(formValues, project) {
   return changes;
 }
 
-// Build the tool toggle rows for the editor: every catalog tool (minus the
-// runtime-derived `memory` tool) with whether it is in the project's current Tool
-// Whitelist. The catalog is the tool-catalog RPC's tool list, so new tools appear
-// automatically. Rows are sorted by name for a stable display.
+// Build the tool toggle rows for the editor: every catalog tool (minus the tools
+// excluded from a project whitelist — see `PROJECT_TOOL_WHITELIST_EXCLUDED`) with
+// whether it is in the project's current Tool Whitelist. The catalog is the
+// tool-catalog RPC's tool list, so new tools appear automatically. Rows are sorted by
+// name for a stable display.
 export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
   const excluded = new Set(PROJECT_TOOL_WHITELIST_EXCLUDED);
   const enabled = new Set(normalizeStringList(allowedTools));
