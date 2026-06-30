@@ -17,6 +17,7 @@ from core.chat.messages import ChatMessage, JsonObject, ToolCall
 from core.extensions import ExtensionRegistry, HookContext
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run
 from core.sessions import ChatSession
+from core.skills.skill_validator import SKILL_NAME_CHARSET_FRAGMENT
 from core.tools import (
     EDIT_TOOL_NAME,
     GLOB_TOOL_NAME,
@@ -44,8 +45,11 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("chat")
 
-SKILL_SLASH_TRIGGER_PATTERN = re.compile(r"^/([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?=\s|$)")
-SKILL_INLINE_TRIGGER_PATTERN = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]{0,63})")
+# Built from the same fragment skill authoring enforces as a hard name requirement
+# (core.skills.skill_validator.SKILL_NAME_TRIGGER_PATTERN), so a newly authored skill
+# is always matched here and the two can never drift to different length/charset rules.
+SKILL_SLASH_TRIGGER_PATTERN = re.compile(rf"^/({SKILL_NAME_CHARSET_FRAGMENT})(?=\s|$)")
+SKILL_INLINE_TRIGGER_PATTERN = re.compile(rf"\$({SKILL_NAME_CHARSET_FRAGMENT})")
 
 # File tools that take a ``path`` argument the agent can point at any absolute
 # location. A visiting identity agent reaches into a project repo by absolute
@@ -548,6 +552,7 @@ def _runtime_allowed_tools(agent: Any, tool_registry: ToolRegistry) -> Sequence[
         getattr(agent, "allowed_tools", ["*"]),
         getattr(agent, "memory_prompt_mode", "agent_user"),
         registered_tool_names=[tool.name for tool in tool_registry.list_tools()],
+        workspace=getattr(agent, "workspace", "") or "",
     )
 
 
