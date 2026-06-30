@@ -325,6 +325,7 @@ describe('normalizeProject / normalizeProjects', () => {
       auto_load: ['AGENTS.md'],
       allowed_tools: [],
       skills_bundled_enabled: [],
+      skills_global_enabled: [],
       skills_project_disabled: [],
       created_at: '2026-06-18T00:00:00Z',
       updated_at: '2026-06-18T01:00:00Z',
@@ -495,11 +496,13 @@ describe('buildToolToggleList', () => {
 });
 
 describe('buildSkillToggleSections', () => {
-  it('defaults project skills on (off when disabled) and bundled off (on when enabled)', () => {
+  it('defaults project skills on (off when disabled) and bundled/global off (on when enabled)', () => {
     const sections = buildSkillToggleSections({
       projectSkills: ['refactoring', 'debugging'],
       bundledSkills: ['pdf', 'xlsx'],
+      globalSkills: ['deploy', 'audit'],
       skillsBundledEnabled: ['pdf'],
+      skillsGlobalEnabled: ['deploy'],
       skillsProjectDisabled: ['debugging'],
     });
 
@@ -511,15 +514,21 @@ describe('buildSkillToggleSections', () => {
       { name: 'pdf', enabled: true },
       { name: 'xlsx', enabled: false },
     ]);
+    expect(sections.global).toEqual([
+      { name: 'deploy', enabled: true },
+      { name: 'audit', enabled: false },
+    ]);
   });
 
-  it('drops a bundled skill shadowed by a project skill of the same name', () => {
+  it('drops a bundled or global skill shadowed by a project skill of the same name', () => {
     const sections = buildSkillToggleSections({
       projectSkills: ['glossary'],
       bundledSkills: ['glossary', 'pdf'],
+      globalSkills: ['glossary', 'deploy'],
     });
 
     expect(sections.bundled.map((row) => row.name)).toEqual(['pdf']);
+    expect(sections.global.map((row) => row.name)).toEqual(['deploy']);
   });
 });
 
@@ -535,13 +544,16 @@ describe('setListMembership', () => {
 });
 
 describe('normalizeScanSkills', () => {
-  it('extracts the project and bundled skill pools', () => {
+  it('extracts the project, bundled, and global skill pools', () => {
     expect(
-      normalizeScanSkills({ skills: { project: ['a', ' '], bundled: ['b'] } }),
-    ).toEqual({ project: ['a'], bundled: ['b'] });
+      normalizeScanSkills({
+        skills: { project: ['a', ' '], bundled: ['b'], global: ['c'] },
+      }),
+    ).toEqual({ project: ['a'], bundled: ['b'], global: ['c'] });
     expect(normalizeScanSkills(undefined)).toEqual({
       project: [],
       bundled: [],
+      global: [],
     });
   });
 });

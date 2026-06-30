@@ -158,6 +158,7 @@ PROJECT_FIELDS = frozenset(
         "model_overrides",
         "project_id",
         "skills_bundled_enabled",
+        "skills_global_enabled",
         "skills_project_disabled",
         "updated_at",
     }
@@ -539,6 +540,9 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     _validate_optional_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
     _validate_optional_string_list(
         diagnostics, "$.skills_bundled_enabled", data.get("skills_bundled_enabled")
+    )
+    _validate_optional_string_list(
+        diagnostics, "$.skills_global_enabled", data.get("skills_global_enabled")
     )
     _validate_optional_string_list(
         diagnostics, "$.skills_project_disabled", data.get("skills_project_disabled")
