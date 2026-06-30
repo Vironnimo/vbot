@@ -45,7 +45,7 @@ from core.skills.skills import (
     SKILL_ORIGIN_PROJECT_PREFIX,
     skill_origin_sort_key,
 )
-from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
+from core.tools.availability import IDENTITY_ONLY_TOOLS, MEMORY_TOOL_NAME, memory_tool_enabled
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -1202,21 +1202,14 @@ class SystemPromptManager:
     def provider_tool_definitions(self, agent: PromptAgent) -> list[dict[str, Any]]:
         """Return provider tool definitions filtered by the agent allowlist.
 
-        The internal ``skill`` tool (load/list) is always offered — skills can be
-        authored or activated mid-session, so the loader must never be gated on the
-        agent currently having one. The internal ``skill_manage`` (authoring) tool is
-        offered only to **identity** agents: its sole write target is the agent's own
-        private skill home, which a config/project agent (empty ``workspace``) does
-        not own.
+        ``skill`` and ``skill_manage`` are ordinary allow-list tools, so they are
+        offered exactly when the agent allows them — toggleable per agent like any
+        tool. The only extra rule is identity-only visibility (applied inside
+        :meth:`_provider_definitions_for_agent`): ``skill_manage`` writes to the
+        agent's own private skill home, so it is withheld from a config/project agent
+        (empty ``workspace``) even under a wildcard allow-list.
         """
-        definitions = self._provider_definitions_for_agent(agent)
-        internal_names = ["skill"]
-        if agent.workspace:
-            internal_names.append("skill_manage")
-        return [
-            *definitions,
-            *self._tool_registry.provider_definitions(internal_names, include_internal=True),
-        ]
+        return self._provider_definitions_for_agent(agent)
 
     def _resolve_skill_registry(
         self, skill_registry: SkillPromptRegistry | None
@@ -1311,19 +1304,41 @@ class SystemPromptManager:
 
     def _provider_definitions_for_agent(self, agent: PromptAgent) -> list[JsonObject]:
         definitions = self._tool_registry.provider_definitions(agent.allowed_tools)
-        return self._apply_memory_tool_visibility(
+        definitions = self._apply_memory_tool_visibility(
             definitions,
             agent,
             self._tool_registry.provider_definitions,
         )
+        return self._apply_identity_only_tool_visibility(definitions, agent)
 
     def _prompt_definitions_for_agent(self, agent: PromptAgent) -> list[JsonObject]:
         definitions = self._tool_registry.prompt_definitions(agent.allowed_tools)
-        return self._apply_memory_tool_visibility(
+        definitions = self._apply_memory_tool_visibility(
             definitions,
             agent,
             self._tool_registry.prompt_definitions,
         )
+        return self._apply_identity_only_tool_visibility(definitions, agent)
+
+    def _apply_identity_only_tool_visibility(
+        self,
+        definitions: list[JsonObject],
+        agent: PromptAgent,
+    ) -> list[JsonObject]:
+        """Strip identity-only tools (skill authoring) for config/project agents.
+
+        An identity agent (non-empty ``workspace``) keeps whatever its allow-list
+        grants; a config/project agent never owns a private skill home, so
+        ``IDENTITY_ONLY_TOOLS`` are removed even when a wildcard allow-list would
+        otherwise include them — the same shape as memory's mode gate.
+        """
+        if agent.workspace:
+            return definitions
+        return [
+            definition
+            for definition in definitions
+            if definition.get("name") not in IDENTITY_ONLY_TOOLS
+        ]
 
     def _apply_memory_tool_visibility(
         self,

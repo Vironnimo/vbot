@@ -1,11 +1,14 @@
-"""Internal tool for an agent to author skills in its own private home.
+"""Tool for an identity agent to author skills in its own private home.
 
 Unlike the ``skill`` activation tool, ``skill_manage`` *writes*. It is the agent's
 single seam onto the shared skill authoring write core, restricted by construction
 to the authoring agent's own home ``<data_dir>/agents/<agent_id>/skills/`` — no
-scope parameter, no project or global targets (those are user-only surfaces). It is
-always available (``internal=True``, registered unconditionally) and **not** gated
-on the agent already having a skill, so an agent with none can create its first.
+scope parameter, no project or global targets (those are user-only surfaces).
+
+A normal allow-list tool that can be toggled per agent, but **identity-only**: it is
+offered only to an agent that owns a Workspace (see :data:`IDENTITY_ONLY_TOOLS`), so a
+config/project agent never authors skills even under a wildcard allow-list. It is not
+gated on the agent already having a skill, so an agent with none can create its first.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from pathlib import Path
 
 from core.skills.authoring import SkillAuthoringError, SkillAuthoringService, SkillWriteResult
 from core.tools.arguments import ToolArgumentError, optional_string, required_string
+from core.tools.availability import SKILL_MANAGE_TOOL_NAME
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -24,7 +28,6 @@ from core.tools.tools import (
     tool_success,
 )
 
-SKILL_MANAGE_TOOL_NAME = "skill_manage"
 SKILL_MANAGE_TOOL_DESCRIPTION = (
     "Author your own private skills: create, edit, patch, or delete a skill (and its "
     "scripts/references support files) in your personal skill home. New and changed "
@@ -180,13 +183,12 @@ def register_skill_manage_tool(
     resolve_agent_skills_dir: Callable[[str], Path],
     invalidate_agent_skills: Callable[[str], None],
 ) -> None:
-    """Register the internal, home-only skill authoring tool."""
+    """Register the home-only skill authoring tool (identity-only, allow-list gated)."""
     registry.register(
         SKILL_MANAGE_TOOL_NAME,
         SKILL_MANAGE_TOOL_DESCRIPTION,
         SKILL_MANAGE_TOOL_PARAMETERS,
         make_skill_manage_handler(authoring, resolve_agent_skills_dir, invalidate_agent_skills),
-        internal=True,
         display=ToolDisplay(summary_fields=("operation", "name")),
     )
 

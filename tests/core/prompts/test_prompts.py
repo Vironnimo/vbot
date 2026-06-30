@@ -144,13 +144,6 @@ class StubTools:
                 "parameters": {"type": "object"},
             },
         ]
-        internal_names = {"skill", "skill_manage"}
-        if (
-            allowed_tools is not None
-            and set(allowed_tools)
-            and set(allowed_tools) <= internal_names
-        ):
-            return [tool for tool in tools if tool["name"] in allowed_tools]
         return _filter_by_allowlist(tools, allowed_tools)
 
 
@@ -482,12 +475,14 @@ def test_project_files_never_abort_run_on_unreadable_file(
     assert "Skipping unreadable project file" in caplog.text
 
 
-# --- Provider tool definitions (unchanged behavior) ---------------------------
+# --- Provider tool definitions (allow-list driven; skill_manage identity-only) ----
 
 
 def test_provider_tool_definitions_use_same_agent_allowlist(
     workspace: Path, tmp_path: Path
 ) -> None:
+    # skill/skill_manage are ordinary tools now: an allow-list without them does not
+    # offer them, which is exactly how the per-agent toggle works.
     tools = StubTools()
     manager = _manager(tmp_path, tools=tools)
     agent = _agent(workspace, allowed_tools=["read_file"])
@@ -505,18 +500,8 @@ def test_provider_tool_definitions_use_same_agent_allowlist(
             "description": "Manage pinned memory",
             "parameters": {"type": "object"},
         },
-        {
-            "name": "skill",
-            "description": "Load a skill",
-            "parameters": {"type": "object"},
-        },
-        {
-            "name": "skill_manage",
-            "description": "Author a skill",
-            "parameters": {"type": "object"},
-        },
     ]
-    assert tools.provider_allowlist_calls == [["read_file"], ["memory"], ["skill", "skill_manage"]]
+    assert tools.provider_allowlist_calls == [["read_file"], ["memory"]]
 
 
 def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
@@ -534,20 +519,7 @@ def test_provider_tool_definitions_offer_skill_and_skill_manage_for_identity_age
     workspace: Path, tmp_path: Path
 ) -> None:
     manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
-    agent = _agent(workspace, allowed_tools=[], allowed_skills=["debugging"])
-
-    definitions = manager.provider_tool_definitions(agent)
-
-    assert [definition["name"] for definition in definitions] == ["memory", "skill", "skill_manage"]
-
-
-def test_provider_tool_definitions_offer_skill_even_without_skills(
-    workspace: Path, tmp_path: Path
-) -> None:
-    # The skill tool is never gated on the agent already having a skill: a skill can
-    # be authored or activated mid-session, so the loader must always be present.
-    manager = _manager(tmp_path, skills=StubSkills([]))
-    agent = _agent(workspace, allowed_tools=["read_file"], allowed_skills=[])
+    agent = _agent(workspace, allowed_tools=["*"], allowed_skills=["debugging"])
 
     names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
 
@@ -555,11 +527,39 @@ def test_provider_tool_definitions_offer_skill_even_without_skills(
     assert "skill_manage" in names
 
 
+def test_provider_tool_definitions_offer_skill_even_without_skills(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # The skill tool is never gated on the agent already having a skill: a skill can
+    # be authored or activated mid-session, so the loader stays available whenever the
+    # tool itself is allowed (here via the wildcard) even with an empty skill set.
+    manager = _manager(tmp_path, skills=StubSkills([]))
+    agent = _agent(workspace, allowed_tools=["*"], allowed_skills=[])
+
+    names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
+
+    assert "skill" in names
+    assert "skill_manage" in names
+
+
+def test_provider_tool_definitions_drop_skill_when_agent_disallows_it(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # Toggling the tools off for an identity agent removes them, like any tool.
+    manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
+    agent = _agent(workspace, allowed_tools=["read_file", "memory"], allowed_skills=["debugging"])
+
+    names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
+
+    assert "skill" not in names
+    assert "skill_manage" not in names
+
+
 def test_provider_tool_definitions_omit_skill_manage_for_config_agent(tmp_path: Path) -> None:
     # A config/project agent (empty workspace) has no private skill home, so the
-    # authoring tool is withheld; the loader stays.
+    # authoring tool is withheld even under a wildcard allow-list; the loader stays.
     manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
-    agent = _agent("", allowed_tools=["read_file"], allowed_skills=["debugging"])
+    agent = _agent("", allowed_tools=["*"], allowed_skills=["debugging"])
 
     names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
 
