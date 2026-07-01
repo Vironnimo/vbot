@@ -204,9 +204,9 @@ def _channel_status(state: Any, params: JsonObject) -> JsonObject:
     try:
         channel_service = state.runtime.channel_service
         config = _channel_config_by_id(channel_service, channel_id)
-        running = _channel_is_running(channel_service, channel_id)
-        failed = _channel_is_failed(channel_service, channel_id)
-        failure_reason = _channel_failure_reason(channel_service, channel_id)
+        running = bool(channel_service.is_running(channel_id))
+        failed = bool(channel_service.is_failed(channel_id))
+        failure_reason = channel_service.failure_reason(channel_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {
@@ -214,7 +214,9 @@ def _channel_status(state: Any, params: JsonObject) -> JsonObject:
         "enabled": config.enabled,
         "running": running,
         "failed": failed,
-        "failure_reason": failure_reason,
+        "failure_reason": (
+            failure_reason if isinstance(failure_reason, str) and failure_reason else None
+        ),
     }
 
 
@@ -336,42 +338,6 @@ def _channel_config_by_id(channel_service: Any, channel_id: str) -> ChannelConfi
         if config.id == channel_id:
             return cast(ChannelConfig, config)
     raise ChannelNotFoundError(f"Channel not found: {channel_id}")
-
-
-def _channel_is_running(channel_service: Any, channel_id: str) -> bool:
-    running_checker = getattr(channel_service, "_is_running", None)
-    if callable(running_checker):
-        return bool(running_checker(channel_id))
-
-    adapter_tasks = getattr(channel_service, "_adapter_tasks", None)
-    if isinstance(adapter_tasks, dict):
-        task = adapter_tasks.get(channel_id)
-        return bool(task is not None and not task.done())
-    return False
-
-
-def _channel_is_failed(channel_service: Any, channel_id: str) -> bool:
-    failed_checker = getattr(channel_service, "is_failed", None)
-    if callable(failed_checker):
-        return bool(failed_checker(channel_id))
-
-    failed_channels = getattr(channel_service, "_failed_channels", None)
-    if isinstance(failed_channels, set):
-        return channel_id in failed_channels
-    return False
-
-
-def _channel_failure_reason(channel_service: Any, channel_id: str) -> str | None:
-    reason_getter = getattr(channel_service, "failure_reason", None)
-    if callable(reason_getter):
-        reason = reason_getter(channel_id)
-        return reason if isinstance(reason, str) and reason else None
-
-    failure_reasons = getattr(channel_service, "_failure_reasons", None)
-    if isinstance(failure_reasons, dict):
-        reason = failure_reasons.get(channel_id)
-        return reason if isinstance(reason, str) and reason else None
-    return None
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:
