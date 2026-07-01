@@ -1,6 +1,6 @@
 # Read Tool
 
-Reads a file from the Agent workspace or an absolute path. Text files return their contents with a compact `N|` line-number gutter; image, audio, and video files are handled by media type.
+Reads a file from the working directory or an absolute path. Text files return their contents with a compact `N|` line-number gutter; image, audio, and video files are handled by media type.
 
 ## Interfaces
 
@@ -12,7 +12,7 @@ Reads a file from the Agent workspace or an absolute path. Text files return the
 
 ## Conventions
 
-- Relative paths resolve from `ToolContext.workspace`; absolute paths are allowed.
+- Relative paths resolve from `ToolContext.effective_cwd` (the working directory); absolute paths are allowed.
 - `read` is the authoritative read-like tool and must not include a provider/tool parameter named `description`.
 - Successful results do not include `data.path`; the agent already knows the requested path from arguments.
 - After the path is confirmed to be a file, the bytes are read once and classified with `sniff_media_type` (see `attachments.md`). The branch is chosen by the sniffed media type, not the file extension — **except** the Office/notebook extraction branch, which is chosen by extension (see below).
