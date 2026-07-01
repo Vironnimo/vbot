@@ -462,6 +462,24 @@ def test_extract_within_rejects_path_escape(tmp_path: Path) -> None:
     assert not (tmp_path / "escape.txt").exists()
 
 
+def test_extract_within_rejects_link_members(tmp_path: Path) -> None:
+    # A symlink member could redirect later members outside the tree after the
+    # name-based pre-check has passed, so the fallback refuses links outright.
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        link = tarfile.TarInfo("dist/evil")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../outside"
+        archive.addfile(link)
+    buffer.seek(0)
+    destination = tmp_path / "webui"
+    destination.mkdir()
+
+    with tarfile.open(fileobj=buffer, mode="r:gz") as archive, pytest.raises(tarfile.TarError):
+        _extract_within(archive, destination)
+    assert not (destination / "dist" / "evil").exists()
+
+
 def test_default_runner_disables_git_prompt(tmp_path: Path) -> None:
     result = _default_runner(
         [sys.executable, "-c", "import os; print(os.environ.get('GIT_TERMINAL_PROMPT', 'unset'))"],
