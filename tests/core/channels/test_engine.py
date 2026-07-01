@@ -451,6 +451,32 @@ async def test_new_session_command_starts_fresh_session_and_redirects_followups(
 
 
 @pytest.mark.asyncio
+async def test_message_enqueued_behind_pending_new_routes_to_new_session(tmp_path: Path) -> None:
+    """A message arriving before a queued /new is processed follows the moved pointer.
+
+    Routing is resolved at processing time, not enqueue time: both items sit in the
+    conversation queue together, /new moves the pointer first, and the message that
+    was already enqueued behind it must land in the new session, not the old one.
+    """
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, command_dispatcher=make_new_only_dispatcher()
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/new")
+    await engine.handle_inbound_text(make_conversation(), "right after new")
+    await drain(engine, 12345)
+
+    new_session_id = chat_sessions.get_metadata("assistant", SESSION_ID)[
+        engine_module.ACTIVE_SESSION_METADATA_KEY
+    ]
+    trigger_mock.assert_awaited_once()
+    assert trigger_mock.await_args is not None
+    assert trigger_mock.await_args.args[2] == new_session_id
+    await engine.stop()
+
+
+@pytest.mark.asyncio
 async def test_new_session_tags_fresh_session_with_reminder_and_metadata(tmp_path: Path) -> None:
     command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
     engine, chat_sessions, _trigger, _transport = make_engine(
@@ -624,11 +650,7 @@ async def test_stop_command_eagerly_dispatched_while_worker_is_blocked(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    command_dispatcher = make_command_dispatcher()
-    command_dispatcher.dispatch.side_effect = [
-        NotACommand(),
-        CommandHandled(reply="Run cancelled."),
-    ]
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
     trigger_mock = AsyncMock(
         return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
     )
@@ -651,8 +673,9 @@ async def test_stop_command_eagerly_dispatched_while_worker_is_blocked(
     await engine.handle_inbound_text(make_conversation(), "/stop")
     await asyncio.sleep(0)
 
-    assert command_dispatcher.dispatch.call_args_list[0].args == ("assistant", SESSION_ID, "hello")
-    assert command_dispatcher.dispatch.call_args_list[1].args == ("assistant", SESSION_ID, "/stop")
+    # Plain text never touches the dispatcher; the command dispatched eagerly while
+    # the worker was still blocked relaying the first message's run.
+    command_dispatcher.dispatch.assert_called_once_with("assistant", SESSION_ID, "/stop")
     assert trigger_mock.await_count == 1
     assert transport.sent == [("12345", "Run cancelled.")]
 
@@ -667,7 +690,6 @@ async def test_non_command_text_queues_behind_blocked_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     command_dispatcher = make_command_dispatcher()
-    command_dispatcher.dispatch.side_effect = [NotACommand(), NotACommand()]
     trigger_mock = AsyncMock(
         return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
     )
@@ -769,8 +791,7 @@ async def test_block_content_skips_command_dispatch_and_triggers_run(tmp_path: P
 
     content: list[ContentBlock] = [TextBlock(type="text", text="/stop")]
     queued = engine_module._QueuedInboundMessage(
-        route=RouteFacts(agent_id="assistant", session_id=SESSION_ID),
-        reply_plan=ReplyPlanFacts(channel_id="tg-assistant", platform_target="12345"),
+        conversation=make_conversation(),
         message=MessageFacts(content=content),
     )
 
@@ -802,8 +823,7 @@ async def test_media_failure_isolates_siblings_and_triggers_successful_blocks(
     )
 
     queued = engine_module._QueuedInboundMedia(
-        route=RouteFacts(agent_id="assistant", session_id=SESSION_ID),
-        reply_plan=ReplyPlanFacts(channel_id="tg-assistant", platform_target="12345"),
+        conversation=make_conversation(),
         messages=("ok", "broken"),
     )
 
@@ -829,8 +849,7 @@ async def test_media_duplicate_failure_replies_are_deduped(tmp_path: Path) -> No
     )
 
     queued = engine_module._QueuedInboundMedia(
-        route=RouteFacts(agent_id="assistant", session_id=SESSION_ID),
-        reply_plan=ReplyPlanFacts(channel_id="tg-assistant", platform_target="12345"),
+        conversation=make_conversation(),
         messages=("broken-a", "broken-b"),
     )
 

@@ -18,9 +18,8 @@ import core.channels.engine as engine_module
 import core.channels.telegram as telegram_module
 from core.attachments import AttachmentStore, AttachmentTooLargeError
 from core.channels.adapter import (
+    ConversationFacts,
     FileData,
-    ReplyPlanFacts,
-    RouteFacts,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.telegram import (
@@ -963,11 +962,7 @@ async def test_stop_command_is_eagerly_dispatched_while_chat_worker_is_blocked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = "ch-tg-assistant-12345"
-    command_dispatcher = make_command_dispatcher()
-    command_dispatcher.dispatch.side_effect = [
-        NotACommand(),
-        CommandHandled(reply="Run cancelled."),
-    ]
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
     trigger_mock = AsyncMock(
         return_value=Run(run_id="run-active", agent_id="assistant", session_id=session_id)
     )
@@ -1004,10 +999,9 @@ async def test_stop_command_is_eagerly_dispatched_while_chat_worker_is_blocked(
     )
     await asyncio.sleep(0)
 
-    first_call = command_dispatcher.dispatch.call_args_list[0]
-    second_call = command_dispatcher.dispatch.call_args_list[1]
-    assert first_call.args == ("assistant", session_id, "hello")
-    assert second_call.args == ("assistant", session_id, "/stop")
+    # Plain text never touches the dispatcher; the command dispatched eagerly while
+    # the worker was still blocked relaying the first message's run.
+    command_dispatcher.dispatch.assert_called_once_with("assistant", session_id, "/stop")
     assert trigger_mock.await_count == 1
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="Run cancelled.")
 
@@ -1023,10 +1017,6 @@ async def test_non_command_text_still_queues_while_chat_worker_is_blocked(
 ) -> None:
     session_id = "ch-tg-assistant-12345"
     command_dispatcher = make_command_dispatcher()
-    command_dispatcher.dispatch.side_effect = [
-        NotACommand(),
-        NotACommand(),
-    ]
     trigger_mock = AsyncMock(
         return_value=Run(run_id="run-active", agent_id="assistant", session_id=session_id)
     )
@@ -1063,10 +1053,8 @@ async def test_non_command_text_still_queues_while_chat_worker_is_blocked(
     )
     await asyncio.sleep(0)
 
-    first_call = command_dispatcher.dispatch.call_args_list[0]
-    second_call = command_dispatcher.dispatch.call_args_list[1]
-    assert first_call.args == ("assistant", session_id, "hello")
-    assert second_call.args == ("assistant", session_id, "still queued")
+    # Plain text is queued without any dispatcher involvement.
+    command_dispatcher.dispatch.assert_not_called()
     assert trigger_mock.await_count == 1
 
     queue = adapter._engine._chat_queues.get("12345")
@@ -1631,8 +1619,12 @@ async def test_album_with_one_failing_item_keeps_siblings_and_reports_failure(
     ]
 
     queued = engine_module._QueuedInboundMedia(
-        route=RouteFacts(agent_id="assistant", session_id=session_id),
-        reply_plan=ReplyPlanFacts(channel_id="tg-assistant", platform_target="12345"),
+        conversation=ConversationFacts(
+            platform="telegram",
+            channel_id="tg-assistant",
+            chat_id="12345",
+            user_id="50",
+        ),
         messages=(
             make_photo_update(
                 chat_id=12345,
