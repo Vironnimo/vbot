@@ -48,7 +48,13 @@ function Resolve-UserPath {
     if ($PathText.StartsWith("~\") -or $PathText.StartsWith("~/")) {
         return [System.IO.Path]::GetFullPath((Join-Path $HOME $PathText.Substring(2)))
     }
-    return [System.IO.Path]::GetFullPath($PathText)
+    if ([System.IO.Path]::IsPathRooted($PathText)) {
+        return [System.IO.Path]::GetFullPath($PathText)
+    }
+    # A bare GetFullPath resolves against the process working directory, which
+    # does not follow Set-Location; anchor relative paths to the PowerShell
+    # location instead.
+    return [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath $PathText))
 }
 
 function New-CommandSpec {
