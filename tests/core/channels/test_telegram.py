@@ -704,6 +704,66 @@ async def test_handoff_command_action_reports_channel_limitation(
 
 
 @pytest.mark.asyncio
+async def test_build_application_configures_rate_limiter_with_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeRateLimiter:
+        def __init__(self, *, max_retries: int) -> None:
+            captured["max_retries"] = max_retries
+
+    class FakeBuilder:
+        def token(self, token: str) -> FakeBuilder:
+            captured["token"] = token
+            return self
+
+        def rate_limiter(self, rate_limiter: Any) -> FakeBuilder:
+            captured["rate_limiter"] = rate_limiter
+            return self
+
+        def build(self) -> Any:
+            return SimpleNamespace()
+
+    fake_ext = SimpleNamespace(
+        AIORateLimiter=FakeRateLimiter,
+        Application=SimpleNamespace(builder=FakeBuilder),
+    )
+
+    adapter._build_application(fake_ext)
+
+    assert captured["token"] == "test-token"
+    assert isinstance(captured["rate_limiter"], FakeRateLimiter)
+    assert captured["max_retries"] == telegram_module._SEND_MAX_RETRIES
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_build_application_uses_real_rate_limiter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    telegram_ext = pytest.importorskip("telegram.ext")
+    pytest.importorskip("aiolimiter")
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    application = adapter._build_application(telegram_ext)
+
+    assert isinstance(application.bot.rate_limiter, telegram_ext.AIORateLimiter)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_message_handlers_ignore_edited_messages_and_channel_posts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

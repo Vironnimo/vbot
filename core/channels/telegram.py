@@ -40,6 +40,9 @@ _ALBUM_FLUSH_SECONDS = 0.5
 _TYPING_ACTION = "typing"
 _TYPING_REFRESH_SECONDS = 4.0
 _UNSUPPORTED_MESSAGE_TYPE_REPLY = "Sorry, this message type isn't supported yet."
+# Retries for a send that Telegram answers with RetryAfter (flood control), honoring the
+# server-provided delay — the project convention of max 3 retries for transient errors.
+_SEND_MAX_RETRIES = 3
 
 
 class TelegramChannelAdapter(ChannelAdapter):
@@ -92,7 +95,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         telegram_ext = _load_telegram_ext()
-        application = telegram_ext.Application.builder().token(self._token).build()
+        application = self._build_application(telegram_ext)
         for handler in self._build_message_handlers(telegram_ext):
             application.add_handler(handler)
         self._application = application
@@ -113,6 +116,16 @@ class TelegramChannelAdapter(ChannelAdapter):
         await updater.start_polling()
         _LOGGER.info("Telegram adapter started (channel=%s)", self._config.id)
         await self._stop_event.wait()
+
+    def _build_application(self, telegram_ext: Any) -> Any:
+        # AIORateLimiter paces outbound calls against Telegram's flood limits (~30 msg/s
+        # overall, 20 msg/min per group) so multi-chunk replies and media groups do not
+        # trip flood control, and retries a send Telegram answers with RetryAfter. Without
+        # it a rate-limit error mid-reply loses the remaining chunks.
+        rate_limiter = telegram_ext.AIORateLimiter(max_retries=_SEND_MAX_RETRIES)
+        return (
+            telegram_ext.Application.builder().token(self._token).rate_limiter(rate_limiter).build()
+        )
 
     def _build_message_handlers(self, telegram_ext: Any) -> list[Any]:
         # UpdateType.MESSAGE restricts handlers to new messages: edited messages must not
