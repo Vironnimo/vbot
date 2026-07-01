@@ -646,6 +646,10 @@ class ChannelService:
         """Return whether at least one channel adapter task is currently running."""
         return any(not task.done() for task in self._adapter_tasks.values())
 
+    def is_running(self, channel_id: str) -> bool:
+        """Return whether one channel's adapter task is currently running."""
+        return self._is_running(_normalize_channel_id(channel_id))
+
     def is_failed(self, channel_id: str) -> bool:
         """Return whether one channel is currently marked failed."""
         normalized_id = _normalize_channel_id(channel_id)
