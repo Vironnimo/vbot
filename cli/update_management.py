@@ -135,7 +135,9 @@ def run_update(
         if popped.returncode != 0:
             lines.append(
                 "reapplying stashed changes hit a conflict; resolve it in the repo "
-                "(see 'git stash list'), then restart the server manually"
+                "(see 'git stash list'). The dependency and WebUI refresh steps were "
+                "skipped — re-run 'vbot update' after resolving, or restart the "
+                "server manually"
             )
             return CommandResult(ok=False, message="\n".join(lines), instance=instance)
         lines.append("local changes reapplied")
