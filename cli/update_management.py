@@ -14,6 +14,7 @@ asset, so no Node is needed).
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import io
 import os
 import subprocess
@@ -38,6 +39,9 @@ GITHUB_API_BASE = "https://api.github.com/repos/Vironnimo/vbot"
 WEBUI_ASSET_NAME = "webui-dist.tar.gz"
 RELEASE_EXTRAS = "server,cli"
 DEV_EXTRAS = "dev"
+DESKTOP_EXTRA = "desktop"
+# Import name that proves the desktop extra is installed in this environment.
+_DESKTOP_PROBE_MODULE = "webview"
 _API_TIMEOUT_SECONDS = 30.0
 _DOWNLOAD_TIMEOUT_SECONDS = 60.0
 _COMMAND_TIMEOUT_SECONDS = 600.0
@@ -219,11 +223,31 @@ def _refresh_dependencies(run: Runner, repo: Path, track: str, pyproject_before:
 
     if _file_digest(repo / "pyproject.toml") == pyproject_before:
         return _Step(True, "")
-    extras = DEV_EXTRAS if track == "dev" else RELEASE_EXTRAS
+    extras = _reinstall_extras(track)
     pip = run([sys.executable, "-m", "pip", "install", "-e", f".[{extras}]"], repo)
     if pip.returncode != 0:
         return _Step(False, f"dependency update failed: {pip.stderr}")
     return _Step(True, f"dependencies reinstalled ([{extras}])")
+
+
+def _reinstall_extras(track: str) -> str:
+    """Extras to reinstall: the track's base plus the desktop add-on when present.
+
+    The checkout does not record whether the install added the desktop accessor
+    (``-Desktop`` / ``--desktop``), so detect it from the running environment;
+    a fixed base would silently drop any desktop dependency a new version adds.
+    """
+
+    extras = DEV_EXTRAS if track == "dev" else RELEASE_EXTRAS
+    if _desktop_extra_installed():
+        extras = f"{extras},{DESKTOP_EXTRA}"
+    return extras
+
+
+def _desktop_extra_installed() -> bool:
+    """Return whether the desktop accessor (pywebview) is importable here."""
+
+    return importlib.util.find_spec(_DESKTOP_PROBE_MODULE) is not None
 
 
 def _rebuild_webui_if_changed(run: Runner, repo: Path, before: str, after: str) -> _Step:
