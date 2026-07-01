@@ -184,6 +184,36 @@ for key in ("server_port", "SERVER_PORT", "port", "PORT"):
 PYEOF
 }
 
+# Write an explicit --port into an existing settings.json, updating the port key
+# the app actually reads (first present wins, like the server's resolver). Keeps
+# the autostart entry and later flag-less commands (server status/stop) on the
+# same port. Prints the updated key, or nothing when the port already matches.
+sync_settings_port() {
+    "$PYTHON" - "$1" "$2" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+port = int(sys.argv[2])
+try:
+    settings = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    print("invalid settings.json", file=sys.stderr)
+    sys.exit(2)
+if not isinstance(settings, dict):
+    print("invalid settings.json", file=sys.stderr)
+    sys.exit(2)
+keys = ("server_port", "SERVER_PORT", "port", "PORT")
+key = next((k for k in keys if k in settings), "server_port")
+if settings.get(key) == port:
+    sys.exit(0)
+settings[key] = port
+path.write_text(json.dumps(settings, indent=4, ensure_ascii=False) + "\n", encoding="utf-8")
+print(key)
+PYEOF
+}
+
 # Server data-dir steps (port resolution, settings.json, .env): skipped for the
 # desktop-client mode, which connects to a remote server and owns no local one.
 if [ "$DESKTOP_CLIENT" -eq 0 ]; then
@@ -207,6 +237,14 @@ if [ "$DESKTOP_CLIENT" -eq 0 ]; then
     if [ ! -f "$SETTINGS_PATH" ]; then
         printf '{\n    "server_port": %s\n}\n' "$PORT" > "$SETTINGS_PATH"
         echo "Created settings.json with server_port ${PORT}."
+    elif [ "$PORT_PROVIDED" -eq 1 ]; then
+        updated_key="$(sync_settings_port "$SETTINGS_PATH" "$PORT")" \
+            || fail "Existing settings.json is not valid JSON and was not updated: ${SETTINGS_PATH}"
+        if [ -n "$updated_key" ]; then
+            echo "Updated ${updated_key} to ${PORT} in existing settings.json (--port)."
+        else
+            echo "Keeping existing settings.json (already at port ${PORT})."
+        fi
     else
         # Validity was already checked while resolving the port.
         echo "Keeping existing valid settings.json."
