@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import contextvars
 import json
 import os
 import re
@@ -281,35 +282,47 @@ class ChatSession:
 
 
 class _SessionWriteLock:
-    """Task-reentrant async lock guarding one session transcript's appends.
+    """Context-reentrant async lock guarding one session transcript's appends.
 
-    Reentrant per task so a Run that holds the lock across its tool cycle can run
-    a tool (for example ``channel_send``) that targets its own session without
-    self-deadlocking; re-entry from the owning task just nests. A different task
-    (a channel observe worker, an RPC handler, a Run on another accessor) blocks
-    until the owner releases, which is what keeps an out-of-band note from
-    splitting an open tool cycle.
+    Reentrant for the holder *and any child tasks it spawns while holding the
+    lock*, so a Run that holds the lock across its tool cycle can run a tool (for
+    example ``channel_send``) that targets its own session without
+    self-deadlocking — even though the tool executor runs each tool call in its
+    own ``asyncio.create_task``. Ownership is tracked through a ``ContextVar``
+    rather than the running task: ``asyncio`` copies the holder's context into
+    those child tasks at creation, so they inherit the reentrancy depth and nest
+    instead of blocking on the held lock. Keying on ``current_task()`` instead
+    would deadlock here, because the tool runs in a different task than the one
+    that acquired the lock.
+
+    A task from an unrelated context chain (a channel observe worker, an RPC
+    handler, a Run on another accessor) is not a child of the holder and does not
+    inherit the depth, so it blocks until the owner releases — which is what keeps
+    an out-of-band note from splitting an open tool cycle.
     """
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._owner: asyncio.Task[Any] | None = None
-        self._depth = 0
+        # Per-instance reentrancy depth. A ContextVar so child tasks spawned by
+        # the holder inherit the depth (contexts are copied at task creation) and
+        # re-enter, while unrelated tasks see the default 0 and contend normally.
+        self._depth: contextvars.ContextVar[int] = contextvars.ContextVar(
+            "session_write_lock_depth", default=0
+        )
 
     async def __aenter__(self) -> _SessionWriteLock:
-        task = asyncio.current_task()
-        if task is not None and self._owner is task:
-            self._depth += 1
+        depth = self._depth.get()
+        if depth > 0:
+            self._depth.set(depth + 1)
             return self
         await self._lock.acquire()
-        self._owner = task
-        self._depth = 1
+        self._depth.set(1)
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
-        self._depth -= 1
-        if self._depth == 0:
-            self._owner = None
+        depth = self._depth.get()
+        self._depth.set(depth - 1)
+        if depth == 1:
             self._lock.release()
 
 
