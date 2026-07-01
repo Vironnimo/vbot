@@ -28,10 +28,12 @@ A bootstrap install (installed via the one-line bootstrap) is removed wholesale 
 its directory, the 'vbot' launcher, and the autostart unit — regardless of the
 options below. The data dir (~/.vbot) is always left untouched.
 
-Options (manual/editable installs only):
-  --package-name <name>  pip package to uninstall (default: vbot)
-  --remove-autostart     Disable and remove the systemd user unit
-  --service-name <name>  systemd unit name (default: vbot)
+Options:
+  --package-name <name>  pip package to uninstall (default: vbot; manual installs only)
+  --remove-autostart     Disable and remove the systemd user unit (manual installs
+                         only; a bootstrap uninstall always removes the unit)
+  --service-name <name>  systemd unit name (default: vbot; both modes — pass the
+                         same name the install used)
   -h, --help             Show this help
 USAGE
 }
