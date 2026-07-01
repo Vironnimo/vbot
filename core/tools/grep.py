@@ -7,7 +7,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from core.tools.arguments import coerce_bool, optional_int, optional_string
+from core.tools.arguments import (
+    coerce_bool,
+    normalize_aliases,
+    optional_int,
+    optional_string,
+)
 from core.tools.search import (
     file_filter_matches,
     normalize_file_filter_pattern,
@@ -33,12 +38,14 @@ ALLOWED_ARGUMENTS = {
     "pattern",
     "path",
     "glob",
-    "ignoreCase",
+    "ignore_case",
     "literal",
     "context",
     "limit",
     "output_mode",
 }
+# camelCase variant some models emit; normalized before validation like edit's aliases.
+_GREP_ARGUMENT_ALIASES = {"ignoreCase": "ignore_case"}
 
 GREP_TOOL_NAME = "grep"
 GREP_TOOL_DESCRIPTION = (
@@ -61,7 +68,7 @@ GREP_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": "Optional search-root-relative file glob filter for candidate files.",
         },
-        "ignoreCase": {
+        "ignore_case": {
             "type": "boolean",
             "description": "Case-insensitive search (default: false).",
         },
@@ -342,6 +349,7 @@ def _render_rg_line(raw_line: str, output_mode: str) -> str | None:
 
 def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     """Handle a grep tool call and return a stable vBot result envelope."""
+    arguments = normalize_aliases(arguments, _GREP_ARGUMENT_ALIASES)
     unknown_arguments = set(arguments) - ALLOWED_ARGUMENTS
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -361,7 +369,7 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
             arguments.get("limit"), field_name="limit", default=DEFAULT_LIMIT, minimum=1
         )
         ignore_case = coerce_bool(
-            arguments.get("ignoreCase"), field_name="ignoreCase", default=False
+            arguments.get("ignore_case"), field_name="ignore_case", default=False
         )
         literal = coerce_bool(arguments.get("literal"), field_name="literal", default=False)
         output_mode = str(arguments.get("output_mode") or "content").strip() or "content"

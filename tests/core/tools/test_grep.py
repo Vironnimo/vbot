@@ -113,7 +113,7 @@ def test_register_grep_tool_exposes_provider_schema() -> None:
         "pattern",
         "path",
         "glob",
-        "ignoreCase",
+        "ignore_case",
         "literal",
         "context",
         "limit",
@@ -200,7 +200,7 @@ def test_grep_returns_failure_for_invalid_regex(
         ({"limit": 0}, "limit must be >= 1"),
         ({"limit": True}, "limit must be an integer"),
         ({"limit": 1.5}, "limit must be an integer"),
-        ({"ignoreCase": "maybe"}, "ignoreCase must be a boolean"),
+        ({"ignore_case": "maybe"}, "ignore_case must be a boolean"),
         ({"literal": "maybe"}, "literal must be a boolean"),
     ],
 )
@@ -224,7 +224,8 @@ def test_grep_returns_failure_for_invalid_controls(
 def test_grep_accepts_string_encoded_controls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Models often encode numbers and booleans as strings; accept them.
+    # Models often encode numbers and booleans as strings; accept them. The
+    # string variant also uses the legacy camelCase alias to cover normalization.
     force_python_fallback(monkeypatch)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -236,7 +237,7 @@ def test_grep_accepts_string_encoded_controls(
     )
     typed_result = grep_handler(
         make_context(workspace),
-        {"pattern": "hello", "ignoreCase": True, "limit": 5, "context": 0},
+        {"pattern": "hello", "ignore_case": True, "limit": 5, "context": 0},
     )
 
     assert string_result["ok"] is True
@@ -269,7 +270,7 @@ def test_grep_literal_and_ignore_case(tmp_path: Path, monkeypatch: pytest.Monkey
 
     regex_result = grep_handler(make_context(workspace), {"pattern": "Alpha.1"})
     literal_result = grep_handler(
-        make_context(workspace), {"pattern": "Alpha.1", "literal": True, "ignoreCase": True}
+        make_context(workspace), {"pattern": "Alpha.1", "literal": True, "ignore_case": True}
     )
 
     regex_data = assert_success_envelope(regex_result)
