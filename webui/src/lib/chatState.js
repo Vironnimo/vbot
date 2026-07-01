@@ -6,6 +6,7 @@ import {
 
 import { parseAgentAddress } from './agentAddress.js';
 import { pruneRunEventsPersistedInHistory } from './chatTimeline.js';
+import { createToolArgumentPreviewScanner } from './toolArgumentPreview.js';
 
 export {
   assistantRunChildProgressKey,
@@ -630,24 +631,47 @@ function appendCompressedToolCallDeltaEvent(sessionState, event) {
     existingEvent._streamChunkCount = streamEventChunkCount(existingEvent) + 1;
     existingEvent._streamLatestSequence = streamEventLatestSequence(event);
     existingEvent.timestamp ??= event.timestamp;
+    updateToolArgumentPreview(existingEvent, argumentsDelta);
     return;
   }
 
+  const compressedEvent = {
+    ...event,
+    payload: {
+      ...payload,
+      tool_call_id: toolCallId,
+      name_delta: nameDelta,
+      arguments_delta: argumentsDelta,
+    },
+    _streamingPhase: sessionState.streamingPhase,
+    _streamChunkCount: 1,
+    _streamLatestSequence: streamEventLatestSequence(event),
+  };
+  updateToolArgumentPreview(compressedEvent, argumentsDelta);
   sessionState.streamingRunEvents = [
     ...sessionState.streamingRunEvents,
-    {
-      ...event,
-      payload: {
-        ...payload,
-        tool_call_id: toolCallId,
-        name_delta: nameDelta,
-        arguments_delta: argumentsDelta,
-      },
-      _streamingPhase: sessionState.streamingPhase,
-      _streamChunkCount: 1,
-      _streamLatestSequence: streamEventLatestSequence(event),
-    },
+    compressedEvent,
   ];
+}
+
+// Argument fragments are scanned incrementally so a display field (e.g. a
+// write's path) can label the preparing tool row long before the arguments
+// finish streaming. Scanner state lives outside the event so the compressed
+// event stays plain JSON-shaped data.
+const toolArgumentPreviewScanners = new WeakMap();
+
+function updateToolArgumentPreview(compressedEvent, argumentsDelta) {
+  if (!argumentsDelta) {
+    return;
+  }
+  let scanner = toolArgumentPreviewScanners.get(compressedEvent);
+  if (!scanner) {
+    scanner = createToolArgumentPreviewScanner();
+    toolArgumentPreviewScanners.set(compressedEvent, scanner);
+  }
+  if (scanner.push(argumentsDelta)) {
+    compressedEvent.payload.preview_arguments = scanner.fields();
+  }
 }
 
 function canMergeCompressedStreamingEvent(
