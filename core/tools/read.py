@@ -38,20 +38,20 @@ READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
     "Read a file. Text files return their contents with every line prefixed by "
     "its number as `N|` — a reference gutter only; never reproduce it when "
-    "writing or editing. Output is truncated to 2000 lines or 50 KB (whichever "
-    "is hit first); use offset/limit for large files, and an offset past EOF "
-    "returns an explicit end-of-file notice. Image files are shown to the model "
-    "directly when it supports vision; audio files are transcribed to text; "
+    "writing or editing. Output is truncated to 2000 lines or 50 KB; use "
+    "offset/limit for large files. Image files are shown to the model directly "
+    "when it supports vision; audio files are transcribed to text; "
     "Word/Excel/Jupyter files (.docx/.xlsx/.ipynb) are extracted to readable "
-    "text; video files return a path note only; binary files return a short "
-    "notice instead of garbled text."
+    "text; video and other binary files return a short notice."
 )
 READ_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "path": {
             "type": "string",
-            "description": "Path to the file to read (relative to workspace, or absolute).",
+            "description": (
+                "Path to the file to read (relative to the working directory, or absolute)."
+            ),
         },
         "offset": {
             "type": "number",

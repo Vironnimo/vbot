@@ -26,7 +26,8 @@ from core.utils.logging import get_logger
 BASH_TOOL_NAME = "bash"
 BASH_TOOL_DESCRIPTION = (
     "Run a shell command on the host system. Short commands complete in the foreground; "
-    "long-running commands return a process session_id for later process-tool management."
+    "commands still running after yield_after seconds (default 30) are moved to the "
+    "background and return a session_id for the process tool."
 )
 BASH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -37,7 +38,10 @@ BASH_TOOL_PARAMETERS: JsonObject = {
         },
         "workdir": {
             "type": "string",
-            "description": "Working directory. Relative paths resolve from the working directory.",
+            "description": (
+                "Directory to run the command in (default: the working directory; "
+                "a relative value resolves from it)."
+            ),
         },
         "env": {
             "type": "object",
@@ -52,7 +56,7 @@ BASH_TOOL_PARAMETERS: JsonObject = {
                 "Seconds to wait for foreground completion before backgrounding "
                 "(default 30). Inside a sub-agent, where backgrounding is unavailable, "
                 "this caps foreground runtime before the command is killed and defaults "
-                "to a much longer window; use timeout for a precise cap."
+                "to 30 minutes; use timeout for a precise cap."
             ),
             "default": 30,
         },
