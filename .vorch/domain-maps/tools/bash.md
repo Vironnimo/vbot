@@ -14,7 +14,7 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 
 ## Conventions
 
-- Relative `workdir` resolves from `ToolContext.workspace`; absolute working directories are allowed.
+- Relative `workdir` resolves from `ToolContext.effective_cwd` (the working directory); absolute working directories are allowed.
 - Uses the platform-native shell: `pwsh` on Windows, `bash -c` elsewhere.
 - Non-zero exits are successful tool results with an exit code.
 
