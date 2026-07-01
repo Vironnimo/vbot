@@ -96,7 +96,14 @@ function Confirm-Node {
 }
 
 function Get-LatestTag {
-    $release = Invoke-RestMethod -Uri "$ApiBase/releases/latest" -Headers $ApiHeaders
+    # A repo without releases answers 404 here; surface the -Dev hint instead of
+    # the raw API error (mirrors bootstrap.sh).
+    try {
+        $release = Invoke-RestMethod -Uri "$ApiBase/releases/latest" -Headers $ApiHeaders
+    }
+    catch {
+        throw "Could not determine the latest release ($($_.Exception.Message)). Use -Dev to install from main."
+    }
     return $release.tag_name
 }
 
