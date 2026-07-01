@@ -1094,6 +1094,9 @@ function appendToolDelta(assistantRun, event) {
   tool.toolCallId = payload.tool_call_id ?? payload.id ?? tool.toolCallId;
   tool.name = `${tool.name ?? ''}${payload.name_delta ?? ''}`;
   tool.partialArgumentsText = `${tool.partialArgumentsText ?? ''}${payload.arguments_delta ?? ''}`;
+  if (isPlainObject(payload.preview_arguments)) {
+    tool.previewArguments = payload.preview_arguments;
+  }
   tool.status = 'preparing';
   tool.events = [...tool.events, event];
   syncAssistantRunCollections(assistantRun);
@@ -1115,6 +1118,7 @@ function mergeToolStarted(assistantRun, event) {
   tool.arguments = toolCall.arguments;
   tool.display = event.payload?.display ?? toolCall.display ?? null;
   tool.partialArgumentsText = null;
+  tool.previewArguments = null;
   tool.startedEvent = event;
   tool.status = tool.resultEvent ? tool.status : CHAT_STATUS_RUNNING;
   tool.events = [...tool.events, event];
@@ -1214,6 +1218,7 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
     arguments: undefined,
     display: null,
     partialArgumentsText: null,
+    previewArguments: null,
     result: undefined,
     toolCall: null,
     startedEvent: null,

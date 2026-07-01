@@ -2394,6 +2394,89 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('surfaces preview arguments on a preparing tool row before the value stream ends', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-tool-argument-preview',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-tool-argument-preview',
+      sequence: 1,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'write',
+        arguments_delta: '{"path": "notes/to',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-tool-argument-preview',
+      sequence: 2,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: '',
+        arguments_delta: 'do.md", "content": "# Title',
+      },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems[0].tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        name: 'write',
+        status: 'preparing',
+        previewArguments: { path: 'notes/todo.md' },
+      }),
+    ]);
+  });
+
+  it('drops preview arguments once the tool call actually starts', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-tool-argument-preview-cleared',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-tool-argument-preview-cleared',
+      sequence: 1,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'write',
+        arguments_delta: '{"path": "notes/todo.md", "content": "# Title"}',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-tool-argument-preview-cleared',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'write',
+          arguments: { path: 'notes/todo.md', content: '# Title' },
+        },
+      },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems[0].tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        name: 'write',
+        previewArguments: null,
+        arguments: { path: 'notes/todo.md', content: '# Title' },
+      }),
+    ]);
+  });
+
   it('compresses interleaved sibling tool-call deltas into one retained event per call', () => {
     const sessionState = ensureSessionState(
       createChatState(),
