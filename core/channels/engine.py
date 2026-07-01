@@ -131,8 +131,18 @@ class _QueuedObservedMessage:
     note: str
 
 
+@dataclass(slots=True, frozen=True)
+class _QueuedInternalPrompt:
+    conversation: ConversationFacts
+    prompt: str
+
+
 _QueuedWork = (
-    _QueuedInboundMessage | _QueuedCommandAction | _QueuedInboundMedia | _QueuedObservedMessage
+    _QueuedInboundMessage
+    | _QueuedCommandAction
+    | _QueuedInboundMedia
+    | _QueuedObservedMessage
+    | _QueuedInternalPrompt
 )
 
 
@@ -275,6 +285,18 @@ class ChannelConversationEngine:
         self._enqueue_observed_message(
             conversation,
             _format_observed_message(conversation, message_text),
+        )
+
+    def trigger_internal_reply(self, conversation: ConversationFacts, prompt: str) -> None:
+        """Queue an internal note-driven Run whose reply goes back to the conversation.
+
+        Platform rituals such as Telegram's ``/start`` use this: the prompt is
+        persisted as a kernel-internal note (never a visible user message), the model
+        acts on it, and its reply is relayed like any other channel answer.
+        """
+        self._enqueue_chat_work(
+            conversation.chat_id,
+            _QueuedInternalPrompt(conversation=conversation, prompt=prompt),
         )
 
     def prepare_inbound_route(
@@ -575,6 +597,10 @@ class ChannelConversationEngine:
         if isinstance(queued, _QueuedInboundMedia):
             await self._process_queued_media(queued)
             return
+        if isinstance(queued, _QueuedInternalPrompt):
+            route, reply_plan = self.prepare_inbound_route(queued.conversation)
+            await self._trigger_and_relay(route, reply_plan, queued.prompt, internal=True)
+            return
         await self._process_queued_message(queued)
 
     async def _process_queued_observed_message(self, queued: _QueuedObservedMessage) -> None:
@@ -642,14 +668,25 @@ class ChannelConversationEngine:
         content: str | list[ContentBlock],
         *,
         sender: MessageSender | None = None,
+        internal: bool = False,
     ) -> None:
         try:
-            run = await self._trigger_service.trigger_run(
-                route.agent_id,
-                content,
-                route.session_id,
-                sender=sender,
-            )
+            # An internal run persists the content as a kernel note instead of a
+            # visible user message; it never carries a sender.
+            if internal:
+                run = await self._trigger_service.trigger_run(
+                    route.agent_id,
+                    content,
+                    route.session_id,
+                    internal=True,
+                )
+            else:
+                run = await self._trigger_service.trigger_run(
+                    route.agent_id,
+                    content,
+                    route.session_id,
+                    sender=sender,
+                )
         except Exception as error:
             _LOGGER.error(
                 "Channel trigger run failed (channel=%s agent=%s session=%s target=%s): %s",
