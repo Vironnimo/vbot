@@ -44,7 +44,9 @@ class FakeTransport:
     ) -> None:
         self.sent: list[tuple[str, str]] = []
         self.sent_reply_targets: list[str | None] = []
+        self.sent_thread_ids: list[str | None] = []
         self.activity_targets: list[str] = []
+        self.activity_thread_ids: list[str | None] = []
         self._media_builder = media_builder
 
     async def send_text(
@@ -53,13 +55,18 @@ class FakeTransport:
         text: str,
         *,
         reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
     ) -> None:
         self.sent.append((platform_target, text))
         self.sent_reply_targets.append(reply_to_message_id)
+        self.sent_thread_ids.append(thread_id)
 
     @contextlib.asynccontextmanager
-    async def activity_indicator(self, platform_target: str) -> AsyncIterator[None]:
+    async def activity_indicator(
+        self, platform_target: str, thread_id: str | None = None
+    ) -> AsyncIterator[None]:
         self.activity_targets.append(platform_target)
+        self.activity_thread_ids.append(thread_id)
         yield
 
     async def build_media_blocks(self, raw_message: Any) -> list[ContentBlock]:
@@ -105,6 +112,7 @@ def make_conversation(
     kind: str = "direct",
     user_display_name: str | None = None,
     message_id: str | None = None,
+    thread_id: str | None = None,
     mentioned_bot: bool = False,
     is_reply_to_bot: bool = False,
 ) -> ConversationFacts:
@@ -113,7 +121,7 @@ def make_conversation(
         channel_id="tg-assistant",
         chat_id=str(chat_id),
         user_id=str(user_id),
-        thread_id=None,
+        thread_id=thread_id,
         kind=cast(Any, kind),
         user_display_name=user_display_name,
         message_id=message_id,
@@ -1257,6 +1265,38 @@ async def test_group_reply_references_triggering_message(tmp_path: Path) -> None
 
     assert transport.sent == [("12345", "ok")]
     assert transport.sent_reply_targets == ["777"]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_topic_message_reply_carries_thread_everywhere(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, chat_sessions, _trigger, transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, response_mode="all"
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", message_id="777", thread_id="42"),
+        "hello",
+    )
+    await drain(engine, 12345)
+
+    # Reply text, activity indicator, and the reply-target metadata all carry the topic.
+    assert transport.sent == [("12345", "ok")]
+    assert transport.sent_thread_ids == ["42"]
+    assert transport.activity_thread_ids == ["42"]
+    metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    assert metadata["last_reply_target"] == {
+        "channel_id": "tg-assistant",
+        "platform_target": "12345",
+        "thread_id": "42",
+    }
+
+    # A later non-topic message rewrites the reply target without the thread key.
+    await engine.handle_inbound_text(make_conversation(kind="group", mentioned_bot=True), "hi")
+    await drain(engine, 12345)
+    metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    assert "thread_id" not in metadata["last_reply_target"]
     await engine.stop()
 
 

@@ -210,27 +210,47 @@ class TelegramChannelAdapter(ChannelAdapter):
         platform_target: str,
         *,
         files: list[FileData] | None = None,
+        thread_id: str | None = None,
     ) -> None:
         """Send one outbound message and/or file payloads to Telegram."""
         bot = self._require_bot()
         chat_id = _parse_platform_target(platform_target)
+        message_thread_id = _parse_thread_id(thread_id)
         normalized_message = _normalize_optional_message(message)
         normalized_files = list(files or [])
 
         if normalized_files:
             with _telegram_error_boundary(self._config.id):
-                await self._send_with_files(bot, chat_id, normalized_message, normalized_files)
+                await self._send_with_files(
+                    bot,
+                    chat_id,
+                    normalized_message,
+                    normalized_files,
+                    message_thread_id=message_thread_id,
+                )
             return
 
         if normalized_message is None:
             raise ChannelConfigError("at least one of message or files must be provided")
 
         with _telegram_error_boundary(self._config.id):
-            await self._send_text_chunks(bot, chat_id, normalized_message)
+            await self._send_text_chunks(
+                bot, chat_id, normalized_message, message_thread_id=message_thread_id
+            )
 
-    async def _send_text_chunks(self, bot: Any, chat_id: int, message: str) -> None:
+    async def _send_text_chunks(
+        self,
+        bot: Any,
+        chat_id: int,
+        message: str,
+        *,
+        message_thread_id: int | None = None,
+    ) -> None:
         for chunk in split_telegram_message(message, TELEGRAM_MESSAGE_LIMIT):
-            await bot.send_message(chat_id=chat_id, text=chunk)
+            payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+            if message_thread_id is not None:
+                payload["message_thread_id"] = message_thread_id
+            await bot.send_message(**payload)
 
     async def _send_with_files(
         self,
@@ -238,16 +258,22 @@ class TelegramChannelAdapter(ChannelAdapter):
         chat_id: int,
         message: str | None,
         files: list[FileData],
+        *,
+        message_thread_id: int | None = None,
     ) -> None:
         # Telegram caps file captions at TELEGRAM_CAPTION_LIMIT UTF-16 units, far below the
         # 4096 text limit. A caption that fits rides along on the first file; a longer message
         # is delivered as standalone text first (so nothing is dropped) and the files go out
         # uncaptioned.
         if message is not None and _utf16_length(message) > TELEGRAM_CAPTION_LIMIT:
-            await self._send_text_chunks(bot, chat_id, message)
-            await self._send_files(bot, chat_id, files, caption=None)
+            await self._send_text_chunks(bot, chat_id, message, message_thread_id=message_thread_id)
+            await self._send_files(
+                bot, chat_id, files, caption=None, message_thread_id=message_thread_id
+            )
             return
-        await self._send_files(bot, chat_id, files, caption=message)
+        await self._send_files(
+            bot, chat_id, files, caption=message, message_thread_id=message_thread_id
+        )
 
     async def _send_files(
         self,
@@ -256,11 +282,14 @@ class TelegramChannelAdapter(ChannelAdapter):
         files: list[FileData],
         *,
         caption: str | None,
+        message_thread_id: int | None = None,
     ) -> None:
         if not files:
             return
 
-        await self._send_file_batch(bot, chat_id, files, caption=caption)
+        await self._send_file_batch(
+            bot, chat_id, files, caption=caption, message_thread_id=message_thread_id
+        )
 
     async def _send_single_file(
         self,
@@ -269,6 +298,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         file_data: FileData,
         *,
         caption: str | None,
+        message_thread_id: int | None = None,
     ) -> None:
         telegram = _load_telegram()
         input_file = telegram.InputFile(file_data.data, filename=file_data.filename)
@@ -277,12 +307,16 @@ class TelegramChannelAdapter(ChannelAdapter):
             payload: dict[str, Any] = {"chat_id": chat_id, "photo": input_file}
             if caption is not None:
                 payload["caption"] = caption
+            if message_thread_id is not None:
+                payload["message_thread_id"] = message_thread_id
             await bot.send_photo(**payload)
             return
 
         payload = {"chat_id": chat_id, "document": input_file}
         if caption is not None:
             payload["caption"] = caption
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
         await bot.send_document(**payload)
 
     async def _send_file_batch(
@@ -292,6 +326,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         files: list[FileData],
         *,
         caption: str | None,
+        message_thread_id: int | None = None,
     ) -> None:
         image_files: list[FileData] = []
         doc_files: list[FileData] = []
@@ -314,6 +349,7 @@ class TelegramChannelAdapter(ChannelAdapter):
                     batch,
                     caption=caption_pending,
                     is_image=is_image,
+                    message_thread_id=message_thread_id,
                 )
                 caption_pending = None
 
@@ -325,11 +361,14 @@ class TelegramChannelAdapter(ChannelAdapter):
         *,
         caption: str | None,
         is_image: bool,
+        message_thread_id: int | None = None,
     ) -> None:
         if not files:
             return
         if len(files) == 1:
-            await self._send_single_file(bot, chat_id, files[0], caption=caption)
+            await self._send_single_file(
+                bot, chat_id, files[0], caption=caption, message_thread_id=message_thread_id
+            )
             return
 
         telegram = _load_telegram()
@@ -345,7 +384,10 @@ class TelegramChannelAdapter(ChannelAdapter):
                     telegram.InputMediaDocument(media=input_file, caption=item_caption)
                 )
 
-        await bot.send_media_group(chat_id=chat_id, media=media_items)
+        payload: dict[str, Any] = {"chat_id": chat_id, "media": media_items}
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
+        await bot.send_media_group(**payload)
 
     # -- ConversationTransport ------------------------------------------------------------
 
@@ -355,30 +397,34 @@ class TelegramChannelAdapter(ChannelAdapter):
         text: str,
         *,
         reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
     ) -> None:
         """Deliver one outbound text reply (engine transport callback)."""
         reply_parameters = self._build_reply_parameters(reply_to_message_id)
         if reply_parameters is None:
-            await self.send(text, platform_target)
+            await self.send(text, platform_target, thread_id=thread_id)
             return
 
         bot = self._require_bot()
         chat_id = _parse_platform_target(platform_target)
+        message_thread_id = _parse_thread_id(thread_id)
         normalized_message = _normalize_optional_message(text)
         if normalized_message is None:
             raise ChannelConfigError("at least one of message or files must be provided")
 
         with _telegram_error_boundary(self._config.id):
-            # Only the first chunk references the replied-to message.
+            # Only the first chunk references the replied-to message; every chunk
+            # carries the topic, so a multi-part reply stays in the forum topic
+            # instead of falling into the General topic.
             for index, chunk in enumerate(
                 split_telegram_message(normalized_message, TELEGRAM_MESSAGE_LIMIT)
             ):
+                payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+                if message_thread_id is not None:
+                    payload["message_thread_id"] = message_thread_id
                 if index == 0:
-                    await bot.send_message(
-                        chat_id=chat_id, text=chunk, reply_parameters=reply_parameters
-                    )
-                else:
-                    await bot.send_message(chat_id=chat_id, text=chunk)
+                    payload["reply_parameters"] = reply_parameters
+                await bot.send_message(**payload)
 
     def _build_reply_parameters(self, reply_to_message_id: str | None) -> Any | None:
         if reply_to_message_id is None:
@@ -402,10 +448,12 @@ class TelegramChannelAdapter(ChannelAdapter):
         return _extract_caption(raw_message)
 
     def activity_indicator(
-        self, platform_target: str
+        self,
+        platform_target: str,
+        thread_id: str | None = None,
     ) -> contextlib.AbstractAsyncContextManager[None]:
         """Telegram typing indicator as the engine's activity-indicator callback."""
-        return self._typing_indicator(platform_target)
+        return self._typing_indicator(platform_target, thread_id)
 
     async def build_media_blocks(self, raw_message: Any) -> list[ContentBlock]:
         """Convert one raw Telegram message into canonical content blocks."""
@@ -674,7 +722,14 @@ class TelegramChannelAdapter(ChannelAdapter):
         if not self._engine.should_respond(conversation):
             return
 
-        await self.send(_UNSUPPORTED_MESSAGE_TYPE_REPLY, conversation.chat_id)
+        # Same reply semantics as engine replies: group replies reference the message
+        # they answer, and the reply follows the message into its forum topic.
+        await self.send_text(
+            conversation.chat_id,
+            _UNSUPPORTED_MESSAGE_TYPE_REPLY,
+            reply_to_message_id=(conversation.message_id if conversation.kind == "group" else None),
+            thread_id=conversation.thread_id,
+        )
 
     def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
         """Ensure the Session mirroring an outbound Telegram chat exists with channel context."""
@@ -779,8 +834,12 @@ class TelegramChannelAdapter(ChannelAdapter):
         if not (_is_integer(chat_id) and _is_integer(user_id)):
             return None
 
+        # message_thread_id is only a topic when is_topic_message is set: in non-forum
+        # supergroups Telegram also fills it for plain reply threads, and sending a
+        # message_thread_id back into a non-forum group fails with "thread not found".
         thread_id_raw = getattr(message, "message_thread_id", None)
-        thread_id = str(thread_id_raw) if thread_id_raw is not None else None
+        is_topic_message = bool(getattr(message, "is_topic_message", False))
+        thread_id = str(thread_id_raw) if is_topic_message and _is_integer(thread_id_raw) else None
 
         message_id_raw = getattr(message, "message_id", None)
         message_id = str(message_id_raw) if _is_integer(message_id_raw) else None
@@ -843,10 +902,12 @@ class TelegramChannelAdapter(ChannelAdapter):
     # -- Typing indicator -----------------------------------------------------------------
 
     @contextlib.asynccontextmanager
-    async def _typing_indicator(self, platform_target: str) -> AsyncIterator[None]:
+    async def _typing_indicator(
+        self, platform_target: str, thread_id: str | None = None
+    ) -> AsyncIterator[None]:
         """Show Telegram's "typing" indicator for the chat until the block exits."""
         task = asyncio.create_task(
-            self._keep_typing(platform_target),
+            self._keep_typing(platform_target, thread_id),
             name=f"telegram:{self._config.id}:typing:{platform_target}",
         )
         try:
@@ -856,16 +917,20 @@ class TelegramChannelAdapter(ChannelAdapter):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-    async def _keep_typing(self, platform_target: str) -> None:
+    async def _keep_typing(self, platform_target: str, thread_id: str | None = None) -> None:
         try:
             bot = self._require_bot()
             chat_id = _parse_platform_target(platform_target)
+            message_thread_id = _parse_thread_id(thread_id)
         except (ChannelError, ChannelConfigError):
             return
 
+        payload: dict[str, Any] = {"chat_id": chat_id, "action": _TYPING_ACTION}
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
         while True:
             try:
-                await bot.send_chat_action(chat_id=chat_id, action=_TYPING_ACTION)
+                await bot.send_chat_action(**payload)
             except Exception as error:
                 # Best-effort cosmetic indicator: stop quietly if the API call fails.
                 _LOGGER.debug(
@@ -1131,6 +1196,15 @@ def _parse_platform_target(platform_target: str) -> int:
     except (TypeError, ValueError) as error:
         raise ChannelConfigError("platform_target must be an integer chat id") from error
     return chat_id
+
+
+def _parse_thread_id(thread_id: str | None) -> int | None:
+    if thread_id is None:
+        return None
+    try:
+        return int(thread_id)
+    except (TypeError, ValueError) as error:
+        raise ChannelConfigError("thread_id must be an integer Telegram topic id") from error
 
 
 def _load_telegram_ext() -> Any:

@@ -484,11 +484,14 @@ class ChannelService:
         platform_target: str,
         *,
         files: list[FileData] | None = None,
+        thread_id: str | None = None,
     ) -> None:
         """Delegate an outbound send to a running channel adapter."""
         normalized_id = _normalize_channel_id(channel_id)
         if not isinstance(platform_target, str) or not platform_target:
             raise ChannelConfigError("platform_target must be a non-empty string")
+        if thread_id is not None and (not isinstance(thread_id, str) or not thread_id.strip()):
+            raise ChannelConfigError("thread_id must be a non-empty string when provided")
 
         normalized_message: str | None
         if message is None:
@@ -515,10 +518,12 @@ class ChannelService:
 
         adapter = self._active_adapter(normalized_id)
         if normalized_files is None:
-            await adapter.send(normalized_message, platform_target)
+            await adapter.send(normalized_message, platform_target, thread_id=thread_id)
             return
 
-        await adapter.send(normalized_message, platform_target, files=normalized_files)
+        await adapter.send(
+            normalized_message, platform_target, files=normalized_files, thread_id=thread_id
+        )
 
     def ensure_outbound_session(self, channel_id: str, platform_target: str) -> RouteFacts:
         """Ensure the Session mirroring an outbound target chat exists and return its route."""
