@@ -406,12 +406,21 @@ export const toolArgumentSummary = (tool) => {
     return displaySummary;
   }
 
-  const argumentsValue = toolArguments(tool);
+  const argumentsValue = toolArguments(tool) ?? streamingPreviewArguments(tool);
   if (argumentsValue === undefined || argumentsValue === null) {
     return '';
   }
   return humanReadableToolLabel(toolNameForRunTool(tool), argumentsValue);
 };
+
+// While a tool call is still streaming, the completed top-level string fields
+// extracted from the partial arguments JSON stand in for the parsed arguments
+// so the preparing row can already show e.g. a write's file path.
+const streamingPreviewArguments = (tool) =>
+  isPlainObject(tool?.previewArguments) &&
+  Object.keys(tool.previewArguments).length > 0
+    ? tool.previewArguments
+    : undefined;
 
 export const isSubAgentTool = (tool) =>
   SUBAGENT_TOOL_NAMES.has(toolNameForRunTool(tool));
