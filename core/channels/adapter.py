@@ -49,6 +49,9 @@ class ReplyPlanFacts:
     platform_target: str
     # Platform message id replies should reference (group conversations only).
     reply_to_message_id: str | None = None
+    # Platform thread/topic replies should land in (Telegram forum topics). Adapters
+    # whose thread targets are separate platform targets (Discord) ignore it.
+    thread_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,8 +141,14 @@ class ChannelAdapter(ABC):
         platform_target: str,
         *,
         files: list[FileData] | None = None,
+        thread_id: str | None = None,
     ) -> None:
-        """Send one outbound message to a platform target."""
+        """Send one outbound message to a platform target.
+
+        ``thread_id`` addresses a thread/topic inside the target where the platform
+        models topics as sub-addresses of one chat (Telegram forum topics). Adapters
+        whose threads are their own platform targets (Discord) ignore it.
+        """
 
     @abstractmethod
     def ensure_outbound_session(self, platform_target: str) -> RouteFacts:

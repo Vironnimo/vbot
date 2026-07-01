@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import Callable
@@ -2499,6 +2500,8 @@ def make_group_update(
     text: str | None = "hello",
     message_id: int | None = None,
     reply_to_user_id: int | None = None,
+    message_thread_id: int | None = None,
+    is_topic_message: bool = False,
 ) -> SimpleNamespace:
     reply_to_message = None
     if reply_to_user_id is not None:
@@ -2508,7 +2511,8 @@ def make_group_update(
         effective_user=SimpleNamespace(id=user_id),
         effective_message=SimpleNamespace(
             text=text,
-            message_thread_id=None,
+            message_thread_id=message_thread_id,
+            is_topic_message=is_topic_message,
             message_id=message_id,
             reply_to_message=reply_to_message,
         ),
@@ -2767,6 +2771,120 @@ async def test_group_reply_uses_reply_parameters_on_first_chunk_only(
     assert first_call.kwargs["reply_parameters"].message_id == 777
     assert first_call.kwargs["reply_parameters"].allow_sending_without_reply is True
     assert "reply_parameters" not in second_call.kwargs
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_topic_reply_carries_thread_on_all_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    session_id = "ch-tg-assistant--10001"
+    long_reply = "x" * (TELEGRAM_MESSAGE_LIMIT + 5)
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text=long_reply)
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        response_mode="all",
+        trigger_run=trigger_mock,
+    )
+
+    await adapter._handle_inbound_message(
+        make_group_update(text="hello", message_id=777, message_thread_id=42, is_topic_message=True),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    # Every chunk lands in the forum topic; only the first references the message.
+    assert bot.send_message.await_count == 2
+    first_call, second_call = bot.send_message.await_args_list
+    assert first_call.kwargs["message_thread_id"] == 42
+    assert second_call.kwargs["message_thread_id"] == 42
+    assert first_call.kwargs["reply_parameters"].message_id == 777
+    assert "reply_parameters" not in second_call.kwargs
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_typing_indicator_targets_topic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+    )
+
+    typing_task = asyncio.create_task(adapter._keep_typing("-10001", "42"))
+    await asyncio.sleep(0)
+    typing_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await typing_task
+
+    typing_call = bot.send_chat_action.await_args_list[0]
+    assert typing_call.kwargs["chat_id"] == -10001
+    assert typing_call.kwargs["message_thread_id"] == 42
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_reply_thread_ignored_outside_forum_topics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    session_id = "ch-tg-assistant--10001"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        response_mode="all",
+        trigger_run=trigger_mock,
+    )
+
+    # message_thread_id without is_topic_message is a plain reply thread in a
+    # non-forum group; sending it back would fail with "message thread not found".
+    await adapter._handle_inbound_message(
+        make_group_update(text="hello", message_id=777, message_thread_id=42),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    reply_call = bot.send_message.await_args_list[-1]
+    assert "message_thread_id" not in reply_call.kwargs
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_with_files_carries_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+    )
+
+    await adapter.send(
+        "caption",
+        "-10001",
+        files=[FileData(filename="a.png", media_type="image/png", data=b"png")],
+        thread_id="42",
+    )
+
+    photo_call = bot.send_photo.await_args_list[0]
+    assert photo_call.kwargs["message_thread_id"] == 42
+    assert photo_call.kwargs["caption"] == "caption"
     await adapter.stop()
 
 

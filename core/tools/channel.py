@@ -35,7 +35,9 @@ CHANNEL_SEND_TOOL_DESCRIPTION = (
     "Send a proactive outbound message (text and/or files) through a configured channel."
 )
 _REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id",))
-_OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(("message", "platform_target", "file_paths"))
+_OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(
+    ("message", "platform_target", "thread_id", "file_paths")
+)
 _CHANNEL_SEND_ALLOWED_ARGUMENTS = (
     _REQUIRED_CHANNEL_SEND_ARGUMENTS | _OPTIONAL_CHANNEL_SEND_ARGUMENTS
 )
@@ -58,6 +60,15 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Platform-specific target id (e.g. a chat or channel id). Omit to "
                 "send to wherever this session last replied."
+            ),
+        },
+        "thread_id": {
+            "type": "string",
+            "description": (
+                "Optional thread/topic inside the target chat (e.g. a Telegram forum "
+                "topic id). When the target comes from session metadata, the last "
+                "reply's topic is used automatically; ignored on platforms whose "
+                "threads are their own targets (Discord)."
             ),
         },
         "file_paths": {
@@ -135,14 +146,16 @@ async def _handle_channel_send_tool(
             )
 
         channel_config = _channel_config_for_agent(channel_service, channel_id, context.agent_id)
-        platform_target = _platform_target_from_arguments_or_context(
+        platform_target, thread_id = _send_target_from_arguments_or_context(
             arguments,
             chat_sessions,
             context,
             channel_id,
             channel_config,
         )
-        await channel_service.send(channel_id, message, platform_target, files=files or None)
+        await channel_service.send(
+            channel_id, message, platform_target, files=files or None, thread_id=thread_id
+        )
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
     except ChannelNotFoundError as error:
@@ -161,7 +174,10 @@ async def _handle_channel_send_tool(
         message=message,
         files=files,
     )
-    return tool_success({"channel_id": channel_id, "platform_target": platform_target})
+    result: JsonObject = {"channel_id": channel_id, "platform_target": platform_target}
+    if thread_id is not None:
+        result["thread_id"] = thread_id
+    return tool_success(result)
 
 
 async def _record_outbound_message_note(
@@ -210,30 +226,36 @@ def _outbound_message_note(
     return "\n\n".join(parts)
 
 
-def _platform_target_from_arguments_or_context(
+def _send_target_from_arguments_or_context(
     arguments: JsonObject,
     chat_sessions: ChatSessionManager,
     context: ToolContext,
     channel_id: str,
     channel_config: ChannelConfig,
-) -> str:
+) -> tuple[str, str | None]:
+    """Resolve the (platform_target, thread_id) pair for one send.
+
+    An explicit ``thread_id`` argument always wins. The metadata thread is adopted
+    only together with the metadata target — an explicitly targeted send must not
+    inherit another conversation's topic.
+    """
+    explicit_thread_id = optional_string(arguments.get("thread_id"), field_name="thread_id")
     platform_target_value = optional_string(
         arguments.get("platform_target"), field_name="platform_target"
     )
     if platform_target_value is not None:
-        return platform_target_value
+        return platform_target_value, explicit_thread_id
 
-    metadata_platform_target = _platform_target_from_session_metadata(
-        chat_sessions,
-        context,
-        channel_id,
-    )
-    if metadata_platform_target is not None:
-        return metadata_platform_target
+    metadata_target = _send_target_from_session_metadata(chat_sessions, context, channel_id)
+    if metadata_target is not None:
+        metadata_platform_target, metadata_thread_id = metadata_target
+        return metadata_platform_target, (
+            explicit_thread_id if explicit_thread_id is not None else metadata_thread_id
+        )
 
     config_platform_target = _platform_target_from_channel_config(channel_config)
     if config_platform_target is not None:
-        return config_platform_target
+        return config_platform_target, explicit_thread_id
 
     raise ValueError(
         "platform_target is required when session metadata has no "
@@ -241,11 +263,11 @@ def _platform_target_from_arguments_or_context(
     )
 
 
-def _platform_target_from_session_metadata(
+def _send_target_from_session_metadata(
     chat_sessions: ChatSessionManager,
     context: ToolContext,
     channel_id: str,
-) -> str | None:
+) -> tuple[str, str | None] | None:
     metadata = chat_sessions.get_metadata(context.agent_id, context.session_id)
     last_reply_target = metadata.get("last_reply_target")
     if not isinstance(last_reply_target, dict):
@@ -258,7 +280,12 @@ def _platform_target_from_session_metadata(
     if metadata_platform_target is None:
         return None
 
-    return required_string(metadata_platform_target, field_name="last_reply_target.platform_target")
+    platform_target = required_string(
+        metadata_platform_target, field_name="last_reply_target.platform_target"
+    )
+    thread_id_value = last_reply_target.get("thread_id")
+    thread_id = optional_string(thread_id_value, field_name="last_reply_target.thread_id")
+    return platform_target, thread_id
 
 
 def _channel_config_for_agent(

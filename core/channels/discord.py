@@ -130,8 +130,13 @@ class DiscordChannelAdapter(ChannelAdapter):
         platform_target: str,
         *,
         files: list[FileData] | None = None,
+        thread_id: str | None = None,
     ) -> None:
-        """Send one outbound message and/or file payloads to a Discord channel."""
+        """Send one outbound message and/or file payloads to a Discord channel.
+
+        ``thread_id`` is transport parity only and ignored: Discord threads are their
+        own channels, addressed directly as the ``platform_target``.
+        """
         target = await self._resolve_target(platform_target)
         await self._send_payloads(target, message, list(files or []))
         self._backfilled_message_ids.pop(platform_target, None)
@@ -161,15 +166,22 @@ class DiscordChannelAdapter(ChannelAdapter):
         text: str,
         *,
         reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
     ) -> None:
-        """Deliver one engine reply, referencing the triggering group message."""
+        """Deliver one engine reply, referencing the triggering group message.
+
+        ``thread_id`` is transport parity only and ignored: Discord threads are their
+        own channels, addressed directly as the ``platform_target``.
+        """
         target = await self._resolve_target(platform_target)
         reference = self._reply_reference(target, reply_to_message_id)
         await self._send_payloads(target, text, [], reference=reference)
         self._backfilled_message_ids.pop(platform_target, None)
 
     def activity_indicator(
-        self, platform_target: str
+        self,
+        platform_target: str,
+        thread_id: str | None = None,
     ) -> contextlib.AbstractAsyncContextManager[None]:
         """Discord typing indicator as the engine activity callback."""
         return self._typing_indicator(platform_target)
