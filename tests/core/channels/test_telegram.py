@@ -2030,6 +2030,115 @@ async def test_structured_message_ignores_disallowed_chat(
 
 
 @pytest.mark.asyncio
+async def test_dm_start_command_triggers_internal_greeting_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="Hi, I'm vBot!")
+    )
+    command_dispatcher = make_command_dispatcher()
+    adapter, chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        command_dispatcher=command_dispatcher,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/start"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    # The literal "/start" never reaches command dispatch or the model as user text;
+    # an internal note-driven run carries the greeting instruction instead.
+    command_dispatcher.dispatch.assert_not_called()
+    trigger_mock.assert_awaited_once()
+    assert trigger_mock.await_args is not None
+    assert trigger_mock.await_args.kwargs.get("internal") is True
+    prompt = trigger_mock.await_args.args[1]
+    assert "/start" in prompt
+    assert "Greet them" in prompt
+    bot.send_message.assert_awaited_once_with(chat_id=12345, text="Hi, I'm vBot!")
+
+    # The instruction is persisted as a note, not as a user message.
+    messages = chat_sessions.get("assistant", session_id).load()
+    assert not any(message.role == "user" for message in messages)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_dm_start_command_forwards_deep_link_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="Welcome!")
+    )
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/start promo-2026"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    assert trigger_mock.await_args is not None
+    assert 'start parameter "promo-2026"' in trigger_mock.await_args.args[1]
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_start_command_keeps_normal_command_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trigger_mock = AsyncMock()
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        trigger_run=trigger_mock,
+    )
+
+    # No owner_user_ids: a group /start is an unauthorized group command and is dropped.
+    await adapter._handle_inbound_message(
+        make_group_update(text="/start"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    await adapter.stop()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("/start", ""),
+        ("/start promo", "promo"),
+        ("/start  promo  ", "promo"),
+        ("/started", None),
+        ("start", None),
+        ("hello /start", None),
+    ],
+)
+def test_parse_start_command(text: str, expected: str | None) -> None:
+    assert telegram_module._parse_start_command(text) == expected
+
+
+@pytest.mark.asyncio
 async def test_chat_migration_swaps_allowlist_bridges_session_and_confirms(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
