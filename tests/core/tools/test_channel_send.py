@@ -34,7 +34,11 @@ def make_chat_sessions() -> Mock:
     return chat_sessions
 
 
-def make_context(workspace: Path, tool_name: str = CHANNEL_SEND_TOOL_NAME) -> ToolContext:
+def make_context(
+    workspace: Path,
+    tool_name: str = CHANNEL_SEND_TOOL_NAME,
+    cwd: Path | None = None,
+) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
@@ -45,6 +49,7 @@ def make_context(workspace: Path, tool_name: str = CHANNEL_SEND_TOOL_NAME) -> To
         workspace=workspace,
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
+        cwd=cwd,
     )
 
 
@@ -424,6 +429,45 @@ def test_channel_send_file_paths_only_forwards_files(tmp_path: Path) -> None:
     assert files[0].filename == "note.txt"
     assert files[0].media_type == "text/plain"
     assert files[0].data == b"hello"
+
+
+def test_channel_send_relative_file_path_resolves_from_cwd(tmp_path: Path) -> None:
+    # In a project session, relative file paths resolve against the project cwd
+    # (like every other file-taking tool), not the agent workspace.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    repo.joinpath("note.txt").write_text("from repo", encoding="utf-8")
+
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    chat_sessions = make_chat_sessions()
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        registry.dispatch(
+            make_context(workspace, cwd=repo),
+            {
+                "channel_id": "tg-assistant",
+                "platform_target": "12345",
+                "file_paths": ["note.txt"],
+            },
+            [CHANNEL_SEND_TOOL_NAME],
+        )
+    )
+
+    assert_success_envelope(result)
+    files = channel_service.send.await_args.kwargs.get("files")
+    assert isinstance(files, list)
+    assert files[0].data == b"from repo"
 
 
 def test_channel_send_message_and_file_paths_forwarded(tmp_path: Path) -> None:
