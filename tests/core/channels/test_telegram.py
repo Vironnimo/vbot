@@ -865,9 +865,7 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
         telegram.Update(update_id=14, message=migration_message)
     )
     # Location/contact/poll route to the structured handler, not the catch-all.
-    location_message = make_real_message(
-        location=telegram.Location(longitude=13.4, latitude=52.5)
-    )
+    location_message = make_real_message(location=telegram.Location(longitude=13.4, latitude=52.5))
     contact_message = make_real_message(
         contact=telegram.Contact(phone_number="+491234", first_name="Max")
     )
@@ -883,7 +881,11 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
             allows_multiple_answers=False,
         )
     )
-    for update_id, structured in ((15, location_message), (16, contact_message), (17, poll_message)):
+    for update_id, structured in (
+        (15, location_message),
+        (16, contact_message),
+        (17, poll_message),
+    ):
         assert structured_handler.check_update(
             telegram.Update(update_id=update_id, message=structured)
         )
@@ -2903,7 +2905,9 @@ async def test_topic_reply_carries_thread_on_all_chunks(
     )
 
     await adapter._handle_inbound_message(
-        make_group_update(text="hello", message_id=777, message_thread_id=42, is_topic_message=True),
+        make_group_update(
+            text="hello", message_id=777, message_thread_id=42, is_topic_message=True
+        ),
         SimpleNamespace(),
     )
     await drain_chat_queue(adapter, -10001)
