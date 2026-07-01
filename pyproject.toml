@@ -32,10 +32,10 @@ Repository = "https://github.com/Vironnimo/vbot"
 Issues = "https://github.com/Vironnimo/vbot/issues"
 
 [project.optional-dependencies]
-server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "discord.py>=2.7,<3", "python-multipart"]
+server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart"]
 cli     = ["psutil"]
 desktop = ["pywebview", "openwakeword", "sounddevice", "webrtcvad"]
-dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "discord.py>=2.7,<3", "python-multipart", "psutil"]
+dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]
