@@ -40,6 +40,10 @@ _ALBUM_FLUSH_SECONDS = 0.5
 _TYPING_ACTION = "typing"
 _TYPING_REFRESH_SECONDS = 4.0
 _UNSUPPORTED_MESSAGE_TYPE_REPLY = "Sorry, this message type isn't supported yet."
+_CHAT_MIGRATED_REPLY = (
+    "This group was upgraded by Telegram and has a new chat id. "
+    "I've updated my configuration; the conversation continues here."
+)
 # Retries for a send that Telegram answers with RetryAfter (flood control), honoring the
 # server-provided delay — the project convention of max 3 retries for transient errors.
 _SEND_MAX_RETRIES = 3
@@ -60,9 +64,13 @@ class TelegramChannelAdapter(ChannelAdapter):
         attachment_store: AttachmentStore | None = None,
         *,
         command_dispatcher: CommandDispatcher,
+        chat_migration_persister: Callable[[str, str], None] | None = None,
     ) -> None:
         self._config = config
         self._attachment_store = attachment_store
+        # Persists a group→supergroup chat-id swap into the channel config
+        # (ChannelService wires its storage update); None keeps the swap runtime-only.
+        self._chat_migration_persister = chat_migration_persister
         self._engine = ChannelConversationEngine(
             config,
             trigger_service,
@@ -142,6 +150,12 @@ class TelegramChannelAdapter(ChannelAdapter):
         )
         unsupported_message_types = telegram_ext.filters.Sticker.ALL
         return [
+            # Migration service messages first: a group→supergroup upgrade changes the
+            # chat id in place and would otherwise silently kill the allowlist match.
+            telegram_ext.MessageHandler(
+                telegram_ext.filters.StatusUpdate.MIGRATE & new_messages_only,
+                self._handle_chat_migration,
+            ),
             telegram_ext.MessageHandler(
                 telegram_ext.filters.TEXT & new_messages_only,
                 self._handle_inbound_message,
@@ -529,6 +543,85 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         await self._engine.handle_inbound_media(conversation, (message,))
+
+    async def _handle_chat_migration(self, update: Any, _context: Any) -> None:
+        """Adopt the new chat id when Telegram upgrades a group to a supergroup.
+
+        The upgrade changes the chat id in place; without this the allowlist stops
+        matching and the bot silently goes dead in that chat. The allowlist swap is
+        applied to the running adapter, persisted into the channel config, and the
+        conversation anchor is bridged so the session history continues seamlessly.
+        """
+        message = getattr(update, "effective_message", None)
+        chat = getattr(update, "effective_chat", None)
+        if message is None or chat is None:
+            return
+        chat_id = getattr(chat, "id", None)
+        if not _is_integer(chat_id):
+            return
+
+        migrate_to = getattr(message, "migrate_to_chat_id", None)
+        migrate_from = getattr(message, "migrate_from_chat_id", None)
+        if _is_integer(migrate_to):
+            old_chat_id, new_chat_id = str(chat_id), str(migrate_to)
+        elif _is_integer(migrate_from):
+            old_chat_id, new_chat_id = str(migrate_from), str(chat_id)
+        else:
+            return
+
+        # Authorization: only an allowlisted old chat carries its allowance over.
+        # Telegram announces the migration twice (a service message in the old chat
+        # and one in the new); the first one processed swaps the allowlist and the
+        # second finds the old id gone and is a no-op.
+        if old_chat_id not in self._allowed_chat_ids:
+            return
+
+        self._allowed_chat_ids = frozenset(
+            new_chat_id if allowed == old_chat_id else allowed for allowed in self._allowed_chat_ids
+        )
+        _LOGGER.info(
+            "Telegram chat migrated to supergroup (channel=%s old=%s new=%s)",
+            self._config.id,
+            old_chat_id,
+            new_chat_id,
+        )
+
+        persister = self._chat_migration_persister
+        if persister is not None:
+            try:
+                persister(old_chat_id, new_chat_id)
+            except Exception as error:
+                _LOGGER.error(
+                    "Cannot persist migrated chat id (channel=%s old=%s new=%s): %s",
+                    self._config.id,
+                    old_chat_id,
+                    new_chat_id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        try:
+            await self._engine.migrate_group_conversation(old_chat_id, new_chat_id)
+        except Exception as error:
+            _LOGGER.error(
+                "Cannot bridge migrated chat conversation (channel=%s old=%s new=%s): %s",
+                self._config.id,
+                old_chat_id,
+                new_chat_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+        try:
+            await self.send(_CHAT_MIGRATED_REPLY, new_chat_id)
+        except ChannelError as error:
+            # Best-effort courtesy note; the migration itself already succeeded.
+            _LOGGER.warning(
+                "Cannot confirm chat migration in new chat (channel=%s new=%s): %s",
+                self._config.id,
+                new_chat_id,
+                error,
+            )
 
     async def _handle_unsupported_message_type(self, update: Any, _context: Any) -> None:
         """Reply to allowed chats that this message type cannot be processed yet."""

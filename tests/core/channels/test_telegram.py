@@ -120,6 +120,24 @@ def make_document_update(
     )
 
 
+def make_migration_update(
+    *,
+    chat_id: int,
+    migrate_to: int | None = None,
+    migrate_from: int | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        effective_chat=SimpleNamespace(id=chat_id),
+        effective_user=SimpleNamespace(id=50),
+        effective_message=SimpleNamespace(
+            text=None,
+            migrate_to_chat_id=migrate_to,
+            migrate_from_chat_id=migrate_from,
+            message_thread_id=None,
+        ),
+    )
+
+
 def make_completed_run(*, session_id: str, output_text: str) -> Run:
     run = Run(run_id="run-completed", agent_id="assistant", session_id=session_id)
     run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": output_text}})
@@ -161,6 +179,7 @@ def make_adapter(
     credential_resolver: Callable[[str], str] | None = None,
     attachment_store: AttachmentStore | None = None,
     command_dispatcher: object | None = None,
+    chat_migration_persister: Callable[[str, str], None] | None = None,
     set_process_token: bool = True,
 ) -> tuple[TelegramChannelAdapter, ChatSessionManager, AsyncMock, SimpleNamespace]:
     if set_process_token:
@@ -193,6 +212,7 @@ def make_adapter(
         credential_resolver or (lambda key: os.environ.get(key, "")),
         attachment_store=attachment_store,
         command_dispatcher=cast(Any, resolved_command_dispatcher),
+        chat_migration_persister=chat_migration_persister,
     )
     if bot_username is not None or bot_id is not None:
         adapter._set_bot_identity(SimpleNamespace(id=bot_id, username=bot_username))
@@ -219,7 +239,9 @@ async def drain_chat_queue(adapter: TelegramChannelAdapter, chat_id: int) -> Non
     if queue is None:
         await asyncio.sleep(0)
         return
-    await asyncio.wait_for(queue.join(), timeout=1)
+    # Generous timeout: under xdist load a worker's first lazy import of the real
+    # telegram package can eat well over a second before the queue drains.
+    await asyncio.wait_for(queue.join(), timeout=5)
 
 
 def install_fake_telegram_media(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -785,7 +807,9 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
             **content,
         )
 
-    text_handler, media_handler, unsupported_handler = adapter._build_message_handlers(telegram_ext)
+    migration_handler, text_handler, media_handler, unsupported_handler = (
+        adapter._build_message_handlers(telegram_ext)
+    )
     text_message = make_real_message(text="hi")
     photo_message = make_real_message(
         photo=[telegram.PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)]
@@ -831,6 +855,13 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
     assert media_handler.check_update(telegram.Update(update_id=10, message=animation_message))
     assert not unsupported_handler.check_update(
         telegram.Update(update_id=11, message=animation_message)
+    )
+    # Migration service messages route to the dedicated migration handler only.
+    migration_message = make_real_message(migrate_to_chat_id=-100123)
+    assert migration_handler.check_update(telegram.Update(update_id=12, message=migration_message))
+    assert not text_handler.check_update(telegram.Update(update_id=13, message=migration_message))
+    assert not unsupported_handler.check_update(
+        telegram.Update(update_id=14, message=migration_message)
     )
     await adapter.stop()
 
@@ -1833,6 +1864,151 @@ async def test_unsupported_message_type_replies_for_allowed_chat(
         chat_id=12345,
         text="Sorry, this message type isn't supported yet.",
     )
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_chat_migration_swaps_allowlist_bridges_session_and_confirms(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_anchor = "ch-tg-assistant--500"
+    persister = Mock()
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=old_anchor, output_text="ok")
+    )
+    adapter, chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-500],
+        response_mode="all",
+        trigger_run=trigger_mock,
+        chat_migration_persister=persister,
+    )
+
+    # Seed the group conversation with history under the old chat id.
+    await adapter._handle_inbound_message(
+        make_update(chat_id=-500, user_id=50, text="hello"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -500)
+
+    await adapter._handle_chat_migration(
+        make_migration_update(chat_id=-500, migrate_to=-100500),
+        SimpleNamespace(),
+    )
+
+    assert adapter._is_chat_allowed("-100500")
+    assert not adapter._is_chat_allowed("-500")
+    persister.assert_called_once_with("-500", "-100500")
+
+    # The new chat id's anchor points at the old conversation's session.
+    new_anchor_metadata = chat_sessions.get_metadata("assistant", "ch-tg-assistant--100500")
+    assert new_anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY] == old_anchor
+
+    # The live session's channel sidecar targets the new chat id.
+    session_metadata = chat_sessions.get_metadata("assistant", old_anchor)
+    assert session_metadata["platform_conv_id"] == "-100500"
+    assert session_metadata["last_reply_target"]["platform_target"] == "-100500"
+
+    # The model learns about the migration through a session note.
+    notes = [
+        message.content
+        for message in chat_sessions.get("assistant", old_anchor).load()
+        if message.role == "note"
+    ]
+    assert any("migrated" in (content or "") for content in notes)
+
+    # The confirmation courtesy note goes to the new chat.
+    confirmation = bot.send_message.await_args_list[-1]
+    assert confirmation.kwargs["chat_id"] == -100500
+    assert "new chat id" in confirmation.kwargs["text"]
+
+    # An inbound message in the new supergroup continues the same session.
+    trigger_mock.reset_mock()
+    await adapter._handle_inbound_message(
+        make_update(chat_id=-100500, user_id=50, text="still here?"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -100500)
+    trigger_mock.assert_awaited_once()
+    assert trigger_mock.await_args is not None
+    assert trigger_mock.await_args.args[2] == old_anchor
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_chat_migration_second_event_is_noop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persister = Mock()
+    adapter, chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-500],
+        chat_migration_persister=persister,
+    )
+
+    # Telegram announces a migration twice: once in the old chat, once in the new.
+    await adapter._handle_chat_migration(
+        make_migration_update(chat_id=-500, migrate_to=-100500),
+        SimpleNamespace(),
+    )
+    await adapter._handle_chat_migration(
+        make_migration_update(chat_id=-100500, migrate_from=-500),
+        SimpleNamespace(),
+    )
+
+    persister.assert_called_once_with("-500", "-100500")
+    assert adapter._is_chat_allowed("-100500")
+    # No prior conversation existed, so no anchor session is fabricated.
+    assert not chat_sessions.exists("assistant", "ch-tg-assistant--100500")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_chat_migration_from_new_chat_event_swaps_allowlist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-500],
+    )
+
+    await adapter._handle_chat_migration(
+        make_migration_update(chat_id=-100500, migrate_from=-500),
+        SimpleNamespace(),
+    )
+
+    assert adapter._is_chat_allowed("-100500")
+    assert not adapter._is_chat_allowed("-500")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_chat_migration_ignores_unallowlisted_chat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persister = Mock()
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        chat_migration_persister=persister,
+    )
+
+    await adapter._handle_chat_migration(
+        make_migration_update(chat_id=-500, migrate_to=-100500),
+        SimpleNamespace(),
+    )
+
+    persister.assert_not_called()
+    assert not adapter._is_chat_allowed("-100500")
+    bot.send_message.assert_not_awaited()
     await adapter.stop()
 
 

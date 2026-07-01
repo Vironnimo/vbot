@@ -475,6 +475,20 @@ def test_channel_service_update_validates_agent_exists(tmp_path: Path) -> None:
         service.update_channel(config.id, agent_id="missing-agent")
 
 
+def test_record_chat_id_migration_swaps_allowlist_and_persists(tmp_path: Path) -> None:
+    storage = ChannelStorage(tmp_path)
+    storage.save(make_config(allowed_chat_ids=[-500, 777]))
+    service = make_service(tmp_path)
+
+    service.record_chat_id_migration("tg-assistant", "-500", "-100500")
+
+    assert storage.get("tg-assistant").allowed_chat_ids == ["-100500", "777"]
+
+    # Idempotent: once the old id is gone, a repeat call changes nothing.
+    service.record_chat_id_migration("tg-assistant", "-500", "-100999")
+    assert storage.get("tg-assistant").allowed_chat_ids == ["-100500", "777"]
+
+
 def test_channel_service_start_tolerates_corrupt_config(tmp_path: Path) -> None:
     storage = ChannelStorage(tmp_path)
     storage.save(make_config("tg-valid", enabled=True))

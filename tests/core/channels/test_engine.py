@@ -218,7 +218,8 @@ async def drain(engine: ChannelConversationEngine, platform_target: int) -> None
     if queue is None:
         await asyncio.sleep(0)
         return
-    await asyncio.wait_for(queue.join(), timeout=1)
+    # Generous timeout: xdist load can delay the worker task noticeably.
+    await asyncio.wait_for(queue.join(), timeout=5)
 
 
 @pytest.mark.parametrize(
