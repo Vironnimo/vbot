@@ -33,7 +33,8 @@ SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
     "Load an allowed skill by name to add its instructions to session context, or "
     "call with no name to list the skills currently available to you (grouped by "
-    "origin), including any you have authored since this session's catalog was fixed."
+    "origin), including any not yet in your system-prompt skill catalog (that "
+    "catalog is snapshotted at session start)."
 )
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"

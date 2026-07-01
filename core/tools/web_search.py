@@ -107,16 +107,21 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 "Optional recency filter. Supports day/week/month/year (or d/w/m/y, "
-                "pd/pw/pm/py) or YYYY-MM-DDtoYYYY-MM-DD."
+                "pd/pw/pm/py) or YYYY-MM-DDtoYYYY-MM-DD. Ignored when both "
+                "date_after and date_before are set."
             ),
         },
         "date_after": {
             "type": "string",
-            "description": "Optional lower date bound (YYYY-MM-DD).",
+            "description": (
+                "Optional lower date bound (YYYY-MM-DD); set both bounds for an exact range."
+            ),
         },
         "date_before": {
             "type": "string",
-            "description": "Optional upper date bound (YYYY-MM-DD).",
+            "description": (
+                "Optional upper date bound (YYYY-MM-DD); set both bounds for an exact range."
+            ),
         },
     },
     "required": ["query"],
