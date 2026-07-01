@@ -132,6 +132,7 @@ class FailingAdapter(ChannelAdapter):
         platform_target: str,
         *,
         files: list[FileData] | None = None,
+        thread_id: str | None = None,
     ) -> None:
         return
 
@@ -172,6 +173,7 @@ class DelayedStopAdapter(ChannelAdapter):
         platform_target: str,
         *,
         files: list[FileData] | None = None,
+        thread_id: str | None = None,
     ) -> None:
         return
 
