@@ -21,7 +21,7 @@ Sends proactive outbound messages through configured channels.
 ## Constraints & Gotchas
 
 - The target channel must belong to the calling Agent; a channel owned by another Agent returns `invalid_arguments` (`ChannelConfigError`).
-- `file_paths` are local paths (relative paths resolve from the workspace); the tool reads files, sniffs MIME type, and builds channel `FileData` payloads.
+- `file_paths` are local paths (relative paths resolve from `ToolContext.effective_cwd`, the working directory — like the other file-taking tools); the tool reads files, sniffs MIME type, and builds channel `FileData` payloads.
 - Each `file_paths` entry is size-checked against `max_attachment_size_bytes` via its on-disk size *before* the bytes are read, so an oversize file is rejected (`invalid_arguments`) without being loaded into memory. This is the outbound counterpart to the same limit enforced inbound by `AttachmentStore` and the upload endpoints.
 - Telegram-specific batching and media-group decisions stay inside the adapter layer.
 - Missing channel, missing target, config errors, and send failures return failure envelopes.
