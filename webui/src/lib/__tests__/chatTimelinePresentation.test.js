@@ -94,6 +94,38 @@ describe('chatTimelinePresentation', () => {
     expect(summary).toBe('notes/plan.md');
   });
 
+  it('labels a still-streaming tool row from its preview arguments', () => {
+    const summary = toolArgumentSummary({
+      name: 'write',
+      arguments: undefined,
+      previewArguments: { path: 'notes/plan.md' },
+      partialArgumentsText: '{"path": "notes/plan.md", "content": "# Pl',
+    });
+
+    expect(summary).toBe('notes/plan.md');
+  });
+
+  it('prefers parsed arguments over stale preview arguments', () => {
+    const summary = toolArgumentSummary({
+      name: 'write',
+      arguments: { path: 'final/path.md', content: '# Done' },
+      previewArguments: { path: 'stale/path.md' },
+    });
+
+    expect(summary).toBe('final/path.md');
+  });
+
+  it('keeps a streaming row unlabeled while no preview field is complete', () => {
+    const summary = toolArgumentSummary({
+      name: 'write',
+      arguments: undefined,
+      previewArguments: null,
+      partialArgumentsText: '{"pa',
+    });
+
+    expect(summary).toBe('');
+  });
+
   it('projects an externally completed sub-agent run as successful', () => {
     const tool = {
       name: 'subagent',
