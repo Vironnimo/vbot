@@ -804,6 +804,15 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
             type="regular",
         )
     )
+    animation_message = make_real_message(
+        animation=telegram.Animation(
+            file_id="a",
+            file_unique_id="au",
+            width=64,
+            height=64,
+            duration=1,
+        )
+    )
 
     assert text_handler.check_update(telegram.Update(update_id=1, message=text_message))
     assert not text_handler.check_update(telegram.Update(update_id=2, edited_message=text_message))
@@ -817,6 +826,11 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
     assert not unsupported_handler.check_update(telegram.Update(update_id=8, message=voice_message))
     assert not unsupported_handler.check_update(
         telegram.Update(update_id=9, edited_message=sticker_message)
+    )
+    # Animations are media, not an unsupported type.
+    assert media_handler.check_update(telegram.Update(update_id=10, message=animation_message))
+    assert not unsupported_handler.check_update(
+        telegram.Update(update_id=11, message=animation_message)
     )
     await adapter.stop()
 
@@ -1730,6 +1744,12 @@ async def test_album_with_one_failing_item_keeps_siblings_and_reports_failure(
             b"\x00\x00\x00\x18ftypisom",
             "video/mp4",
             "telegram-video-note-vu-1.mp4",
+        ),
+        (
+            "animation",
+            b"\x00\x00\x00\x18ftypisom",
+            "video/mp4",
+            "telegram-animation-vu-1.mp4",
         ),
     ],
 )

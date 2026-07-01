@@ -138,13 +138,9 @@ class TelegramChannelAdapter(ChannelAdapter):
             | telegram_ext.filters.AUDIO
             | telegram_ext.filters.VIDEO
             | telegram_ext.filters.VIDEO_NOTE
+            | telegram_ext.filters.ANIMATION
         )
-        # Animations carry a backward-compat `document` field and normally hit the media
-        # handler first; the ANIMATION filter here only catches them if Telegram ever
-        # stops setting that field.
-        unsupported_message_types = (
-            telegram_ext.filters.ANIMATION | telegram_ext.filters.Sticker.ALL
-        )
+        unsupported_message_types = telegram_ext.filters.Sticker.ALL
         return [
             telegram_ext.MessageHandler(
                 telegram_ext.filters.TEXT & new_messages_only,
@@ -428,12 +424,18 @@ class TelegramChannelAdapter(ChannelAdapter):
         return blocks
 
     async def _build_audio_video_block(self, message: Any) -> MediaBlock | None:
-        """Store one voice/audio/video/video-note payload and return its media block."""
+        """Store one voice/audio/video/video-note/animation payload and return its block.
+
+        Animations must be resolved here, before the document fallback: Telegram sets a
+        backward-compat ``document`` field on animation messages, and the animation's own
+        metadata (filename, unique id) is the better source.
+        """
         media_sources: tuple[tuple[str, Any], ...] = (
             ("voice", _default_voice_filename),
             ("audio", _default_audio_filename),
             ("video", _default_video_filename),
             ("video_note", _default_video_note_filename),
+            ("animation", _default_animation_filename),
         )
         for attribute_name, default_filename_builder in media_sources:
             media_object = getattr(message, attribute_name, None)
@@ -899,6 +901,12 @@ def _default_video_filename(video: Any) -> str:
 
 def _default_video_note_filename(video_note: Any) -> str:
     return _media_filename(video_note, "telegram-video-note", ".mp4")
+
+
+def _default_animation_filename(animation: Any) -> str:
+    # Telegram converts GIFs to MP4 animations; a real GIF still sniffs as image/gif
+    # in the attachment store regardless of this fallback extension.
+    return _media_filename(animation, "telegram-animation", ".mp4")
 
 
 def _is_image_media_type(media_type: str) -> bool:
