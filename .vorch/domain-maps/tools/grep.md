@@ -6,7 +6,7 @@ Searches file contents by regex or fixed string.
 
 - Tool name: `grep`
 - Registration: `register_grep_tool(registry)`
-- Schema: required `pattern`; optional `path`, `glob`, `ignoreCase`, `literal`, `context`, `limit`, and `output_mode`.
+- Schema: required `pattern`; optional `path`, `glob`, `ignore_case`, `literal`, `context`, `limit`, and `output_mode`. The legacy camelCase `ignoreCase` is accepted as an alias and normalized before validation (like `edit`'s aliases).
 - `output_mode`: `content`, `files_with_matches`, or `count`.
 - Success data returns textual output under `data.content`.
 - Display: summary fields `pattern` and `path`.
@@ -14,7 +14,7 @@ Searches file contents by regex or fixed string.
 ## Conventions
 
 - Regex mode is default; fixed string mode uses `literal: true`.
-- Relative `path` resolves from `ToolContext.workspace`; absolute file or directory paths are allowed.
+- Relative `path` resolves from `ToolContext.effective_cwd` (the working directory); absolute file or directory paths are allowed.
 - Optional `glob` limits candidate files before content matching.
 
 ## Constraints & Gotchas
