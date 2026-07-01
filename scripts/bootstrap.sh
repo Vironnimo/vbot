@@ -182,7 +182,9 @@ link_vbot() {
 }
 
 # Mark this directory as a self-contained bootstrap install so uninstall.sh knows
-# it may remove the whole tree (venv + source), not just a pip package.
+# it may remove the whole tree (venv + source), not just a pip package. Written
+# right after the clone, so a bootstrap that fails mid-install still leaves a
+# marked tree that uninstall.sh can remove wholesale.
 write_marker() {
     cat > "${INSTALL_DIR}/.vbot-bootstrap" <<'MARKER'
 # vBot bootstrap install marker.
@@ -198,10 +200,10 @@ ensure_python
 [ "$DEV" -eq 1 ] && ensure_node
 
 clone_repo
+write_marker
 [ "$DEV" -eq 0 ] && fetch_prebuilt_webui
 run_installer
 link_vbot
-write_marker
 
 step "vBot bootstrap complete"
 echo "Installed at: ${INSTALL_DIR}"
