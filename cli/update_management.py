@@ -17,6 +17,7 @@ import hashlib
 import importlib.util
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -292,7 +293,12 @@ def _download_webui(asset_url: str, repo: Path) -> _Step:
 
 
 def _unpack_webui_archive(content: bytes, webui_dir: Path) -> None:
-    """Unpack the WebUI tarball, using tarfile's data filter where available.
+    """Unpack the WebUI tarball, replacing webui/dist wholesale.
+
+    Extraction goes into a staging directory first and the finished dist is
+    swapped in afterwards: a corrupt archive never costs the existing dist, and
+    replacing (rather than overlaying) keeps hashed bundles from older releases
+    from accumulating across updates.
 
     The extraction filter (PEP 706) only exists on CPython >= 3.12 and the
     3.11.4+/3.10.12+ backports; the deployment target (Raspberry Pi OS can ship
@@ -300,11 +306,25 @@ def _unpack_webui_archive(content: bytes, webui_dir: Path) -> None:
     and fall back to a same-tree guard so unpacking never escapes webui/.
     """
 
-    with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
-        if hasattr(tarfile, "data_filter"):
-            archive.extractall(webui_dir, filter="data")  # type: ignore[call-arg]
-        else:
-            _extract_within(archive, webui_dir)
+    staging = webui_dir / "dist.staging"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    try:
+        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
+            if hasattr(tarfile, "data_filter"):
+                archive.extractall(staging, filter="data")  # type: ignore[call-arg]
+            else:
+                _extract_within(archive, staging)
+        staged_dist = staging / "dist"
+        if not staged_dist.is_dir():
+            raise ValueError("WebUI archive does not contain dist/")
+        dist_dir = webui_dir / "dist"
+        if dist_dir.exists():
+            shutil.rmtree(dist_dir)
+        staged_dist.rename(dist_dir)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _extract_within(archive: tarfile.TarFile, destination: Path) -> None:
