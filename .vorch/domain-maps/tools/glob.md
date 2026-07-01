@@ -13,7 +13,7 @@ Discovers filesystem paths by glob-style pattern.
 ## Conventions
 
 - Relative patterns such as `**/*.py` are supported.
-- Relative `path` resolves from `ToolContext.workspace`; absolute search roots are allowed.
+- Relative `path` resolves from `ToolContext.effective_cwd` (the working directory); absolute search roots are allowed.
 - Matches are returned relative to the search root; directory entries end with `/`.
 
 ## Constraints & Gotchas
