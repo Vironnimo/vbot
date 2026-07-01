@@ -308,10 +308,15 @@ def _unpack_webui_archive(content: bytes, webui_dir: Path) -> None:
 
 
 def _extract_within(archive: tarfile.TarFile, destination: Path) -> None:
-    """Extract every member, refusing any path that escapes the destination tree."""
+    """Extract every member, refusing links and paths that escape the destination tree."""
 
     root = destination.resolve()
     for member in archive.getmembers():
+        # A link member can redirect later members outside the tree after this
+        # pre-check has passed (the TOCTOU the stdlib data filter guards
+        # against), so refuse links outright — the WebUI bundle contains none.
+        if member.issym() or member.islnk():
+            raise tarfile.TarError(f"link member in WebUI archive: {member.name}")
         target = (destination / member.name).resolve()
         if not target.is_relative_to(root):
             raise tarfile.TarError(f"unsafe path in WebUI archive: {member.name}")
