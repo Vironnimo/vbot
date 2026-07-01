@@ -31,7 +31,9 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("tools.channel")
 
 CHANNEL_SEND_TOOL_NAME = "channel_send"
-CHANNEL_SEND_TOOL_DESCRIPTION = "Send a proactive outbound message through a configured channel."
+CHANNEL_SEND_TOOL_DESCRIPTION = (
+    "Send a proactive outbound message (text and/or files) through a configured channel."
+)
 _REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id",))
 _OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(("message", "platform_target", "file_paths"))
 _CHANNEL_SEND_ALLOWED_ARGUMENTS = (
@@ -47,7 +49,9 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
         },
         "message": {
             "type": "string",
-            "description": "Optional outbound message text.",
+            "description": (
+                "Outbound message text. At least one of message or file_paths is required."
+            ),
         },
         "platform_target": {
             "type": "string",
