@@ -404,10 +404,49 @@ class ChannelConversationEngine:
             return active
         return conversation_key
 
+    async def migrate_group_conversation(self, old_chat_id: str, new_chat_id: str) -> bool:
+        """Repoint a group conversation anchor after a platform chat-id migration.
+
+        Some platforms change a group's chat id in place (Telegram: group →
+        supergroup upgrade). The old anchor's active session keeps the full
+        history; the new chat id's anchor gets an ``active_session_id`` pointer at
+        it (single hop), the session's channel sidecar moves to the new chat id
+        (so proactive sends target the live chat), and a note tells the model.
+        Returns False when the old conversation has no session to bridge.
+        """
+        agent_id = self._config.agent_id
+        old_anchor = self._group_conversation_key(old_chat_id)
+        active_session_id = self._resolve_active_session_id(agent_id, old_anchor)
+        if not self._chat_sessions.exists(agent_id, active_session_id):
+            return False
+
+        new_anchor = self._group_conversation_key(new_chat_id)
+        self._set_active_session_pointer(agent_id, new_anchor, active_session_id)
+        conversation = ConversationFacts(
+            platform=self._config.platform,
+            channel_id=self._config.id,
+            chat_id=new_chat_id,
+            user_id=new_chat_id,
+            kind="group",
+        )
+        self._update_session_metadata(
+            RouteFacts(agent_id=agent_id, session_id=active_session_id),
+            conversation,
+            ReplyPlanFacts(channel_id=self._config.id, platform_target=new_chat_id),
+            track_participant=False,
+        )
+        async with self._chat_sessions.write_lock(agent_id, active_session_id):
+            session = self._chat_sessions.get_or_create(agent_id, active_session_id)
+            session.add_note(
+                f"This group chat was migrated by the platform to a new chat id "
+                f"(old: {old_chat_id}, new: {new_chat_id}). The conversation continues here."
+            )
+        return True
+
     def _derive_session_id(self, conversation: ConversationFacts) -> str:
         # Group conversations share one session keyed by chat id and ignore dm_scope.
         if conversation.kind == "group":
-            return f"ch-{self._config.id}-{conversation.chat_id}"
+            return self._group_conversation_key(conversation.chat_id)
 
         scope = self._config.dm_scope
         if scope == "main":
@@ -417,6 +456,9 @@ class ChannelConversationEngine:
         if scope == "per_account_channel_peer":
             return f"ch-{self._config.id}-{conversation.chat_id}-u{conversation.user_id}"
         return f"ch-{self._config.id}-{conversation.chat_id}"
+
+    def _group_conversation_key(self, chat_id: str) -> str:
+        return f"ch-{self._config.id}-{chat_id}"
 
     def _session_exists(self, route: RouteFacts) -> bool:
         return self._chat_sessions.exists(route.agent_id, route.session_id)
