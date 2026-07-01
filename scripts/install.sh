@@ -300,9 +300,16 @@ fi
 
 SCRIPTS_PATH="$("$PYTHON" -c "import sysconfig; print(sysconfig.get_path('scripts'))")"
 VBOT_ON_ORIGINAL_PATH="$(command -v vbot || true)"
-export PATH="${PATH}:${SCRIPTS_PATH}"
+# Prepend so this session — including the autostart registration triggered
+# below — resolves the just-installed vbot, not a stale one elsewhere on PATH.
+export PATH="${SCRIPTS_PATH}:${PATH}"
 
-VBOT_PATH="$(command -v vbot || true)"
+# Prefer the just-installed command directly over whatever PATH resolves first.
+if [ -x "${SCRIPTS_PATH}/vbot" ]; then
+    VBOT_PATH="${SCRIPTS_PATH}/vbot"
+else
+    VBOT_PATH="$(command -v vbot || true)"
+fi
 if [ -z "$VBOT_PATH" ]; then
     fail "The vbot command was not found after installation. Check pip output for installation errors."
 fi

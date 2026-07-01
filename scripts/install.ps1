@@ -387,9 +387,10 @@ function Ensure-PathContains {
         return
     }
 
-    if (-not (Test-PathListContains -PathList $env:Path -PathToFind $PathToAdd)) {
-        $env:Path = $env:Path + [System.IO.Path]::PathSeparator + $PathToAdd
-    }
+    # Prepend for this session so every later resolution — including shutil.which
+    # inside 'vbot autostart enable' — prefers the just-installed vbot over a
+    # stale one elsewhere on PATH.
+    $env:Path = $PathToAdd + [System.IO.Path]::PathSeparator + $env:Path
 
     if (-not (Test-RunningOnWindows)) {
         return
@@ -413,16 +414,18 @@ function Ensure-PathContains {
 function Resolve-VbotCommandPath {
     param([string]$ScriptsPath)
 
-    $command = Get-Command vbot -ErrorAction SilentlyContinue
-    if ($null -ne $command) {
-        return $command.Source
-    }
-
+    # Prefer the just-installed command over whatever PATH resolves first: a
+    # stale vbot elsewhere must not win verification or autostart registration.
     foreach ($candidateName in @("vbot.exe", "vbot.cmd", "vbot")) {
         $candidate = Join-Path $ScriptsPath $candidateName
         if (Test-Path $candidate) {
             return $candidate
         }
+    }
+
+    $command = Get-Command vbot -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
     }
 
     throw "The vbot command was not found after installation. Check pip output for installation errors."
