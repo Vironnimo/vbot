@@ -148,6 +148,8 @@ function Write-BootstrapMarker {
     param([string]$InstallDir)
     # Mark this directory as a self-contained bootstrap install so uninstall.ps1
     # knows it may remove the whole tree (venv + source), not just a pip package.
+    # Written right after the clone, so a bootstrap that fails mid-install still
+    # leaves a marked tree that uninstall.ps1 can remove wholesale.
     $marker = Join-Path $InstallDir ".vbot-bootstrap"
     $lines = @(
         "# vBot bootstrap install marker.",
@@ -176,6 +178,7 @@ if ($Dev) {
     if ($LASTEXITCODE -ne 0) {
         throw "git clone failed."
     }
+    Write-BootstrapMarker -InstallDir $InstallDir
 }
 else {
     if (-not [string]::IsNullOrWhiteSpace($Version)) {
@@ -192,6 +195,7 @@ else {
     if ($LASTEXITCODE -ne 0) {
         throw "git clone failed."
     }
+    Write-BootstrapMarker -InstallDir $InstallDir
 
     Write-Step "Fetching prebuilt WebUI for $tag"
     $assetUrl = Get-WebuiAssetUrl -Tag $tag
@@ -241,7 +245,6 @@ Write-Step "Running installer: install.ps1 $($installerArgList -join ' ')"
 & $installer @installerArgList
 
 Add-VbotShim -InstallDir $InstallDir -VenvDir $venvDir
-Write-BootstrapMarker -InstallDir $InstallDir
 
 Write-Step "vBot bootstrap complete"
 Write-Host "Installed at: $InstallDir (virtual environment in .venv)"
