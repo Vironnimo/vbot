@@ -52,8 +52,8 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
         "platform_target": {
             "type": "string",
             "description": (
-                "Platform-specific target id. If omitted, uses the session metadata "
-                "last_reply_target.platform_target value."
+                "Platform-specific target id (e.g. a chat or channel id). Omit to "
+                "send to wherever this session last replied."
             ),
         },
         "file_paths": {

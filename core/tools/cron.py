@@ -26,7 +26,10 @@ if TYPE_CHECKING:
 CronScheduleType = Literal["cron", "once"]
 
 CRON_TOOL_NAME = "cron"
-CRON_TOOL_DESCRIPTION = "Create, list, update, delete, enable, and disable scheduled cron jobs."
+CRON_TOOL_DESCRIPTION = (
+    "Schedule prompts that trigger an agent run later — recurring (cron expression) "
+    "or one-time (run_at). Create, list, update, delete, enable, and disable jobs."
+)
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
 CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
@@ -87,7 +90,7 @@ CRON_TOOL_PARAMETERS: JsonObject = {
         },
         "prompt": {
             "type": "string",
-            "description": "Prompt to trigger when the schedule fires.",
+            "description": "Prompt sent to the target agent when the schedule fires.",
         },
         "schedule_type": {
             "type": "string",

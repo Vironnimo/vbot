@@ -780,7 +780,8 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
                     "path": {
                         "type": "string",
                         "description": (
-                            "Path to the file to read (relative to workspace, or absolute)."
+                            "Path to the file to read (relative to the working directory, "
+                            "or absolute)."
                         ),
                     },
                     "offset": {
