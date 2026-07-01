@@ -36,7 +36,9 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "path": {
             "type": "string",
-            "description": "Path to the file to edit (relative to workspace, or absolute).",
+            "description": (
+                "Path to the file to edit (relative to the working directory, or absolute)."
+            ),
         },
         "old_string": {
             "type": "string",
