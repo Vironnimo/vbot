@@ -807,7 +807,7 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
             **content,
         )
 
-    migration_handler, text_handler, media_handler, unsupported_handler = (
+    migration_handler, text_handler, media_handler, structured_handler, unsupported_handler = (
         adapter._build_message_handlers(telegram_ext)
     )
     text_message = make_real_message(text="hi")
@@ -863,6 +863,42 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
     assert not unsupported_handler.check_update(
         telegram.Update(update_id=14, message=migration_message)
     )
+    # Location/contact/poll route to the structured handler, not the catch-all.
+    location_message = make_real_message(
+        location=telegram.Location(longitude=13.4, latitude=52.5)
+    )
+    contact_message = make_real_message(
+        contact=telegram.Contact(phone_number="+491234", first_name="Max")
+    )
+    poll_message = make_real_message(
+        poll=telegram.Poll(
+            id="p1",
+            question="Lunch?",
+            options=[telegram.PollOption(text="Yes", voter_count=0)],
+            total_voter_count=0,
+            is_closed=False,
+            is_anonymous=True,
+            type="regular",
+            allows_multiple_answers=False,
+        )
+    )
+    for update_id, structured in ((15, location_message), (16, contact_message), (17, poll_message)):
+        assert structured_handler.check_update(
+            telegram.Update(update_id=update_id, message=structured)
+        )
+        assert not unsupported_handler.check_update(
+            telegram.Update(update_id=update_id + 10, message=structured)
+        )
+    # Anything else that is a real user message falls into the catch-all...
+    dice_message = make_real_message(dice=telegram.Dice(value=3, emoji="🎲"))
+    assert unsupported_handler.check_update(telegram.Update(update_id=30, message=dice_message))
+    assert not unsupported_handler.check_update(telegram.Update(update_id=31, message=text_message))
+    # ...but service noise (member joined etc.) matches no reply-producing handler.
+    status_message = make_real_message(
+        new_chat_members=[telegram.User(id=51, first_name="B", is_bot=False)]
+    )
+    for handler in (text_handler, media_handler, structured_handler, unsupported_handler):
+        assert not handler.check_update(telegram.Update(update_id=32, message=status_message))
     await adapter.stop()
 
 
@@ -1864,6 +1900,131 @@ async def test_unsupported_message_type_replies_for_allowed_chat(
         chat_id=12345,
         text="Sorry, this message type isn't supported yet.",
     )
+    await adapter.stop()
+
+
+@pytest.mark.parametrize(
+    ("message_fields", "expected"),
+    [
+        (
+            {"location": SimpleNamespace(latitude=52.5, longitude=13.4)},
+            "[location shared] latitude 52.5, longitude 13.4",
+        ),
+        (
+            {
+                "venue": SimpleNamespace(
+                    title="Cafe",
+                    address="Main St 1",
+                    location=SimpleNamespace(latitude=52.5, longitude=13.4),
+                )
+            },
+            "[location shared] Cafe, Main St 1 (latitude 52.5, longitude 13.4)",
+        ),
+        (
+            {
+                "contact": SimpleNamespace(
+                    first_name="Max", last_name="Muster", phone_number="+49123"
+                )
+            },
+            "[contact shared] Max Muster, phone: +49123",
+        ),
+        (
+            {"contact": SimpleNamespace(first_name="Max", last_name=None, phone_number=None)},
+            "[contact shared] Max",
+        ),
+        (
+            {
+                "poll": SimpleNamespace(
+                    question="Lunch?",
+                    options=[SimpleNamespace(text="Yes"), SimpleNamespace(text="No")],
+                )
+            },
+            "[poll] Lunch?\n- Yes\n- No",
+        ),
+    ],
+)
+def test_render_structured_message_variants(
+    message_fields: dict[str, Any],
+    expected: str,
+) -> None:
+    base_fields: dict[str, Any] = {"venue": None, "location": None, "contact": None, "poll": None}
+    message = SimpleNamespace(**{**base_fields, **message_fields})
+
+    assert telegram_module._render_structured_message(message) == expected
+
+
+def test_render_structured_message_returns_none_without_payload() -> None:
+    message = SimpleNamespace(venue=None, location=None, contact=None, poll=None)
+
+    assert telegram_module._render_structured_message(message) is None
+
+
+@pytest.mark.asyncio
+async def test_location_message_triggers_run_with_rendered_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+    )
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=12345),
+        effective_user=SimpleNamespace(id=50),
+        effective_message=SimpleNamespace(
+            text=None,
+            venue=None,
+            location=SimpleNamespace(latitude=52.5, longitude=13.4),
+            contact=None,
+            poll=None,
+            message_thread_id=None,
+        ),
+    )
+
+    await adapter._handle_inbound_structured_message(update, SimpleNamespace())
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    assert trigger_mock.await_args is not None
+    assert trigger_mock.await_args.args[1] == "[location shared] latitude 52.5, longitude 13.4"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_structured_message_ignores_disallowed_chat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trigger_mock = AsyncMock()
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+    )
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=99999),
+        effective_user=SimpleNamespace(id=50),
+        effective_message=SimpleNamespace(
+            text=None,
+            venue=None,
+            location=SimpleNamespace(latitude=52.5, longitude=13.4),
+            contact=None,
+            poll=None,
+            message_thread_id=None,
+        ),
+    )
+
+    await adapter._handle_inbound_structured_message(update, SimpleNamespace())
+    await drain_chat_queue(adapter, 99999)
+
+    trigger_mock.assert_not_awaited()
     await adapter.stop()
 
 

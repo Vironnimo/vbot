@@ -148,7 +148,21 @@ class TelegramChannelAdapter(ChannelAdapter):
             | telegram_ext.filters.VIDEO_NOTE
             | telegram_ext.filters.ANIMATION
         )
-        unsupported_message_types = telegram_ext.filters.Sticker.ALL
+        # Location (incl. venue), contact, and poll messages are rendered as bracketed
+        # text for the model instead of being dropped.
+        structured_message_types = (
+            telegram_ext.filters.LOCATION | telegram_ext.filters.CONTACT | telegram_ext.filters.POLL
+        )
+        # Everything else that is a real user message (stickers, dice, games, ...) gets
+        # the polite unsupported-type reply instead of silence. Status updates (member
+        # joined, pinned message, ...) are service noise, not user messages, and stay
+        # excluded — migration status updates have their own handler above.
+        unsupported_message_types = ~(
+            telegram_ext.filters.TEXT
+            | media_message_types
+            | structured_message_types
+            | telegram_ext.filters.StatusUpdate.ALL
+        )
         return [
             # Migration service messages first: a group→supergroup upgrade changes the
             # chat id in place and would otherwise silently kill the allowlist match.
@@ -163,6 +177,10 @@ class TelegramChannelAdapter(ChannelAdapter):
             telegram_ext.MessageHandler(
                 media_message_types & new_messages_only,
                 self._handle_inbound_media,
+            ),
+            telegram_ext.MessageHandler(
+                structured_message_types & new_messages_only,
+                self._handle_inbound_structured_message,
             ),
             telegram_ext.MessageHandler(
                 unsupported_message_types & new_messages_only,
@@ -543,6 +561,25 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         await self._engine.handle_inbound_media(conversation, (message,))
+
+    async def _handle_inbound_structured_message(self, update: Any, _context: Any) -> None:
+        """Route a location/contact/poll message as rendered text into the engine."""
+        conversation = self._conversation_facts(update)
+        if conversation is None:
+            return
+
+        if not self._is_chat_allowed(conversation.chat_id):
+            return
+
+        message = getattr(update, "effective_message", None)
+        if message is None:
+            return
+
+        rendered_text = _render_structured_message(message)
+        if rendered_text is None:
+            return
+
+        await self._engine.handle_inbound_text(conversation, rendered_text)
 
     async def _handle_chat_migration(self, update: Any, _context: Any) -> None:
         """Adopt the new chat id when Telegram upgrades a group to a supergroup.
@@ -942,6 +979,88 @@ def _user_display_name(user: Any) -> str | None:
     if isinstance(username, str) and username.strip():
         return username.strip()
     return None
+
+
+def _render_structured_message(message: Any) -> str | None:
+    """Render a location/contact/poll payload as bracketed text for the model.
+
+    These message types carry structured data instead of downloadable media; a compact
+    text rendering keeps their content usable in the conversation without a separate
+    content-block type.
+    """
+    venue = getattr(message, "venue", None)
+    if venue is not None:
+        return _render_venue(venue)
+    location = getattr(message, "location", None)
+    if location is not None:
+        return _render_location(location)
+    contact = getattr(message, "contact", None)
+    if contact is not None:
+        return _render_contact(contact)
+    poll = getattr(message, "poll", None)
+    if poll is not None:
+        return _render_poll(poll)
+    return None
+
+
+def _location_coordinates(location: Any) -> str | None:
+    latitude = getattr(location, "latitude", None)
+    longitude = getattr(location, "longitude", None)
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        return None
+    return f"latitude {latitude}, longitude {longitude}"
+
+
+def _render_location(location: Any) -> str | None:
+    coordinates = _location_coordinates(location)
+    if coordinates is None:
+        return None
+    return f"[location shared] {coordinates}"
+
+
+def _render_venue(venue: Any) -> str | None:
+    details = ", ".join(
+        value.strip()
+        for value in (getattr(venue, "title", None), getattr(venue, "address", None))
+        if isinstance(value, str) and value.strip()
+    )
+    coordinates = _location_coordinates(getattr(venue, "location", None))
+    if details and coordinates:
+        return f"[location shared] {details} ({coordinates})"
+    if details:
+        return f"[location shared] {details}"
+    if coordinates:
+        return f"[location shared] {coordinates}"
+    return None
+
+
+def _render_contact(contact: Any) -> str | None:
+    name = " ".join(
+        value.strip()
+        for value in (getattr(contact, "first_name", None), getattr(contact, "last_name", None))
+        if isinstance(value, str) and value.strip()
+    )
+    phone_raw = getattr(contact, "phone_number", None)
+    phone = phone_raw.strip() if isinstance(phone_raw, str) and phone_raw.strip() else None
+    if not name and phone is None:
+        return None
+    if phone is None:
+        return f"[contact shared] {name}"
+    if not name:
+        return f"[contact shared] phone: {phone}"
+    return f"[contact shared] {name}, phone: {phone}"
+
+
+def _render_poll(poll: Any) -> str | None:
+    question = getattr(poll, "question", None)
+    if not isinstance(question, str) or not question.strip():
+        return None
+    lines = [f"[poll] {question.strip()}"]
+    for option in getattr(poll, "options", ()) or ():
+        text = getattr(option, "text", None)
+        if isinstance(text, str) and text.strip():
+            lines.append(f"- {text.strip()}")
+    return "\n".join(lines)
 
 
 def _extract_caption(message: Any) -> str | None:
