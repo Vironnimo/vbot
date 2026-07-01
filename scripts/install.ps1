@@ -23,6 +23,9 @@ $WebUiDir = Join-Path $ProjectRoot "webui"
 if ($Desktop -and $DesktopClient) {
     throw "-Desktop and -DesktopClient are mutually exclusive: -Desktop adds the accessor to a full server install, -DesktopClient installs the accessor with no server stack."
 }
+if ($DesktopClient -and $Dev) {
+    throw "-DesktopClient and -Dev are mutually exclusive: -DesktopClient installs the accessor with no server stack, -Dev installs the full development environment."
+}
 
 function Write-Step {
     param([string]$Message)
@@ -273,16 +276,17 @@ function Initialize-DataDirectory {
 function Install-PythonPackage {
     param([object]$Python)
 
-    $extra = ".[server,cli]"
-    if ($Desktop) {
-        $extra = ".[server,cli,desktop]"
-    }
+    # -Dev swaps the base groups; -Desktop stays an add-on on top of either base,
+    # so a dev install with the desktop accessor gets both dependency groups.
+    # -DesktopClient is its own accessor-only shape and excludes -Dev.
+    $groups = if ($Dev) { @("dev") } else { @("server", "cli") }
     if ($DesktopClient) {
-        $extra = ".[cli,desktop]"
+        $groups = @("cli", "desktop")
     }
-    if ($Dev) {
-        $extra = ".[dev]"
+    elseif ($Desktop) {
+        $groups += "desktop"
     }
+    $extra = ".[{0}]" -f ($groups -join ",")
 
     Write-Step "Installing Python package in editable mode: $extra"
     Invoke-External $Python @("-m", "pip", "install", "-e", $extra)

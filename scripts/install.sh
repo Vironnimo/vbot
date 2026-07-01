@@ -99,6 +99,9 @@ done
 if [ "$DESKTOP" -eq 1 ] && [ "$DESKTOP_CLIENT" -eq 1 ]; then
     fail "--desktop and --desktop-client are mutually exclusive: --desktop adds the accessor to a full server install, --desktop-client installs the accessor with no server stack."
 fi
+if [ "$DESKTOP_CLIENT" -eq 1 ] && [ "$DEV" -eq 1 ]; then
+    fail "--desktop-client and --dev are mutually exclusive: --desktop-client installs the accessor with no server stack, --dev installs the full development environment."
+fi
 
 # The desktop-client mode installs only the accessor: it owns no server data dir,
 # so its normalization and creation are skipped along with the server steps below.
@@ -223,15 +226,19 @@ ENVEOF
     fi
 fi
 
-EXTRA=".[server,cli]"
-if [ "$DESKTOP" -eq 1 ]; then
-    EXTRA=".[server,cli,desktop]"
-fi
+# --dev swaps the base groups; --desktop stays an add-on on top of either base,
+# so a dev install with the desktop accessor gets both dependency groups.
+# --desktop-client is its own accessor-only shape and excludes --dev.
 if [ "$DESKTOP_CLIENT" -eq 1 ]; then
     EXTRA=".[cli,desktop]"
-fi
-if [ "$DEV" -eq 1 ]; then
+elif [ "$DEV" -eq 1 ] && [ "$DESKTOP" -eq 1 ]; then
+    EXTRA=".[dev,desktop]"
+elif [ "$DEV" -eq 1 ]; then
     EXTRA=".[dev]"
+elif [ "$DESKTOP" -eq 1 ]; then
+    EXTRA=".[server,cli,desktop]"
+else
+    EXTRA=".[server,cli]"
 fi
 step "Installing Python package in editable mode: ${EXTRA}"
 (cd "$PROJECT_ROOT" && "$PYTHON" -m pip install -e "$EXTRA")
