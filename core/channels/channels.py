@@ -9,6 +9,7 @@ import re
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -610,6 +611,32 @@ class ChannelService:
             self._storage.save(replace(config, enabled=False))
         self.stop_channel(normalized_id)
 
+    def record_chat_id_migration(self, channel_id: str, old_chat_id: str, new_chat_id: str) -> None:
+        """Persist a platform-side chat-id migration into the channel's allowlist.
+
+        Swaps the old chat id for the new one in ``allowed_chat_ids`` and saves the
+        config without restarting the adapter — the running adapter already swapped
+        its in-memory allowlist and a restart would drop queued conversation work.
+        Idempotent: a config that no longer lists the old id is left untouched.
+        """
+        normalized_id = _normalize_channel_id(channel_id)
+        config = self._storage.get(normalized_id)
+        if old_chat_id not in config.allowed_chat_ids:
+            return
+
+        migrated_ids: list[str] = []
+        for allowed_chat_id in config.allowed_chat_ids:
+            candidate = new_chat_id if allowed_chat_id == old_chat_id else allowed_chat_id
+            if candidate not in migrated_ids:
+                migrated_ids.append(candidate)
+        self._storage.save(replace(config, allowed_chat_ids=migrated_ids))
+        _LOGGER.info(
+            "Channel allowlist migrated (channel=%s old=%s new=%s)",
+            normalized_id,
+            old_chat_id,
+            new_chat_id,
+        )
+
     def has_active_channels(self) -> bool:
         """Return whether at least one channel adapter task is currently running."""
         return any(not task.done() for task in self._adapter_tasks.values())
@@ -662,6 +689,7 @@ class ChannelService:
                 self._credential_resolver,
                 attachment_store=self._attachment_store,
                 command_dispatcher=self._command_dispatcher,
+                chat_migration_persister=partial(self.record_chat_id_migration, config.id),
             )
 
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
