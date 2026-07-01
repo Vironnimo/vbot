@@ -227,15 +227,15 @@ function Resolve-EffectivePort {
             continue
         }
 
-        try {
-            $configuredPort = [int]$value
-        }
-        catch {
+        # Match the Linux installer's strictness: only a JSON integer counts —
+        # no booleans, strings, or fractional numbers (a cast would round).
+        if ($value -is [bool] -or -not ($value -is [int] -or $value -is [long])) {
             throw "settings.json value '$key' must be an integer port."
         }
-        if ($configuredPort -lt 1 -or $configuredPort -gt 65535) {
+        if ($value -lt 1 -or $value -gt 65535) {
             throw "settings.json value '$key' must be between 1 and 65535."
         }
+        $configuredPort = [int]$value
         Write-Host "Using port $configuredPort from existing settings.json ($key). Pass -Port to override installer commands."
         return $configuredPort
     }
