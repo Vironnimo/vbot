@@ -20,6 +20,7 @@ from cli.update_management import (
     ReleaseInfo,
     _default_runner,
     _extract_within,
+    _reinstall_extras,
     run_update,
 )
 
@@ -161,7 +162,10 @@ def test_dev_track_up_to_date_restarts(tmp_path: Path) -> None:
     assert events == ["stop", "start"]
 
 
-def test_dev_track_reinstalls_deps_and_rebuilds_webui(tmp_path: Path) -> None:
+def test_dev_track_reinstalls_deps_and_rebuilds_webui(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("cli.update_management._desktop_extra_installed", lambda: False)
     (tmp_path / ".git").mkdir()
     (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
     revisions = iter(["beforesha", "aftersha"])
@@ -191,6 +195,21 @@ def test_dev_track_reinstalls_deps_and_rebuilds_webui(tmp_path: Path) -> None:
     assert runner.ran("-m", "pip", "install", "-e", ".[dev]")
     assert any("npm" in call for call in runner.calls)
     assert events == ["stop", "start"]
+
+
+def test_reinstall_extras_keeps_desktop_add_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An install made with the desktop accessor must not lose it on update.
+    monkeypatch.setattr("cli.update_management._desktop_extra_installed", lambda: True)
+
+    assert _reinstall_extras("release") == "server,cli,desktop"
+    assert _reinstall_extras("dev") == "dev,desktop"
+
+
+def test_reinstall_extras_without_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("cli.update_management._desktop_extra_installed", lambda: False)
+
+    assert _reinstall_extras("release") == "server,cli"
+    assert _reinstall_extras("dev") == "dev"
 
 
 def test_release_track_requires_webui_asset(tmp_path: Path) -> None:
