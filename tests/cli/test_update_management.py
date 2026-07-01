@@ -435,6 +435,81 @@ def test_release_track_redownloads_when_dist_missing(tmp_path: Path) -> None:
     assert (tmp_path / "webui" / "dist" / "index.html").is_file()
 
 
+@respx.mock
+def test_release_download_replaces_stale_dist(tmp_path: Path) -> None:
+    # The new bundle replaces dist wholesale; hashed bundles from an older
+    # release must not survive the update.
+    (tmp_path / ".git").mkdir()
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "stale-bundle.js").write_text("old", encoding="utf-8")
+    asset_url = "https://example.com/webui-dist.tar.gz"
+    respx.get(asset_url).mock(return_value=httpx.Response(200, content=_webui_tar_bytes()))
+    revisions = iter(["old", "new", "new"])
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _err()
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(next(revisions))
+        return _ok("")
+
+    runner = ScriptedRunner(handler)
+    events, stop, start = _recording_restart()
+    result = run_update(
+        _instance(),
+        runner=runner,
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        latest_release=lambda: ReleaseInfo(tag="v9.9.9", webui_asset_url=asset_url),
+    )
+
+    assert result.ok, result.message
+    assert (dist / "index.html").is_file()
+    assert not (dist / "stale-bundle.js").exists()
+
+
+@respx.mock
+def test_release_download_keeps_dist_on_corrupt_archive(tmp_path: Path) -> None:
+    # A corrupt download must fail the update without costing the existing dist.
+    (tmp_path / ".git").mkdir()
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    asset_url = "https://example.com/webui-dist.tar.gz"
+    respx.get(asset_url).mock(return_value=httpx.Response(200, content=b"not a tarball"))
+    revisions = iter(["old", "new", "new"])
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _err()
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(next(revisions))
+        return _ok("")
+
+    runner = ScriptedRunner(handler)
+    events, stop, start = _recording_restart()
+    result = run_update(
+        _instance(),
+        runner=runner,
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        latest_release=lambda: ReleaseInfo(tag="v9.9.9", webui_asset_url=asset_url),
+    )
+
+    assert not result.ok
+    assert "unpacking the prebuilt WebUI failed" in result.message
+    assert (dist / "index.html").is_file()
+    assert not (tmp_path / "webui" / "dist.staging").exists()
+    assert events == []
+
+
 def test_extract_within_extracts_benign_archive(tmp_path: Path) -> None:
     # The same-tree fallback path used on Pythons without tarfile's data filter.
     destination = tmp_path / "webui"
