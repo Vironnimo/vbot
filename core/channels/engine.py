@@ -98,34 +98,28 @@ class ConversationTransport(Protocol):
         """Extract caption text from one raw platform message for gating checks."""
 
 
+# Queued work carries the ConversationFacts, not a resolved route: the routed session
+# is resolved in the per-conversation worker at processing time. Resolving at enqueue
+# time would pin messages to a session that a queued /new ahead of them is about to
+# move off the conversation anchor (observed messages always resolved late already).
 @dataclass(slots=True, frozen=True)
 class _QueuedInboundMessage:
-    route: RouteFacts
-    reply_plan: ReplyPlanFacts
+    conversation: ConversationFacts
     message: MessageFacts
-    command_checked: bool = False
-    sender: MessageSender | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class _QueuedCommandAction:
-    route: RouteFacts
-    reply_plan: ReplyPlanFacts
+    conversation: ConversationFacts
     action: CommandAction
-    # The stable conversation anchor captured when the command was received, so a
-    # deferred /new sets its pointer on the anchor and not on the resolved active
-    # session (route.session_id may already be a pointer target).
-    conversation_key: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class _QueuedInboundMedia:
-    route: RouteFacts
-    reply_plan: ReplyPlanFacts
+    conversation: ConversationFacts
     # Raw platform messages; conversion to content blocks happens in the per-conversation
     # worker via the transport so the adapter's update pipeline never blocks.
     messages: tuple[Any, ...]
-    sender: MessageSender | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -171,12 +165,14 @@ class ChannelConversationEngine:
         conversation: ConversationFacts,
         message_text: str,
     ) -> None:
-        """Gate, route, eagerly command-dispatch, and enqueue one inbound text message."""
-        if conversation.kind == "group" and self._command_dispatcher.recognizes(message_text):
-            # Commands are inherently addressed; they are gated by sender authorization
-            # instead of response mode. The check must run before dispatch() because
-            # dispatch executes handler side effects (e.g. /stop cancels a Run).
-            if not self._command_sender_authorized(conversation):
+        """Gate, eagerly command-dispatch, and enqueue one inbound text message."""
+        if self._command_dispatcher.recognizes(message_text):
+            # Commands are inherently addressed; group commands are gated by sender
+            # authorization instead of response mode. The check must run before
+            # dispatch() because dispatch executes handler side effects (e.g. /stop
+            # cancels a Run). Commands dispatch eagerly against the session that is
+            # active on arrival, so /stop can cancel a Run a queued item waits on.
+            if conversation.kind == "group" and not self._command_sender_authorized(conversation):
                 _LOGGER.info(
                     "Channel command denied for non-owner (channel=%s chat=%s user=%s)",
                     self._config.id,
@@ -184,7 +180,18 @@ class ChannelConversationEngine:
                     conversation.user_id,
                 )
                 return
-        elif not self.should_respond(conversation, (message_text,)):
+            route, reply_plan = self.prepare_inbound_route(conversation)
+            command_result = self._command_dispatcher.dispatch(
+                route.agent_id,
+                route.session_id,
+                message_text,
+            )
+            if await self._handle_dispatch_result(
+                command_result, conversation, route, reply_plan, defer_actions=True
+            ):
+                return
+
+        if not self.should_respond(conversation, (message_text,)):
             if self._config.observe_unaddressed and conversation.kind == "group":
                 self._enqueue_observed_message(
                     conversation,
@@ -203,30 +210,11 @@ class ChannelConversationEngine:
             )
             return
 
-        route, reply_plan = self.prepare_inbound_route(conversation)
-
-        command_result = self._command_dispatcher.dispatch(
-            route.agent_id,
-            route.session_id,
-            message_text,
-        )
-        if await self._handle_dispatch_result(
-            command_result,
-            route,
-            reply_plan,
-            defer_actions=True,
-            conversation_key=self._derive_session_id(conversation),
-        ):
-            return
-
         self._enqueue_chat_work(
-            reply_plan.platform_target,
+            conversation.chat_id,
             _QueuedInboundMessage(
-                route=route,
-                reply_plan=reply_plan,
+                conversation=conversation,
                 message=MessageFacts(content=message_text),
-                command_checked=True,
-                sender=self._sender_for(conversation),
             ),
         )
 
@@ -263,14 +251,11 @@ class ChannelConversationEngine:
             )
             return
 
-        route, reply_plan = self.prepare_inbound_route(conversation)
         self._enqueue_chat_work(
-            reply_plan.platform_target,
+            conversation.chat_id,
             _QueuedInboundMedia(
-                route=route,
-                reply_plan=reply_plan,
+                conversation=conversation,
                 messages=tuple(raw_messages),
-                sender=self._sender_for(conversation),
             ),
         )
 
@@ -523,11 +508,15 @@ class ChannelConversationEngine:
             await self._process_queued_observed_message(queued)
             return
         if isinstance(queued, _QueuedCommandAction):
+            # Deferred actions re-resolve at processing time like every other queued
+            # item: a /new that ran ahead of this action in the queue has moved the
+            # pointer by now, and e.g. /compact must act on the now-active session.
+            route, reply_plan = self.prepare_inbound_route(queued.conversation)
             await self._handle_command_action(
                 queued.action,
-                queued.route,
-                queued.reply_plan,
-                queued.conversation_key,
+                route,
+                reply_plan,
+                self._derive_session_id(queued.conversation),
             )
             return
         if isinstance(queued, _QueuedInboundMedia):
@@ -548,34 +537,18 @@ class ChannelConversationEngine:
             session.add_note(queued.note)
 
     async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
-        command_text = _command_text_from_content(queued.message.content)
-        if command_text is not None and not queued.command_checked:
-            dispatch_result = self._command_dispatcher.dispatch(
-                queued.route.agent_id,
-                queued.route.session_id,
-                command_text,
-            )
-            if await self._handle_dispatch_result(
-                dispatch_result,
-                queued.route,
-                queued.reply_plan,
-                defer_actions=False,
-                # Block content never command-dispatches and text commands are
-                # eagerly checked, so this path produces no new_session action
-                # today; the route.session_id fallback in _start_new_session stays
-                # correct if it ever does.
-                conversation_key=None,
-            ):
-                return
-
+        # Commands were already dispatched eagerly on arrival; only plain messages
+        # reach this queue, so processing goes straight to trigger/relay.
+        route, reply_plan = self.prepare_inbound_route(queued.conversation)
         await self._trigger_and_relay(
-            queued.route,
-            queued.reply_plan,
+            route,
+            reply_plan,
             queued.message.content,
-            sender=queued.sender,
+            sender=self._sender_for(queued.conversation),
         )
 
     async def _process_queued_media(self, queued: _QueuedInboundMedia) -> None:
+        route, reply_plan = self.prepare_inbound_route(queued.conversation)
         # Per-message handling: one failing album item must not drop its siblings,
         # and every failure produces user-visible feedback instead of silence.
         content_blocks: list[ContentBlock] = []
@@ -587,23 +560,23 @@ class ChannelConversationEngine:
                 _LOGGER.warning(
                     "Channel inbound media processing failed (channel=%s target=%s): %s",
                     self._config.id,
-                    queued.reply_plan.platform_target,
+                    reply_plan.platform_target,
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )
                 failure_replies.append(_media_failure_reply(error))
 
         for reply in dict.fromkeys(failure_replies):
-            await self._send_reply(queued.reply_plan, reply)
+            await self._send_reply(reply_plan, reply)
 
         if not content_blocks:
             return
 
         await self._trigger_and_relay(
-            queued.route,
-            queued.reply_plan,
+            route,
+            reply_plan,
             content_blocks,
-            sender=queued.sender,
+            sender=self._sender_for(queued.conversation),
         )
 
     # -- Trigger / relay --------------------------------------------------------------
@@ -677,11 +650,11 @@ class ChannelConversationEngine:
     async def _handle_dispatch_result(
         self,
         dispatch_result: object,
+        conversation: ConversationFacts,
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
         *,
         defer_actions: bool,
-        conversation_key: str | None = None,
     ) -> bool:
         if isinstance(dispatch_result, CommandHandled):
             reply = dispatch_result.reply
@@ -695,17 +668,15 @@ class ChannelConversationEngine:
                 # relay). The adapter feeds updates sequentially, so they must not be
                 # awaited in the update handler; the per-conversation worker owns slow work.
                 self._enqueue_chat_work(
-                    reply_plan.platform_target,
+                    conversation.chat_id,
                     _QueuedCommandAction(
-                        route=route,
-                        reply_plan=reply_plan,
+                        conversation=conversation,
                         action=dispatch_result,
-                        conversation_key=conversation_key,
                     ),
                 )
             else:
                 await self._handle_command_action(
-                    dispatch_result, route, reply_plan, conversation_key
+                    dispatch_result, route, reply_plan, self._derive_session_id(conversation)
                 )
             return True
 
@@ -716,7 +687,7 @@ class ChannelConversationEngine:
         command_action: CommandAction,
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
-        conversation_key: str | None = None,
+        conversation_key: str,
     ) -> None:
         platform = self._transport.platform_display_name
         match command_action.name:
@@ -757,7 +728,7 @@ class ChannelConversationEngine:
         self,
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
-        conversation_key: str | None,
+        conversation_key: str,
     ) -> None:
         """Start a fresh channel session and point this chat's anchor at it.
 
@@ -771,11 +742,11 @@ class ChannelConversationEngine:
             return
 
         # conversation_key is the stable anchor; route.session_id is only the
-        # currently-active session (used for the run guard above). Falling back to
-        # route.session_id is correct before the first /new, when they are equal.
-        anchor = conversation_key or route.session_id
-        new_session_id = self._create_fresh_channel_session(route.agent_id, anchor, reply_plan)
-        self._set_active_session_pointer(route.agent_id, anchor, new_session_id)
+        # currently-active session (used for the run guard above).
+        new_session_id = self._create_fresh_channel_session(
+            route.agent_id, conversation_key, reply_plan
+        )
+        self._set_active_session_pointer(route.agent_id, conversation_key, new_session_id)
         await self._send_reply(reply_plan, _NEW_SESSION_STARTED_REPLY)
 
     def _create_fresh_channel_session(
@@ -863,12 +834,6 @@ class ChannelConversationEngine:
             worker.cancel()
         if workers:
             await asyncio.gather(*workers, return_exceptions=True)
-
-
-def _command_text_from_content(content: str | list[ContentBlock]) -> str | None:
-    if isinstance(content, str):
-        return content
-    return None
 
 
 def _format_observed_message(conversation: ConversationFacts, text: str) -> str:
