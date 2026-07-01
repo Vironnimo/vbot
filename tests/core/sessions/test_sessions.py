@@ -757,6 +757,29 @@ class TestChatSessionManager:
 
         assert asyncio.run(asyncio.wait_for(reenter(), timeout=1.0)) is True
 
+    def test_write_lock_reenters_from_child_task_spawned_while_held(self, tmp_path):
+        # The tool executor runs every tool in its own asyncio.create_task, so a
+        # tool that re-acquires its Run's session lock (channel_send targeting the
+        # same chat) runs in a child of the lock-holding task, not the holder
+        # itself. Keying reentrancy on the running task would deadlock here: the
+        # holder awaits the child, the child blocks on the held lock. The child
+        # must inherit the holder's reentrancy depth via contextvars and nest.
+        manager = ChatSessionManager(tmp_path)
+
+        async def scenario() -> bool:
+            lock = manager.write_lock("coder", "session-one")
+            async with lock:  # "Run" holds the lock across its tool cycle.
+
+                async def tool() -> bool:
+                    async with lock:  # re-entry from the child task must not block
+                        return True
+
+                # Created while the lock is held, so it copies the holder's
+                # context — mirroring ToolExecutor.execute_many.
+                return await asyncio.create_task(tool())
+
+        assert asyncio.run(asyncio.wait_for(scenario(), timeout=1.0)) is True
+
     def test_open_tool_cycle_blocks_out_of_band_note_until_release(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-one")
