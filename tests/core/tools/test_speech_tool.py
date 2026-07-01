@@ -13,8 +13,9 @@ from core.tools.tools import ToolContext, ToolRegistry
 
 @pytest.mark.asyncio
 async def test_text_to_speech_tool_returns_artifact_payload(tmp_path: Path) -> None:
+    audio_path = tmp_path / "artifact-1.mp3"
     registry = ToolRegistry()
-    register_text_to_speech_tool(registry, _SpeechService())
+    register_text_to_speech_tool(registry, _SpeechService(audio_path))
     context = ToolContext(
         agent_id="agent",
         session_id="session",
@@ -30,27 +31,31 @@ async def test_text_to_speech_tool_returns_artifact_payload(tmp_path: Path) -> N
     result = await registry.dispatch(context, {"text": "hello"})
 
     assert result["ok"] is True
-    assert result["artifacts"] == [
-        {
-            "id": "artifact-1",
-            "kind": "speech",
-            "filename": "artifact-1.mp3",
-            "media_type": "audio/mpeg",
-            "size_bytes": 5,
-            "url": "/api/speech/artifacts/artifact-1",
-        }
-    ]
+    # The UI-facing artifacts payload stays path-free; the WebUI renders from url.
+    assert result["artifacts"] == [_ARTIFACT_PAYLOAD]
+    data = result["data"]
+    assert isinstance(data, dict)
+    # The model-facing copy carries the absolute file path for out-of-chat delivery.
+    assert data["artifact"] == {**_ARTIFACT_PAYLOAD, "path": str(audio_path)}
+    assert str(audio_path) in data["message"]
+
+
+_ARTIFACT_PAYLOAD = {
+    "id": "artifact-1",
+    "kind": "speech",
+    "filename": "artifact-1.mp3",
+    "media_type": "audio/mpeg",
+    "size_bytes": 5,
+    "url": "/api/speech/artifacts/artifact-1",
+}
 
 
 class _SpeechService:
+    def __init__(self, file_path: Path) -> None:
+        self._file_path = file_path
+
     async def synthesize_artifact(self, _text: str) -> object:
         return SimpleNamespace(
-            to_dict=lambda: {
-                "id": "artifact-1",
-                "kind": "speech",
-                "filename": "artifact-1.mp3",
-                "media_type": "audio/mpeg",
-                "size_bytes": 5,
-                "url": "/api/speech/artifacts/artifact-1",
-            }
+            file_path=self._file_path,
+            to_dict=lambda: dict(_ARTIFACT_PAYLOAD),
         )
