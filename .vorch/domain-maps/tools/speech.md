@@ -10,6 +10,7 @@ Built-in `text_to_speech` tool for creating speech artifacts through the central
 - Display: summary field `text`.
 - Success data: `{ message, artifact }`; the artifact dict is also returned in the top-level `artifacts` list.
 - Artifact shape: `{ id, kind: "speech", filename, media_type, size_bytes, url }`. `url` is a server-local speech artifact URL (`/api/speech/artifacts/<id>`), not an attachment URL.
+- The model-facing `data.artifact` copy additionally carries `path` (the audio file's absolute path, also named in `data.message`) so the agent can deliver the audio outside the web chat (e.g. via `channel_send`). The UI-facing `artifacts` payload stays path-free — the WebUI renders from `url`.
 - Invalid or empty `text` returns `invalid_arguments`. Expected speech failures return `speech_error` instead of crashing the Run.
 
 ## Runtime
