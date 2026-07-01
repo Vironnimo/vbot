@@ -237,10 +237,37 @@ function Resolve-EffectivePort {
     return $DefaultPort
 }
 
+# Write an explicit -Port into an existing settings.json, updating the port key
+# the app actually reads (first present wins, like the server's resolver). Keeps
+# the autostart entry and later flag-less commands (server status/stop) on the
+# same port. Runs through Python because PowerShell's JSON round-trip mangles
+# value types; prints the updated key, or nothing when the port already matches.
+# Python-side strings use single quotes only: Windows PowerShell 5.1 does not
+# escape embedded double quotes when passing arguments to native commands.
+$SyncSettingsPortScript = @'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+port = int(sys.argv[2])
+settings = json.loads(path.read_text(encoding='utf-8'))
+if not isinstance(settings, dict):
+    raise SystemExit('settings.json must hold a JSON object')
+keys = ('server_port', 'SERVER_PORT', 'port', 'PORT')
+key = next((k for k in keys if k in settings), 'server_port')
+if settings.get(key) != port:
+    settings[key] = port
+    path.write_text(json.dumps(settings, indent=4, ensure_ascii=False) + '\n', encoding='utf-8')
+    print(key)
+'@
+
 function Initialize-DataDirectory {
     param(
         [string]$ResolvedDataDir,
-        [int]$ResolvedPort
+        [int]$ResolvedPort,
+        [object]$Python,
+        [bool]$SyncPortIntoSettings
     )
 
     Write-Step "Preparing data directory: $ResolvedDataDir"
@@ -252,6 +279,15 @@ function Initialize-DataDirectory {
         $settings = [ordered]@{ server_port = $ResolvedPort } | ConvertTo-Json
         Write-Utf8NoBomFile -Path $settingsPath -Content ($settings + [Environment]::NewLine)
         Write-Host "Created settings.json with server_port $ResolvedPort."
+    }
+    elseif ($SyncPortIntoSettings) {
+        $updatedKey = Invoke-Capture $Python @("-c", $SyncSettingsPortScript, $settingsPath, "$ResolvedPort")
+        if (-not [string]::IsNullOrWhiteSpace($updatedKey)) {
+            Write-Host "Updated $updatedKey to $ResolvedPort in existing settings.json (-Port)."
+        }
+        else {
+            Write-Host "Keeping existing settings.json (already at port $ResolvedPort)."
+        }
     }
     else {
         Write-Host "Keeping existing valid settings.json."
@@ -453,7 +489,11 @@ if ($buildWebUi) {
 }
 
 if (-not $DesktopClient) {
-    Initialize-DataDirectory $resolvedDataDir $effectivePort
+    Initialize-DataDirectory `
+        -ResolvedDataDir $resolvedDataDir `
+        -ResolvedPort $effectivePort `
+        -Python $python `
+        -SyncPortIntoSettings ($PSBoundParameters.ContainsKey("Port"))
 }
 Install-PythonPackage $python
 if ($DesktopClient) {
