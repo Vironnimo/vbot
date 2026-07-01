@@ -16,7 +16,10 @@ from core.tools.tools import (
 
 TEXT_TO_SPEECH_TOOL_NAME = "text_to_speech"
 TEXT_TO_SPEECH_TOOL_DESCRIPTION = (
-    "Create a speech audio artifact from text using the configured text-to-speech model."
+    "Convert text to spoken audio using the configured text-to-speech model. "
+    "In the web chat the audio plays automatically. The result includes the "
+    "audio file's path — to deliver the audio anywhere else (e.g. a channel "
+    "conversation), send that file, e.g. via channel_send."
 )
 TEXT_TO_SPEECH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -45,11 +48,19 @@ def make_text_to_speech_handler(speech_service: Any):
         except SpeechError as exc:
             return tool_failure("speech_error", str(exc))
 
+        # The model-facing data carries the audio file's absolute path so the agent
+        # can deliver it outside the web chat (e.g. channel_send); the UI-facing
+        # artifacts payload stays path-free — the WebUI renders from `url`.
         artifact_payload = artifact.to_dict()
+        file_path = str(artifact.file_path)
         return tool_success(
             {
-                "message": "Speech artifact created.",
-                "artifact": artifact_payload,
+                "message": (
+                    f"Speech audio created at {file_path}. It plays automatically "
+                    "in the web chat; to deliver it elsewhere, send this file "
+                    "(e.g. via channel_send)."
+                ),
+                "artifact": {**artifact_payload, "path": file_path},
             },
             artifacts=[artifact_payload],
         )
