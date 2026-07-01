@@ -739,7 +739,7 @@ export const englishCatalog = Object.freeze({
   'settings.channels.dm_scope.per_account_channel_peer':
     'Per account + channel + peer',
   'settings.channels.token_env_var': 'Token env var',
-  'settings.channels.allowed_chat_ids': 'Allowed chat IDs',
+  'settings.channels.allowed_chat_ids': 'Allowed chat IDs (inbound)',
   'settings.channels.allowed_chat_ids.placeholder': '12345, -1009876543210',
   'settings.channels.allowed_chat_ids.none': 'None',
   'settings.channels.enabled': 'Enabled',
