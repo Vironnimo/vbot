@@ -67,7 +67,7 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             },
             "description": (
                 "Optional list of file paths to send. Relative paths resolve from the "
-                "agent workspace."
+                "working directory."
             ),
         },
     },
@@ -125,7 +125,7 @@ async def _handle_channel_send_tool(
         message = optional_string(arguments.get("message"), field_name="message")
         files = _build_file_data(
             arguments.get("file_paths"),
-            workspace=context.workspace,
+            base_dir=context.effective_cwd,
             max_size_bytes=max_attachment_size_bytes,
         )
         if message is None and not files:
@@ -283,7 +283,7 @@ def _platform_target_from_channel_config(channel_config: ChannelConfig) -> str |
     return str(channel_config.allowed_chat_ids[0])
 
 
-def _build_file_data(value: object, *, workspace: Path, max_size_bytes: int) -> list[FileData]:
+def _build_file_data(value: object, *, base_dir: Path, max_size_bytes: int) -> list[FileData]:
     if value is None:
         return []
     if not isinstance(value, list):
@@ -294,7 +294,7 @@ def _build_file_data(value: object, *, workspace: Path, max_size_bytes: int) -> 
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise ValueError(f"file_paths[{index}] must be a non-empty string")
 
-        resolved_path = _resolve_path(raw_path.strip(), workspace=workspace)
+        resolved_path = _resolve_path(raw_path.strip(), base_dir=base_dir)
         if not resolved_path.is_file():
             raise ValueError(f"file_paths[{index}] is not a file: {raw_path}")
 
@@ -322,8 +322,8 @@ def _build_file_data(value: object, *, workspace: Path, max_size_bytes: int) -> 
     return files
 
 
-def _resolve_path(path: str, *, workspace: Path) -> Path:
+def _resolve_path(path: str, *, base_dir: Path) -> Path:
     resolved = Path(path).expanduser()
     if not resolved.is_absolute():
-        resolved = workspace / resolved
+        resolved = base_dir / resolved
     return resolved.resolve()
