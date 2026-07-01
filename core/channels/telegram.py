@@ -40,6 +40,13 @@ _ALBUM_FLUSH_SECONDS = 0.5
 _TYPING_ACTION = "typing"
 _TYPING_REFRESH_SECONDS = 4.0
 _UNSUPPORTED_MESSAGE_TYPE_REPLY = "Sorry, this message type isn't supported yet."
+# Telegram's first-contact ritual: every user's first DM to a bot is the /start command.
+# It is translated into an internal note-driven Run so the agent greets in its own
+# voice instead of the model receiving a literal "/start" user message.
+_START_GREETING_PROMPT = (
+    "The user has just opened this chat with Telegram's /start command. "
+    "Greet them briefly in your own voice and let them know how you can help."
+)
 _CHAT_MIGRATED_REPLY = (
     "This group was upgraded by Telegram and has a new chat id. "
     "I've updated my configuration; the conversation continues here."
@@ -575,6 +582,17 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         message_text = self._strip_bot_command_suffix(message_text)
+
+        # /start is Telegram's first-contact ritual in private chats; groups keep the
+        # normal command/gating path (where an unknown /start is simply not addressed).
+        if conversation.kind == "direct":
+            start_payload = _parse_start_command(message_text)
+            if start_payload is not None:
+                self._engine.trigger_internal_reply(
+                    conversation, _start_greeting_prompt(start_payload)
+                )
+                return
+
         await self._engine.handle_inbound_text(conversation, message_text)
 
     def _strip_bot_command_suffix(self, text: str) -> str:
@@ -1021,6 +1039,23 @@ def _normalize_optional_message(message: str | None) -> str | None:
     if not isinstance(message, str) or not message.strip():
         raise ChannelConfigError("message must be a non-empty string when provided")
     return message.strip()
+
+
+def _parse_start_command(text: str) -> str | None:
+    """Return the /start deep-link payload ("" when bare), or None for other text."""
+    stripped = text.strip()
+    if stripped == "/start":
+        return ""
+    if stripped.startswith("/start "):
+        return stripped[len("/start ") :].strip()
+    return None
+
+
+def _start_greeting_prompt(start_payload: str) -> str:
+    if not start_payload:
+        return _START_GREETING_PROMPT
+    # Deep links (t.me/<bot>?start=<payload>) deliver a parameter worth surfacing.
+    return f'{_START_GREETING_PROMPT} They arrived with the start parameter "{start_payload}".'
 
 
 def _extract_message_text(update: Any) -> str | None:
