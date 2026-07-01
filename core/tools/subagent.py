@@ -39,9 +39,7 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
         "background": {
             "type": "boolean",
             "description": (
-                "Run in the background and return immediately so you can fan out "
-                "parallel work (default true). Set false to wait for the sub-agent "
-                "to finish and return its result."
+                "Default true (run in background). Set false to wait for the sub-agent's result."
             ),
             "default": True,
         },

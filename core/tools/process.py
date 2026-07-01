@@ -45,7 +45,12 @@ PROCESS_TOOL_PARAMETERS: JsonObject = {
         "action": {
             "type": "string",
             "enum": sorted(PROCESS_ACTIONS),
-            "description": "Action to perform on process sessions.",
+            "description": (
+                "list: all sessions; poll: wait for new output; log: read output "
+                "lines; write: send text to stdin (no newline appended); submit: "
+                "send the line ending (press Enter); kill: terminate; clear: drop "
+                "finished sessions."
+            ),
         },
         "session_id": {
             "type": "string",
@@ -65,7 +70,10 @@ PROCESS_TOOL_PARAMETERS: JsonObject = {
         },
         "data": {
             "type": "string",
-            "description": "UTF-8 text to write to process stdin.",
+            "description": (
+                "UTF-8 text to write to process stdin. No newline is appended — "
+                "follow with submit to send the line."
+            ),
         },
         "eof": {
             "type": "boolean",
