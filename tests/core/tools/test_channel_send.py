@@ -78,14 +78,21 @@ async def dispatch(
     )
 
 
-def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
+def assert_success_envelope(
+    result: dict[str, object],
+    *,
+    with_thread: bool = False,
+) -> dict[str, object]:
     assert is_tool_result_envelope(result) is True
     assert result["ok"] is True
     assert result["error"] is None
     assert result["artifacts"] == []
     data = result["data"]
     assert isinstance(data, dict)
-    assert set(data) == {"channel_id", "platform_target"}
+    expected_keys = {"channel_id", "platform_target"}
+    if with_thread:
+        expected_keys.add("thread_id")
+    assert set(data) == expected_keys
     return data
 
 
@@ -121,6 +128,7 @@ def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -
         "Task finished",
         "12345",
         files=None,
+        thread_id=None,
     )
     chat_sessions.get_metadata.assert_not_called()
     channel_service.list_channels.assert_called_once_with()
@@ -274,6 +282,7 @@ def test_channel_send_resolves_platform_target_from_session_metadata(tmp_path: P
         "Task finished",
         "12345",
         files=None,
+        thread_id=None,
     )
     channel_service.list_channels.assert_called_once_with()
 
@@ -317,6 +326,7 @@ def test_channel_send_ignores_session_metadata_for_other_channel(tmp_path: Path)
         "Task finished",
         "8506476339",
         files=None,
+        thread_id=None,
     )
 
 
@@ -356,6 +366,87 @@ def test_channel_send_resolves_platform_target_from_unique_allowed_chat_id(tmp_p
         "Task finished",
         "8506476339",
         files=None,
+        thread_id=None,
+    )
+
+
+def test_channel_send_passes_explicit_thread_id(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    chat_sessions = make_chat_sessions()
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "Task finished",
+                "platform_target": "12345",
+                "thread_id": "42",
+            },
+        )
+    )
+
+    data = assert_success_envelope(result, with_thread=True)
+    assert data == {"channel_id": "tg-assistant", "platform_target": "12345", "thread_id": "42"}
+    channel_service.send.assert_awaited_once_with(
+        "tg-assistant",
+        "Task finished",
+        "12345",
+        files=None,
+        thread_id="42",
+    )
+
+
+def test_channel_send_adopts_thread_from_session_metadata(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    chat_sessions = make_chat_sessions()
+    chat_sessions.get_metadata.return_value = {
+        "last_reply_target": {
+            "channel_id": "tg-assistant",
+            "platform_target": "12345",
+            "thread_id": "42",
+        }
+    }
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "Task finished",
+            },
+        )
+    )
+
+    # The metadata topic rides along with the metadata target automatically.
+    data = assert_success_envelope(result, with_thread=True)
+    assert data == {"channel_id": "tg-assistant", "platform_target": "12345", "thread_id": "42"}
+    channel_service.send.assert_awaited_once_with(
+        "tg-assistant",
+        "Task finished",
+        "12345",
+        files=None,
+        thread_id="42",
     )
 
 

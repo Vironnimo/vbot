@@ -83,11 +83,14 @@ class ConversationTransport(Protocol):
         text: str,
         *,
         reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
     ) -> None:
-        """Deliver one outbound text reply, optionally referencing a platform message."""
+        """Deliver one outbound text reply, optionally referencing a message/thread."""
 
     def activity_indicator(
-        self, platform_target: str
+        self,
+        platform_target: str,
+        thread_id: str | None = None,
     ) -> contextlib.AbstractAsyncContextManager[None]:
         """Show a best-effort activity indicator for a target until the block exits."""
 
@@ -286,6 +289,9 @@ class ChannelConversationEngine:
             # Group replies reference the triggering message so it is clear which
             # message the bot answers; DM replies stay plain.
             reply_to_message_id=(conversation.message_id if conversation.kind == "group" else None),
+            # Replies follow the message into its thread/topic where the platform
+            # models topics inside one chat (Telegram forum topics).
+            thread_id=conversation.thread_id,
         )
         self._update_session_metadata(route, conversation, reply_plan)
         return route, reply_plan
@@ -472,15 +478,20 @@ class ChannelConversationEngine:
         track_participant: bool = True,
     ) -> None:
         metadata = self._chat_sessions.get_metadata(route.agent_id, route.session_id)
+        last_reply_target: dict[str, Any] = {
+            "channel_id": reply_plan.channel_id,
+            "platform_target": reply_plan.platform_target,
+        }
+        # The thread key is present only while the conversation lives in a topic; a
+        # later non-topic message rewrites the dict without it (last-target semantics).
+        if reply_plan.thread_id is not None:
+            last_reply_target["thread_id"] = reply_plan.thread_id
         metadata.update(
             {
                 "source_channel_id": self._config.id,
                 "platform": conversation.platform,
                 "platform_conv_id": conversation.chat_id,
-                "last_reply_target": {
-                    "channel_id": reply_plan.channel_id,
-                    "platform_target": reply_plan.platform_target,
-                },
+                "last_reply_target": last_reply_target,
             }
         )
         if track_participant and conversation.kind == "group":
@@ -571,6 +582,7 @@ class ChannelConversationEngine:
         reply_plan = ReplyPlanFacts(
             channel_id=self._config.id,
             platform_target=queued.conversation.chat_id,
+            thread_id=queued.conversation.thread_id,
         )
         self._update_session_metadata(route, queued.conversation, reply_plan)
         # Wait for any open tool cycle on this shared session (a Run via another
@@ -657,7 +669,9 @@ class ChannelConversationEngine:
         assistant_text: str | None = None
         reply: str | None = None
 
-        async with self._transport.activity_indicator(reply_plan.platform_target):
+        async with self._transport.activity_indicator(
+            reply_plan.platform_target, reply_plan.thread_id
+        ):
             async for event in run.subscribe():
                 if event.type == ASSISTANT_OUTPUT_EVENT:
                     extracted = _extract_assistant_output(event)
@@ -685,6 +699,7 @@ class ChannelConversationEngine:
             reply_plan.platform_target,
             text,
             reply_to_message_id=reply_plan.reply_to_message_id,
+            thread_id=reply_plan.thread_id,
         )
 
     # -- Command actions --------------------------------------------------------------
@@ -735,7 +750,9 @@ class ChannelConversationEngine:
         match command_action.name:
             case "compact":
                 try:
-                    async with self._transport.activity_indicator(reply_plan.platform_target):
+                    async with self._transport.activity_indicator(
+                        reply_plan.platform_target, reply_plan.thread_id
+                    ):
                         reply = await self._trigger_service.compact_session(
                             route.agent_id,
                             route.session_id,

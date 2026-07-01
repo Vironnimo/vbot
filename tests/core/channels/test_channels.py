@@ -101,6 +101,7 @@ class BlockingAdapter(ChannelAdapter):
         platform_target: str,
         *,
         files: list[FileData] | None = None,
+        thread_id: str | None = None,
     ) -> None:
         self.sent_messages.append((message, platform_target))
 
