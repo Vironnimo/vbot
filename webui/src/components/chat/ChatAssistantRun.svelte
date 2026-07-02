@@ -19,6 +19,7 @@
     subAgentNavigationTarget,
     subAgentNeedsStatusVerification,
     subAgentPreview,
+    subAgentQueueItemId,
     subAgentResultEntryAllowsFetch,
     subAgentResultKey,
     subAgentShouldFetchResult,
@@ -132,6 +133,9 @@
         return {
           ...target,
           runId: subAgentEffectiveRunId(child, subAgentStatuses),
+          // Lets the run-id-less verification of a queued spawn ask the queue
+          // whether the child is still pending instead of assuming "done".
+          queueItemId: subAgentQueueItemId(child),
         };
       })
       .filter(Boolean),
@@ -139,7 +143,12 @@
 
   $effect(() => {
     for (const target of subAgentVerificationTargets) {
-      onVerifySubAgentStatus(target.agentId, target.sessionId, target.runId);
+      onVerifySubAgentStatus(
+        target.agentId,
+        target.sessionId,
+        target.runId,
+        target.queueItemId,
+      );
     }
   });
 </script>

@@ -474,12 +474,42 @@ export const subAgentEffectiveRunId = (tool, subAgentStatuses = {}) => {
   if (runId) {
     return runId;
   }
-  const queueItemId = trimmedString(subAgentResultData(tool).queue_item_id);
+  const queueItemId = subAgentQueueItemId(tool);
   if (!queueItemId) {
     return '';
   }
   const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
   return trimmedString(statuses[`queueRun:${queueItemId}`]);
+};
+
+export const subAgentQueueItemId = (tool) =>
+  trimmedString(subAgentResultData(tool).queue_item_id);
+
+// Decides how a sub-agent spawn row's cancel button acts. A resolvable child
+// run id — from the frozen descriptor or, for a spawn that left the queue,
+// the `queueRun:<item>` mapping (B6) — is cancelled as a run; a queued spawn
+// without a resolvable run id is removed from the child session's queue.
+// `null` means the row addresses nothing cancellable (the caller may still
+// verify server-side).
+export const resolveSubAgentCancelPlan = (tool, subAgentStatuses = {}) => {
+  if (!isPlainObject(tool)) {
+    return null;
+  }
+  const runId = subAgentEffectiveRunId(tool, subAgentStatuses);
+  if (runId) {
+    return { kind: 'run', runId };
+  }
+  const target = subAgentNavigationTarget(tool);
+  const queueItemId = subAgentQueueItemId(tool);
+  if (target && queueItemId) {
+    return {
+      kind: 'queue',
+      queueItemId,
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+    };
+  }
+  return null;
 };
 
 export const subAgentPreview = (tool) => {
