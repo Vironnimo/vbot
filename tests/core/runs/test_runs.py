@@ -746,6 +746,56 @@ async def test_mark_completed_includes_payload_extras_when_provided() -> None:
     }
 
 
+async def test_executor_terminal_payload_extras_ride_completed_event() -> None:
+    manager = ChatRunManager()
+
+    async def execute(run: Run) -> str:
+        run.terminal_payload_extras["session_usage"] = {"input_tokens": 12}
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    assert await run.wait() == "done"
+
+    completed_events = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed_events) == 1
+    assert completed_events[0].payload["session_usage"] == {"input_tokens": 12}
+    assert_timing_payload(completed_events[0].payload)
+
+
+async def test_executor_terminal_payload_extras_ride_failed_and_cancelled_events() -> None:
+    manager = ChatRunManager()
+
+    async def failing(run: Run) -> str:
+        run.terminal_payload_extras["session_usage"] = {"input_tokens": 7}
+        raise VBotError("boom")
+
+    failed_run = await manager.start(agent_id="coder", session_id="session-fail", executor=failing)
+    with pytest.raises(VBotError):
+        await failed_run.wait()
+    failed_events = [event for event in failed_run.events if event.type == "run_failed"]
+    assert failed_events[0].payload["session_usage"] == {"input_tokens": 7}
+
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def cancellable(run: Run) -> str:
+        run.terminal_payload_extras["session_usage"] = {"input_tokens": 9}
+        started.set()
+        await release.wait()
+        return "late"
+
+    cancelled_run = await manager.start(
+        agent_id="coder", session_id="session-cancel", executor=cancellable
+    )
+    await started.wait()
+    cancelled_run.request_cancel()
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await cancelled_run.wait()
+    cancelled_events = [event for event in cancelled_run.events if event.type == "run_cancelled"]
+    assert cancelled_events[0].payload["session_usage"] == {"input_tokens": 9}
+
+
 async def test_mark_completed_omits_payload_extras_when_not_provided() -> None:
     run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
 

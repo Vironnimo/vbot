@@ -190,6 +190,11 @@ class Run:
         self._cancel_callbacks: list[CancelCallback] = []
         self._tool_cancel_callbacks: dict[str, CancelCallback | _CancelledToolCallSentinel] = {}
         self._started_from_queue_item_id: str | None = None
+        # Executor-supplied extras merged into every terminal event payload
+        # (e.g. the chat loop's end-of-run session usage totals). Filled by the
+        # executor before it returns/raises; the manager merges it alongside
+        # ``timing`` regardless of the terminal outcome.
+        self.terminal_payload_extras: JsonObject = {}
 
     @property
     def events(self) -> list[RunEvent]:
@@ -627,6 +632,11 @@ class ChatRunManager:
                 "duration_ms": duration_ms,
             }
 
+        def terminal_extras() -> JsonObject:
+            extras: JsonObject = dict(run.terminal_payload_extras)
+            extras["timing"] = terminal_timing()
+            return extras
+
         try:
             started_payload: JsonObject = {"status": RunStatus.RUNNING.value}
             if run._started_from_queue_item_id is not None:  # noqa: SLF001 - executor shares run instance.
@@ -634,27 +644,27 @@ class ChatRunManager:
             run.emit(RUN_STARTED_EVENT, started_payload)
             result = await executor(run)
             if run.cancel_requested:
-                run.mark_cancelled(payload_extras={"timing": terminal_timing()})
+                run.mark_cancelled(payload_extras=terminal_extras())
                 return
             result_usage = getattr(result, "usage", None) if result is not None else None
-            payload_extras: JsonObject = {"timing": terminal_timing()}
+            payload_extras: JsonObject = terminal_extras()
             if result_usage:
                 payload_extras["usage"] = result_usage
             run.mark_completed(result, payload_extras=payload_extras)
         except asyncio.CancelledError:
-            run.mark_cancelled(payload_extras={"timing": terminal_timing()})
+            run.mark_cancelled(payload_extras=terminal_extras())
         except (KeyboardInterrupt, SystemExit):
             # Process-level interrupts must never be downgraded to a failed run:
             # record the run as cancelled best-effort, then let the interrupt
             # propagate so shutdown proceeds. Other non-Exception BaseExceptions
             # (e.g. GeneratorExit) likewise fall through untouched.
-            run.mark_cancelled(payload_extras={"timing": terminal_timing()})
+            run.mark_cancelled(payload_extras=terminal_extras())
             raise
         except Exception as exc:
             if run.cancel_requested:
-                run.mark_cancelled(payload_extras={"timing": terminal_timing()})
+                run.mark_cancelled(payload_extras=terminal_extras())
                 return
-            run.mark_failed(exc, payload_extras={"timing": terminal_timing()})
+            run.mark_failed(exc, payload_extras=terminal_extras())
         finally:
             async with self._lock:
                 if self._active_by_session.get(session_key) is run:
