@@ -1,5 +1,4 @@
 <script>
-  import { isRunActive } from '$lib/chatState.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { formatTokenUsageTooltip } from '$lib/tokenUsageTooltip.js';
   import Button from '../ui/Button.svelte';
@@ -12,7 +11,6 @@
     activeAgent = null,
     activeSessionState = null,
     showSessionDrawer = false,
-    cancellingRun = false,
     creatingSession = false,
     newSessionBlocked = false,
     // Project context for the compact project picker that lives in the header
@@ -24,7 +22,6 @@
     desktopCapabilities = null,
     onSelectAgent = () => {},
     onToggleSessionDrawer = () => {},
-    onCancelRun = () => {},
     onNewSession = () => {},
     onNavigateToVoiceSettings = () => {},
   } = $props();
@@ -192,13 +189,6 @@
         ? t('sessions.hide', 'Hide sessions')
         : t('sessions.title', 'Sessions')}
     </Button>
-    {#if activeSessionState && isRunActive(activeSessionState)}
-      <Button variant="danger" disabled={cancellingRun} onClick={onCancelRun}>
-        {cancellingRun
-          ? t('cancel.cancelling', 'Cancelling run…')
-          : t('chat.cancelRun', 'Cancel run')}
-      </Button>
-    {/if}
     <Button
       variant="primary"
       disabled={!activeAgent || newSessionBlocked || creatingSession}
