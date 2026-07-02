@@ -203,6 +203,12 @@ class TestSupportFiles:
         service.write_file(tmp_path, "demo", "references/notes.md", "notes\n")
         assert (tmp_path / "demo" / "references" / "notes.md").is_file()
 
+    def test_write_under_assets(self, service: SkillAuthoringService, tmp_path: Path) -> None:
+        service.create(tmp_path, "demo", skill_document(), author="agent")
+
+        service.write_file(tmp_path, "demo", "assets/template.html", "<html></html>\n")
+        assert (tmp_path / "demo" / "assets" / "template.html").is_file()
+
     def test_rejects_file_outside_resource_dirs(
         self, service: SkillAuthoringService, tmp_path: Path
     ) -> None:

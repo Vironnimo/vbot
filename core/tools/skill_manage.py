@@ -30,8 +30,8 @@ from core.tools.tools import (
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
     "Author your own private skills: create, edit, patch, or delete a skill (and its "
-    "scripts/references support files) in your personal skill home. New and changed "
-    "skills become usable immediately, by name, in the same session."
+    "scripts/references/assets support files) in your personal skill home. New and "
+    "changed skills become usable immediately, by name, in the same session."
 )
 
 _OPERATIONS = ("create", "edit", "patch", "delete", "write_file", "remove_file")
@@ -72,7 +72,8 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
         "path": {
             "type": "string",
             "description": (
-                "write_file/remove_file: the support-file path under scripts/ or references/."
+                "write_file/remove_file: the support-file path under scripts/, "
+                "references/, or assets/."
             ),
         },
         "source": {
