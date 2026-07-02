@@ -69,6 +69,8 @@ function makeReport(overrides = {}) {
         estimated_output_tokens: 5,
         cache_read_tokens: 50,
         cache_write_tokens: 10,
+        cache_turns: 4,
+        cache_input_tokens: 500,
       },
       providers: [
         {
@@ -81,6 +83,10 @@ function makeReport(overrides = {}) {
           estimated_output_tokens: 0,
           estimated_turns: 0,
           errors: 1,
+          cache_read_tokens: 50,
+          cache_write_tokens: 10,
+          cache_turns: 4,
+          cache_input_tokens: 500,
           total_tokens: 1200,
         },
       ],
@@ -96,6 +102,10 @@ function makeReport(overrides = {}) {
           estimated_output_tokens: 5,
           estimated_turns: 1,
           errors: 1,
+          cache_read_tokens: 50,
+          cache_write_tokens: 10,
+          cache_turns: 4,
+          cache_input_tokens: 500,
           total_tokens: 1235,
           average_run_duration_ms: 1500,
         },
@@ -109,8 +119,39 @@ function makeReport(overrides = {}) {
           measured_output_tokens: 200,
           estimated_input_tokens: 30,
           estimated_output_tokens: 5,
+          cache_read_tokens: 50,
+          cache_write_tokens: 10,
+          cache_input_tokens: 500,
         },
       ],
+      cache: {
+        lowest_hit_rate_sessions: [
+          {
+            agent_id: 'main',
+            session_id: 's1',
+            cache_turns: 3,
+            input_tokens: 500,
+            cache_read_tokens: 50,
+            cache_write_tokens: 10,
+            hit_rate: 0.1,
+            last_activity: '2026-06-13T09:00:00+00:00',
+          },
+        ],
+        suspected_breaks: {
+          evaluated_turns: 6,
+          suspected_turns: 1,
+          incidents: [
+            {
+              agent_id: 'main',
+              session_id: 's1',
+              timestamp: '2026-06-13T08:30:00+00:00',
+              model: 'openrouter/anthropic/claude-sonnet-4',
+              previous_input_tokens: 9000,
+              cache_read_tokens: 100,
+            },
+          ],
+        },
+      },
     },
     runs: {
       total_runs: 4,
@@ -294,6 +335,34 @@ describe('StatisticsView', () => {
       'openrouter/anthropic/claude-sonnet-4',
     );
     expect(document.body.textContent).toContain('~ estimated');
+  });
+
+  it('renders cache hit rate, worst sessions and suspected breaks in the usage sub-view', async () => {
+    rpcMock.mockResolvedValue(makeReport());
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+
+    const usageTab = [...document.querySelectorAll('.stats-view__tab')].find(
+      (button) => button.textContent.trim() === 'Usage',
+    );
+    usageTab.click();
+    flushSync();
+
+    const text = document.body.textContent;
+    expect(text).toContain('Cache hit rate');
+    // totals: 50 read of 500 cache-reporting input → 10.0%
+    expect(text).toContain('10.0%');
+    expect(text).toContain('Sessions with lowest cache hit rate');
+    expect(text).toContain('Suspected cache breaks (derived)');
+    expect(text).toContain(
+      '1 suspected breaks across 6 evaluated continuation turns.',
+    );
+    // The incident table shows the collapsed turn's expectation vs. reality.
+    expect(text).toContain('9,000');
+    expect(text).toContain('Prev. input');
   });
 
   it('renders the runs & errors sub-view with derived fallback labelling', async () => {

@@ -9,6 +9,7 @@
     DAILY_GRANULARITIES,
     agentDisplay,
     barFractions,
+    cacheHitRate,
     clampUsagePercent,
     donutSegments,
     formatDateTime,
@@ -91,6 +92,8 @@
   const providerGroups = $derived(
     usage ? groupModelsByProvider(usage.models) : [],
   );
+  const cacheSessions = $derived(usage?.cache?.lowest_hit_rate_sessions ?? []);
+  const cacheBreaks = $derived(usage?.cache?.suspected_breaks ?? null);
   const usageTotalTokens = $derived(
     usage
       ? usage.totals.measured_input_tokens +
@@ -568,6 +571,10 @@
         formatInteger(usage.totals.estimated_turns, locale),
       )}
       {@render statCard(
+        t('statistics.usage.cacheHitRate', 'Cache hit rate'),
+        formatPercent(cacheHitRate(usage.totals)),
+      )}
+      {@render statCard(
         t('statistics.usage.cacheRead', 'Cache read'),
         formatTokens(usage.totals.cache_read_tokens, locale),
       )}
@@ -580,6 +587,10 @@
       {t(
         'statistics.estimatedHint',
         'Estimated tokens are approximated, not provider-reported.',
+      )}
+      {t(
+        'statistics.usage.cacheHitHint',
+        'Cache hit rate: tokens read from cache as a share of the input, over the turns that report cache data.',
       )}
     </p>
 
@@ -598,6 +609,7 @@
               <th>{t('statistics.col.provider', 'Provider')}</th>
               <th>{t('statistics.col.runs', 'Runs')}</th>
               <th>{t('statistics.col.tokens', 'Tokens')}</th>
+              <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
               <th>{t('statistics.col.share', 'Share')}</th>
               <th>{t('statistics.col.errors', 'Errors')}</th>
             </tr>
@@ -608,6 +620,7 @@
                 <td class="stats-mono">{provider.provider}</td>
                 <td>{formatInteger(provider.runs, locale)}</td>
                 <td>{@render tokenCell(provider)}</td>
+                <td>{formatPercent(cacheHitRate(provider))}</td>
                 <td>{formatShare(provider.total_tokens, usageTotalTokens)}</td>
                 <td>{formatInteger(provider.errors, locale)}</td>
               </tr>
@@ -629,6 +642,7 @@
               <th>{t('statistics.col.model', 'Model')}</th>
               <th>{t('statistics.col.runs', 'Runs')}</th>
               <th>{t('statistics.col.tokens', 'Tokens')}</th>
+              <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
               <th>{t('statistics.col.avgDuration', 'Avg')}</th>
               <th>{t('statistics.col.errors', 'Errors')}</th>
             </tr>
@@ -639,6 +653,7 @@
                 <td class="stats-mono">{model.model}</td>
                 <td>{formatInteger(model.runs, locale)}</td>
                 <td>{@render tokenCell(model)}</td>
+                <td>{formatPercent(cacheHitRate(model))}</td>
                 <td>{formatDurationMs(model.average_run_duration_ms)}</td>
                 <td>{formatInteger(model.errors, locale)}</td>
               </tr>
@@ -689,9 +704,126 @@
               40,
             )}
           />
+          <polyline
+            class="stats-spark__line stats-spark__line--cache"
+            points={sparklinePoints(
+              usageDaily.map((point) => cacheHitRate(point) ?? 0),
+              200,
+              40,
+              { max: 1 },
+            )}
+          />
         </svg>
+        <div class="stats-trend__legend">
+          <span class="stats-legend stats-legend--measured"
+            >{t('statistics.legend.measured', 'Measured tokens')}</span
+          >
+          <span class="stats-legend stats-legend--estimated"
+            >{t('statistics.legend.estimated', 'Estimated tokens')}</span
+          >
+          <span class="stats-legend stats-legend--cache"
+            >{t('statistics.legend.cacheHit', 'Cache hit % (0–100)')}</span
+          >
+        </div>
       {/if}
     </div>
+
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t(
+          'statistics.usage.cacheSessions',
+          'Sessions with lowest cache hit rate',
+        )}
+      </h3>
+      {#if cacheSessions.length === 0}
+        <p class="stats-empty">
+          {t('statistics.usage.cacheEmpty', 'No cache-reporting activity yet.')}
+        </p>
+      {:else}
+        <table class="stats-table">
+          <thead>
+            <tr>
+              <th>{t('statistics.col.agent', 'Agent')}</th>
+              <th>{t('statistics.col.session', 'Session')}</th>
+              <th>{t('statistics.col.turns', 'Turns')}</th>
+              <th>{t('statistics.col.input', 'Input')}</th>
+              <th>{t('statistics.col.cacheRead', 'Cache read')}</th>
+              <th>{t('statistics.col.hitRate', 'Hit rate')}</th>
+              <th>{t('statistics.col.lastActivity', 'Last activity')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each cacheSessions as record (`${record.agent_id}:${record.session_id}`)}
+              <tr>
+                <td class="stats-mono">{@render agentName(record.agent_id)}</td>
+                <td class="stats-mono stats-truncate">{record.session_id}</td>
+                <td>{formatInteger(record.cache_turns, locale)}</td>
+                <td>{formatTokens(record.input_tokens, locale)}</td>
+                <td>{formatTokens(record.cache_read_tokens, locale)}</td>
+                <td>{formatPercent(record.hit_rate)}</td>
+                <td>{formatDateTime(record.last_activity, locale)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+    </div>
+
+    {#if cacheBreaks}
+      <div class="stats-block">
+        <h3 class="stats-block__title">
+          {t(
+            'statistics.usage.cacheBreaks',
+            'Suspected cache breaks (derived)',
+          )}
+        </h3>
+        <p class="stats-note">
+          {t(
+            'statistics.usage.cacheBreaksSummary',
+            '{suspected} suspected breaks across {evaluated} evaluated continuation turns.',
+            {
+              suspected: formatInteger(cacheBreaks.suspected_turns, locale),
+              evaluated: formatInteger(cacheBreaks.evaluated_turns, locale),
+            },
+          )}
+          {t(
+            'statistics.usage.cacheBreaksHint',
+            'A turn whose cache read fell far below the previous prompt although nothing legitimate explains a miss (new session, compaction, takeover, model switch, expired cache, or a tiny prompt are excluded). Best-effort heuristic, not authoritative.',
+          )}
+        </p>
+        {#if cacheBreaks.incidents.length > 0}
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th>{t('statistics.col.time', 'Time')}</th>
+                <th>{t('statistics.col.agent', 'Agent')}</th>
+                <th>{t('statistics.col.session', 'Session')}</th>
+                <th>{t('statistics.col.model', 'Model')}</th>
+                <th>{t('statistics.col.previousInput', 'Prev. input')}</th>
+                <th>{t('statistics.col.cacheRead', 'Cache read')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each cacheBreaks.incidents as incident (`${incident.session_id}:${incident.timestamp}`)}
+                <tr>
+                  <td>{formatDateTime(incident.timestamp, locale)}</td>
+                  <td class="stats-mono"
+                    >{@render agentName(incident.agent_id)}</td
+                  >
+                  <td class="stats-mono stats-truncate"
+                    >{incident.session_id}</td
+                  >
+                  <td class="stats-mono">{incident.model}</td>
+                  <td>{formatTokens(incident.previous_input_tokens, locale)}</td
+                  >
+                  <td>{formatTokens(incident.cache_read_tokens, locale)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+      </div>
+    {/if}
   </div>
 {/snippet}
 
@@ -1471,6 +1603,15 @@
   .stats-legend--errors::before {
     background: var(--red);
   }
+  .stats-legend--measured::before {
+    background: var(--accent);
+  }
+  .stats-legend--estimated::before {
+    background: var(--amber);
+  }
+  .stats-legend--cache::before {
+    background: var(--green);
+  }
   .stats-toggle {
     margin-top: 0;
     gap: 0;
@@ -1504,6 +1645,9 @@
   .stats-spark__line--est {
     stroke: var(--amber);
     stroke-dasharray: 3 3;
+  }
+  .stats-spark__line--cache {
+    stroke: var(--green);
   }
   .stats-hours {
     display: flex;

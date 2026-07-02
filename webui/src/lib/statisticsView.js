@@ -179,6 +179,18 @@ export function tokenSplit(record) {
   };
 }
 
+// Cache hit rate over a record's cache-reporting turns: cache_read_tokens as a
+// share of cache_input_tokens (the input of exactly those turns). Returns null
+// when the record carries no cache data at all, so a provider that never
+// reports caching renders as "—" instead of a misleading 0%.
+export function cacheHitRate(record) {
+  const cacheInput = toFiniteNumber(record?.cache_input_tokens);
+  if (cacheInput <= 0) {
+    return null;
+  }
+  return toFiniteNumber(record?.cache_read_tokens) / cacheInput;
+}
+
 // Split a statistics `agent_id` into display parts. The `statistics.report`
 // keys project agents as `agent@projekt` (and identity agents as a bare id), so
 // every agent cell parses the address once and renders the bare name plus, for a
@@ -274,19 +286,22 @@ function bucketKeyFor(dateString, granularity) {
 
 // Build a `points="x,y …"` attribute for an SVG sparkline polyline. Values map
 // left→right across `width`; the largest value touches the top of `height`.
-export function sparklinePoints(values, width, height) {
+// Pass `max` for an absolute scale (e.g. 1 for a 0–100% ratio series) instead
+// of normalizing to the series' own maximum.
+export function sparklinePoints(values, width, height, { max } = {}) {
   if (!Array.isArray(values) || values.length === 0) {
     return '';
   }
   const numeric = values.map(toFiniteNumber);
   if (numeric.length === 1) {
-    return `0,${height} ${width},${height - barFraction(numeric[0], numeric[0]) * height}`;
+    const scale = max ?? numeric[0];
+    return `0,${height} ${width},${height - barFraction(numeric[0], scale) * height}`;
   }
-  const max = Math.max(...numeric, 0);
+  const scale = max ?? Math.max(...numeric, 0);
   return numeric
     .map((value, index) => {
       const x = (index / (numeric.length - 1)) * width;
-      const y = height - barFraction(value, max) * height;
+      const y = height - barFraction(value, scale) * height;
       return `${round(x)},${round(y)}`;
     })
     .join(' ');
