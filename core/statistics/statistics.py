@@ -61,6 +61,21 @@ PROJECT_ADDRESS_SEPARATOR = "@"
 # top-N; the WebUI does any further top-N / share selection from these.
 TOP_LONGEST_RUNS = 10
 TOP_SESSIONS = 20
+TOP_CACHE_SESSIONS = 20
+TOP_CACHE_BREAK_INCIDENTS = 20
+
+# Prompt-cache-break heuristic (best-effort, derived — the cache-side sibling of
+# ``derived_fallback_runs``). A measured turn is evaluated against its
+# predecessor only when no legitimate prefix change explains a cache miss; the
+# thresholds below keep false positives low rather than catching every break.
+CACHE_BREAK_READ_RATIO = 0.5
+"""A cache read below this share of the previous turn's prompt is a suspected break."""
+CACHE_BREAK_MAX_GAP_SECONDS = 300
+"""Provider prompt caches expire after ~5 idle minutes; longer gaps are expected misses."""
+CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS = 2048
+"""Below provider minimum cacheable prompt sizes an empty cache read is legitimate."""
+MIN_CACHE_SESSION_TURNS = 2
+"""A session needs two cache-reporting turns before its hit rate means anything."""
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +204,12 @@ class UsageTotals:
     estimated_output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
+    # Cache figures are meaningful only against turns that reported cache
+    # fields at all: ``cache_turns`` counts those measured turns and
+    # ``cache_input_tokens`` sums their input, so a hit rate never paints a
+    # provider without cache reporting as 0%.
+    cache_turns: int
+    cache_input_tokens: int
 
 
 @dataclass(frozen=True)
@@ -202,6 +223,10 @@ class ProviderUsage:
     estimated_output_tokens: int
     estimated_turns: int
     errors: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cache_turns: int
+    cache_input_tokens: int
     # measured + estimated, for ranking and share-of-total only — never present
     # this as an authoritative measured figure.
     total_tokens: int
@@ -219,6 +244,10 @@ class ModelUsage:
     estimated_output_tokens: int
     estimated_turns: int
     errors: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cache_turns: int
+    cache_input_tokens: int
     total_tokens: int
     average_run_duration_ms: float | None
 
@@ -232,6 +261,52 @@ class UsageDailyPoint:
     measured_output_tokens: int
     estimated_input_tokens: int
     estimated_output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cache_input_tokens: int
+
+
+@dataclass(frozen=True)
+class SessionCacheUsage:
+    """One session's prompt-cache effectiveness over its cache-reporting turns."""
+
+    agent_id: str
+    session_id: str
+    cache_turns: int
+    input_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    hit_rate: float
+    last_activity: str | None
+
+
+@dataclass(frozen=True)
+class CacheBreakIncident:
+    """One suspected prompt-cache break: a turn whose cache read collapsed."""
+
+    agent_id: str
+    session_id: str
+    timestamp: str
+    model: str
+    previous_input_tokens: int
+    cache_read_tokens: int
+
+
+@dataclass(frozen=True)
+class SuspectedCacheBreaks:
+    """Derived cache-break signal — best-effort, never authoritative."""
+
+    evaluated_turns: int
+    suspected_turns: int
+    incidents: list[CacheBreakIncident]
+
+
+@dataclass(frozen=True)
+class CacheSection:
+    """Prompt-cache effectiveness view over measured, cache-reporting turns."""
+
+    lowest_hit_rate_sessions: list[SessionCacheUsage]
+    suspected_breaks: SuspectedCacheBreaks
 
 
 @dataclass(frozen=True)
@@ -240,6 +315,7 @@ class UsageSection:
     providers: list[ProviderUsage]
     models: list[ModelUsage]
     daily: list[UsageDailyPoint]
+    cache: CacheSection
 
 
 @dataclass(frozen=True)
@@ -396,6 +472,10 @@ class _ModelAcc:
     estimated_output_tokens: int = 0
     estimated_turns: int = 0
     errors: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_turns: int = 0
+    cache_input_tokens: int = 0
     run_duration_total_ms: int = 0
     run_duration_count: int = 0
 
@@ -411,6 +491,10 @@ class _ProviderAcc:
     estimated_output_tokens: int = 0
     estimated_turns: int = 0
     errors: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_turns: int = 0
+    cache_input_tokens: int = 0
 
 
 @dataclass
@@ -421,6 +505,116 @@ class _DailyAcc:
     measured_output_tokens: int = 0
     estimated_input_tokens: int = 0
     estimated_output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_input_tokens: int = 0
+
+
+@dataclass
+class _PreviousCacheTurn:
+    """The break heuristic's expectation baseline: the last measured turn."""
+
+    input_tokens: int
+    timestamp: datetime | None
+    model_key: str
+    has_cache_data: bool
+
+
+class _SessionCacheTracker:
+    """Per-session prompt-cache accumulation and break detection.
+
+    Walks one session's in-window messages in order. Cache totals cover only
+    measured turns that reported cache fields; the break heuristic compares
+    each such turn's cache read against the previous turn's prompt size and
+    skips every turn with a legitimate reason for a miss — first turn,
+    compaction checkpoint, agent takeover, model switch, expired-cache idle
+    gap, or a previous prompt below provider minimum cacheable sizes.
+    """
+
+    def __init__(self, *, agent_id: str, session_id: str) -> None:
+        self._agent_id = agent_id
+        self._session_id = session_id
+        self.cache_turns = 0
+        self.input_tokens = 0
+        self.cache_read_tokens = 0
+        self.cache_write_tokens = 0
+        self.evaluated_turns = 0
+        self.incidents: list[CacheBreakIncident] = []
+        self._last_activity: str | None = None
+        self._previous: _PreviousCacheTurn | None = None
+
+    def observe(self, message: ChatMessage) -> None:
+        if message.role in ("compaction_checkpoint", "agent_takeover"):
+            # Both legitimately rebuild the prompt prefix — no expectation
+            # carries across the boundary.
+            self._previous = None
+            return
+        if message.role != "assistant":
+            return
+        facts = _read_usage(message.usage)
+        if message.usage is None or facts.estimated:
+            # Estimated turns give no reliable expectation baseline.
+            self._previous = None
+            return
+
+        timestamp = _parse_timestamp(message.timestamp)
+        model_key = _provider_model_key(message.model)
+        if facts.has_cache_data:
+            self.cache_turns += 1
+            self.input_tokens += facts.input_tokens
+            self.cache_read_tokens += facts.cache_read
+            self.cache_write_tokens += facts.cache_write
+            self._last_activity = _max_timestamp(self._last_activity, message.timestamp)
+            self._evaluate_break(facts, timestamp, model_key, message.timestamp)
+        self._previous = _PreviousCacheTurn(
+            input_tokens=facts.input_tokens,
+            timestamp=timestamp,
+            model_key=model_key,
+            has_cache_data=facts.has_cache_data,
+        )
+
+    def _evaluate_break(
+        self,
+        facts: _UsageFacts,
+        timestamp: datetime | None,
+        model_key: str,
+        raw_timestamp: str,
+    ) -> None:
+        previous = self._previous
+        if (
+            previous is None
+            or not previous.has_cache_data
+            or previous.model_key != model_key
+            or previous.input_tokens < CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS
+            or not _within_cache_gap(previous.timestamp, timestamp)
+        ):
+            return
+        self.evaluated_turns += 1
+        if facts.cache_read < previous.input_tokens * CACHE_BREAK_READ_RATIO:
+            self.incidents.append(
+                CacheBreakIncident(
+                    agent_id=self._agent_id,
+                    session_id=self._session_id,
+                    timestamp=raw_timestamp,
+                    model=model_key,
+                    previous_input_tokens=previous.input_tokens,
+                    cache_read_tokens=facts.cache_read,
+                )
+            )
+
+    def session_record(self) -> SessionCacheUsage | None:
+        if self.cache_turns < MIN_CACHE_SESSION_TURNS or self.input_tokens <= 0:
+            return None
+        return SessionCacheUsage(
+            agent_id=self._agent_id,
+            session_id=self._session_id,
+            cache_turns=self.cache_turns,
+            input_tokens=self.input_tokens,
+            cache_read_tokens=self.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens,
+            hit_rate=self.cache_read_tokens / self.input_tokens,
+            last_activity=self._last_activity,
+        )
 
 
 @dataclass
@@ -470,6 +664,11 @@ class _Aggregator:
         self._usage_estimated_turns = 0
         self._cache_read_tokens = 0
         self._cache_write_tokens = 0
+        self._cache_turns = 0
+        self._cache_input_tokens = 0
+        self._session_cache_records: list[SessionCacheUsage] = []
+        self._cache_break_evaluated_turns = 0
+        self._cache_break_incidents: list[CacheBreakIncident] = []
 
         self._total_errors = 0
         self._error_by_kind: Counter[str] = Counter()
@@ -505,10 +704,12 @@ class _Aggregator:
         current_model: str | None = None
         session_runs = 0
         session_tool_calls = 0
+        cache_tracker = _SessionCacheTracker(agent_id=agent_id, session_id=session_id)
 
         for message in in_window:
             self._role_counts[message.role] += 1
             agent.messages += 1
+            cache_tracker.observe(message)
             if message.role == "run_summary":
                 self._record_run(agent, agent_id, session_id, current, message)
                 current = []
@@ -529,6 +730,12 @@ class _Aggregator:
             self._runs_per_session.append(SessionRunCount(agent_id, session_id, session_runs))
         if session_tool_calls:
             self._tool_by_session[(agent_id, session_id)] += session_tool_calls
+
+        session_cache_record = cache_tracker.session_record()
+        if session_cache_record is not None:
+            self._session_cache_records.append(session_cache_record)
+        self._cache_break_evaluated_turns += cache_tracker.evaluated_turns
+        self._cache_break_incidents.extend(cache_tracker.incidents)
 
     # -- per-message accumulation -----------------------------------------
 
@@ -553,31 +760,43 @@ class _Aggregator:
         model.assistant_messages += 1
         provider_acc.assistant_messages += 1
 
-        input_tokens, output_tokens, estimated, cache_read, cache_write = _read_usage(message.usage)
-        self._cache_read_tokens += cache_read
-        self._cache_write_tokens += cache_write
+        facts = _read_usage(message.usage)
+        self._cache_read_tokens += facts.cache_read
+        self._cache_write_tokens += facts.cache_write
         daily = self._daily_bucket(day)
 
-        if estimated:
+        if facts.estimated:
             self._usage_estimated_turns += 1
             model.estimated_turns += 1
             provider_acc.estimated_turns += 1
-            model.estimated_input_tokens += input_tokens
-            model.estimated_output_tokens += output_tokens
-            provider_acc.estimated_input_tokens += input_tokens
-            provider_acc.estimated_output_tokens += output_tokens
+            model.estimated_input_tokens += facts.input_tokens
+            model.estimated_output_tokens += facts.output_tokens
+            provider_acc.estimated_input_tokens += facts.input_tokens
+            provider_acc.estimated_output_tokens += facts.output_tokens
             if daily is not None:
-                daily.estimated_input_tokens += input_tokens
-                daily.estimated_output_tokens += output_tokens
+                daily.estimated_input_tokens += facts.input_tokens
+                daily.estimated_output_tokens += facts.output_tokens
         else:
             self._usage_measured_turns += 1
-            model.measured_input_tokens += input_tokens
-            model.measured_output_tokens += output_tokens
-            provider_acc.measured_input_tokens += input_tokens
-            provider_acc.measured_output_tokens += output_tokens
+            model.measured_input_tokens += facts.input_tokens
+            model.measured_output_tokens += facts.output_tokens
+            provider_acc.measured_input_tokens += facts.input_tokens
+            provider_acc.measured_output_tokens += facts.output_tokens
             if daily is not None:
-                daily.measured_input_tokens += input_tokens
-                daily.measured_output_tokens += output_tokens
+                daily.measured_input_tokens += facts.input_tokens
+                daily.measured_output_tokens += facts.output_tokens
+            if facts.has_cache_data:
+                self._cache_turns += 1
+                self._cache_input_tokens += facts.input_tokens
+                for cache_acc in (model, provider_acc):
+                    cache_acc.cache_turns += 1
+                    cache_acc.cache_input_tokens += facts.input_tokens
+                    cache_acc.cache_read_tokens += facts.cache_read
+                    cache_acc.cache_write_tokens += facts.cache_write
+                if daily is not None:
+                    daily.cache_input_tokens += facts.input_tokens
+                    daily.cache_read_tokens += facts.cache_read
+                    daily.cache_write_tokens += facts.cache_write
 
     def _record_error(
         self,
@@ -749,6 +968,8 @@ class _Aggregator:
             ),
             cache_read_tokens=self._cache_read_tokens,
             cache_write_tokens=self._cache_write_tokens,
+            cache_turns=self._cache_turns,
+            cache_input_tokens=self._cache_input_tokens,
         )
         providers = sorted(
             (self._provider_usage(accumulator) for accumulator in self._providers.values()),
@@ -771,9 +992,37 @@ class _Aggregator:
                     measured_output_tokens=bucket.measured_output_tokens,
                     estimated_input_tokens=bucket.estimated_input_tokens,
                     estimated_output_tokens=bucket.estimated_output_tokens,
+                    cache_read_tokens=bucket.cache_read_tokens,
+                    cache_write_tokens=bucket.cache_write_tokens,
+                    cache_input_tokens=bucket.cache_input_tokens,
                 )
                 for date, bucket in self._sorted_daily()
             ],
+            cache=self._build_cache(),
+        )
+
+    def _build_cache(self) -> CacheSection:
+        # Worst hit rate first; equal rates surface the bigger session (more
+        # tokens paid) before the smaller one.
+        sessions = sorted(
+            self._session_cache_records,
+            key=lambda record: (record.hit_rate, -record.input_tokens, record.session_id),
+        )[:TOP_CACHE_SESSIONS]
+        incidents = sorted(
+            self._cache_break_incidents,
+            key=lambda incident: (
+                -(incident.previous_input_tokens - incident.cache_read_tokens),
+                incident.session_id,
+                incident.timestamp,
+            ),
+        )[:TOP_CACHE_BREAK_INCIDENTS]
+        return CacheSection(
+            lowest_hit_rate_sessions=sessions,
+            suspected_breaks=SuspectedCacheBreaks(
+                evaluated_turns=self._cache_break_evaluated_turns,
+                suspected_turns=len(self._cache_break_incidents),
+                incidents=incidents,
+            ),
         )
 
     def _build_runs(self) -> RunsSection:
@@ -874,6 +1123,10 @@ class _Aggregator:
             estimated_output_tokens=accumulator.estimated_output_tokens,
             estimated_turns=accumulator.estimated_turns,
             errors=accumulator.errors,
+            cache_read_tokens=accumulator.cache_read_tokens,
+            cache_write_tokens=accumulator.cache_write_tokens,
+            cache_turns=accumulator.cache_turns,
+            cache_input_tokens=accumulator.cache_input_tokens,
             total_tokens=total_tokens,
         )
 
@@ -900,6 +1153,10 @@ class _Aggregator:
             estimated_output_tokens=accumulator.estimated_output_tokens,
             estimated_turns=accumulator.estimated_turns,
             errors=accumulator.errors,
+            cache_read_tokens=accumulator.cache_read_tokens,
+            cache_write_tokens=accumulator.cache_write_tokens,
+            cache_turns=accumulator.cache_turns,
+            cache_input_tokens=accumulator.cache_input_tokens,
             total_tokens=total_tokens,
             average_run_duration_ms=average,
         )
@@ -1074,21 +1331,44 @@ def _group_is_open(group: list[ChatMessage]) -> bool:
     return any(message.role in ("user", "assistant") for message in group)
 
 
-def _read_usage(usage: JsonObject | None) -> tuple[int, int, bool, int, int]:
-    """Return ``(input, output, estimated, cache_read, cache_write)`` from usage.
+@dataclass(frozen=True)
+class _UsageFacts:
+    """Normalized view of one assistant turn's ``usage`` payload."""
+
+    input_tokens: int
+    output_tokens: int
+    estimated: bool
+    cache_read: int
+    cache_write: int
+    # Field *presence*, not value: distinguishes "provider reported zero cache"
+    # from "provider does not report caching at all".
+    has_cache_data: bool
+
+
+def _read_usage(usage: JsonObject | None) -> _UsageFacts:
+    """Normalize an assistant turn's usage payload.
 
     Canonical ``input_tokens`` already includes cached tokens, so cache figures
     are surfaced only as separate informational totals — never added on top.
     """
     if not isinstance(usage, dict):
-        return 0, 0, False, 0, 0
-    return (
-        _non_negative_int(usage.get("input_tokens")),
-        _non_negative_int(usage.get("output_tokens")),
-        usage.get("estimated") is True,
-        _non_negative_int(usage.get("cache_read_tokens")),
-        _non_negative_int(usage.get("cache_write_tokens")),
+        return _UsageFacts(0, 0, False, 0, 0, False)
+    return _UsageFacts(
+        input_tokens=_non_negative_int(usage.get("input_tokens")),
+        output_tokens=_non_negative_int(usage.get("output_tokens")),
+        estimated=usage.get("estimated") is True,
+        cache_read=_non_negative_int(usage.get("cache_read_tokens")),
+        cache_write=_non_negative_int(usage.get("cache_write_tokens")),
+        has_cache_data="cache_read_tokens" in usage or "cache_write_tokens" in usage,
     )
+
+
+def _within_cache_gap(previous: datetime | None, current: datetime | None) -> bool:
+    """Whether two turns are close enough for the cache to still be warm."""
+    if previous is None or current is None:
+        return False
+    gap_seconds = (current - previous).total_seconds()
+    return 0 <= gap_seconds <= CACHE_BREAK_MAX_GAP_SECONDS
 
 
 def _parse_envelope(content: Any) -> JsonObject | None:

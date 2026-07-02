@@ -39,9 +39,18 @@ The report tree (frozen dataclasses in `statistics.py`, all JSON-native fields):
   counts, mean + median run duration, tool-call totals, per-agent activity, and
   a `daily_trend` series.
 - **usage** — `totals` plus per-`provider` and per-`(provider, bare-model)`
-  records and a daily series. Each record splits tokens into
+  records, a daily series, and a `cache` section. Each record splits tokens into
   measured_input/output and estimated_input/output, with `total_tokens`
-  (measured + estimated) provided **only** for ranking/share.
+  (measured + estimated) provided **only** for ranking/share. Totals, provider,
+  model, and daily records additionally carry `cache_read_tokens`,
+  `cache_write_tokens`, and `cache_input_tokens` (totals/provider/model also
+  `cache_turns`) — accumulated **only** over measured turns whose usage carries
+  cache fields at all, so a hit rate (`cache_read / cache_input`) never paints a
+  provider without cache reporting as 0%. The `cache` section holds
+  `lowest_hit_rate_sessions` (per-session cache effectiveness, worst hit rate
+  first, ≥2 cache-reporting turns required, capped `TOP_CACHE_SESSIONS`) and
+  `suspected_breaks` (`evaluated_turns`, `suspected_turns`, `incidents` capped
+  `TOP_CACHE_BREAK_INCIDENTS`, sorted by lost tokens).
 - **runs** — status distribution, cancel/failure rate, duration stats
   (count, mean, P50/P90/P95), longest runs, runs-with-tool-calls,
   derived_fallback_runs, per-agent/per-session/per-day counts.
@@ -93,6 +102,11 @@ The report tree (frozen dataclasses in `statistics.py`, all JSON-native fields):
   `input_tokens` already includes cached tokens, so `cache_read_tokens` /
   `cache_write_tokens` are surfaced only as separate informational totals, never
   added on top.
+- **Cache figures key on field presence.** Estimated turns never carry cache
+  data, and a provider that does not report caching must not read as a 0% hit
+  rate — so every cache aggregate (turns, input, read, write) accumulates only
+  over measured turns whose usage dict contains a cache field, and hit rates
+  divide by `cache_input_tokens`, never by all measured input.
 - **Window semantics.** `since`/`until` filter time-derived aggregates at
   message-timestamp granularity. Structural totals (agent and session counts) and
   last-activity are window-independent snapshots.
@@ -108,6 +122,18 @@ The report tree (frozen dataclasses in `statistics.py`, all JSON-native fields):
   distinct bare models is reported as `derived_fallback_runs` (an in-run model
   change). The authoritative `model_fallback_activated` event is in-memory and
   not persisted, so it is not available here; the UI labels this as derived.
+- **Suspected cache breaks are a heuristic, labelled derived.** Per session
+  (`_SessionCacheTracker`), each measured cache-reporting turn is compared
+  against the previous measured turn; a turn is *evaluated* only when nothing
+  legitimate explains a cache miss — skipped are the first turn, turns after a
+  `compaction_checkpoint` or `agent_takeover` boundary, model switches, idle
+  gaps beyond `CACHE_BREAK_MAX_GAP_SECONDS` (300s ≈ provider cache TTL),
+  previous prompts under `CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS` (2048), and
+  anything following an estimated turn. An evaluated turn whose `cache_read`
+  falls below `CACHE_BREAK_READ_RATIO` (0.5) of the previous prompt becomes an
+  incident. False negatives are accepted by design (thresholds favor low
+  noise); prompt-prefix changes the scan cannot see (settings edits, tool-set
+  changes) can still cause rare false positives.
 - **`open_run_groups` is best-effort "active/unterminated".** A trailing message
   group with conversational activity after the last `run_summary` is counted as
   open. This conflates a genuinely running run with a crashed/interrupted one —

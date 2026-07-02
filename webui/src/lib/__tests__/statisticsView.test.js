@@ -5,6 +5,7 @@ import {
   STATISTICS_SUB_VIEWS,
   agentDisplay,
   barFractions,
+  cacheHitRate,
   clampUsagePercent,
   donutSegments,
   formatDurationMs,
@@ -198,6 +199,13 @@ describe('statisticsView chart geometry', () => {
     expect(sparklinePoints([], 100, 20)).toBe('');
   });
 
+  it('scales sparkline points to an absolute max when given', () => {
+    // A ratio series (0–1) keeps its absolute meaning instead of stretching
+    // the largest value to the top of the chart.
+    const points = sparklinePoints([0.25, 0.5], 100, 20, { max: 1 });
+    expect(points).toBe('0,15 100,10');
+  });
+
   it('scales bars to fractions of the max', () => {
     expect(barFractions([0, 5, 10])).toEqual([0, 0.5, 1]);
     expect(barFractions([])).toEqual([]);
@@ -224,6 +232,29 @@ describe('statisticsView chart geometry', () => {
 
   it('returns no donut segments when the total is zero', () => {
     expect(donutSegments([{ key: 'completed', value: 0 }])).toEqual([]);
+  });
+});
+
+describe('cacheHitRate', () => {
+  it('returns the cache read share of the cache-reporting input', () => {
+    expect(
+      cacheHitRate({ cache_read_tokens: 800, cache_input_tokens: 1000 }),
+    ).toBe(0.8);
+  });
+
+  it('returns null when a record has no cache-reporting input', () => {
+    // A provider that never reports caching must render as "—", not 0%.
+    expect(
+      cacheHitRate({ cache_read_tokens: 0, cache_input_tokens: 0 }),
+    ).toBeNull();
+    expect(cacheHitRate(null)).toBeNull();
+    expect(cacheHitRate({})).toBeNull();
+  });
+
+  it('treats junk values as zero input', () => {
+    expect(
+      cacheHitRate({ cache_read_tokens: 10, cache_input_tokens: 'junk' }),
+    ).toBeNull();
   });
 });
 
