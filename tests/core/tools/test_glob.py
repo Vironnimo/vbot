@@ -1,19 +1,31 @@
 """Tests for the built-in glob tool."""
 
+import inspect
+import os
 from pathlib import Path
 
+import pytest
+
+import core.tools.search as search_module
 from core.tools.glob import (
+    DEFAULT_GLOB_LIMIT,
     GLOB_TOOL_NAME,
     GLOB_TOOL_PARAMETERS,
-    MAX_GLOB_MATCHES,
     glob_handler,
     register_glob_tool,
 )
+from core.tools.search import RESULTS_LIMITED_MARKER, SEARCH_TIMEOUT_MARKER
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
+
+BASE_MTIME = 1_700_000_000
 
 
 def make_context(
-    workspace: Path, tool_name: str = GLOB_TOOL_NAME, *, cwd: Path | None = None
+    workspace: Path,
+    tool_name: str = GLOB_TOOL_NAME,
+    *,
+    cwd: Path | None = None,
+    user_cancelled: bool = False,
 ) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
@@ -26,7 +38,12 @@ def make_context(
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
         cwd=cwd,
+        cancel_check_hook=(lambda: True) if user_cancelled else None,
     )
+
+
+def set_mtime(path: Path, offset_seconds: int) -> None:
+    os.utime(path, (BASE_MTIME + offset_seconds, BASE_MTIME + offset_seconds))
 
 
 def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
@@ -85,6 +102,8 @@ def test_register_glob_tool_exposes_provider_schema() -> None:
     tool = registry.get("glob")
     assert tool.name == GLOB_TOOL_NAME == "glob"
     assert tool.parameters == GLOB_TOOL_PARAMETERS
+    # The registered handler must run the sync search off the event loop.
+    assert inspect.iscoroutinefunction(tool.handler)
 
     definitions = registry.provider_definitions(["glob"])
     assert len(definitions) == 1
@@ -96,11 +115,13 @@ def test_register_glob_tool_exposes_provider_schema() -> None:
     assert parameters["type"] == "object"
     assert parameters["required"] == ["pattern"]
     assert parameters["additionalProperties"] is False
-    assert set(parameters["properties"]) == {"pattern", "path"}
+    assert set(parameters["properties"]) == {"pattern", "path", "limit"}
     assert "description" not in parameters["properties"]
 
 
-def test_glob_searches_relative_workspace_path(tmp_path: Path) -> None:
+def test_glob_renders_relative_path_argument_results_from_cwd(tmp_path: Path) -> None:
+    # Results from a subdirectory search stay working-directory-relative so
+    # they round-trip directly into a follow-up read call.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("src").mkdir()
@@ -108,10 +129,10 @@ def test_glob_searches_relative_workspace_path(tmp_path: Path) -> None:
 
     result = glob_handler(make_context(workspace), {"pattern": "*.py", "path": "src"})
 
-    assert get_success_content(result) == "app.py"
+    assert get_success_content(result) == "src/app.py"
 
 
-def test_glob_searches_absolute_path(tmp_path: Path) -> None:
+def test_glob_renders_absolute_paths_outside_cwd(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = tmp_path / "outside"
@@ -123,7 +144,7 @@ def test_glob_searches_absolute_path(tmp_path: Path) -> None:
         {"pattern": "*.md", "path": str(outside)},
     )
 
-    assert get_success_content(result) == "notes.md"
+    assert get_success_content(result) == (outside / "notes.md").resolve().as_posix()
 
 
 def test_glob_defaults_to_workspace_path(tmp_path: Path) -> None:
@@ -175,44 +196,112 @@ def test_glob_returns_failure_for_invalid_pattern_values(tmp_path: Path) -> None
         assert "pattern" in error["message"]
 
 
+def test_glob_returns_failure_for_invalid_limit(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = glob_handler(make_context(workspace), {"pattern": "*.py", "limit": 0})
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert error["message"] == "limit must be >= 1"
+
+
 def test_glob_suffixes_directories_and_special_cases_double_star(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("src").mkdir()
     workspace.joinpath("src", "nested").mkdir()
     workspace.joinpath("src", "app.py").write_text("print('hello')\n", encoding="utf-8")
+    set_mtime(workspace / "src" / "app.py", 30)
+    set_mtime(workspace / "src" / "nested", 20)
+    set_mtime(workspace / "src", 10)
 
     result = glob_handler(make_context(workspace), {"pattern": "**"})
 
-    assert get_success_content(result).splitlines() == ["src/", "src/app.py", "src/nested/"]
+    assert get_success_content(result).splitlines() == ["src/app.py", "src/nested/", "src/"]
 
 
-def test_glob_returns_matches_in_sorted_order(tmp_path: Path) -> None:
+def test_glob_sorts_by_modification_time_newest_first(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    workspace.joinpath("b.txt").write_text("b\n", encoding="utf-8")
-    workspace.joinpath("folder").mkdir()
-    workspace.joinpath("a.txt").write_text("a\n", encoding="utf-8")
-    workspace.joinpath("folder", "c.txt").write_text("c\n", encoding="utf-8")
-
-    result = glob_handler(make_context(workspace), {"pattern": "**/*.txt"})
-
-    assert get_success_content(result).splitlines() == ["a.txt", "b.txt", "folder/c.txt"]
-
-
-def test_glob_caps_matches_at_one_hundred(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    for index in range(MAX_GLOB_MATCHES + 1):
-        workspace.joinpath(f"file-{index:03}.txt").write_text("x\n", encoding="utf-8")
+    workspace.joinpath("old.txt").write_text("old\n", encoding="utf-8")
+    workspace.joinpath("newest.txt").write_text("newest\n", encoding="utf-8")
+    workspace.joinpath("middle.txt").write_text("middle\n", encoding="utf-8")
+    set_mtime(workspace / "old.txt", 0)
+    set_mtime(workspace / "middle.txt", 10)
+    set_mtime(workspace / "newest.txt", 20)
 
     result = glob_handler(make_context(workspace), {"pattern": "*.txt"})
 
-    matches = get_success_content(result).splitlines()
-    assert len(matches) == MAX_GLOB_MATCHES
-    assert matches[0] == "file-000.txt"
-    assert matches[-1] == "file-099.txt"
-    assert "file-100.txt" not in matches
+    assert get_success_content(result).splitlines() == ["newest.txt", "middle.txt", "old.txt"]
+
+
+def test_glob_breaks_equal_modification_time_ties_alphabetically(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("b.txt", "a.txt", "c.txt"):
+        workspace.joinpath(name).write_text("x\n", encoding="utf-8")
+        set_mtime(workspace / name, 0)
+
+    result = glob_handler(make_context(workspace), {"pattern": "*.txt"})
+
+    assert get_success_content(result).splitlines() == ["a.txt", "b.txt", "c.txt"]
+
+
+def test_glob_marks_results_cut_by_default_limit(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for index in range(DEFAULT_GLOB_LIMIT + 1):
+        file_path = workspace / f"file-{index:03}.txt"
+        file_path.write_text("x\n", encoding="utf-8")
+        set_mtime(file_path, 0)
+
+    result = glob_handler(make_context(workspace), {"pattern": "*.txt"})
+
+    lines = get_success_content(result).splitlines()
+    assert len(lines) == DEFAULT_GLOB_LIMIT + 1
+    assert lines[0] == "file-000.txt"
+    assert lines[-2] == "file-099.txt"
+    assert lines[-1] == RESULTS_LIMITED_MARKER.format(limit=DEFAULT_GLOB_LIMIT)
+    assert "file-100.txt" not in lines
+
+
+def test_glob_applies_explicit_limit_keeping_newest_matches(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for offset, name in enumerate(("old.txt", "middle.txt", "newest.txt")):
+        file_path = workspace / name
+        file_path.write_text("x\n", encoding="utf-8")
+        set_mtime(file_path, offset * 10)
+
+    result = glob_handler(make_context(workspace), {"pattern": "*.txt", "limit": 2})
+
+    assert get_success_content(result).splitlines() == [
+        "newest.txt",
+        "middle.txt",
+        RESULTS_LIMITED_MARKER.format(limit=2),
+    ]
+
+
+def test_glob_returns_cancelled_failure_when_user_cancels(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("a.txt").write_text("x\n", encoding="utf-8")
+
+    result = glob_handler(make_context(workspace, user_cancelled=True), {"pattern": "*.txt"})
+
+    assert_failure_envelope(result, "cancelled_by_user")
+
+
+def test_glob_marks_timed_out_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("a.txt").write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(search_module, "SEARCH_TIMEOUT_SECONDS", -1.0)
+
+    result = glob_handler(make_context(workspace), {"pattern": "*.txt"})
+
+    content = get_success_content(result)
+    assert SEARCH_TIMEOUT_MARKER in content
 
 
 def test_glob_returns_failure_for_unknown_argument(tmp_path: Path) -> None:
