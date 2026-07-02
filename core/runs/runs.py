@@ -249,15 +249,28 @@ class Run:
         if self.cancel_requested:
             raise asyncio.CancelledError
 
-    def emit(self, event_type: str, payload: JsonObject | None = None) -> RunEvent | None:
+    def emit(
+        self,
+        event_type: str,
+        payload: JsonObject | None = None,
+        *,
+        allow_after_cancel: bool = False,
+    ) -> RunEvent | None:
         """Append and publish one visible run event.
 
         After cancellation is requested, only terminal events are forwarded. This
-        keeps late provider/tool results from becoming visible.
+        keeps late provider/tool results from becoming visible. The one deliberate
+        escape is ``allow_after_cancel``: an executor may still publish an event
+        that *finalizes output the user has already seen* (the chat loop's
+        preserved partial answer on cancel) — never new or late results.
         """
         if self.status != RunStatus.RUNNING and event_type not in TERMINAL_EVENT_TYPES:
             return None
-        if self.cancel_requested and event_type not in TERMINAL_EVENT_TYPES:
+        if (
+            self.cancel_requested
+            and event_type not in TERMINAL_EVENT_TYPES
+            and not allow_after_cancel
+        ):
             return None
         event = RunEvent(
             sequence=self._next_sequence,

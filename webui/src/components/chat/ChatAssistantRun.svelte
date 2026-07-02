@@ -434,7 +434,9 @@
           {#if child.streaming}<span class="streaming-caret" aria-hidden="true"
             ></span>{/if}
         </div>
-        {#if child.interrupted && !child.streaming}
+        <!-- A cancelled run shows the "Cancelled" header label instead: the
+             cut was the user's action, not an involuntary interruption. -->
+        {#if child.interrupted && !child.streaming && item.status !== 'cancelled'}
           <div class="interrupted-notice">
             {t(
               'chat.interrupted',

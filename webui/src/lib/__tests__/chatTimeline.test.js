@@ -387,3 +387,97 @@ describe('agent_takeover timeline projection', () => {
     expect(afterUser.message.role).toBe('user');
   });
 });
+
+describe('cancelled run rendering', () => {
+  it('renders a bare cancelled run row from an anchorless run_summary (zero-output cancel)', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-cancelled-empty',
+    );
+    loadHistory(sessionState, [
+      { id: 'u1', role: 'user', content: 'tell me a story' },
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-cancelled',
+        status: 'cancelled',
+        timing: {
+          started_at: '2026-07-02T10:00:00+00:00',
+          completed_at: '2026-07-02T10:00:12+00:00',
+          duration_ms: 12000,
+        },
+      },
+    ]);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    // The cancelled turn is not a hole: a run row with status + timing renders
+    // after the user message even though no assistant/tool message anchors it.
+    expect(items.map((item) => item.type)).toEqual([
+      'message',
+      'assistant_run',
+    ]);
+    const run = items[1];
+    expect(run.status).toBe('cancelled');
+    expect(run.runId).toBe('run-cancelled');
+    expect(run.durationMs).toBe(12000);
+    expect(run.items).toEqual([]);
+  });
+
+  it('does not render bare rows for anchorless non-cancelled summaries (page-slice orphans)', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-orphan-summary',
+    );
+    loadHistory(sessionState, [
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-old',
+        status: 'completed',
+        timing: { duration_ms: 5 },
+      },
+      { id: 'u1', role: 'user', content: 'next turn' },
+    ]);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    expect(items.map((item) => item.type)).toEqual(['message']);
+  });
+
+  it('marks the run block cancelled when a preserved interrupted partial is followed by a cancelled summary', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-cancelled-partial',
+    );
+    loadHistory(sessionState, [
+      { id: 'u1', role: 'user', content: 'tell me a story' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Once upon a',
+        interrupted: true,
+      },
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-cancelled',
+        status: 'cancelled',
+        timing: { duration_ms: 3000 },
+      },
+    ]);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const run = items.find((item) => item.type === 'assistant_run');
+    expect(run).toBeTruthy();
+    expect(run.status).toBe('cancelled');
+    expect(run.durationMs).toBe(3000);
+    // The preserved partial stays visible, flagged interrupted for the
+    // component (which shows the Cancelled header label instead of the notice).
+    expect(run.outputs.map((output) => output.content)).toEqual([
+      'Once upon a',
+    ]);
+    expect(run.outputs[0].interrupted).toBe(true);
+  });
+});
