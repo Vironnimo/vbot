@@ -594,12 +594,14 @@ describe('SystemPromptView', () => {
     expect(scopeOptionLabels()).toEqual(['Default', 'Alpha']);
   });
 
-  it('refresh calls prompt.preview and renders the token count', async () => {
+  it('refresh calls prompt.preview and renders the token breakdown', async () => {
     rpcMock.mockImplementation(
       createRpcMock({
         promptPreview: {
           text: 'You are an agent named Alpha...',
           tokens: 1234,
+          tool_tokens: 456,
+          tool_count: 12,
           estimated: true,
         },
       }),
@@ -631,7 +633,44 @@ describe('SystemPromptView', () => {
       () => document.body.textContent.includes('1234'),
       50,
     );
+    expect(document.body.textContent).toContain(
+      '~1234 prompt + ~456 tools = ~1690 tokens',
+    );
     expect(document.body.textContent).toContain('You are an agent named Alpha');
+  });
+
+  it('falls back to the plain token count when the agent has no tools', async () => {
+    rpcMock.mockImplementation(
+      createRpcMock({
+        promptPreview: {
+          text: 'Toolless preview',
+          tokens: 200,
+          tool_tokens: 0,
+          tool_count: 0,
+          estimated: true,
+        },
+      }),
+    );
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Preview for'),
+      100,
+    );
+
+    const refreshButton = Array.from(
+      document.body.querySelectorAll('button'),
+    ).find((button) => button.textContent.trim() === 'Refresh');
+    refreshButton.click();
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('~200 tokens'),
+      100,
+    );
+    expect(document.body.textContent).not.toContain('= ~');
   });
 
   it('previews an agent prompt scope without the default agent picker', async () => {
@@ -769,6 +808,8 @@ describe('SystemPromptView', () => {
       'systemPrompt.preview.refresh',
       'systemPrompt.preview.copy',
       'systemPrompt.preview.tokenCount',
+      'systemPrompt.preview.tokenBreakdown',
+      'systemPrompt.preview.tokenBreakdownHint',
       'systemPrompt.preview.agentLabel',
       'systemPrompt.preview.empty',
       'systemPrompt.error.loadFailed',

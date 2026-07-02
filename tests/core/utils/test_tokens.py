@@ -4,7 +4,7 @@ Verifies the 4-chars/token heuristic, including edge cases like empty
 strings, exact divisions, remainders, and multi-byte (CJK) characters.
 """
 
-from core.utils.tokens import estimate_message_tokens, estimate_tokens
+from core.utils.tokens import estimate_json_tokens, estimate_message_tokens, estimate_tokens
 
 # ----- Empty input -----
 
@@ -152,6 +152,33 @@ def test_estimate_message_tokens_counts_structured_tool_call_payloads():
     # Assert
     assert count > 2_000
     assert is_estimate is True
+
+
+def test_estimate_json_tokens_counts_compact_json_size():
+    """A JSON-serializable value is estimated by its compact serialization."""
+    # Arrange
+    tool_definitions = [
+        {"name": "read", "description": "Read a file", "parameters": {"type": "object"}}
+    ]
+    compact_length = len(
+        '[{"description":"Read a file","name":"read","parameters":{"type":"object"}}]'
+    )
+
+    # Act
+    count, is_estimate = estimate_json_tokens(tool_definitions)
+
+    # Assert
+    assert count == -(-compact_length // 4)  # ceil(chars / 4)
+    assert is_estimate is True
+
+
+def test_estimate_json_tokens_plain_string_counts_verbatim():
+    """A bare string is counted as-is, without JSON quoting."""
+    # Act
+    count, _ = estimate_json_tokens("abcd")
+
+    # Assert
+    assert count == 1
 
 
 def test_estimate_message_tokens_ignores_storage_metadata():
