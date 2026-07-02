@@ -8,7 +8,9 @@ import re
 import shutil
 import subprocess
 import threading
+from bisect import bisect_right
 from pathlib import Path
+from typing import NamedTuple
 
 from core.tools.arguments import (
     coerce_bool,
@@ -26,6 +28,8 @@ from core.tools.search import (
     SearchBudget,
     display_search_path,
     file_filter_matches,
+    ignore_rules_apply,
+    iter_search_entries,
     normalize_file_filter_pattern,
     relative_forward_path,
     render_limited_results,
@@ -49,21 +53,28 @@ ALLOWED_ARGUMENTS = {
     "glob",
     "ignore_case",
     "literal",
+    "multiline",
     "context",
     "limit",
+    "offset",
+    "include_ignored",
     "output_mode",
 }
-# camelCase variant some models emit; normalized before validation like edit's aliases.
-_GREP_ARGUMENT_ALIASES = {"ignoreCase": "ignore_case"}
+# camelCase variants some models emit; normalized before validation like edit's aliases.
+_GREP_ARGUMENT_ALIASES = {"ignoreCase": "ignore_case", "includeIgnored": "include_ignored"}
 # Bounded drain of a finished/killed ripgrep process; generous, never load-bearing.
 _RG_DRAIN_TIMEOUT_SECONDS = 5.0
+# rg exclusion for version-control internals; composes with any user glob.
+_GIT_INTERNALS_EXCLUSION_GLOB = "!**/.git/**"
 
 GREP_TOOL_NAME = "grep"
 GREP_TOOL_DESCRIPTION = (
     "Search file contents with a regex pattern by default. Set literal=true for "
-    "fixed-string matching. Optional glob filters candidate files only. Returns "
-    "path:line:text rows unless output_mode requests matching files or counts; "
-    "paths are relative to the working directory (absolute when outside it)."
+    "fixed-string matching, multiline=true for patterns spanning lines. Optional "
+    "glob filters candidate files (case-insensitive). Skips .gitignore'd files and "
+    ".git internals unless include_ignored=true. Returns path:line:text rows unless "
+    "output_mode requests matching files or counts; paths are relative to the "
+    "working directory (absolute when outside it). Page with offset."
 )
 GREP_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -88,6 +99,13 @@ GREP_TOOL_PARAMETERS: JsonObject = {
             "type": "boolean",
             "description": "Treat pattern as fixed text instead of regex (default: false).",
         },
+        "multiline": {
+            "type": "boolean",
+            "description": (
+                "Match across lines: '.' matches newlines and patterns can span "
+                "lines (default: false)."
+            ),
+        },
         "context": {
             "type": "number",
             "description": "Number of context lines before and after content matches (default: 0).",
@@ -97,6 +115,17 @@ GREP_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Maximum results (default: 100). content limits matches; "
                 "files_with_matches/count limit returned file rows."
+            ),
+        },
+        "offset": {
+            "type": "number",
+            "description": "Skip the first N results before applying limit (default: 0).",
+        },
+        "include_ignored": {
+            "type": "boolean",
+            "description": (
+                "Also search .gitignore'd files (default: false). Hidden dotfiles are "
+                "always searched; .git internals never."
             ),
         },
         "output_mode": {
@@ -128,18 +157,27 @@ def _filter_relative_path(file_path: Path, *, base: Path) -> str:
 
 
 def _iter_candidate_files(
-    search_target: Path, glob_pattern: str | None, *, budget: SearchBudget
+    search_target: Path,
+    glob_pattern: str | None,
+    *,
+    budget: SearchBudget,
+    apply_ignore_rules: bool,
 ) -> tuple[list[Path], Path]:
     base = search_target if search_target.is_dir() else search_target.parent
     candidates: list[Path] = []
     if search_target.is_file():
+        # An explicitly named file is always searched, ignored or not.
         candidates = [search_target]
     elif search_target.is_dir():
-        for path in search_target.rglob("*"):
-            if not budget.keep_going():
-                break
-            if path.is_file():
-                candidates.append(path)
+        candidates = [
+            path
+            for path, _ in iter_search_entries(
+                search_target,
+                budget=budget,
+                apply_ignore_rules=apply_ignore_rules,
+                include_directories=False,
+            )
+        ]
 
     if glob_pattern:
         candidates = [
@@ -152,17 +190,75 @@ def _iter_candidate_files(
     return candidates, base
 
 
-def _compile_pattern(pattern: str, *, literal: bool, ignore_case: bool) -> re.Pattern[str]:
+def _compile_pattern(
+    pattern: str, *, literal: bool, ignore_case: bool, multiline: bool
+) -> re.Pattern[str]:
     regex_pattern = re.escape(pattern) if literal else pattern
     flags = re.IGNORECASE if ignore_case else 0
+    if multiline:
+        flags |= re.MULTILINE | re.DOTALL
     return re.compile(regex_pattern, flags)
 
 
-def _read_lines(file_path: Path) -> list[str] | None:
+def _read_text(file_path: Path) -> str | None:
     try:
-        return file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return file_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+
+
+def _line_start_offsets(text: str) -> list[int]:
+    offsets = [0]
+    newline_index = text.find("\n")
+    while newline_index != -1:
+        offsets.append(newline_index + 1)
+        newline_index = text.find("\n", newline_index + 1)
+    return offsets
+
+
+def _emit_match_lines(
+    rendered: list[str],
+    emitted_line_numbers: set[int],
+    *,
+    display: str,
+    all_lines: list[str],
+    first_line: int,
+    last_line: int,
+    context_lines: int,
+) -> int:
+    """Append a match's lines (with context, deduped); return the bytes appended."""
+    appended_bytes = 0
+    start = max(1, first_line - context_lines)
+    end = min(len(all_lines), last_line + context_lines)
+    for line_number in range(start, end + 1):
+        if line_number in emitted_line_numbers:
+            continue
+        emitted_line_numbers.add(line_number)
+        rendered_line = f"{display}:{line_number}: {_truncate_line(all_lines[line_number - 1])}"
+        rendered.append(rendered_line)
+        appended_bytes += len(rendered_line.encode("utf-8")) + 1
+    return appended_bytes
+
+
+def _match_line_spans(
+    text: str, all_lines: list[str], pattern: re.Pattern[str], *, multiline: bool
+) -> list[tuple[int, int]]:
+    """Return each match as an inclusive 1-based ``(first_line, last_line)`` span."""
+    if not multiline:
+        return [
+            (index, index)
+            for index, line in enumerate(all_lines, start=1)
+            if pattern.search(line) is not None
+        ]
+
+    line_starts = _line_start_offsets(text)
+    return [
+        (
+            bisect_right(line_starts, match.start()),
+            bisect_right(line_starts, max(match.end() - 1, match.start())),
+        )
+        for match in pattern.finditer(text)
+    ]
 
 
 def _grep_content_python(
@@ -172,6 +268,8 @@ def _grep_content_python(
     pattern: re.Pattern[str],
     context_lines: int,
     limit: int,
+    offset: int,
+    multiline: bool,
     budget: SearchBudget,
 ) -> tuple[list[str], int]:
     rendered: list[str] = []
@@ -181,73 +279,100 @@ def _grep_content_python(
     for file_path in files:
         if not budget.keep_going():
             break
-        all_lines = _read_lines(file_path)
-        if all_lines is None:
+        text = _read_text(file_path)
+        if text is None:
             continue
+        all_lines = text.splitlines()
 
         display = display_search_path(file_path, cwd=cwd)
         emitted_line_numbers: set[int] = set()
-        for line_index, line in enumerate(all_lines, start=1):
-            if pattern.search(line) is None:
-                continue
+        for first_line, last_line in _match_line_spans(
+            text, all_lines, pattern, multiline=multiline
+        ):
             match_count += 1
-            if match_count > limit:
+            if match_count <= offset:
+                continue
+            if match_count > offset + limit:
                 return rendered, match_count
-
-            start = max(1, line_index - context_lines)
-            end = min(len(all_lines), line_index + context_lines)
-            for context_index in range(start, end + 1):
-                if context_index in emitted_line_numbers:
-                    continue
-                emitted_line_numbers.add(context_index)
-                rendered_line = (
-                    f"{display}:{context_index}: {_truncate_line(all_lines[context_index - 1])}"
-                )
-                rendered.append(rendered_line)
-                rendered_bytes += len(rendered_line.encode("utf-8")) + 1
+            rendered_bytes += _emit_match_lines(
+                rendered,
+                emitted_line_numbers,
+                display=display,
+                all_lines=all_lines,
+                first_line=first_line,
+                last_line=last_line,
+                context_lines=context_lines,
+            )
             if rendered_bytes > MAX_OUTPUT_BYTES:
-                # Already past the byte cap; scanning further files only buys
-                # output the cap would discard.
+                # Already past the byte cap; scanning further only buys output
+                # the cap would discard.
                 return rendered, match_count
 
     return rendered, match_count
 
 
 def _grep_files_with_matches_python(
-    files: list[Path], *, cwd: Path, pattern: re.Pattern[str], limit: int, budget: SearchBudget
+    files: list[Path],
+    *,
+    cwd: Path,
+    pattern: re.Pattern[str],
+    limit: int,
+    offset: int,
+    multiline: bool,
+    budget: SearchBudget,
 ) -> tuple[list[str], int]:
     rendered: list[str] = []
     file_count = 0
     for file_path in files:
         if not budget.keep_going():
             break
-        all_lines = _read_lines(file_path)
-        if all_lines is None or not any(pattern.search(line) for line in all_lines):
+        text = _read_text(file_path)
+        if text is None:
+            continue
+        if multiline:
+            matched = pattern.search(text) is not None
+        else:
+            matched = any(pattern.search(line) is not None for line in text.splitlines())
+        if not matched:
             continue
         file_count += 1
-        if file_count > limit:
+        if file_count <= offset:
+            continue
+        if file_count > offset + limit:
             break
         rendered.append(display_search_path(file_path, cwd=cwd))
     return rendered, file_count
 
 
 def _grep_count_python(
-    files: list[Path], *, cwd: Path, pattern: re.Pattern[str], limit: int, budget: SearchBudget
+    files: list[Path],
+    *,
+    cwd: Path,
+    pattern: re.Pattern[str],
+    limit: int,
+    offset: int,
+    multiline: bool,
+    budget: SearchBudget,
 ) -> tuple[list[str], int]:
     rendered: list[str] = []
     file_count = 0
     for file_path in files:
         if not budget.keep_going():
             break
-        all_lines = _read_lines(file_path)
-        if all_lines is None:
+        text = _read_text(file_path)
+        if text is None:
             continue
 
-        count = sum(1 for line in all_lines if pattern.search(line))
+        if multiline:
+            count = sum(1 for _ in pattern.finditer(text))
+        else:
+            count = sum(1 for line in text.splitlines() if pattern.search(line) is not None)
         if count <= 0:
             continue
         file_count += 1
-        if file_count > limit:
+        if file_count <= offset:
+            continue
+        if file_count > offset + limit:
             break
         rendered.append(f"{display_search_path(file_path, cwd=cwd)}:{count}")
     return rendered, file_count
@@ -260,6 +385,15 @@ def _normalize_rg_path(path_value: str) -> str:
     return normalized
 
 
+class _RipgrepOutcome(NamedTuple):
+    handled: bool
+    content: str = ""
+    error_code: str | None = None
+    error_message: str | None = None
+    total_results: int = 0
+    counted_all: bool = False
+
+
 def _grep_with_rg(
     *,
     context: ToolContext,
@@ -270,15 +404,18 @@ def _grep_with_rg(
     glob_pattern: str | None,
     ignore_case: bool,
     literal: bool,
+    multiline: bool,
+    apply_ignore_rules: bool,
     output_mode: str,
     context_lines: int,
     limit: int,
-) -> tuple[str | None, str | None]:
+    offset: int,
+) -> _RipgrepOutcome:
     if context_lines > 0:
-        return None, None
+        return _RipgrepOutcome(handled=False)
     rg_path = shutil.which("rg")
     if not rg_path:
-        return None, None
+        return _RipgrepOutcome(handled=False)
 
     base = search_target if search_target.is_dir() else search_target.parent
     search_argument = "." if search_target.is_dir() else search_target.name
@@ -289,11 +426,18 @@ def _grep_with_rg(
         "--no-messages",
         "--no-config",
         "--hidden",
-        "--no-ignore",
+        # Honor .gitignore files outside git repositories too, matching the
+        # Python fallback's behavior.
+        "--no-require-git",
+        "--glob-case-insensitive",
         "--sort",
         "path",
         "--text",
     ]
+    if not apply_ignore_rules:
+        command.append("--no-ignore")
+    if ".git" not in search_target.parts:
+        command.extend(["--glob", _GIT_INTERNALS_EXCLUSION_GLOB])
 
     if output_mode == "content":
         command.extend(["--line-number", "--with-filename", "--no-heading"])
@@ -305,6 +449,8 @@ def _grep_with_rg(
         command.append("--ignore-case")
     if literal:
         command.append("--fixed-strings")
+    if multiline:
+        command.extend(["--multiline", "--multiline-dotall"])
     if glob_pattern:
         command.extend(["--glob", glob_pattern])
     command.extend(["--regexp", pattern, "--", search_argument])
@@ -320,7 +466,11 @@ def _grep_with_rg(
             errors="replace",
         )
     except OSError as error:
-        return None, f"failed to execute ripgrep: {error}"
+        return _RipgrepOutcome(
+            handled=True,
+            error_code="grep_error",
+            error_message=f"failed to execute ripgrep: {error}",
+        )
 
     def kill_process() -> None:
         if process.poll() is None:
@@ -348,6 +498,9 @@ def _grep_with_rg(
         stdout_stream = process.stdout
         if stdout_stream is not None:
             for raw_line in stdout_stream:
+                if not budget.keep_going():
+                    stopped_early = True
+                    break
                 line = raw_line.rstrip("\n")
                 if not line.strip():
                     continue
@@ -355,12 +508,14 @@ def _grep_with_rg(
                 if rendered_line is None:
                     continue
                 observed_results += 1
-                if observed_results > limit:
+                if observed_results <= offset:
+                    continue
+                if observed_results > offset + limit:
                     stopped_early = True
                     break
                 rendered.append(rendered_line)
                 rendered_bytes += len(rendered_line.encode("utf-8")) + 1
-                if rendered_bytes > MAX_OUTPUT_BYTES or not budget.keep_going():
+                if rendered_bytes > MAX_OUTPUT_BYTES:
                     stopped_early = True
                     break
     finally:
@@ -379,16 +534,23 @@ def _grep_with_rg(
         budget.keep_going()
     intentionally_stopped = stopped_early or budget.stopped
     if not intentionally_stopped and process.returncode not in (0, 1):
-        return None, stderr_output.strip() or "ripgrep failed"
+        message = stderr_output.strip() or "ripgrep failed"
+        # The executing engine (Rust regex) rejected the pattern — surface it
+        # as an invalid pattern, not an infrastructure failure.
+        error_code = "invalid_regex" if "regex parse error" in message.lower() else "grep_error"
+        return _RipgrepOutcome(handled=True, error_code=error_code, error_message=message)
 
-    return (
-        render_limited_results(
-            rendered,
-            observed_results=observed_results,
-            limit=limit,
-            timed_out=budget.timed_out,
-        ),
-        None,
+    content = render_limited_results(
+        rendered,
+        observed_results=max(observed_results - offset, 0),
+        limit=limit,
+        timed_out=budget.timed_out,
+    )
+    return _RipgrepOutcome(
+        handled=True,
+        content=content,
+        total_results=observed_results,
+        counted_all=not stopped_early,
     )
 
 
@@ -437,10 +599,17 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         match_limit = optional_int(
             arguments.get("limit"), field_name="limit", default=DEFAULT_LIMIT, minimum=1
         )
+        result_offset = optional_int(
+            arguments.get("offset"), field_name="offset", default=0, minimum=0
+        )
         ignore_case = coerce_bool(
             arguments.get("ignore_case"), field_name="ignore_case", default=False
         )
         literal = coerce_bool(arguments.get("literal"), field_name="literal", default=False)
+        multiline = coerce_bool(arguments.get("multiline"), field_name="multiline", default=False)
+        include_ignored = coerce_bool(
+            arguments.get("include_ignored"), field_name="include_ignored", default=False
+        )
         output_mode = str(arguments.get("output_mode") or "content").strip() or "content"
         if output_mode not in SUPPORTED_OUTPUT_MODES:
             raise ValueError("output_mode must be one of: content, files_with_matches, count")
@@ -453,17 +622,25 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     if not (search_target.is_file() or search_target.is_dir()):
         return tool_failure("invalid_path", f"path is not a file or directory: {search_target}")
 
+    # The pattern is validated by whichever engine executes it: ripgrep's Rust
+    # regex when available, Python re in the fallback. A Python compile error
+    # therefore only matters when the fallback actually runs.
+    compiled_pattern: re.Pattern[str] | None = None
+    regex_error_message = ""
     try:
         compiled_pattern = _compile_pattern(
-            pattern_argument, literal=literal, ignore_case=ignore_case
+            pattern_argument, literal=literal, ignore_case=ignore_case, multiline=multiline
         )
     except re.error as error:
-        return tool_failure("invalid_regex", f"invalid regex pattern: {error}")
+        regex_error_message = f"invalid regex pattern: {error}"
 
     cwd_root = context.effective_cwd.expanduser().resolve()
     budget = SearchBudget(context)
+    apply_ignore = search_target.is_dir() and ignore_rules_apply(
+        search_target, include_ignored=include_ignored
+    )
 
-    rg_result, rg_error = _grep_with_rg(
+    outcome = _grep_with_rg(
         context=context,
         budget=budget,
         cwd=cwd_root,
@@ -472,41 +649,61 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         glob_pattern=glob_pattern,
         ignore_case=ignore_case,
         literal=literal,
+        multiline=multiline,
+        apply_ignore_rules=apply_ignore,
         output_mode=output_mode,
         context_lines=context_lines,
         limit=match_limit,
+        offset=result_offset,
     )
-    if rg_error is not None:
-        return tool_failure("grep_error", rg_error)
-    if budget.cancelled_by_user:
-        return tool_failure(SEARCH_CANCELLED_FAILURE_CODE, SEARCH_CANCELLED_FAILURE_MESSAGE)
-    if rg_result is not None:
-        return tool_success({"content": rg_result or _no_match_content(pattern_argument, budget)})
+    if outcome.handled:
+        if outcome.error_code is not None:
+            return tool_failure(outcome.error_code, outcome.error_message or "ripgrep failed")
+        if budget.cancelled_by_user:
+            return tool_failure(SEARCH_CANCELLED_FAILURE_CODE, SEARCH_CANCELLED_FAILURE_MESSAGE)
+        content = outcome.content
+        if not content:
+            total_results = outcome.total_results if outcome.counted_all else 0
+            content = _empty_result_content(
+                pattern_argument, budget, offset=result_offset, total_results=total_results
+            )
+        return tool_success({"content": content})
 
-    files, _base = _iter_candidate_files(search_target, glob_pattern, budget=budget)
+    if compiled_pattern is None:
+        return tool_failure("invalid_regex", regex_error_message)
+
+    files, _base = _iter_candidate_files(
+        search_target, glob_pattern, budget=budget, apply_ignore_rules=apply_ignore
+    )
     if output_mode == "content":
-        rendered, observed_results = _grep_content_python(
+        rendered, raw_count = _grep_content_python(
             files,
             cwd=cwd_root,
             pattern=compiled_pattern,
             context_lines=context_lines,
             limit=match_limit,
+            offset=result_offset,
+            multiline=multiline,
             budget=budget,
         )
     elif output_mode == "files_with_matches":
-        rendered, observed_results = _grep_files_with_matches_python(
+        rendered, raw_count = _grep_files_with_matches_python(
             files,
             cwd=cwd_root,
             pattern=compiled_pattern,
             limit=match_limit,
+            offset=result_offset,
+            multiline=multiline,
             budget=budget,
         )
     else:
-        rendered, observed_results = _grep_count_python(
+        rendered, raw_count = _grep_count_python(
             files,
             cwd=cwd_root,
             pattern=compiled_pattern,
             limit=match_limit,
+            offset=result_offset,
+            multiline=multiline,
             budget=budget,
         )
 
@@ -515,17 +712,24 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
 
     content = render_limited_results(
         rendered,
-        observed_results=observed_results,
+        observed_results=max(raw_count - result_offset, 0),
         limit=match_limit,
         timed_out=budget.timed_out,
     )
     if not content:
-        content = _no_match_content(pattern_argument, budget)
+        content = _empty_result_content(
+            pattern_argument, budget, offset=result_offset, total_results=raw_count
+        )
     return tool_success({"content": content})
 
 
-def _no_match_content(pattern: str, budget: SearchBudget) -> str:
-    content = f"No matches found for pattern: {pattern}"
+def _empty_result_content(
+    pattern: str, budget: SearchBudget, *, offset: int, total_results: int
+) -> str:
+    if offset > 0 and total_results > 0:
+        content = f"No results at offset {offset}; {total_results} matches total."
+    else:
+        content = f"No matches found for pattern: {pattern}"
     if budget.timed_out:
         return f"{content}\n{SEARCH_TIMEOUT_MARKER}"
     return content

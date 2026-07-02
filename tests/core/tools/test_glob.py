@@ -115,7 +115,13 @@ def test_register_glob_tool_exposes_provider_schema() -> None:
     assert parameters["type"] == "object"
     assert parameters["required"] == ["pattern"]
     assert parameters["additionalProperties"] is False
-    assert set(parameters["properties"]) == {"pattern", "path", "limit"}
+    assert set(parameters["properties"]) == {
+        "pattern",
+        "path",
+        "limit",
+        "offset",
+        "include_ignored",
+    }
     assert "description" not in parameters["properties"]
 
 
@@ -324,3 +330,104 @@ def test_glob_no_match_returns_success_content(tmp_path: Path) -> None:
     result = glob_handler(make_context(workspace), {"pattern": "*.missing"})
 
     assert get_success_content(result) == "No paths matched pattern: *.missing"
+
+
+def test_glob_bare_star_pattern_matches_top_level_only(tmp_path: Path) -> None:
+    # Standard glob semantics: '*.py' is anchored to the search root; matching
+    # at any depth needs '**/*.py'.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("main.py").write_text("", encoding="utf-8")
+    workspace.joinpath("src").mkdir()
+    workspace.joinpath("src", "app.py").write_text("", encoding="utf-8")
+
+    top_level = glob_handler(make_context(workspace), {"pattern": "*.py"})
+    any_depth = glob_handler(make_context(workspace), {"pattern": "**/*.py"})
+
+    assert get_success_content(top_level).splitlines() == ["main.py"]
+    assert sorted(get_success_content(any_depth).splitlines()) == ["main.py", "src/app.py"]
+
+
+def test_glob_pattern_matches_case_insensitively(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("app.py").write_text("", encoding="utf-8")
+
+    result = glob_handler(make_context(workspace), {"pattern": "*.PY"})
+
+    assert get_success_content(result) == "app.py"
+
+
+def test_glob_skips_gitignored_paths_by_default(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath(".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    workspace.joinpath("node_modules").mkdir()
+    workspace.joinpath("node_modules", "lib.js").write_text("", encoding="utf-8")
+    workspace.joinpath("app.js").write_text("", encoding="utf-8")
+
+    default_result = glob_handler(make_context(workspace), {"pattern": "**/*.js"})
+    opted_in_result = glob_handler(
+        make_context(workspace), {"pattern": "**/*.js", "include_ignored": True}
+    )
+
+    assert get_success_content(default_result).splitlines() == ["app.js"]
+    assert sorted(get_success_content(opted_in_result).splitlines()) == [
+        "app.js",
+        "node_modules/lib.js",
+    ]
+
+
+def test_glob_always_skips_git_internals(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    git_dir = workspace / ".git"
+    git_dir.mkdir()
+    git_dir.joinpath("config.txt").write_text("", encoding="utf-8")
+    workspace.joinpath("app.txt").write_text("", encoding="utf-8")
+
+    result = glob_handler(make_context(workspace), {"pattern": "**/*.txt", "include_ignored": True})
+
+    assert get_success_content(result).splitlines() == ["app.txt"]
+
+
+def test_glob_searches_explicitly_targeted_ignored_directory(tmp_path: Path) -> None:
+    # Explicitly targeting an ignored directory is intent to search it; the
+    # ignore rules must not produce a misleading empty result.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath(".git").mkdir()
+    workspace.joinpath(".gitignore").write_text("vendor/\n", encoding="utf-8")
+    vendor = workspace / "vendor"
+    vendor.mkdir()
+    vendor.joinpath("lib.js").write_text("", encoding="utf-8")
+
+    result = glob_handler(make_context(workspace), {"pattern": "*.js", "path": "vendor"})
+
+    assert get_success_content(result) == "vendor/lib.js"
+
+
+def test_glob_pages_results_with_offset(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for offset, name in enumerate(("old.txt", "middle.txt", "newest.txt")):
+        file_path = workspace / name
+        file_path.write_text("x\n", encoding="utf-8")
+        set_mtime(file_path, offset * 10)
+
+    result = glob_handler(make_context(workspace), {"pattern": "*.txt", "offset": 1, "limit": 1})
+
+    assert get_success_content(result).splitlines() == [
+        "middle.txt",
+        RESULTS_LIMITED_MARKER.format(limit=1),
+    ]
+
+
+def test_glob_reports_offset_beyond_total_matches(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("a.txt").write_text("x\n", encoding="utf-8")
+
+    result = glob_handler(make_context(workspace), {"pattern": "*.txt", "offset": 5})
+
+    assert get_success_content(result) == "No results at offset 5; 1 matches total."
