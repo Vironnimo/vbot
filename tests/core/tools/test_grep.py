@@ -170,8 +170,11 @@ def test_register_grep_tool_exposes_provider_schema() -> None:
         "glob",
         "ignore_case",
         "literal",
+        "multiline",
         "context",
         "limit",
+        "offset",
+        "include_ignored",
         "output_mode",
     }
     assert "description" not in parameters["properties"]
@@ -508,11 +511,11 @@ def test_grep_returns_failure_for_rg_nonzero_error(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("notes.txt").write_text("hello\n", encoding="utf-8")
-    install_fake_rg(monkeypatch, stderr_text="regex parse error", returncode=2)
+    install_fake_rg(monkeypatch, stderr_text="some unexpected rg failure", returncode=2)
 
     result = grep_handler(make_context(workspace), {"pattern": "hello"})
     error = assert_failure_envelope(result, "grep_error")
-    assert error["message"] == "regex parse error"
+    assert error["message"] == "some unexpected rg failure"
 
 
 def test_grep_returns_failure_for_discovered_rg_execution_oserror(
@@ -601,3 +604,268 @@ def test_grep_failure_envelope_is_valid_for_missing_path(tmp_path: Path) -> None
     result = grep_handler(make_context(workspace), {"pattern": "x", "path": "missing"})
     error = assert_failure_envelope(result, "path_not_found")
     assert "missing" in error["message"]
+
+
+def test_grep_skips_gitignored_files_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath(".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    workspace.joinpath("node_modules").mkdir()
+    workspace.joinpath("node_modules", "lib.js").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("app.js").write_text("needle\n", encoding="utf-8")
+
+    default_result = grep_handler(make_context(workspace), {"pattern": "needle"})
+    opted_in_result = grep_handler(
+        make_context(workspace), {"pattern": "needle", "include_ignored": True}
+    )
+
+    assert get_success_content(default_result) == "app.js:1: needle"
+    opted_in_content = get_success_content(opted_in_result)
+    assert "app.js:1: needle" in opted_in_content
+    assert "node_modules/lib.js:1: needle" in opted_in_content
+
+
+def test_grep_honors_nested_gitignore_negation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Deeper .gitignore files win over shallower ones, git-style: the nested
+    # negation re-includes a file the root pattern ignored.
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath(".gitignore").write_text("*.log\n", encoding="utf-8")
+    workspace.joinpath("root.log").write_text("needle\n", encoding="utf-8")
+    sub = workspace / "sub"
+    sub.mkdir()
+    sub.joinpath(".gitignore").write_text("!keep.log\n", encoding="utf-8")
+    sub.joinpath("keep.log").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle"})
+
+    assert get_success_content(result) == "sub/keep.log:1: needle"
+
+
+def test_grep_always_skips_git_internals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    git_dir = workspace / ".git"
+    git_dir.mkdir()
+    git_dir.joinpath("config").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("app.txt").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "include_ignored": True})
+
+    assert get_success_content(result) == "app.txt:1: needle"
+
+
+def test_grep_searches_explicitly_named_ignored_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath(".gitignore").write_text("secret.txt\n", encoding="utf-8")
+    workspace.joinpath("secret.txt").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "path": "secret.txt"})
+
+    assert get_success_content(result) == "secret.txt:1: needle"
+
+
+def test_grep_searches_explicitly_targeted_ignored_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath(".git").mkdir()
+    workspace.joinpath(".gitignore").write_text("vendor/\n", encoding="utf-8")
+    vendor = workspace / "vendor"
+    vendor.mkdir()
+    vendor.joinpath("lib.js").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "path": "vendor"})
+
+    assert get_success_content(result) == "vendor/lib.js:1: needle"
+
+
+def test_grep_rg_command_uses_ignore_respecting_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    created = install_fake_rg(monkeypatch)
+
+    grep_handler(make_context(workspace), {"pattern": "needle"})
+
+    command = created[0].command
+    assert "--no-ignore" not in command
+    assert "--hidden" in command
+    assert "--no-require-git" in command
+    assert "--glob-case-insensitive" in command
+    exclusion_index = command.index("!**/.git/**")
+    assert command[exclusion_index - 1] == "--glob"
+
+
+def test_grep_rg_command_disables_ignore_rules_on_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    created = install_fake_rg(monkeypatch)
+
+    grep_handler(make_context(workspace), {"pattern": "needle", "include_ignored": True})
+
+    command = created[0].command
+    assert "--no-ignore" in command
+    assert "!**/.git/**" in command
+
+
+def test_grep_rg_command_enables_multiline_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    created = install_fake_rg(monkeypatch)
+
+    grep_handler(make_context(workspace), {"pattern": "alpha.beta", "multiline": True})
+
+    command = created[0].command
+    assert "--multiline" in command
+    assert "--multiline-dotall" in command
+
+
+def test_grep_multiline_matches_across_lines_in_python_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "alpha.beta", "multiline": True})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "notes.txt:1: alpha\nnotes.txt:2: beta"
+
+
+def test_grep_multiline_counts_matches_not_lines_in_python_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("alpha\nbeta\nalpha\nbeta\n", encoding="utf-8")
+
+    result = grep_handler(
+        make_context(workspace),
+        {"pattern": "alpha.beta", "multiline": True, "output_mode": "count"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "notes.txt:2"
+
+
+def test_grep_pages_results_with_offset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("hit\nhit\nhit\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "hit", "offset": 1, "limit": 1})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == (f"notes.txt:2: hit\n{RESULTS_LIMITED_MARKER.format(limit=1)}")
+
+
+def test_grep_reports_offset_beyond_total_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("hit\nhit\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "hit", "offset": 5})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "No results at offset 5; 2 matches total."
+
+
+def test_grep_rg_offset_skips_streamed_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    stdout_text = "".join(f"notes.txt:{index}:hit\n" for index in range(1, 4))
+    install_fake_rg(monkeypatch, stdout_text=stdout_text)
+
+    result = grep_handler(make_context(workspace), {"pattern": "hit", "offset": 1, "limit": 1})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == (f"notes.txt:2: hit\n{RESULTS_LIMITED_MARKER.format(limit=1)}")
+
+
+def test_grep_maps_rg_regex_parse_error_to_invalid_regex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    install_fake_rg(
+        monkeypatch,
+        stderr_text="regex parse error:\n    (?=x)\nerror: look-around is not supported",
+        returncode=2,
+    )
+
+    result = grep_handler(make_context(workspace), {"pattern": "(?=x)"})
+
+    error = assert_failure_envelope(result, "invalid_regex")
+    assert "regex parse error" in error["message"]
+
+
+def test_grep_runs_rg_even_when_python_rejects_the_pattern(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # \p{Lu} is valid Rust regex but invalid Python re: the executing engine
+    # decides validity, so with rg available the search must succeed.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    install_fake_rg(monkeypatch, stdout_text="notes.txt:1:Xyz\n")
+
+    result = grep_handler(make_context(workspace), {"pattern": r"\p{Lu}"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "notes.txt:1: Xyz"
+
+
+def test_grep_reports_invalid_regex_without_rg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("Xyz\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": r"\p{Lu}"})
+
+    error = assert_failure_envelope(result, "invalid_regex")
+    assert "invalid regex pattern" in error["message"]
+
+
+def test_grep_glob_filter_matches_case_insensitively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("keep.py").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("skip.txt").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "glob": "*.PY"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "keep.py:1: needle"

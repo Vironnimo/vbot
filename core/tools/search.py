@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 import time
 from functools import cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
+from pathspec import PathSpec
+from pathspec.pattern import Pattern
+
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from core.tools.tools import ToolContext
 
 SEARCH_TIMEOUT_SECONDS = 30.0
@@ -62,6 +68,125 @@ class SearchBudget:
     def stopped(self) -> bool:
         """Return whether any stop condition has been recorded."""
         return self.timed_out or self.cancelled_by_user or self.run_cancelled
+
+
+def _find_repository_top(search_root: Path) -> Path:
+    """Return the closest ancestor holding a ``.git`` entry, else the root itself."""
+    for directory in (search_root, *search_root.parents):
+        if (directory / ".git").exists():
+            return directory
+    return search_root
+
+
+class GitIgnoreFilter:
+    """Evaluates ``.gitignore`` rules for paths under a search root, git-style.
+
+    Patterns are read lazily per directory from the repository top down to the
+    path's parent; across levels the deepest matching pattern wins, matching
+    git's precedence. Re-inclusion below an excluded directory is impossible
+    because the walker prunes excluded directories before descending — also
+    git's behavior. Only ``.gitignore`` files are honored (not
+    ``.git/info/exclude`` or the user's global excludes file).
+    """
+
+    def __init__(self, search_root: Path) -> None:
+        self._top = _find_repository_top(search_root)
+        self._patterns_by_directory: dict[Path, list[Pattern] | None] = {}
+
+    def _patterns_for(self, directory: Path) -> list[Pattern] | None:
+        if directory in self._patterns_by_directory:
+            return self._patterns_by_directory[directory]
+
+        patterns: list[Pattern] | None = None
+        gitignore_path = directory / ".gitignore"
+        try:
+            if gitignore_path.is_file():
+                lines = gitignore_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                parsed = PathSpec.from_lines("gitignore", lines).patterns
+                patterns = [pattern for pattern in parsed if pattern.include is not None] or None
+        except OSError:
+            patterns = None
+
+        self._patterns_by_directory[directory] = patterns
+        return patterns
+
+    def is_ignored(self, path: Path, *, is_directory: bool) -> bool:
+        """Return whether git would ignore ``path`` (evaluated as file or directory)."""
+        try:
+            relative_parts = path.relative_to(self._top).parts
+        except ValueError:
+            return False
+
+        ignored = False
+        for depth in range(len(relative_parts)):
+            level_directory = self._top.joinpath(*relative_parts[:depth])
+            patterns = self._patterns_for(level_directory)
+            if not patterns:
+                continue
+            candidate = "/".join(relative_parts[depth:])
+            if is_directory:
+                candidate = f"{candidate}/"
+            for pattern in patterns:
+                if pattern.match_file(candidate):
+                    ignored = bool(pattern.include)
+        return ignored
+
+
+def ignore_rules_apply(search_root: Path, *, include_ignored: bool) -> bool:
+    """Decide whether ignore rules filter a search rooted at ``search_root``.
+
+    Rules are off when the caller opted out — or when the root itself is
+    ignored: explicitly targeting an ignored directory is intent to search it,
+    and filtering would otherwise return a misleading empty result.
+    """
+    if include_ignored:
+        return False
+    return not GitIgnoreFilter(search_root).is_ignored(search_root, is_directory=True)
+
+
+def iter_search_entries(
+    search_root: Path,
+    *,
+    budget: SearchBudget,
+    apply_ignore_rules: bool,
+    include_directories: bool,
+) -> Iterator[tuple[Path, bool]]:
+    """Yield ``(path, is_directory)`` under a directory root, deterministically sorted.
+
+    Prunes ignored directories before descending and skips ignored files when
+    ``apply_ignore_rules`` is set. ``.git`` internals are always pruned — never
+    useful for content search — unless the root itself lies inside a ``.git``
+    tree (an explicit reach-in). Polls the budget per directory and per file.
+    """
+    ignore_filter = GitIgnoreFilter(search_root) if apply_ignore_rules else None
+    skip_git_directories = ".git" not in search_root.parts
+
+    for directory_path, directory_names, file_names in os.walk(search_root):
+        if not budget.keep_going():
+            return
+        current = Path(directory_path)
+
+        kept_directories = []
+        for name in sorted(directory_names):
+            if skip_git_directories and name == ".git":
+                continue
+            child = current / name
+            if ignore_filter is not None and ignore_filter.is_ignored(child, is_directory=True):
+                continue
+            kept_directories.append(name)
+        directory_names[:] = kept_directories
+
+        if include_directories:
+            for name in kept_directories:
+                yield current / name, True
+
+        for name in sorted(file_names):
+            if not budget.keep_going():
+                return
+            child = current / name
+            if ignore_filter is not None and ignore_filter.is_ignored(child, is_directory=False):
+                continue
+            yield child, False
 
 
 def display_search_path(path: Path, *, cwd: Path) -> str:
@@ -169,17 +294,47 @@ def relative_forward_path(path: Path, *, base: Path) -> str:
     return path.relative_to(base).as_posix()
 
 
+def _relative_path_segments(relative_path: str) -> tuple[str, ...]:
+    """Split a relative path into segments without pattern validation.
+
+    Result paths are data, not patterns: a file legitimately named ``~lock``
+    or ``..data`` must not trip the pattern-side validation rules.
+    """
+    return tuple(
+        segment
+        for segment in relative_path.replace("\\", "/").split("/")
+        if segment not in {"", "."}
+    )
+
+
 def file_filter_matches(relative_path: str, pattern: str) -> bool:
-    """Return whether a forward-slash relative path matches a file filter pattern."""
-    normalized_path = normalize_file_filter_pattern(relative_path, field_name="path")
+    """Return whether a relative path matches a file filter pattern.
+
+    A pattern without ``/`` matches the file name at any depth (rg ``--glob``
+    semantics); matching is case-insensitive on every platform.
+    """
+    path_segments = _relative_path_segments(relative_path)
     normalized_pattern = normalize_file_filter_pattern(pattern)
 
     if "/" not in normalized_pattern:
         if normalized_pattern == "**":
             return True
-        return fnmatch.fnmatch(PurePosixPath(normalized_path).name, normalized_pattern)
+        name = path_segments[-1] if path_segments else ""
+        return fnmatch.fnmatchcase(name.casefold(), normalized_pattern.casefold())
 
-    path_segments = tuple(segment for segment in normalized_path.split("/") if segment)
+    pattern_segments = tuple(segment for segment in normalized_pattern.split("/") if segment)
+    return _match_glob_path_segments(path_segments, pattern_segments)
+
+
+def glob_path_matches(relative_path: str, pattern: str) -> bool:
+    """Return whether a relative path matches an anchored glob pattern.
+
+    Unlike ``file_filter_matches`` there is no bare-name shortcut: ``*.py``
+    matches top-level entries only, ``**/*.py`` matches at any depth —
+    standard glob semantics. Case-insensitive on every platform.
+    """
+    path_segments = _relative_path_segments(relative_path)
+    normalized_pattern = normalize_file_filter_pattern(pattern)
     pattern_segments = tuple(segment for segment in normalized_pattern.split("/") if segment)
     return _match_glob_path_segments(path_segments, pattern_segments)
 
@@ -219,7 +374,9 @@ def _match_glob_path_segments(
 
         if path_index >= len(path_segments):
             return False
-        if not fnmatch.fnmatch(path_segments[path_index], pattern_segment):
+        if not fnmatch.fnmatchcase(
+            path_segments[path_index].casefold(), pattern_segment.casefold()
+        ):
             return False
         return matches(path_index + 1, pattern_index + 1)
 
@@ -234,10 +391,14 @@ __all__ = [
     "SEARCH_CANCELLED_FAILURE_MESSAGE",
     "SEARCH_TIMEOUT_MARKER",
     "SEARCH_TIMEOUT_SECONDS",
+    "GitIgnoreFilter",
     "SearchBudget",
     "cap_output_bytes",
     "display_search_path",
     "file_filter_matches",
+    "glob_path_matches",
+    "ignore_rules_apply",
+    "iter_search_entries",
     "normalize_file_filter_pattern",
     "relative_forward_path",
     "render_limited_results",
