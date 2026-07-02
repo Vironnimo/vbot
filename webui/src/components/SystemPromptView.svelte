@@ -32,6 +32,8 @@
   let selectedAgentId = $state('');
   let previewText = $state('');
   let previewTokens = $state(null);
+  let previewToolTokens = $state(null);
+  let previewToolCount = $state(null);
   let isLoadingData = $state(true);
   let isRefreshingPreview = $state(false);
   let reorderAnnouncement = $state('');
@@ -161,6 +163,8 @@
     selectedScopeKey = nextScopeKey;
     previewText = '';
     previewTokens = null;
+    previewToolTokens = null;
+    previewToolCount = null;
     reorderAnnouncement = '';
     clearAutoSaveTimers();
     await loadBlocksForScope(nextScopeKey);
@@ -798,6 +802,8 @@
       const result = await rpc('prompt.preview', params);
       previewText = result.text ?? '';
       previewTokens = result.tokens ?? null;
+      previewToolTokens = result.tool_tokens ?? null;
+      previewToolCount = result.tool_count ?? null;
     } catch {
       showToast(
         t('systemPrompt.error.previewFailed', 'Failed to load preview'),
@@ -1092,11 +1098,32 @@
                 />
               {/if}
               {#if previewTokens !== null}
-                <span class="sp-token-count">
-                  {t('systemPrompt.preview.tokenCount', '~{count} tokens', {
-                    count: previewTokens,
-                  })}
-                </span>
+                {#if previewToolTokens}
+                  <span
+                    class="sp-token-count"
+                    title={t(
+                      'systemPrompt.preview.tokenBreakdownHint',
+                      'Estimated. Tools = the {count} tool definitions sent to the provider with every request alongside the system prompt.',
+                      { count: previewToolCount ?? 0 },
+                    )}
+                  >
+                    {t(
+                      'systemPrompt.preview.tokenBreakdown',
+                      '~{prompt} prompt + ~{tools} tools = ~{total} tokens',
+                      {
+                        prompt: previewTokens,
+                        tools: previewToolTokens,
+                        total: previewTokens + previewToolTokens,
+                      },
+                    )}
+                  </span>
+                {:else}
+                  <span class="sp-token-count">
+                    {t('systemPrompt.preview.tokenCount', '~{count} tokens', {
+                      count: previewTokens,
+                    })}
+                  </span>
+                {/if}
               {/if}
             </div>
             <div class="sp-preview-controls">

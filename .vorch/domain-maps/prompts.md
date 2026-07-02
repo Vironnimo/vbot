@@ -74,7 +74,7 @@ A static block's effective text resolves **agent override ← default-scope over
 - `set_layout(layout, scope=None)` persists order + on/off, **tolerating** a contributor-gone id (the store prunes any entry with no live definition on this write, so a reorder never errors on a vanished contributor). `reset_layout(scope=None)` overwrites the scope's `layout.json` with the bundled default (text overrides untouched).
 - `create_block(slug, content=None, scope=None, *, position=None)` creates a custom `user:<slug>` block (override file + layout entry; slug validated with the canonical agent-id rule; must not collide with an existing `user:` block). `remove_block(id, scope=None)` deletes a `user:` block (override file + layout entry) — only a `user:` block is removable; a core/tool/extension block is toggled off, never deleted.
 
-RPC: `prompt.list`, `prompt.update`, `prompt.reset`, `prompt.set_layout`, `prompt.create_block`, `prompt.remove_block`, `prompt.reset_layout`, `prompt.preview` (see `server.md`). `prompt.preview` returns rendered `text`, token count, and `estimated`; for an explicit agent scope the server infers `agent_id` from the scope, otherwise the `agent_id` param is an `agent@projekt` address.
+RPC: `prompt.list`, `prompt.update`, `prompt.reset`, `prompt.set_layout`, `prompt.create_block`, `prompt.remove_block`, `prompt.reset_layout`, `prompt.preview` (see `server.md`). `prompt.preview` returns rendered `text`, `tokens`, `tool_tokens`/`tool_count` (the provider tool-definition array's estimated footprint), and `estimated`; for an explicit agent scope the server infers `agent_id` from the scope, otherwise the `agent_id` param is an `agent@projekt` address.
 
 ## Conventions
 
