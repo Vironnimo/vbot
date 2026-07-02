@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-25T15:33:37.053693+00:00",
+  "fetched_at": "2026-07-02T20:35:13.165004+00:00",
   "provider_id": "openai",
   "raw_response": {
     "models": [
@@ -46,6 +46,7 @@
         "description": "Frontier model for complex coding, research, and real-world work.",
         "display_name": "GPT-5.5",
         "experimental_supported_tools": [],
+        "include_skills_usage_instructions": true,
         "input_modalities": [
           "text",
           "image"
@@ -62,7 +63,7 @@
         },
         "multi_agent_version": null,
         "prefer_websockets": true,
-        "priority": 9,
+        "priority": 7,
         "reasoning_summary_format": "experimental",
         "service_tiers": [
           {
@@ -145,6 +146,7 @@
         "description": "Strong model for everyday coding.",
         "display_name": "GPT-5.4",
         "experimental_supported_tools": [],
+        "include_skills_usage_instructions": false,
         "input_modalities": [
           "text",
           "image"
@@ -248,6 +250,7 @@
         "description": "Small, fast, and cost-efficient model for simpler coding tasks.",
         "display_name": "GPT-5.4-Mini",
         "experimental_supported_tools": [],
+        "include_skills_usage_instructions": false,
         "input_modalities": [
           "text",
           "image"
@@ -339,6 +342,7 @@
         "description": "Automatic approval review model for Codex.",
         "display_name": "Codex Auto Review",
         "experimental_supported_tools": [],
+        "include_skills_usage_instructions": false,
         "input_modalities": [
           "text",
           "image"

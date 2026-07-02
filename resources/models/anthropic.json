@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-25T15:33:35.886279+00:00",
+  "fetched_at": "2026-07-02T20:35:12.241100+00:00",
   "models": {
     "claude-fable-5": {
       "canonical": "anthropic/claude-fable-5",
@@ -324,6 +324,42 @@
         }
       },
       "name": "Claude Sonnet 4.6"
+    },
+    "claude-sonnet-5": {
+      "canonical": "anthropic/claude-sonnet-5",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-sonnet",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": false
+        }
+      },
+      "name": "Claude Sonnet 5"
     }
   },
   "provider_id": "anthropic",
