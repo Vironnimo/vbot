@@ -222,6 +222,21 @@ def test_layout_keeps_disabled_flag() -> None:
     assert resolved[0].enabled is False
 
 
+def test_opt_in_block_defaults_in_disabled_but_layout_entry_wins() -> None:
+    # A definition with default_enabled=False defaults in OFF when the layout does
+    # not list it (so an opt-in block stays off even under an older persisted
+    # layout); an explicit layout entry overrides that default in either direction.
+    opt_in = BlockDefinition(
+        id="core:opt-in", owner="always", default_text="x", default_enabled=False
+    )
+
+    defaulted = resolve_layout([opt_in], [])
+    assert defaulted[0].enabled is False
+
+    switched_on = resolve_layout([opt_in], [LayoutEntry(id="core:opt-in", enabled=True)])
+    assert switched_on[0].enabled is True
+
+
 def test_layout_ignores_duplicate_entry_for_same_id() -> None:
     a = _text_block("core:a", "a")
     layout = [LayoutEntry(id="core:a", enabled=False), LayoutEntry(id="core:a", enabled=True)]

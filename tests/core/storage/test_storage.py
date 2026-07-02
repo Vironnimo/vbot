@@ -17,7 +17,7 @@ from core.storage import (
 def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = True) -> None:
     prompts_dir = resources_dir / "prompts"
     prompts_dir.mkdir(parents=True)
-    prompt_names = ["runtime.md", "tools.md", "channels.md", "skills.md"]
+    prompt_names = ["runtime.md", "tools.md", "tools_list.md", "channels.md", "skills.md"]
     if include_compaction:
         prompt_names.append("compaction.md")
 
@@ -901,6 +901,7 @@ def test_copy_prompt_fragments_preserves_existing_user_copy(tmp_path: Path) -> N
         "compaction.md",
         "skills.md",
         "tools.md",
+        "tools_list.md",
     ]
 
 
@@ -1017,6 +1018,7 @@ def test_copy_agent_prompt_fragments_seeds_editable_defaults_only(tmp_path: Path
         "runtime.md",
         "skills.md",
         "tools.md",
+        "tools_list.md",
     ]
     assert storage.read_agent_prompt_fragment("coder", "runtime.md") == "custom default runtime"
     assert not (data_dir / "agents" / "coder" / "prompts" / "compaction.md").exists()
