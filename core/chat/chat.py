@@ -1166,7 +1166,13 @@ class ChatLoop:
                 note_hook=session.add_note,
                 chunk_timeout_seconds=chunk_timeout_seconds,
             )
-            run.raise_if_cancelled()
+            # A user cancel after visible streamed output returns the preserved
+            # partial as an interrupted turn — it must reach the persist block
+            # below before the cancel is honored, or the answer the user
+            # already saw would vanish from history.
+            preserve_cancelled_partial = run.cancel_requested and assistant_message.interrupted
+            if not preserve_cancelled_partial:
+                run.raise_if_cancelled()
             if assistant_message.usage is None:
                 assistant_message = _apply_usage_estimation(assistant_message, messages)
             # Hold the per-session append lock from the assistant tool-call
@@ -1184,6 +1190,12 @@ class ChatLoop:
                 )
 
                 if not assistant_message.tool_calls:
+                    if preserve_cancelled_partial:
+                        # The preserved partial is persisted; end the turn
+                        # without new provider work (no auto-compaction). The
+                        # run manager sees ``cancel_requested`` and marks the
+                        # Run cancelled despite the normal return.
+                        return assistant_message
                     if self._compaction_service is not None:
                         messages = await self._maybe_auto_compact(
                             agent,
@@ -1640,6 +1652,17 @@ class ChatLoop:
             if action is StreamRecoveryAction.DISCARD_WITH_NOTE:
                 _maybe_persist_partial_thinking(accumulator, note_hook)
             raise
+        except asyncio.CancelledError:
+            # User cancel mid-stream. Output the user already saw must not
+            # vanish (GLOSSARY → Cancel), so accumulated visible content is
+            # finalized like a stream break after visible output; the caller
+            # persists it and the Run still ends as cancelled. With no visible
+            # content (still thinking / reasoning-only) the existing
+            # partial-thinking note is the only trace, as before.
+            if run.cancel_requested and accumulator.partial_content is not None:
+                return self._finalize_interrupted_partial(agent, accumulator, run)
+            _maybe_persist_partial_thinking(accumulator, note_hook)
+            raise
         except BaseException:
             _maybe_persist_partial_thinking(accumulator, note_hook)
             raise
@@ -1665,13 +1688,18 @@ class ChatLoop:
         The run ends as a normal turn-less assistant turn instead of failing or
         re-running, so the next turn sees the truncated answer in history and
         continues it naturally — no auto-retry, no duplicate output.
+
+        Also the finalize path for a user cancel after visible output: there the
+        run ends as *cancelled*, and ``allow_after_cancel`` lets the settled
+        assistant-output event through the cancel suppression — it re-publishes
+        text the user already saw streaming, not a late result.
         """
         assistant_message = _assistant_message_from_response(
             agent.model,
             accumulator.finalize_partial_fields().to_response_dict(),
             interrupted=True,
         )
-        _emit_streaming_assistant_events(run, assistant_message)
+        _emit_streaming_assistant_events(run, assistant_message, allow_after_cancel=True)
         return assistant_message
 
     def _resolve_chunk_timeout(self, provider_id: str, connection_id: str) -> float | None:

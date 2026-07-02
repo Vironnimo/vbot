@@ -6,6 +6,7 @@ import {
   isRowCancellable,
   labelForEvent,
   labelForMessage,
+  runMetaParts,
   subAgentDisplayResult,
   subAgentDotStatus,
   subAgentEffectiveRunId,
@@ -743,5 +744,47 @@ describe('takeoverSeparatorLabel', () => {
     expect(
       takeoverSeparatorLabel({ content: JSON.stringify({ to: 'b' }) }),
     ).toBe('Session taken over');
+  });
+});
+
+describe('runMetaParts', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  it('shows the Cancelled label plus the runtime for a cancelled run', () => {
+    const parts = runMetaParts({
+      status: 'cancelled',
+      durationMs: 12000,
+      outputs: [{ content: 'partial' }],
+      tools: [],
+    });
+
+    expect(parts).toContain('Cancelled');
+    const cancelledIndex = parts.indexOf('Cancelled');
+    // The duration renders after the user-action label, never instead of it.
+    expect(parts.length).toBeGreaterThan(cancelledIndex + 1);
+  });
+
+  it('shows only the Cancelled label when a cancelled run has no timing', () => {
+    const parts = runMetaParts({
+      status: 'cancelled',
+      durationMs: null,
+      outputs: [],
+      tools: [],
+    });
+
+    expect(parts).toContain('Cancelled');
+  });
+
+  it('keeps the duration-or-status fallback for completed runs', () => {
+    const parts = runMetaParts({
+      status: 'completed',
+      durationMs: 8000,
+      outputs: [{ content: 'done' }],
+      tools: [],
+    });
+
+    expect(parts.join(' ')).not.toContain('Completed');
   });
 });

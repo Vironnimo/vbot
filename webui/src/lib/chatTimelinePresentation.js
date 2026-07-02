@@ -262,11 +262,21 @@ export const visibleRunChildren = (assistantRun) =>
     return Boolean(child.content);
   });
 
-export const runMetaParts = (assistantRun) =>
-  [
-    labelForRunIterations(assistantRun),
-    formatRunDuration(assistantRun) || runStatusLabel(assistantRun.status),
-  ].filter(Boolean);
+export const runMetaParts = (assistantRun) => {
+  const parts = [labelForRunIterations(assistantRun)];
+  const duration = formatRunDuration(assistantRun);
+  if (assistantRun.status === 'cancelled') {
+    // A cancelled run always names the user action, with the runtime after
+    // it — the duration alone would read like a normal completed run.
+    parts.push(runStatusLabel(assistantRun.status));
+    if (duration) {
+      parts.push(duration);
+    }
+  } else {
+    parts.push(duration || runStatusLabel(assistantRun.status));
+  }
+  return parts.filter(Boolean);
+};
 
 export const toolStatus = (tool) => {
   if (tool.status === 'failed') {

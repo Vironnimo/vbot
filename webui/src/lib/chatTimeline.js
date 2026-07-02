@@ -191,6 +191,14 @@ function historyTimelineItems(messages) {
         appendHistoryRunSummary(activeAssistantRun, message);
         pushActiveAssistantRun(timelineItems, activeAssistantRun);
         activeAssistantRun = null;
+      } else if (message.status === 'cancelled') {
+        // A run cancelled before any visible output persists no assistant or
+        // tool message — the summary is its only trace. Render a bare
+        // cancelled run row (status label + timing) instead of leaving a
+        // hole where the cancelled turn happened.
+        timelineItems.push(
+          cancelledRunSummaryItem(message, timelineItems.length),
+        );
       }
       previousVisibleRole = 'run_summary';
       continue;
@@ -904,6 +912,23 @@ function appendHistoryToolResult(assistantRun, message) {
   assistantRun.status = hasResultFailure(message.content)
     ? CHAT_STATUS_FAILED
     : CHAT_STATUS_COMPLETED;
+}
+
+// A run row built from a cancelled run_summary alone (no assistant/tool
+// anchor): header with the "Cancelled" status and the run's timing, no
+// children. Used for runs the user cancelled while nothing visible had
+// streamed yet, so the timeline still shows that the turn happened.
+function cancelledRunSummaryItem(message, sequence) {
+  const assistantRun = createAssistantRunItem({
+    id: `history-run-summary-${message.id ?? message.timestamp ?? sequence}`,
+    runId: message.run_id ?? null,
+    source: 'history',
+    sequence,
+    timestamp: message.timestamp,
+  });
+  appendHistoryRunSummary(assistantRun, message);
+  syncAssistantRunCollections(assistantRun);
+  return stripTimelineSequence(assistantRun);
 }
 
 function appendHistoryRunSummary(assistantRun, message) {

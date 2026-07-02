@@ -60,14 +60,29 @@ def _emit_assistant_events(run: Run, message: ChatMessage) -> None:
         _emit_message_event(run, ASSISTANT_OUTPUT_EVENT, message)
 
 
-def _emit_streaming_assistant_events(run: Run, message: ChatMessage) -> None:
+def _emit_streaming_assistant_events(
+    run: Run, message: ChatMessage, *, allow_after_cancel: bool = False
+) -> None:
+    # ``allow_after_cancel`` is set only for the preserve-partial-on-cancel
+    # finalization: the payload then re-publishes text the user already saw
+    # streaming, so the cancel suppression must not drop it.
     if message.reasoning:
-        run.emit(REASONING_EVENT, {"message": _visible_message_payload(message)})
-    _emit_message_event(run, ASSISTANT_OUTPUT_EVENT, message)
+        run.emit(
+            REASONING_EVENT,
+            {"message": _visible_message_payload(message)},
+            allow_after_cancel=allow_after_cancel,
+        )
+    _emit_message_event(run, ASSISTANT_OUTPUT_EVENT, message, allow_after_cancel=allow_after_cancel)
 
 
-def _emit_message_event(run: Run, event_type: str, message: ChatMessage) -> None:
-    run.emit(event_type, {"message": _visible_message_payload(message)})
+def _emit_message_event(
+    run: Run, event_type: str, message: ChatMessage, *, allow_after_cancel: bool = False
+) -> None:
+    run.emit(
+        event_type,
+        {"message": _visible_message_payload(message)},
+        allow_after_cancel=allow_after_cancel,
+    )
 
 
 PARTIAL_THINKING_CAP = 2000
