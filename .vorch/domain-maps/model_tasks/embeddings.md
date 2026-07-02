@@ -20,7 +20,7 @@ The `EmbeddingResult.resolved_model_id` is the single identity key the recall st
 
 `ProviderEmbeddingClient` subclasses `core.providers.task_client.ProviderTaskClient`, the shared plumbing it has in common with `core/model_tasks/image_providers.py` and `core/model_tasks/speech_providers.py` (constructor tuple, `from_runtime` factory, auth headers, POST/classify/parse cycle, retry policy — see `providers.md`). This module owns only the embeddings payload shape and response parsing:
 
-- POSTs `/api/v1/embeddings` with `model`, `input` (array of strings), `encoding_format="float"`, and optional `dimensions` (only when present in options and non-zero).
+- POSTs `/api/v1/embeddings` with `model`, `input` (array of strings), `encoding_format="float"`, and optional `dimensions` (only when present in options and non-zero). The universal `extra_options` escape hatch merges into the payload last (`merge_extra_options` from `core/providers/task_client.py`).
 - Normalizes response `data[]` entries to ordered vectors by sorting on `index` before extracting `embedding` fields.
 - The embedding **dimension** is observed from `len(data[0].embedding)` in the API response — it is never trusted from the model catalog (catalogs lack dimension data). The dimension is returned in `EmbeddingResult.dimension` for the recall store to pin.
 

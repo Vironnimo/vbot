@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-25T15:33:38.658796+00:00",
+  "fetched_at": "2026-07-02T20:09:23.722591+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -737,6 +737,17 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [
           "include_reasoning",
           "max_completion_tokens",
@@ -765,6 +776,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "claude-fable",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -1050,65 +1062,6 @@
         }
       },
       "name": "Anthropic: Claude Opus 4.6"
-    },
-    "anthropic/claude-opus-4.6-fast": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1000000,
-      "family": "claude-opus",
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Anthropic: Claude Opus 4.6 (Fast)"
     },
     "anthropic/claude-opus-4.7": {
       "capabilities": {
@@ -1508,6 +1461,65 @@
         }
       },
       "name": "Anthropic: Claude Sonnet 4.6"
+    },
+    "anthropic/claude-sonnet-5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-sonnet",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Sonnet 5"
     },
     "arcee-ai/coder-large": {
       "capabilities": {
@@ -1931,6 +1943,39 @@
           "seed"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 8,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "png",
+                  "jpeg"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            },
+            "passthrough": {
+              "black-forest-labs": [
+                "guidance",
+                "safety_tolerance",
+                "steps"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -1967,6 +2012,39 @@
           "seed"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 4,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "png",
+                  "jpeg"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            },
+            "passthrough": {
+              "black-forest-labs": [
+                "guidance",
+                "safety_tolerance",
+                "steps"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -2003,6 +2081,39 @@
           "seed"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 8,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "png",
+                  "jpeg"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            },
+            "passthrough": {
+              "black-forest-labs": [
+                "guidance",
+                "safety_tolerance",
+                "steps"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -2039,6 +2150,39 @@
           "seed"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 8,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "png",
+                  "jpeg"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            },
+            "passthrough": {
+              "black-forest-labs": [
+                "guidance",
+                "safety_tolerance",
+                "steps"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -2174,6 +2318,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -2293,6 +2444,56 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "1:2",
+                  "2:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "9:19.5",
+                  "19.5:9",
+                  "9:20",
+                  "20:9",
+                  "9:21",
+                  "21:9",
+                  "auto"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 10,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -3352,7 +3553,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -3542,6 +3743,45 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 3,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "google-ai-studio": [
+                "cachedContent"
+              ],
+              "google-vertex/global": [
+                "cachedContent"
+              ]
+            }
+          }
+        },
         "task_types": [
           "chat",
           "text_output",
@@ -3564,6 +3804,39 @@
         }
       },
       "name": "Google: Nano Banana (Gemini 2.5 Flash Image)"
+    },
+    "google/gemini-2.5-flash-image-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image",
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "name": "Google: Gemini 2.5 Flash Image Preview (Nano Banana)"
     },
     "google/gemini-2.5-flash-lite": {
       "capabilities": {
@@ -3956,6 +4229,53 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            },
+            "passthrough": {
+              "google-ai-studio/global": [
+                "cachedContent"
+              ],
+              "google-vertex/global": [
+                "cachedContent"
+              ]
+            }
+          }
+        },
         "task_types": [
           "chat",
           "text_output",
@@ -4002,6 +4322,53 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            },
+            "passthrough": {
+              "google-ai-studio/global": [
+                "cachedContent"
+              ],
+              "google-vertex/global": [
+                "cachedContent"
+              ]
+            }
+          }
+        },
         "task_types": [
           "chat",
           "text_output",
@@ -4037,6 +4404,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "minimal"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -4050,6 +4422,58 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "1:4",
+                  "1:8",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:1",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "8:1",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "512",
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            },
+            "passthrough": {
+              "google-ai-studio": [
+                "cachedContent"
+              ],
+              "google-vertex/global": [
+                "cachedContent"
+              ]
+            }
+          }
+        },
         "task_types": [
           "chat",
           "text_output",
@@ -4103,6 +4527,58 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "1:4",
+                  "1:8",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:1",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "8:1",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "512",
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            },
+            "passthrough": {
+              "google-ai-studio": [
+                "cachedContent"
+              ],
+              "google-vertex/global": [
+                "cachedContent"
+              ]
+            }
+          }
+        },
         "task_types": [
           "chat",
           "text_output",
@@ -4190,6 +4666,107 @@
         }
       },
       "name": "Google: Gemini 3.1 Flash Lite"
+    },
+    "google/gemini-3.1-flash-lite-image": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image",
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "1:4",
+                  "1:8",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:1",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "8:1",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K"
+                ]
+              }
+            },
+            "passthrough": {
+              "google-ai-studio": [
+                "cachedContent"
+              ],
+              "google-vertex/global": [
+                "cachedContent"
+              ]
+            }
+          }
+        },
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "family": "gemini",
+      "max_output_tokens": 66000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text+image"
+        }
+      },
+      "name": "Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)"
     },
     "google/gemini-3.1-flash-lite-preview": {
       "capabilities": {
@@ -4984,6 +5561,7 @@
           "response_format",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -5600,6 +6178,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -5744,6 +6329,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -7002,6 +7592,35 @@
           "temperature"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "4:3",
+                  "3:4",
+                  "16:9",
+                  "9:16",
+                  "3:2",
+                  "2:3",
+                  "auto"
+                ]
+              },
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              }
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -7150,54 +7769,6 @@
         }
       },
       "name": "Microsoft: Phi 4"
-    },
-    "microsoft/phi-4-mini-instruct": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 131072,
-      "family": "phi",
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Microsoft: Phi 4 Mini Instruct"
     },
     "microsoft/wizardlm-2-8x22b": {
       "capabilities": {
@@ -7385,10 +7956,8 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
@@ -7416,7 +7985,7 @@
       ],
       "context_window": 204800,
       "family": "minimax",
-      "max_output_tokens": 196608,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -7478,16 +8047,13 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
           "response_format",
           "seed",
           "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -7507,7 +8073,7 @@
       ],
       "context_window": 204800,
       "family": "minimax",
-      "max_output_tokens": 196608,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -8239,6 +8805,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -8493,6 +9064,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -8897,7 +9473,7 @@
       ],
       "context_window": 131072,
       "family": "kimi-k2",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 100352,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -8919,9 +9495,7 @@
         },
         "supported_parameters": [
           "frequency_penalty",
-          "logit_bias",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "repetition_penalty",
           "response_format",
@@ -8947,7 +9521,7 @@
       ],
       "context_window": 262144,
       "family": "kimi-k2",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 100352,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -8967,10 +9541,8 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
@@ -8998,7 +9570,7 @@
       ],
       "context_window": 262144,
       "family": "kimi-thinking",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 100352,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -9803,6 +10375,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -9851,6 +10424,14 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium"
+          ],
+          "supported": true
+        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -9885,7 +10466,7 @@
       ],
       "context_window": 1000000,
       "family": "nemotron",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -9903,6 +10484,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -9947,6 +10533,14 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -9997,6 +10591,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -11421,6 +12020,49 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "background": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "transparent",
+                  "opaque"
+                ]
+              },
+              "input_references": {
+                "max": 16,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 10,
+                "min": 1,
+                "type": "range"
+              },
+              "output_compression": {
+                "max": 100,
+                "min": 0,
+                "type": "range"
+              },
+              "quality": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "passthrough": {
+              "openai": [
+                "moderation"
+              ]
+            }
+          }
+        },
         "task_types": [
           "chat",
           "text_output",
@@ -11478,6 +12120,49 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "background": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "transparent",
+                  "opaque"
+                ]
+              },
+              "input_references": {
+                "max": 16,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 10,
+                "min": 1,
+                "type": "range"
+              },
+              "output_compression": {
+                "max": 100,
+                "min": 0,
+                "type": "range"
+              },
+              "quality": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "passthrough": {
+              "openai": [
+                "moderation"
+              ]
+            }
+          }
+        },
         "task_types": [
           "chat",
           "text_output",
@@ -11628,6 +12313,13 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high"
+          ],
+          "supported": true
+        },
         "supported_parameters": [
           "include_reasoning",
           "max_tokens",
@@ -12319,6 +13011,14 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -12336,6 +13036,48 @@
           "top_logprobs"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "background": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "opaque"
+                ]
+              },
+              "input_references": {
+                "max": 16,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 10,
+                "min": 1,
+                "type": "range"
+              },
+              "output_compression": {
+                "max": 100,
+                "min": 0,
+                "type": "range"
+              },
+              "quality": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "passthrough": {
+              "openai": [
+                "moderation"
+              ]
+            }
+          }
+        },
         "task_types": [
           "chat",
           "text_output",
@@ -12832,6 +13574,49 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "background": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "transparent",
+                  "opaque"
+                ]
+              },
+              "input_references": {
+                "max": 16,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 10,
+                "min": 1,
+                "type": "range"
+              },
+              "output_compression": {
+                "max": 100,
+                "min": 0,
+                "type": "range"
+              },
+              "quality": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "passthrough": {
+              "openai": [
+                "moderation"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -12879,6 +13664,49 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "background": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "transparent",
+                  "opaque"
+                ]
+              },
+              "input_references": {
+                "max": 16,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 10,
+                "min": 1,
+                "type": "range"
+              },
+              "output_compression": {
+                "max": 100,
+                "min": 0,
+                "type": "range"
+              },
+              "quality": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "passthrough": {
+              "openai": [
+                "moderation"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -12923,6 +13751,48 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "background": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "opaque"
+                ]
+              },
+              "input_references": {
+                "max": 16,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 10,
+                "min": 1,
+                "type": "range"
+              },
+              "output_compression": {
+                "max": 100,
+                "min": 0,
+                "type": "range"
+              },
+              "quality": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "passthrough": {
+              "openai": [
+                "moderation"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -12977,6 +13847,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_a",
           "top_k",
           "top_logprobs",
           "top_p"
@@ -12994,7 +13865,7 @@
       ],
       "context_window": 131072,
       "family": "gpt-oss",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -13496,6 +14367,10 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -13707,6 +14582,10 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -14242,54 +15121,6 @@
       },
       "name": "OpenRouter: Fusion"
     },
-    "openrouter/owl-alpha": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048756,
-      "family": "alpha",
-      "max_output_tokens": 262144,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Owl Alpha"
-    },
     "openrouter/pareto-code": {
       "capabilities": {
         "input_modalities": [
@@ -14752,6 +15583,86 @@
         }
       },
       "name": "Poolside: Laguna M.1 (free)"
+    },
+    "poolside/laguna-xs-2.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "temperature",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Poolside: Laguna XS 2.1"
+    },
+    "poolside/laguna-xs-2.1:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "temperature",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Poolside: Laguna XS 2.1 (free)"
     },
     "poolside/laguna-xs.2": {
       "capabilities": {
@@ -15353,7 +16264,6 @@
           "response_format",
           "seed",
           "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -15454,7 +16364,6 @@
           "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "repetition_penalty",
           "response_format",
@@ -15502,24 +16411,15 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
-          "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
-          "repetition_penalty",
           "response_format",
           "seed",
-          "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
-          "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -15535,7 +16435,7 @@
       ],
       "context_window": 131072,
       "family": "qwen",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -15612,22 +16512,15 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
-          "repetition_penalty",
           "response_format",
           "seed",
-          "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
-          "top_k",
           "top_p"
         ],
         "supported_voices": [],
@@ -15856,7 +16749,6 @@
           "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "repetition_penalty",
           "response_format",
@@ -16281,10 +17173,8 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
@@ -16505,10 +17395,8 @@
           "max_tokens",
           "presence_penalty",
           "reasoning",
-          "repetition_penalty",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
@@ -16607,7 +17495,6 @@
           "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "repetition_penalty",
           "response_format",
@@ -17568,6 +18455,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17602,6 +18512,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17636,6 +18569,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17670,6 +18626,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17704,6 +18683,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17738,6 +18740,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17772,6 +18797,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17806,6 +18854,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17840,6 +18911,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17874,6 +18968,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17908,6 +19025,29 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls",
+                "style",
+                "text_layout"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -17996,6 +19136,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -18004,6 +19145,7 @@
           "structured_outputs",
           "temperature",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -18117,6 +19259,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "max",
+            "xhigh",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -18141,6 +19289,7 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "fugu",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -18629,6 +19778,35 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 4,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            },
+            "passthrough": {
+              "sourceful": [
+                "font_inputs"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -18673,13 +19851,8 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 8192,
+      "context_window": null,
       "max_output_tokens": null,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->image"
-        }
-      },
       "name": "Sourceful: Riverflow V2 Fast Preview"
     },
     "sourceful/riverflow-v2-max-preview": {
@@ -18707,13 +19880,8 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 8192,
+      "context_window": null,
       "max_output_tokens": null,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->image"
-        }
-      },
       "name": "Sourceful: Riverflow V2 Max Preview"
     },
     "sourceful/riverflow-v2-pro": {
@@ -18731,6 +19899,35 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 10,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            },
+            "passthrough": {
+              "sourceful": [
+                "font_inputs"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -18775,13 +19972,8 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 8192,
+      "context_window": null,
       "max_output_tokens": null,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->image"
-        }
-      },
       "name": "Sourceful: Riverflow V2 Standard Preview"
     },
     "sourceful/riverflow-v2.5-fast": {
@@ -18802,6 +19994,48 @@
           "reasoning"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "background": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "transparent",
+                  "opaque"
+                ]
+              },
+              "input_references": {
+                "max": 4,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "jpeg"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K"
+                ]
+              }
+            },
+            "passthrough": {
+              "sourceful": [
+                "font_inputs"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -18873,6 +20107,51 @@
           "reasoning"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "background": {
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "transparent",
+                  "opaque"
+                ]
+              },
+              "input_references": {
+                "max": 10,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "png",
+                  "jpeg",
+                  "webp"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            },
+            "passthrough": {
+              "sourceful": [
+                "font_inputs"
+              ]
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -18931,22 +20210,15 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "max_tokens",
-          "min_p",
-          "presence_penalty",
           "reasoning",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
           "temperature",
           "tool_choice",
           "tools",
@@ -18965,7 +20237,7 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -19701,7 +20973,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "file"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -19739,7 +21012,9 @@
           "chat",
           "text_output",
           "image_input",
-          "image_understanding"
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -19752,7 +21027,7 @@
       "max_output_tokens": 1000000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image+file->text"
         }
       },
       "name": "xAI: Grok 4.3"
@@ -19836,6 +21111,48 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "3:4",
+                  "4:3",
+                  "9:16",
+                  "16:9",
+                  "2:3",
+                  "3:2",
+                  "9:19.5",
+                  "19.5:9",
+                  "9:20",
+                  "20:9",
+                  "1:2",
+                  "2:1",
+                  "auto"
+                ]
+              },
+              "input_references": {
+                "max": 3,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "image_generation"
@@ -19969,11 +21286,15 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logit_bias",
           "logprobs",
           "max_tokens",
+          "min_p",
           "presence_penalty",
           "reasoning",
+          "repetition_penalty",
           "response_format",
+          "seed",
           "stop",
           "structured_outputs",
           "temperature",
@@ -20631,10 +21952,8 @@
           "logprobs",
           "max_tokens",
           "min_p",
-          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
-          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",
@@ -20679,6 +21998,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -20688,8 +22012,10 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
+          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",
@@ -21076,11 +22402,8 @@
           "response_format",
           "stop",
           "structured_outputs",
-          "temperature",
           "tool_choice",
           "tools",
-          "top_k",
-          "top_p",
           "verbosity"
         ],
         "supported_voices": [],

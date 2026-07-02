@@ -1,19 +1,23 @@
 """Backend-owned option schemas for specialized task models.
 
-Schemas are model-aware: ``option_schema_for`` accepts the resolved
-:class:`core.models.Model` (when available) and adapts fields to what
-that model advertises — TTS voices come from ``supported_voices``,
-``seed`` appears only for image models that list it in
-``supported_parameters``, ``response_format`` appears for STT models
-that list it, and Recraft/Sourceful family-specific image options are
-added by family. The image render hints that the provider API does not
-expose (Recraft/Sourceful field lists, aspect-ratio/image-size
-exceptions) are authored here, consistent with the convention that
-options are backend-owned render hints.
+Schemas are model-aware and data-driven: ``option_schema_for`` accepts the
+resolved :class:`core.models.Model` (when available) and builds fields from
+what the model data advertises. Image options render generically from the
+typed parameter schema in ``capabilities.task_options`` (projected at refresh
+from the OpenRouter image API, or hand-authored in the override layer for
+providers whose APIs publish nothing); TTS voices come from
+``supported_voices``; STT/TTS/embedding extras are gated by
+``supported_parameters``. This module owns only render hints (labels,
+descriptions, control types) — the per-model facts live in the model DB.
+
+Every provider target also gets an ``extra_options`` JSON escape hatch merged
+into the provider request by the wire layer, so an option vBot does not
+surface is usable without a code change.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -89,123 +93,127 @@ STT_RESPONSE_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
     ("vtt", "VTT"),
 )
 
-# Base image aspect ratios. Models with restricted or extended ratios
-# override the choices via :func:`_aspect_ratio_choices_for_model`.
-BASE_ASPECT_RATIOS: tuple[tuple[str, str], ...] = (
-    ("1:1", "1:1 (1024×1024)"),
-    ("2:3", "2:3 (832×1248)"),
-    ("3:2", "3:2 (1248×832)"),
-    ("3:4", "3:4 (864×1184)"),
-    ("4:3", "4:3 (1184×864)"),
-    ("4:5", "4:5 (896×1152)"),
-    ("5:4", "5:4 (1152×896)"),
-    ("9:16", "9:16 (768×1344)"),
-    ("16:9", "16:9 (1344×768)"),
-    ("21:9", "21:9 (1536×672)"),
-)
-
-# microsoft/mai-image-2.5 advertises a reduced aspect-ratio set.
-MAI_IMAGE_2_5_ASPECT_RATIOS: tuple[tuple[str, str], ...] = (
-    ("1:1", "1:1 (1024×1024)"),
-    ("4:3", "4:3 (1184×864)"),
-    ("3:4", "3:4 (864×1184)"),
-    ("16:9", "16:9 (1344×768)"),
-    ("9:16", "9:16 (768×1344)"),
-    ("3:2", "3:2 (1248×832)"),
-    ("2:3", "2:3 (832×1248)"),
-)
-
-# google/gemini-3.1-flash-image-preview extends the base set with very
-# narrow/wide ratios that the other image models do not accept.
-GEMINI_3_1_FLASH_IMAGE_EXTRA_ASPECT_RATIOS: tuple[tuple[str, str], ...] = (
-    ("1:4", "1:4"),
-    ("4:1", "4:1"),
-    ("1:8", "1:8"),
-    ("8:1", "8:1"),
-)
-
-# google/gemini-3.1-flash-image-preview is the only model that advertises
-# 0.5K as an image_size choice.
-HALF_K_IMAGE_SIZE = ("0.5K", "0.5K")
-
-BASE_IMAGE_SIZES: tuple[tuple[str, str], ...] = (
-    ("1K", "1K (standard)"),
-    ("2K", "2K"),
-    ("4K", "4K"),
-)
-
-# Model IDs that get profile-specific overrides.
-MAI_IMAGE_2_5_MODEL_ID = "microsoft/mai-image-2.5"
-GEMINI_3_1_FLASH_IMAGE_MODEL_ID = "google/gemini-3.1-flash-image-preview"
-
 # ---------------------------------------------------------------------------
-# OpenAI image option profiles
+# Image fallback tables
 #
-# OpenAI's ``/v1/images/generations`` endpoint accepts a different set of
-# fields than OpenRouter's chat/completions path. The fields are the union
-# of what ``gpt-image-1`` and ``dall-e-3`` accept; each model's
-# ``supported_parameters`` decides which subset is actually exposed.
+# Used only when a model carries no typed ``task_options`` parameter schema
+# (catalog not refreshed yet, or a provider without a task-capability feed).
+# The values mirror the documented OpenRouter unified image parameters and
+# the OpenAI gpt-image union.
 # ---------------------------------------------------------------------------
 
-# gpt-image-1 size choices (square + portrait + landscape + auto).
-GPT_IMAGE_SIZE_CHOICES: tuple[tuple[str, str], ...] = (
-    ("1024x1024", "1024×1024 (square)"),
-    ("1024x1536", "1024×1536 (portrait)"),
-    ("1536x1024", "1536×1024 (landscape)"),
-    ("auto", "Auto"),
+FALLBACK_ASPECT_RATIOS: tuple[str, ...] = (
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
 )
 
-# dall-e-3 size choices.
-DALL_E_3_SIZE_CHOICES: tuple[tuple[str, str], ...] = (
-    ("1024x1024", "1024×1024 (square)"),
-    ("1792x1024", "1792×1024 (landscape)"),
-    ("1024x1792", "1024×1792 (portrait)"),
+FALLBACK_RESOLUTIONS: tuple[str, ...] = ("512", "1K", "2K", "4K")
+
+# OpenAI ``/v1/images/generations`` fallback choice sets (gpt-image shaped —
+# the union's safer default; dall-e models carry explicit override data).
+GPT_IMAGE_SIZE_CHOICES: tuple[str, ...] = ("1024x1024", "1024x1536", "1536x1024", "auto")
+GPT_IMAGE_QUALITY_CHOICES: tuple[str, ...] = ("auto", "low", "medium", "high")
+GPT_IMAGE_BACKGROUND_CHOICES: tuple[str, ...] = ("opaque", "transparent", "auto")
+GPT_IMAGE_OUTPUT_FORMAT_CHOICES: tuple[str, ...] = ("png", "jpeg", "webp")
+DALL_E_STYLE_CHOICES: tuple[str, ...] = ("vivid", "natural")
+OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES: tuple[str, ...] = ("b64_json", "url")
+
+# ---------------------------------------------------------------------------
+# Image parameter render hints
+#
+# The typed parameter schema in ``capabilities.task_options`` carries the
+# facts (which parameters, which values/bounds); this table carries only the
+# presentation: labels, descriptions, ordering, and per-name control
+# overrides. Unknown parameter names render generically from their spec.
+# ---------------------------------------------------------------------------
+
+# Presentation order for known image parameters; unknown names follow sorted.
+IMAGE_PARAMETER_ORDER: tuple[str, ...] = (
+    "aspect_ratio",
+    "resolution",
+    "size",
+    "quality",
+    "background",
+    "style",
+    "output_format",
+    "output_compression",
+    "moderation",
+    "response_format",
+    "n",
+    "seed",
 )
 
-# gpt-image-1 quality choices.
-GPT_IMAGE_QUALITY_CHOICES: tuple[tuple[str, str], ...] = (
-    ("auto", "Auto"),
-    ("low", "Low"),
-    ("medium", "Medium"),
-    ("high", "High"),
-)
+# Parameters that are runtime inputs rather than persisted settings: image
+# references arrive with the request, streaming is a transport concern.
+IMAGE_PARAMETER_SKIP: frozenset[str] = frozenset({"input_references", "stream"})
 
-# dall-e-3 quality choices.
-DALL_E_3_QUALITY_CHOICES: tuple[tuple[str, str], ...] = (
-    ("standard", "Standard"),
-    ("hd", "HD"),
-)
+# ``size`` is OpenRouter's convenience shorthand for resolution + aspect
+# ratio and conflicts with them; it is skipped whenever either is present
+# (OpenAI native models publish only ``size``, which stays rendered).
+IMAGE_SIZE_SHORTHAND_CONFLICTS: tuple[str, ...] = ("resolution", "aspect_ratio")
 
-# gpt-image-1 background choices.
-GPT_IMAGE_BACKGROUND_CHOICES: tuple[tuple[str, str], ...] = (
-    ("opaque", "Opaque"),
-    ("transparent", "Transparent"),
-    ("auto", "Auto"),
-)
+IMAGE_PARAMETER_LABELS: Mapping[str, str] = {
+    "aspect_ratio": "Aspect ratio",
+    "resolution": "Resolution",
+    "size": "Size",
+    "quality": "Quality",
+    "background": "Background",
+    "style": "Style",
+    "output_format": "Output format",
+    "output_compression": "Output compression",
+    "response_format": "Response format",
+    "n": "Number of images",
+    "seed": "Seed",
+    "moderation": "Moderation",
+}
 
-# gpt-image-1 output_format choices.
-GPT_IMAGE_OUTPUT_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
-    ("png", "PNG"),
-    ("jpeg", "JPEG"),
-    ("webp", "WebP"),
-)
+IMAGE_PARAMETER_DESCRIPTIONS: Mapping[str, str] = {
+    "seed": "Reproducible generation seed.",
+    "n": "How many images to generate per request.",
+    "output_compression": "Compression level (webp/jpeg only).",
+    "moderation": "Content-moderation strictness.",
+    "response_format": "How the provider returns the image; vBot decodes b64_json.",
+}
 
-# dall-e-3 style choices.
-DALL_E_3_STYLE_CHOICES: tuple[tuple[str, str], ...] = (
-    ("vivid", "Vivid"),
-    ("natural", "Natural"),
-)
+# Feed parameters typed ``boolean`` mean "supported, value free-form"; these
+# names take a number instead of a toggle.
+IMAGE_NUMBER_VALUED_PARAMETERS: frozenset[str] = frozenset({"seed"})
 
-# dall-e-3 response_format choices.
-OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
-    ("b64_json", "Base64 JSON"),
-    ("url", "URL"),
-)
+# Enum parameters that must not fall back to the provider default because the
+# wire layer depends on a specific value.
+IMAGE_ENUM_FORCED_DEFAULTS: Mapping[str, str] = {"response_format": "b64_json"}
 
-# Model-id prefixes that mark a model as an OpenAI gpt-image or dall-e-3
-# variant — used to disambiguate option shapes within the OpenAI branch.
-GPT_IMAGE_MODEL_PREFIX = "gpt-image-"
-DALL_E_3_MODEL_PREFIX = "dall-e-"
+# Label for the empty enum choice that leaves the parameter unsent so the
+# provider's own default applies (the wire layer drops empty placeholders).
+PROVIDER_DEFAULT_CHOICE_LABEL = "Provider default"
+
+IMAGE_CHOICE_LABELS: Mapping[str, str] = {
+    "auto": "Auto",
+    "png": "PNG",
+    "jpeg": "JPEG",
+    "webp": "WebP",
+    "b64_json": "Base64 JSON",
+    "url": "URL",
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "standard": "Standard",
+    "hd": "HD",
+    "vivid": "Vivid",
+    "natural": "Natural",
+    "opaque": "Opaque",
+    "transparent": "Transparent",
+    "original": "Original",
+    "solid": "Solid",
+}
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -311,34 +319,39 @@ def option_schema_for(
 
     *model* is the resolved :class:`core.models.Model` for the target when
     available. Without it, the schema falls back to the provider-level
-    conservative defaults that the model-aware branches extend.
+    conservative defaults that the model-aware branches extend. Every
+    supported task type additionally carries the ``extra_options`` escape
+    hatch (provider targets only — local targets never reach this builder).
     """
 
     if task_type == TASK_SPEECH_TO_TEXT:
-        return TaskModelOptionSchema(
-            task_type=task_type,
-            target=target,
-            fields=_speech_to_text_fields(provider_id, model),
-        )
-    if task_type == TASK_TEXT_TO_SPEECH:
-        return TaskModelOptionSchema(
-            task_type=task_type,
-            target=target,
-            fields=_text_to_speech_fields(provider_id, model),
-        )
-    if task_type == TASK_IMAGE_GENERATION:
-        return TaskModelOptionSchema(
-            task_type=task_type,
-            target=target,
-            fields=_image_generation_fields(provider_id, model),
-        )
-    if task_type == TASK_TEXT_EMBEDDING:
-        return TaskModelOptionSchema(
-            task_type=task_type,
-            target=target,
-            fields=_text_embedding_fields(provider_id, model),
-        )
-    return TaskModelOptionSchema(task_type=task_type, target=target)
+        fields = _speech_to_text_fields(provider_id, model)
+    elif task_type == TASK_TEXT_TO_SPEECH:
+        fields = _text_to_speech_fields(provider_id, model)
+    elif task_type == TASK_IMAGE_GENERATION:
+        fields = _image_generation_fields(provider_id, model)
+    elif task_type == TASK_TEXT_EMBEDDING:
+        fields = _text_embedding_fields(provider_id, model)
+    else:
+        return TaskModelOptionSchema(task_type=task_type, target=target)
+    return TaskModelOptionSchema(
+        task_type=task_type,
+        target=target,
+        fields=(*fields, _extra_options_field()),
+    )
+
+
+def _extra_options_field() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="extra_options",
+        type="json",
+        label="Extra options",
+        default={},
+        description=(
+            "Additional request fields (JSON object) merged into the provider "
+            "request. Escape hatch for options vBot does not surface."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +386,7 @@ def _text_to_speech_fields(
         ),
     ]
     # ``instructions`` is model-specific — only OpenAI's ``gpt-4o-mini-tts``
-    # advertises support for it. The override file (Phase 5) flags it in
+    # advertises support for it. The override file flags it in
     # ``supported_parameters``; we surface it exactly when present.
     if model is not None and "instructions" in model.capabilities.supported_parameters:
         fields.append(
@@ -496,75 +509,253 @@ def _image_generation_fields(
     provider_id: str,
     model: Model | None,
 ) -> tuple[TaskModelOptionField, ...]:
-    if provider_id == "openai":
-        return _openai_image_fields(model)
-    if provider_id != "openrouter":
-        # Non-OpenAI, non-OpenAI-native providers have no image option
-        # profile authored here. Execution domains that know how to talk
-        # to those providers map their own fields; we keep the schema
-        # empty so the UI does not invent unsupported inputs.
-        return ()
+    """Image option fields, driven by the model's typed parameter schema.
 
-    fields: list[TaskModelOptionField] = [
-        _aspect_ratio_field(model),
-        _image_size_field(model),
-    ]
+    When the model carries ``capabilities.task_options.image_generation``
+    (projected at refresh from the OpenRouter image API, or hand-authored in
+    the override layer), fields render generically from that data. Without
+    it, a conservative provider-level fallback applies. Providers with no
+    image execution path get no fields — the UI must not invent inputs.
+    """
 
-    if model is not None and "seed" in model.capabilities.supported_parameters:
-        fields.append(_seed_field())
+    image_options = _image_task_options(model)
+    parameters = image_options.get("parameters")
+    fields: list[TaskModelOptionField] = []
+    if isinstance(parameters, Mapping) and parameters:
+        fields.extend(_fields_from_image_parameters(parameters))
+    elif provider_id == "openrouter":
+        fields.extend(_openrouter_image_fallback_fields(model))
+    elif provider_id == "openai":
+        fields.extend(_openai_image_fallback_fields(model))
 
-    if model is not None:
-        if model.model_id.startswith("recraft/"):
-            fields.extend(_recraft_fields(model.model_id))
-        elif model.model_id.startswith("sourceful/"):
-            fields.extend(_sourceful_fields(model.model_id))
-
+    passthrough = image_options.get("passthrough")
+    if isinstance(passthrough, Mapping) and passthrough:
+        fields.append(_provider_options_field(passthrough))
     return tuple(fields)
 
 
-def _aspect_ratio_choices_for_model(model: Model | None) -> tuple[tuple[str, str], ...]:
-    if model is not None and model.model_id == MAI_IMAGE_2_5_MODEL_ID:
-        return MAI_IMAGE_2_5_ASPECT_RATIOS
-    if model is not None and model.model_id == GEMINI_3_1_FLASH_IMAGE_MODEL_ID:
-        return BASE_ASPECT_RATIOS + GEMINI_3_1_FLASH_IMAGE_EXTRA_ASPECT_RATIOS
-    return BASE_ASPECT_RATIOS
+def _image_task_options(model: Model | None) -> Mapping[str, Any]:
+    if model is None:
+        return {}
+    image_options = model.capabilities.task_options.get(TASK_IMAGE_GENERATION)
+    return image_options if isinstance(image_options, Mapping) else {}
 
 
-def _image_size_choices_for_model(model: Model | None) -> tuple[tuple[str, str], ...]:
-    if model is not None and model.model_id == GEMINI_3_1_FLASH_IMAGE_MODEL_ID:
-        return (HALF_K_IMAGE_SIZE,) + BASE_IMAGE_SIZES
-    return BASE_IMAGE_SIZES
+def _fields_from_image_parameters(
+    parameters: Mapping[str, Any],
+) -> list[TaskModelOptionField]:
+    """Render typed parameter specs into option fields.
+
+    ``enum`` → select (with a "Provider default" empty choice unless the wire
+    layer forces a value), ``range`` → bounded number (skipped when the range
+    collapses to a single value — nothing to configure), ``boolean`` → number
+    for free-value names like ``seed``, toggle otherwise, ``string`` → free
+    text (hand-authored specs for parameters with open value spaces, e.g.
+    gpt-image-2 arbitrary sizes). Unknown spec types are skipped fail-soft;
+    the raw catalog still carries them.
+    """
+
+    known_order = [name for name in IMAGE_PARAMETER_ORDER if name in parameters]
+    remaining = sorted(name for name in parameters if name not in IMAGE_PARAMETER_ORDER)
+    fields: list[TaskModelOptionField] = []
+    for name in (*known_order, *remaining):
+        if name in IMAGE_PARAMETER_SKIP:
+            continue
+        if name == "size" and any(
+            conflict in parameters for conflict in IMAGE_SIZE_SHORTHAND_CONFLICTS
+        ):
+            continue
+        spec = parameters.get(name)
+        if not isinstance(spec, Mapping):
+            continue
+        field = _field_from_image_parameter(name, spec)
+        if field is not None:
+            fields.append(field)
+    return fields
 
 
-def _aspect_ratio_field(model: Model | None) -> TaskModelOptionField:
+def _field_from_image_parameter(
+    name: str,
+    spec: Mapping[str, Any],
+) -> TaskModelOptionField | None:
+    spec_type = spec.get("type")
+    if spec_type == "enum":
+        return _enum_image_field(name, spec)
+    if spec_type == "range":
+        return _range_image_field(name, spec)
+    if spec_type == "string":
+        return TaskModelOptionField(
+            name=name,
+            type="text",
+            label=_image_parameter_label(name),
+            default="",
+            description=_image_parameter_description(name, spec),
+        )
+    if spec_type == "boolean":
+        if name in IMAGE_NUMBER_VALUED_PARAMETERS:
+            return TaskModelOptionField(
+                name=name,
+                type="number",
+                label=_image_parameter_label(name),
+                default=None,
+                step=1,
+                description=_image_parameter_description(name, spec),
+            )
+        return TaskModelOptionField(
+            name=name,
+            type="boolean",
+            label=_image_parameter_label(name),
+            default=None,
+            description=_image_parameter_description(name, spec),
+        )
+    return None
+
+
+def _enum_image_field(name: str, spec: Mapping[str, Any]) -> TaskModelOptionField | None:
+    # Loaded ``task_options`` are frozen (lists become tuples), while
+    # fallback specs are built inline as lists — accept both sequence forms.
+    raw_values = spec.get("values")
+    if not isinstance(raw_values, list | tuple):
+        return None
+    values = [value for value in raw_values if isinstance(value, str) and value]
+    forced_default = IMAGE_ENUM_FORCED_DEFAULTS.get(name)
+    if forced_default is not None and forced_default in values:
+        choices = tuple(_image_choice(value) for value in values)
+        default: str = forced_default
+    else:
+        if len(values) < 2:
+            # A single published value offers no choice; leaving the
+            # parameter unsent keeps the provider's fixed value
+            # authoritative (mirrors the collapsed-range rule).
+            return None
+        choices = (
+            TaskModelOptionChoice(value="", label=PROVIDER_DEFAULT_CHOICE_LABEL),
+            *(_image_choice(value) for value in values),
+        )
+        default = ""
     return TaskModelOptionField(
-        name="aspect_ratio",
+        name=name,
         type="select",
-        label="Aspect ratio",
-        default="1:1",
-        options=_to_choices(_aspect_ratio_choices_for_model(model)),
+        label=_image_parameter_label(name),
+        default=default,
+        options=choices,
+        description=_image_parameter_description(name, spec),
     )
 
 
-def _image_size_field(model: Model | None) -> TaskModelOptionField:
+def _range_image_field(name: str, spec: Mapping[str, Any]) -> TaskModelOptionField | None:
+    minimum = spec.get("min")
+    maximum = spec.get("max")
+    if not isinstance(minimum, int | float) or not isinstance(maximum, int | float):
+        return None
+    if minimum == maximum:
+        # A collapsed range offers no choice; leaving the parameter unsent
+        # keeps the provider's fixed value authoritative.
+        return None
     return TaskModelOptionField(
-        name="image_size",
-        type="select",
-        label="Image size",
-        default="1K",
-        options=_to_choices(_image_size_choices_for_model(model)),
-    )
-
-
-def _seed_field() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="seed",
+        name=name,
         type="number",
-        label="Seed",
+        label=_image_parameter_label(name),
         default=None,
+        min_value=float(minimum),
+        max_value=float(maximum),
         step=1,
-        description="Reproducible generation seed. Provider-specific support.",
+        description=_image_parameter_description(name, spec),
     )
+
+
+def _image_parameter_label(name: str) -> str:
+    label = IMAGE_PARAMETER_LABELS.get(name)
+    if label is not None:
+        return label
+    return name.replace("_", " ").capitalize()
+
+
+def _image_parameter_description(name: str, spec: Mapping[str, Any]) -> str:
+    """Per-spec description wins over the code hint.
+
+    Hand-authored override specs may carry a model-specific ``description``
+    (e.g. gpt-image-2's arbitrary-size constraints) that a generic per-name
+    hint cannot express.
+    """
+
+    description = spec.get("description")
+    if isinstance(description, str) and description:
+        return description
+    return IMAGE_PARAMETER_DESCRIPTIONS.get(name, "")
+
+
+def _image_choice(value: str) -> TaskModelOptionChoice:
+    return TaskModelOptionChoice(value=value, label=IMAGE_CHOICE_LABELS.get(value, value))
+
+
+def _provider_options_field(passthrough: Mapping[str, Any]) -> TaskModelOptionField:
+    allowed_parts: list[str] = []
+    for slug in sorted(str(key) for key in passthrough):
+        keys = passthrough.get(slug)
+        if isinstance(keys, list | tuple) and keys:
+            allowed_parts.append(f"{slug}: {', '.join(str(key) for key in keys)}")
+    allowed = "; ".join(allowed_parts)
+    description = (
+        "Provider-specific options (JSON object) sent as provider.options, keyed by provider slug."
+    )
+    if allowed:
+        description = f"{description} Allowed keys — {allowed}."
+    return TaskModelOptionField(
+        name="provider_options",
+        type="json",
+        label="Provider options",
+        default={},
+        description=description,
+    )
+
+
+def _openrouter_image_fallback_fields(model: Model | None) -> list[TaskModelOptionField]:
+    fields = [
+        _enum_image_field("aspect_ratio", {"type": "enum", "values": list(FALLBACK_ASPECT_RATIOS)}),
+        _enum_image_field("resolution", {"type": "enum", "values": list(FALLBACK_RESOLUTIONS)}),
+    ]
+    if model is not None and "seed" in model.capabilities.supported_parameters:
+        fields.append(_field_from_image_parameter("seed", {"type": "boolean"}))
+    return [field for field in fields if field is not None]
+
+
+def _openai_image_fallback_fields(model: Model | None) -> list[TaskModelOptionField]:
+    """OpenAI native image fallback (gpt-image-shaped union).
+
+    Applies only when the model carries no ``task_options`` data — e.g. an
+    unrefreshed catalog. Each field is gated by ``supported_parameters`` when
+    the model is known; with no model at all the whole union renders so the
+    target stays configurable.
+    """
+
+    supported: frozenset[str] | None = (
+        frozenset(model.capabilities.supported_parameters) if model is not None else None
+    )
+
+    def has(field_name: str) -> bool:
+        return supported is None or field_name in supported
+
+    union: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("size", {"type": "enum", "values": list(GPT_IMAGE_SIZE_CHOICES)}),
+        ("quality", {"type": "enum", "values": list(GPT_IMAGE_QUALITY_CHOICES)}),
+        ("background", {"type": "enum", "values": list(GPT_IMAGE_BACKGROUND_CHOICES)}),
+        ("n", {"type": "range", "min": 1, "max": 10}),
+        ("output_format", {"type": "enum", "values": list(GPT_IMAGE_OUTPUT_FORMAT_CHOICES)}),
+        ("style", {"type": "enum", "values": list(DALL_E_STYLE_CHOICES)}),
+        (
+            "response_format",
+            {"type": "enum", "values": list(OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES)},
+        ),
+    )
+    fields: list[TaskModelOptionField] = []
+    for name, spec in union:
+        if not has(name):
+            continue
+        field = _field_from_image_parameter(name, spec)
+        if field is not None:
+            fields.append(field)
+    return fields
 
 
 # ---------------------------------------------------------------------------
@@ -616,316 +807,6 @@ def _dimensions_field() -> TaskModelOptionField:
             "model's native dimension. Non-Matryoshka models reject this "
             "value."
         ),
-    )
-
-
-# ---------------------------------------------------------------------------
-# OpenAI image profile
-# ---------------------------------------------------------------------------
-
-
-def _openai_image_fields(model: Model | None) -> tuple[TaskModelOptionField, ...]:
-    """OpenAI native image options.
-
-    The OpenAI ``/v1/images/generations`` endpoint accepts a union of
-    fields across ``gpt-image-1`` (size / quality / background / n /
-    output_format) and ``dall-e-3`` (size / quality / style / n /
-    response_format). Each model's ``supported_parameters`` decides which
-    fields are exposed in the Settings UI.
-
-    If *model* is ``None`` (catalog not refreshed yet) every field that
-    belongs to the union is exposed so the user can still configure the
-    target. The wire layer is responsible for sending only the fields the
-    selected model accepts.
-    """
-
-    supported: frozenset[str] | None = (
-        frozenset(model.capabilities.supported_parameters) if model is not None else None
-    )
-    is_gpt_image = model is not None and model.model_id.startswith(GPT_IMAGE_MODEL_PREFIX)
-    is_dall_e = model is not None and model.model_id.startswith(DALL_E_3_MODEL_PREFIX)
-
-    def has(field_name: str) -> bool:
-        return supported is None or field_name in supported
-
-    fields: list[TaskModelOptionField] = []
-    if has("size"):
-        fields.append(_openai_size_field(is_gpt_image, is_dall_e))
-    if has("quality"):
-        fields.append(_openai_quality_field(is_gpt_image, is_dall_e))
-    if has("background"):
-        fields.append(_openai_background_field())
-    if has("n"):
-        fields.append(_openai_n_field(is_dall_e))
-    if has("output_format"):
-        fields.append(_openai_output_format_field())
-    if has("style"):
-        fields.append(_openai_style_field())
-    if has("response_format"):
-        fields.append(_openai_response_format_field())
-    return tuple(fields)
-
-
-def _openai_size_field(is_gpt_image: bool, is_dall_e: bool) -> TaskModelOptionField:
-    # When both flags are True the model is ambiguous — gpt-image-1's set
-    # is the safer default because gpt-image-1 is the newer model and its
-    # size set covers ``auto``. The model=None case also lands here.
-    choices = DALL_E_3_SIZE_CHOICES if is_dall_e and not is_gpt_image else GPT_IMAGE_SIZE_CHOICES
-    return TaskModelOptionField(
-        name="size",
-        type="select",
-        label="Size",
-        default="1024x1024",
-        options=_to_choices(choices),
-        description="Image dimensions; provider-specific choices.",
-    )
-
-
-def _openai_quality_field(is_gpt_image: bool, is_dall_e: bool) -> TaskModelOptionField:
-    if is_dall_e and not is_gpt_image:
-        choices = DALL_E_3_QUALITY_CHOICES
-        default = "standard"
-    else:
-        choices = GPT_IMAGE_QUALITY_CHOICES
-        default = "auto"
-    return TaskModelOptionField(
-        name="quality",
-        type="select",
-        label="Quality",
-        default=default,
-        options=_to_choices(choices),
-        description="Render quality; provider-specific choices.",
-    )
-
-
-def _openai_background_field() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="background",
-        type="select",
-        label="Background",
-        default="opaque",
-        options=_to_choices(GPT_IMAGE_BACKGROUND_CHOICES),
-        description="Background transparency (gpt-image-1).",
-    )
-
-
-def _openai_n_field(is_dall_e: bool) -> TaskModelOptionField:
-    # dall-e-3 only supports n=1 per OpenAI docs.
-    max_value = 1.0 if is_dall_e else 10.0
-    return TaskModelOptionField(
-        name="n",
-        type="number",
-        label="Number of images",
-        default=1,
-        min_value=1,
-        max_value=max_value,
-        step=1,
-        description="How many images to generate. dall-e-3 supports n=1 only.",
-    )
-
-
-def _openai_output_format_field() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="output_format",
-        type="select",
-        label="Output format",
-        default="png",
-        options=_to_choices(GPT_IMAGE_OUTPUT_FORMAT_CHOICES),
-        description="Image file format (gpt-image-1).",
-    )
-
-
-def _openai_style_field() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="style",
-        type="select",
-        label="Style",
-        default="vivid",
-        options=_to_choices(DALL_E_3_STYLE_CHOICES),
-        description="Visual style (dall-e-3).",
-    )
-
-
-def _openai_response_format_field() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="response_format",
-        type="select",
-        label="Response format",
-        default="b64_json",
-        options=_to_choices(OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES),
-        description="How OpenAI returns the generated image (dall-e-3).",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Recraft family
-# ---------------------------------------------------------------------------
-
-
-def _recraft_fields(model_id: str) -> tuple[TaskModelOptionField, ...]:
-    """Recraft family image options, gated by model variant.
-
-    v3, v4, v4-pro, and conservatively v4.1 share the strength / rgb_colors
-    / background_rgb_color fields. v3 also exposes ``text_layout`` and
-    ``style`` (vector styles are explicitly unsupported there per the
-    provider docs).
-    """
-
-    is_v3 = "recraft-v3" in model_id
-    is_v4_family = "recraft-v4" in model_id
-
-    fields: list[TaskModelOptionField] = []
-    if is_v3 or is_v4_family:
-        fields.append(
-            TaskModelOptionField(
-                name="strength",
-                type="number",
-                label="Strength",
-                default=0.2,
-                min_value=0.0,
-                max_value=1.0,
-                step=0.05,
-                description="Image-to-image strength (Recraft).",
-            )
-        )
-        fields.append(
-            TaskModelOptionField(
-                name="rgb_colors",
-                type="json",
-                label="RGB colors",
-                default=[],
-                description="Array of [r,g,b] (0-255). Example: [[0,128,255],[255,0,0]].",
-            )
-        )
-        fields.append(
-            TaskModelOptionField(
-                name="background_rgb_color",
-                type="json",
-                label="Background RGB color",
-                default=None,
-                description="[r,g,b] (0-255). Example: [255,255,255].",
-            )
-        )
-    if is_v3:
-        fields.append(
-            TaskModelOptionField(
-                name="text_layout",
-                type="json",
-                label="Text layout",
-                default=[],
-                description='Array of {"text": str, "bbox": [[x,y]×4] (0-1)}. Recraft-v3 only.',
-            )
-        )
-        fields.append(
-            TaskModelOptionField(
-                name="style",
-                type="text",
-                label="Style",
-                default="",
-                description="Recraft-v3 style id. Vector styles are unsupported.",
-            )
-        )
-    return tuple(fields)
-
-
-# ---------------------------------------------------------------------------
-# Sourceful family
-# ---------------------------------------------------------------------------
-
-
-def _sourceful_fields(model_id: str) -> tuple[TaskModelOptionField, ...]:
-    """Sourceful Riverflow family image options, gated by model variant.
-
-    v2.5 must be detected before v2 because ``v2.5`` contains ``v2`` as
-    a substring. v2 exposes ``font_inputs`` and ``super_resolution_references``
-    (img2img-only); v2.5 exposes ``font_inputs``, ``scoring_prompt``,
-    ``scoring_rubric``, and the background controls.
-    """
-
-    is_v2_5 = "riverflow-v2.5" in model_id
-    is_v2 = "riverflow-v2" in model_id and not is_v2_5
-
-    fields: list[TaskModelOptionField] = []
-    if is_v2 or is_v2_5:
-        fields.append(_sourceful_font_inputs())
-    if is_v2:
-        fields.append(_sourceful_super_resolution_references())
-    if is_v2_5:
-        fields.append(_sourceful_scoring_prompt())
-        fields.append(_sourceful_scoring_rubric())
-        fields.append(_sourceful_background_mode())
-        fields.append(_sourceful_background_hex_color())
-    return tuple(fields)
-
-
-def _sourceful_font_inputs() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="font_inputs",
-        type="json",
-        label="Font inputs",
-        default=[],
-        description='Array of {"font_url": str, "text": str}, max 2. Sourceful v2 / v2.5.',
-    )
-
-
-def _sourceful_super_resolution_references() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="super_resolution_references",
-        type="json",
-        label="Super-resolution references",
-        default=[],
-        description="Array of image URL strings, max 4. Sourceful v2 (img2img only).",
-    )
-
-
-def _sourceful_scoring_prompt() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="scoring_prompt",
-        type="textarea",
-        label="Scoring prompt",
-        default="",
-        description="Scoring prompt for the rubric. Sourceful v2.5 only.",
-    )
-
-
-def _sourceful_scoring_rubric() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="scoring_rubric",
-        type="json",
-        label="Scoring rubric",
-        default=[],
-        description=(
-            "Array of rubric entries (1-8). Each entry has key, label, "
-            "description, weight, optional passing_score and score_guidance. "
-            "Sourceful v2.5 only."
-        ),
-    )
-
-
-def _sourceful_background_mode() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="background_mode",
-        type="select",
-        label="Background mode",
-        default="original",
-        options=_to_choices(
-            (
-                ("original", "Original"),
-                ("transparent", "Transparent"),
-                ("solid", "Solid"),
-            )
-        ),
-        description="Sourceful v2.5 only.",
-    )
-
-
-def _sourceful_background_hex_color() -> TaskModelOptionField:
-    return TaskModelOptionField(
-        name="background_hex_color",
-        type="text",
-        label="Background hex color",
-        default="",
-        description="#RRGGBB. Required when background_mode is 'solid'. Sourceful v2.5 only.",
     )
 
 

@@ -176,8 +176,10 @@ async def refresh_models(
         models_dir = resources_dir / "models"
         models_dir.mkdir(parents=True, exist_ok=True)
 
+        # The raw dump is written before normalization so a schema mismatch
+        # still leaves the payload on disk for inspection.
         raw_output_path = models_dir / f"{provider_config.id}.raw.json"
-        raw_output_data = {
+        raw_output_data: dict[str, Any] = {
             "provider_id": provider_config.id,
             "fetched_at": fetched_at,
             "raw_response": raw_payload,
@@ -203,6 +205,47 @@ async def refresh_models(
                 continue
             if model_filter.accepts(model):
                 normalized_models[model.model_id] = model
+
+        # A provider may expose dedicated task-capability catalogs (e.g. the
+        # OpenRouter image API) whose typed per-model option schemas the
+        # default models endpoint omits. The adapter owns those endpoints and
+        # their projection into ``capabilities.task_options``; discovery only
+        # supplies the fetch plumbing and records the raw responses. A failure
+        # degrades to a catalog without task options, never a failed refresh.
+        raw_task_responses: dict[str, Any] = {}
+        discover_task_models = getattr(adapter_class, "discover_task_models", None)
+        if callable(discover_task_models):
+            task_headers = _build_headers(
+                provider_config,
+                credential_value,
+                adapter_class,
+                credential_connection,
+            )
+
+            async def _fetch_task_json(endpoint: str) -> Any:
+                payload = await _fetch_json_payload(_join_url(base_url, endpoint), task_headers)
+                raw_task_responses[endpoint] = payload
+                return payload
+
+            try:
+                task_models = await discover_task_models(normalized_models, _fetch_task_json)
+            except (httpx.HTTPError, ProviderError, NetworkError, ValueError) as exc:
+                _LOGGER.warning(
+                    "Task-model catalog fetch failed for provider '%s': %s",
+                    provider_config.id,
+                    exc,
+                )
+            else:
+                normalized_models.update(task_models)
+            if raw_task_responses:
+                # Rewrite the raw dump with the task-catalog responses so the
+                # safety net covers them too (a later wanted field is a
+                # projection edit, not a re-fetch).
+                raw_output_data["raw_task_responses"] = raw_task_responses
+                raw_output_path.write_text(
+                    json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
 
         # Refresh writes the PURE provider projection — NO override baking (that
         # cross-file merge moved to LOAD in Phase 2). Each model is serialized to
@@ -422,13 +465,28 @@ async def _fetch_raw_models(
         adapter_class,
         credential_connection,
     )
+    payload = await _fetch_json_payload(url, headers)
 
-    async def _request_models() -> tuple[Any, list[Mapping[str, Any]]]:
-        # Catalog refresh now shares the provider chat path's transient-failure
-        # handling: transport/timeout errors and retryable statuses (429/502/503/
-        # 504) are re-issued with backoff + Retry-After; a malformed body or a
-        # fatal status (401/403/404/500) raises a non-retryable error that aborts
-        # immediately.
+    raw_models = _raw_models_from_payload(payload)
+    if not isinstance(raw_models, list):
+        raise ValueError("Models response must contain a list, a data list, or a models list")
+
+    for raw_model in raw_models:
+        if not isinstance(raw_model, dict):
+            raise ValueError("Every raw model entry must be an object")
+    return payload, raw_models
+
+
+async def _fetch_json_payload(url: str, headers: dict[str, str]) -> Any:
+    """GET *url* and return the parsed JSON body with retry semantics.
+
+    Catalog fetches share the provider chat path's transient-failure handling:
+    transport/timeout errors and retryable statuses (429/502/503/504) are
+    re-issued with backoff + Retry-After; a fatal status (401/403/404/500)
+    raises a non-retryable error that aborts immediately.
+    """
+
+    async def _request() -> Any:
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 response = await client.get(url, headers=headers)
@@ -446,18 +504,9 @@ async def _fetch_raw_models(
                     detail=detail,
                     response_headers=response.headers,
                 )
-            payload = response.json()
+            return response.json()
 
-        raw_models = _raw_models_from_payload(payload)
-        if not isinstance(raw_models, list):
-            raise ValueError("Models response must contain a list, a data list, or a models list")
-
-        for raw_model in raw_models:
-            if not isinstance(raw_model, dict):
-                raise ValueError("Every raw model entry must be an object")
-        return payload, raw_models
-
-    return await retry_async(_request_models)
+    return await retry_async(_request)
 
 
 def _raw_models_from_payload(payload: Any) -> Any:
@@ -608,6 +657,9 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
             "context_window": model.context_window,
             "max_output_tokens": model.max_output_tokens,
         }
+        task_options = _plain_data(model.capabilities.task_options)
+        if task_options:
+            data["capabilities"]["task_options"] = task_options
         # ``family`` is written only when known, mirroring how connections /
         # metadata are omitted when empty so generated catalogs stay clean.
         if model.family:

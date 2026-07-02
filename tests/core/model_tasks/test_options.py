@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from core.model_tasks.constants import (
@@ -12,6 +14,7 @@ from core.model_tasks.constants import (
 )
 from core.model_tasks.options import (
     ALLOWED_OPTION_TYPES,
+    PROVIDER_DEFAULT_CHOICE_LABEL,
     TaskModelOptionField,
     TaskModelOptionValidationError,
     option_schema_for,
@@ -20,9 +23,9 @@ from core.models import Capabilities, Model, ReasoningCapabilities
 
 
 def test_allowed_option_types_includes_json() -> None:
-    """The new ``json`` field type is part of the supported set so the
-    Settings UI can render generic array/object options like Recraft's
-    ``text_layout`` or Sourceful's ``scoring_rubric``."""
+    """The ``json`` field type is part of the supported set so the Settings
+    UI can render generic array/object options like the extra-options
+    escape hatch or provider passthrough options."""
 
     assert "json" in ALLOWED_OPTION_TYPES
     # Existing renderable types remain in the whitelist.
@@ -80,8 +83,8 @@ def test_task_model_option_field_rejects_empty_name() -> None:
 
 
 def test_existing_field_types_still_validate() -> None:
-    """Sanity: the four pre-existing field types still construct without
-    error, and each reports the correct ``type`` in its serialized form."""
+    """Sanity: the pre-existing field types still construct without error,
+    and each reports the correct ``type`` in its serialized form."""
 
     cases = [
         ("text", "language"),
@@ -95,74 +98,8 @@ def test_existing_field_types_still_validate() -> None:
         assert field.to_dict()["type"] == field_type
 
 
-def test_option_schema_for_unchanged_for_existing_tasks() -> None:
-    """The existing task branches (TTS, STT, image) still produce the
-    pre-M2 schemas — adding the ``json`` type does not silently alter the
-    recognized task types."""
-
-    tts_schema = option_schema_for(TASK_TEXT_TO_SPEECH, "openai", "openai/tts-1::api-key")
-    assert [field.name for field in tts_schema.fields[:1]] == ["voice"]
-
-    stt_schema = option_schema_for(TASK_SPEECH_TO_TEXT, "openai", "openai/whisper-1::api-key")
-    assert "language" in [field.name for field in stt_schema.fields]
-
-    image_schema = option_schema_for(
-        TASK_IMAGE_GENERATION, "openrouter", "openrouter/flux.2-pro::api-key"
-    )
-    assert "aspect_ratio" in [field.name for field in image_schema.fields]
-
-
-def test_task_model_option_field_choices_serialize_with_json_default() -> None:
-    """A ``select`` field with a JSON-serializable default serializes
-    correctly. This guards the to_dict path used by the renderer."""
-
-    field = TaskModelOptionField(
-        name="voice",
-        type="select",
-        label="Voice",
-        default="alloy",
-    )
-
-    payload = field.to_dict()
-    assert payload["type"] == "select"
-    assert payload["default"] == "alloy"
-
-
-def test_task_model_option_field_json_default_passthrough_complex_types() -> None:
-    """JSON fields can carry nested arrays, objects, and primitives. The
-    backend must not transform the value — the frontend stringifies it for
-    display and parses it back on input."""
-
-    items: list[dict[str, object]] = [
-        {"key": "clarity", "weight": 0.6, "passing_score": 0.5},
-        {"key": "style", "weight": 0.4},
-    ]
-    nested: dict[str, object] = {"items": items, "background": None}
-    field = TaskModelOptionField(
-        name="scoring_rubric",
-        type="json",
-        label="Scoring rubric",
-        default=nested,
-    )
-
-    payload = field.to_dict()
-    assert payload["default"] is nested
-    nested_default = payload["default"]
-    assert nested_default is not None
-    assert isinstance(nested_default, dict)
-    nested_items = nested_default["items"]
-    assert isinstance(nested_items, list)
-    first_item = nested_items[0]
-    assert isinstance(first_item, dict)
-    assert first_item["passing_score"] == 0.5
-
-
 # ---------------------------------------------------------------------------
-# Phase 3 — model-aware schema builders
-#
-# These tests exercise ``option_schema_for`` directly with a real ``Model``
-# instance, so they cover the schema-side logic independently of
-# ``TaskModelService.options`` (which is covered by test_model_tasks.py).
+# Model helpers
 # ---------------------------------------------------------------------------
 
 
@@ -171,6 +108,7 @@ def _make_model(
     *,
     supported_voices: tuple[str, ...] = (),
     supported_parameters: tuple[str, ...] = (),
+    task_options: dict[str, Any] | None = None,
 ) -> Model:
     """Build a real ``Model`` instance for the model-aware schema tests."""
 
@@ -184,17 +122,67 @@ def _make_model(
             reasoning=ReasoningCapabilities(supported=False),
             supported_voices=supported_voices,
             supported_parameters=supported_parameters,
+            task_options=task_options or {},
         ),
         context_window=32000,
         max_output_tokens=4096,
     )
 
 
+def _image_schema(model: Model | None, provider_id: str = "openrouter"):
+    return option_schema_for(
+        TASK_IMAGE_GENERATION,
+        provider_id,
+        f"{provider_id}/some-model::api-key",
+        model=model,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Escape hatch — every supported task type carries extra_options
+# ---------------------------------------------------------------------------
+
+
+def test_every_supported_task_schema_ends_with_extra_options() -> None:
+    """Every provider target schema carries the ``extra_options`` JSON
+    escape hatch as its last field, so options vBot does not surface stay
+    usable without a code change."""
+
+    for task_type in (
+        TASK_SPEECH_TO_TEXT,
+        TASK_TEXT_TO_SPEECH,
+        TASK_IMAGE_GENERATION,
+        TASK_TEXT_EMBEDDING,
+    ):
+        schema = option_schema_for(task_type, "openrouter", "openrouter/x::api-key")
+        assert schema.fields[-1].name == "extra_options"
+        assert schema.fields[-1].type == "json"
+
+
+def test_option_schema_for_unrecognized_task_type_returns_empty_schema() -> None:
+    """Defensive: an unknown task type returns an empty schema without
+    raising — and without the escape hatch, because no wire client would
+    consume it."""
+
+    schema = option_schema_for(
+        "future_task",
+        "openrouter",
+        "openrouter/x::api-key",
+        model=None,
+    )
+
+    assert schema.task_type == "future_task"
+    assert schema.fields == ()
+
+
+# ---------------------------------------------------------------------------
+# TTS
+# ---------------------------------------------------------------------------
+
+
 def test_option_schema_for_tts_uses_supported_voices_from_model() -> None:
     """When the model carries ``supported_voices``, the TTS schema
-    surfaces exactly those voices and marks the field required. The
-    test mirrors the live kokoro / gemini-tts / voxtral / grok case where
-    the per-model list is the only authoritative source."""
+    surfaces exactly those voices and marks the field required."""
 
     voices = ("af_alloy", "af_aoede", "af_bella", "af_jessica")
     model = _make_model("hexgrad/kokoro-82m", supported_voices=voices)
@@ -210,9 +198,6 @@ def test_option_schema_for_tts_uses_supported_voices_from_model() -> None:
     assert voice_field.name == "voice"
     assert voice_field.required is True
     assert [choice.value for choice in voice_field.options] == list(voices)
-    # The TTS schema also includes response_format and speed regardless of
-    # the voice list source. ``instructions`` is model-specific (Phase 5)
-    # and only appears when the model advertises support for it.
     field_names = {field.name for field in schema.fields}
     assert {"response_format", "speed"} <= field_names
     assert "instructions" not in field_names
@@ -251,8 +236,8 @@ def test_option_schema_for_tts_falls_back_to_openai_voices_for_openai_provider()
 
 def test_option_schema_for_tts_uses_free_text_voice_for_unknown_provider() -> None:
     """For an unknown provider with no model, the voice field is a
-    free-text input. The OpenAI voice list is not invented for other
-    providers — that was the bug the phase fixed."""
+    free-text input — the OpenAI voice list is not invented for other
+    providers."""
 
     schema = option_schema_for(
         TASK_TEXT_TO_SPEECH,
@@ -267,248 +252,10 @@ def test_option_schema_for_tts_uses_free_text_voice_for_unknown_provider() -> No
     assert voice_field.default in (None, "")
 
 
-def test_option_schema_for_image_gemini_flash_image_preview_exposes_half_k() -> None:
-    """The Gemini 3.1 Flash Image preview model is the only one whose
-    image_size choices include ``0.5K``. The schema reflects that."""
-
-    model = _make_model("google/gemini-3.1-flash-image-preview")
-
-    schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "openrouter",
-        "openrouter/google/gemini-3.1-flash-image-preview::api-key",
-        model=model,
-    )
-
-    size_field = next(field for field in schema.fields if field.name == "image_size")
-    size_values = {choice.value for choice in size_field.options}
-    assert size_values == {"0.5K", "1K", "2K", "4K"}
-
-
-def test_option_schema_for_image_mai_image_2_5_exposes_reduced_ratios() -> None:
-    """MAI Image 2.5 advertises a reduced aspect-ratio set; the schema
-    must match. The other base ratios are absent."""
-
-    model = _make_model("microsoft/mai-image-2.5")
-
-    schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "openrouter",
-        "openrouter/microsoft/mai-image-2.5::api-key",
-        model=model,
-    )
-
-    aspect_field = next(field for field in schema.fields if field.name == "aspect_ratio")
-    aspect_values = {choice.value for choice in aspect_field.options}
-    assert aspect_values == {"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3"}
-
-
-def test_option_schema_for_image_seed_only_present_when_in_supported_parameters() -> None:
-    """``seed`` is added only when ``supported_parameters`` includes it —
-    the field is provider-level top-level, so it must not appear for
-    models that do not list it (recraft, sourceful, bytedance-seedream)."""
-
-    flux_model = _make_model("black-forest-labs/flux.2-pro", supported_parameters=("seed",))
-    recraft_model = _make_model("recraft/recraft-v3", supported_parameters=())
-
-    flux_schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "openrouter",
-        "openrouter/black-forest-labs/flux.2-pro::api-key",
-        model=flux_model,
-    )
-    recraft_schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "openrouter",
-        "openrouter/recraft/recraft-v3::api-key",
-        model=recraft_model,
-    )
-
-    flux_names = {field.name for field in flux_schema.fields}
-    recraft_names = {field.name for field in recraft_schema.fields}
-    assert "seed" in flux_names
-    assert "seed" not in recraft_names
-
-
-def test_option_schema_for_image_recraft_v3_emits_expected_json_fields() -> None:
-    """Recraft-v3 json-typed fields are typed as ``json`` so the
-    Settings UI uses the multiline JSON textarea renderer. Strength is
-    a number, style is a text input."""
-
-    model = _make_model("recraft/recraft-v3")
-
-    schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "openrouter",
-        "openrouter/recraft/recraft-v3::api-key",
-        model=model,
-    )
-
-    fields_by_name = {field.name: field for field in schema.fields}
-
-    assert fields_by_name["text_layout"].type == "json"
-    assert fields_by_name["rgb_colors"].type == "json"
-    assert fields_by_name["background_rgb_color"].type == "json"
-    assert fields_by_name["strength"].type == "number"
-    assert fields_by_name["style"].type == "text"
-
-
-def test_option_schema_for_image_sourceful_v25_emits_expected_json_fields() -> None:
-    """Sourceful v2.5 json fields use the ``json`` type so the Settings
-    UI renders them as the multiline JSON textarea. Scoring prompt is a
-    textarea, background controls are select / text."""
-
-    model = _make_model("sourceful/riverflow-v2.5-pro")
-
-    schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "openrouter",
-        "openrouter/sourceful/riverflow-v2.5-pro::api-key",
-        model=model,
-    )
-
-    fields_by_name = {field.name: field for field in schema.fields}
-
-    assert fields_by_name["font_inputs"].type == "json"
-    assert fields_by_name["scoring_rubric"].type == "json"
-    assert fields_by_name["scoring_prompt"].type == "textarea"
-    assert fields_by_name["background_mode"].type == "select"
-    assert fields_by_name["background_hex_color"].type == "text"
-    # v2-only super_resolution_references is not in the v2.5 schema.
-    assert "super_resolution_references" not in fields_by_name
-
-
-def test_option_schema_for_stt_response_format_field_type() -> None:
-    """``response_format`` is a select field with the Whisper-style
-    format set when the model advertises support for it."""
-
-    model = _make_model("openai/whisper-1", supported_parameters=("response_format",))
-
-    schema = option_schema_for(
-        TASK_SPEECH_TO_TEXT,
-        "openrouter",
-        "openrouter/openai/whisper-1::api-key",
-        model=model,
-    )
-
-    response_format = next(field for field in schema.fields if field.name == "response_format")
-    assert response_format.type == "select"
-    assert {choice.value for choice in response_format.options} == {
-        "json",
-        "text",
-        "srt",
-        "verbose_json",
-        "vtt",
-    }
-    assert response_format.default == "json"
-
-
-def test_option_schema_for_non_openai_non_openrouter_provider_returns_empty_image_schema() -> None:
-    """Image option schemas for unknown providers (neither OpenAI nor
-    OpenRouter) stay empty. The OpenAI branch is the second native
-    profile; everything else is out of scope for the model-aware schema
-    builders."""
-
-    schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "some-other-provider",
-        "some-other-provider/gpt-image-1::api-key",
-        model=None,
-    )
-
-    assert schema.fields == ()
-
-
-def test_option_schema_for_openai_image_gpt_image_1_exposes_expected_fields() -> None:
-    """The OpenAI gpt-image-1 native profile exposes the size, quality,
-    background, n, and output_format fields. ``style`` and
-    ``response_format`` are dall-e-3-only and must NOT appear here."""
-
-    model = _make_model(
-        "gpt-image-1",
-        supported_parameters=("size", "quality", "background", "n", "output_format"),
-    )
-
-    schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "openai",
-        "openai/gpt-image-1::api-key",
-        model=model,
-    )
-
-    field_names = {field.name for field in schema.fields}
-    assert {"size", "quality", "background", "n", "output_format"} <= field_names
-    assert "style" not in field_names
-    assert "response_format" not in field_names
-
-    # gpt-image-1 quality defaults to "auto"; n is 1-10.
-    quality = next(field for field in schema.fields if field.name == "quality")
-    assert quality.default == "auto"
-    n = next(field for field in schema.fields if field.name == "n")
-    assert n.max_value == 10
-    assert n.min_value == 1
-
-
-def test_option_schema_for_openai_image_dall_e_3_exposes_expected_fields() -> None:
-    """The OpenAI dall-e-3 native profile exposes size, quality, style,
-    n, and response_format. ``background`` and ``output_format`` are
-    gpt-image-1-only and must NOT appear here. ``n`` is restricted to 1."""
-
-    model = _make_model(
-        "dall-e-3",
-        supported_parameters=("size", "quality", "style", "n", "response_format"),
-    )
-
-    schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "openai",
-        "openai/dall-e-3::api-key",
-        model=model,
-    )
-
-    field_names = {field.name for field in schema.fields}
-    assert {"size", "quality", "style", "n", "response_format"} <= field_names
-    assert "background" not in field_names
-    assert "output_format" not in field_names
-
-    n = next(field for field in schema.fields if field.name == "n")
-    assert n.max_value == 1
-    quality = next(field for field in schema.fields if field.name == "quality")
-    assert quality.default == "standard"
-    style = next(field for field in schema.fields if field.name == "style")
-    assert style.default == "vivid"
-
-
-def test_option_schema_for_openai_image_without_model_exposes_union_of_fields() -> None:
-    """When the registry has no model yet (e.g. before the first catalog
-    refresh) the OpenAI image profile exposes the union of supported
-    fields so the user can still configure the target. The wire layer
-    decides which subset to send to the selected model."""
-
-    schema = option_schema_for(
-        TASK_IMAGE_GENERATION,
-        "openai",
-        "openai/gpt-image-1::api-key",
-        model=None,
-    )
-
-    field_names = {field.name for field in schema.fields}
-    assert {
-        "size",
-        "quality",
-        "background",
-        "n",
-        "output_format",
-        "style",
-        "response_format",
-    } <= field_names
-
-
-def test_option_schema_for_openai_tts_instructions_only_for_gpt4o_mini() -> None:
+def test_option_schema_for_openai_tts_instructions_only_when_advertised() -> None:
     """The ``instructions`` field is model-specific: it is exposed only
-    for OpenAI models that advertise support (gpt-4o-mini-tts). tts-1 and
-    tts-1-hd never expose the field. The OpenAI TTS voice list is the
-    canonical fallback when the model is unknown."""
+    for models that advertise support (gpt-4o-mini-tts); tts-1 never
+    exposes the field."""
 
     gpt4o = _make_model(
         "gpt-4o-mini-tts",
@@ -537,45 +284,406 @@ def test_option_schema_for_openai_tts_instructions_only_for_gpt4o_mini() -> None
 
     assert "instructions" in gpt4o_names
     assert "instructions" not in tts1_names
-    # The voice/format/speed trio is always present.
     for schema_names in (gpt4o_names, tts1_names):
         assert {"voice", "response_format", "speed"} <= schema_names
 
 
-def test_option_schema_for_unrecognized_task_type_returns_empty_schema() -> None:
-    """Defensive: an unknown task type returns an empty schema without
-    raising. The dispatch is task-type-driven; future task types can
-    add their own builders."""
+# ---------------------------------------------------------------------------
+# STT
+# ---------------------------------------------------------------------------
+
+
+def test_option_schema_for_stt_response_format_field_type() -> None:
+    """``response_format`` is a select field with the Whisper-style
+    format set when the model advertises support for it."""
+
+    model = _make_model("openai/whisper-1", supported_parameters=("response_format",))
 
     schema = option_schema_for(
-        "future_task",
+        TASK_SPEECH_TO_TEXT,
         "openrouter",
-        "openrouter/x::api-key",
-        model=None,
+        "openrouter/openai/whisper-1::api-key",
+        model=model,
     )
 
-    assert schema.task_type == "future_task"
-    assert schema.fields == ()
+    response_format = next(field for field in schema.fields if field.name == "response_format")
+    assert response_format.type == "select"
+    assert {choice.value for choice in response_format.options} == {
+        "json",
+        "text",
+        "srt",
+        "verbose_json",
+        "vtt",
+    }
+    assert response_format.default == "json"
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 — text_embedding option schema
-#
-# The embedding task exposes the Matryoshka ``dimensions`` knob when
-# the resolved model advertises it in ``supported_parameters``. The
-# schema stays empty for models that do not list it (so the Settings
-# UI does not invent a knob the provider would reject), and the
-# ``dimensions`` field defaults to ``None`` — the wire layer drops
-# ``None`` so the request omits the field for non-Matryoshka models.
+# Image — data-driven from capabilities.task_options
+# ---------------------------------------------------------------------------
+
+
+def test_image_enum_parameter_renders_select_with_provider_default_choice() -> None:
+    """An ``enum`` parameter renders as a select whose first choice is the
+    empty "Provider default" entry, so nothing is sent unless the user
+    pins a value (the wire layer drops empty placeholders)."""
+
+    model = _make_model(
+        "google/gemini-3.1-flash-image-preview",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "aspect_ratio": {"type": "enum", "values": ["1:1", "16:9", "9:16"]},
+                    "resolution": {"type": "enum", "values": ["512", "1K", "2K", "4K"]},
+                }
+            }
+        },
+    )
+
+    schema = _image_schema(model)
+    aspect = next(field for field in schema.fields if field.name == "aspect_ratio")
+    assert aspect.type == "select"
+    assert aspect.default == ""
+    assert aspect.options[0].value == ""
+    assert aspect.options[0].label == PROVIDER_DEFAULT_CHOICE_LABEL
+    assert [choice.value for choice in aspect.options[1:]] == ["1:1", "16:9", "9:16"]
+
+    resolution = next(field for field in schema.fields if field.name == "resolution")
+    assert [choice.value for choice in resolution.options[1:]] == ["512", "1K", "2K", "4K"]
+
+
+def test_image_forced_default_enum_has_no_provider_default_choice() -> None:
+    """``response_format`` must default to ``b64_json`` because the wire
+    layer only decodes inline Base64 — the provider default (url) would
+    break parsing, so there is no empty choice."""
+
+    model = _make_model(
+        "dall-e-3",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "response_format": {"type": "enum", "values": ["b64_json", "url"]},
+                }
+            }
+        },
+    )
+
+    schema = _image_schema(model, provider_id="openai")
+    response_format = next(field for field in schema.fields if field.name == "response_format")
+    assert response_format.default == "b64_json"
+    assert all(choice.value for choice in response_format.options)
+
+
+def test_image_range_parameter_renders_bounded_number() -> None:
+    """A ``range`` parameter renders as a number field with min/max; a
+    collapsed range (min == max) offers no choice and is skipped."""
+
+    model = _make_model(
+        "recraft/recraft-v3",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "n": {"type": "range", "min": 1, "max": 6},
+                    "input_fidelity": {"type": "range", "min": 2, "max": 2},
+                }
+            }
+        },
+    )
+
+    schema = _image_schema(model)
+    field_names = {field.name for field in schema.fields}
+    assert "input_fidelity" not in field_names
+
+    n = next(field for field in schema.fields if field.name == "n")
+    assert n.type == "number"
+    assert n.min_value == 1
+    assert n.max_value == 6
+    assert n.default is None
+
+
+def test_image_boolean_seed_renders_number_field() -> None:
+    """The feed types ``seed`` as boolean ("supported"); the value is a
+    free integer, so the field renders as a number input."""
+
+    model = _make_model(
+        "black-forest-labs/flux.2-pro",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "seed": {"type": "boolean"},
+                }
+            }
+        },
+    )
+
+    schema = _image_schema(model)
+    seed = next(field for field in schema.fields if field.name == "seed")
+    assert seed.type == "number"
+    assert seed.default is None
+
+
+def test_image_string_parameter_renders_text_field_with_spec_description() -> None:
+    """A hand-authored ``string`` spec (open value space, e.g. gpt-image-2
+    arbitrary sizes) renders as a free-text field; a per-spec description
+    wins over the generic per-name hint."""
+
+    model = _make_model(
+        "gpt-image-2",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "size": {
+                        "type": "string",
+                        "description": "auto or WIDTHxHEIGHT divisible by 16.",
+                    },
+                }
+            }
+        },
+    )
+
+    schema = _image_schema(model, provider_id="openai")
+    size = next(field for field in schema.fields if field.name == "size")
+    assert size.type == "text"
+    assert size.description == "auto or WIDTHxHEIGHT divisible by 16."
+
+
+def test_image_size_shorthand_skipped_when_resolution_or_aspect_present() -> None:
+    """OpenRouter's ``size`` is a shorthand that conflicts with
+    resolution/aspect_ratio; it is skipped when either is present but
+    rendered when it is the only dimension parameter (OpenAI native)."""
+
+    with_conflict = _make_model(
+        "bytedance-seed/seedream-4.5",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "size": {"type": "enum", "values": ["1K", "2K"]},
+                    "resolution": {"type": "enum", "values": ["1K", "2K", "4K"]},
+                }
+            }
+        },
+    )
+    alone = _make_model(
+        "gpt-image-1",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "size": {"type": "enum", "values": ["auto", "1024x1024"]},
+                }
+            }
+        },
+    )
+
+    conflict_names = {field.name for field in _image_schema(with_conflict).fields}
+    alone_names = {field.name for field in _image_schema(alone, provider_id="openai").fields}
+    assert "size" not in conflict_names
+    assert "resolution" in conflict_names
+    assert "size" in alone_names
+
+
+def test_image_runtime_parameters_and_unknown_spec_types_are_skipped() -> None:
+    """``input_references``/``stream`` are runtime inputs, not settings;
+    unknown spec types are skipped fail-soft (the raw catalog still
+    carries them for a later renderer upgrade)."""
+
+    model = _make_model(
+        "sourceful/riverflow-v2.5-pro",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "input_references": {"type": "range", "min": 0, "max": 10},
+                    "stream": {"type": "boolean"},
+                    "novelty": {"type": "matrix", "rows": 3},
+                    "resolution": {"type": "enum", "values": ["1K", "2K", "4K"]},
+                }
+            }
+        },
+    )
+
+    schema = _image_schema(model)
+    field_names = {field.name for field in schema.fields}
+    assert "input_references" not in field_names
+    assert "stream" not in field_names
+    assert "novelty" not in field_names
+    assert "resolution" in field_names
+
+
+def test_image_single_value_enum_is_skipped() -> None:
+    """An enum with one published value offers no choice (dall-e-2
+    ``quality: ["standard"]``) — the parameter stays unsent so the
+    provider's fixed value is authoritative."""
+
+    model = _make_model(
+        "dall-e-2",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "quality": {"type": "enum", "values": ["standard"]},
+                    "size": {"type": "enum", "values": ["256x256", "512x512", "1024x1024"]},
+                }
+            }
+        },
+    )
+
+    schema = _image_schema(model, provider_id="openai")
+    field_names = {field.name for field in schema.fields}
+    assert "quality" not in field_names
+    assert "size" in field_names
+
+
+def test_image_parameter_order_is_known_first_then_sorted() -> None:
+    """Known parameters render in presentation order; unknown names follow
+    alphabetically."""
+
+    model = _make_model(
+        "x/experimental",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "zeta_mode": {"type": "enum", "values": ["a", "b"]},
+                    "seed": {"type": "boolean"},
+                    "aspect_ratio": {"type": "enum", "values": ["1:1", "16:9"]},
+                    "alpha_mode": {"type": "enum", "values": ["x", "y"]},
+                }
+            }
+        },
+    )
+
+    schema = _image_schema(model)
+    names = [field.name for field in schema.fields if field.name != "extra_options"]
+    assert names == ["aspect_ratio", "seed", "alpha_mode", "zeta_mode"]
+
+
+def test_image_passthrough_renders_provider_options_json_field() -> None:
+    """Passthrough keys render as one ``provider_options`` JSON field whose
+    description names the provider slug and its allowed keys."""
+
+    model = _make_model(
+        "recraft/recraft-v3",
+        task_options={
+            "image_generation": {
+                "parameters": {"n": {"type": "range", "min": 1, "max": 6}},
+                "passthrough": {"recraft": ["controls", "style", "text_layout"]},
+            }
+        },
+    )
+
+    schema = _image_schema(model)
+    provider_options = next(field for field in schema.fields if field.name == "provider_options")
+    assert provider_options.type == "json"
+    assert provider_options.default == {}
+    assert "recraft: controls, style, text_layout" in provider_options.description
+
+
+def test_image_openrouter_fallback_without_task_options() -> None:
+    """A model without task-options data (unrefreshed catalog) falls back
+    to the conservative aspect-ratio/resolution selects; ``seed`` appears
+    only when the chat catalog advertises it."""
+
+    with_seed = _make_model("black-forest-labs/flux.2-pro", supported_parameters=("seed",))
+    without_seed = _make_model("recraft/recraft-v3")
+
+    with_seed_names = {field.name for field in _image_schema(with_seed).fields}
+    without_seed_names = {field.name for field in _image_schema(without_seed).fields}
+
+    assert {"aspect_ratio", "resolution"} <= with_seed_names
+    assert "seed" in with_seed_names
+    assert "seed" not in without_seed_names
+
+
+def test_image_openai_fallback_without_model_exposes_union_of_fields() -> None:
+    """When the registry has no model yet (e.g. before the first catalog
+    refresh) the OpenAI image fallback exposes the union of supported
+    fields so the user can still configure the target."""
+
+    schema = option_schema_for(
+        TASK_IMAGE_GENERATION,
+        "openai",
+        "openai/gpt-image-1::api-key",
+        model=None,
+    )
+
+    field_names = {field.name for field in schema.fields}
+    assert {
+        "size",
+        "quality",
+        "background",
+        "n",
+        "output_format",
+        "style",
+        "response_format",
+    } <= field_names
+
+
+def test_image_openai_fallback_gated_by_supported_parameters() -> None:
+    """With a model but no task-options data, the OpenAI fallback exposes
+    only the flat ``supported_parameters`` subset."""
+
+    model = _make_model(
+        "gpt-image-1",
+        supported_parameters=("size", "quality", "background", "n", "output_format"),
+    )
+
+    schema = _image_schema(model, provider_id="openai")
+    field_names = {field.name for field in schema.fields}
+    assert {"size", "quality", "background", "n", "output_format"} <= field_names
+    assert "style" not in field_names
+    assert "response_format" not in field_names
+
+
+def test_image_unknown_provider_gets_only_escape_hatch() -> None:
+    """Image schemas for providers without an execution profile stay empty
+    apart from the escape hatch — the UI must not invent inputs."""
+
+    schema = option_schema_for(
+        TASK_IMAGE_GENERATION,
+        "some-other-provider",
+        "some-other-provider/gpt-image-1::api-key",
+        model=None,
+    )
+
+    assert [field.name for field in schema.fields] == ["extra_options"]
+
+
+def test_image_openai_task_options_profile_drives_fields() -> None:
+    """The override-authored OpenAI profiles render from data: dall-e-3
+    exposes size/quality/style/response_format (n collapses), gpt-image-1
+    exposes the GPT set — no prefix matching anywhere."""
+
+    dall_e_3 = _make_model(
+        "dall-e-3",
+        task_options={
+            "image_generation": {
+                "parameters": {
+                    "size": {"type": "enum", "values": ["1024x1024", "1792x1024", "1024x1792"]},
+                    "quality": {"type": "enum", "values": ["standard", "hd"]},
+                    "style": {"type": "enum", "values": ["vivid", "natural"]},
+                    "response_format": {"type": "enum", "values": ["b64_json", "url"]},
+                    "n": {"type": "range", "min": 1, "max": 1},
+                }
+            }
+        },
+    )
+
+    schema = _image_schema(dall_e_3, provider_id="openai")
+    field_names = [field.name for field in schema.fields]
+    assert field_names == [
+        "size",
+        "quality",
+        "style",
+        "response_format",
+        "extra_options",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Text embedding
 # ---------------------------------------------------------------------------
 
 
 def test_option_schema_for_text_embedding_emits_dimensions_field() -> None:
     """A text_embedding schema for an unknown model exposes the
-    ``dimensions`` field. The catalog may not be loaded yet — the
-    union of fields is shown so the user can still configure the
-    target, mirroring the OpenAI image profile behavior.
-    """
+    ``dimensions`` field (union shown before the catalog is loaded)."""
 
     schema = option_schema_for(
         TASK_TEXT_EMBEDDING,
@@ -585,7 +693,7 @@ def test_option_schema_for_text_embedding_emits_dimensions_field() -> None:
     )
 
     field_names = {field.name for field in schema.fields}
-    assert field_names == {"dimensions"}
+    assert field_names == {"dimensions", "extra_options"}
 
     dimensions = schema.fields[0]
     assert dimensions.name == "dimensions"
@@ -597,32 +705,10 @@ def test_option_schema_for_text_embedding_emits_dimensions_field() -> None:
     assert dimensions.step == 1
 
 
-def test_option_schema_for_text_embedding_with_model_advertising_dimensions() -> None:
-    """When the resolved model lists ``dimensions`` in
-    ``supported_parameters``, the schema still emits the field — the
-    wire layer is the source of truth for whether to forward it, and
-    the Settings UI surfaces the knob whenever the model could
-    accept it.
-    """
-
-    model = _make_model("google/gemini-embedding-2", supported_parameters=("dimensions",))
-
-    schema = option_schema_for(
-        TASK_TEXT_EMBEDDING,
-        "openrouter",
-        "openrouter/google/gemini-embedding-2::api-key",
-        model=model,
-    )
-
-    field_names = {field.name for field in schema.fields}
-    assert field_names == {"dimensions"}
-
-
 def test_option_schema_for_text_embedding_without_supported_dimensions() -> None:
     """A model that does not list ``dimensions`` in
-    ``supported_parameters`` has an empty embedding schema — the
-    Settings UI does not invent a knob the provider would reject.
-    """
+    ``supported_parameters`` has no dimensions knob — the Settings UI
+    does not invent one the provider would reject."""
 
     model = _make_model("some/embedding-model-v1", supported_parameters=())
 
@@ -633,16 +719,14 @@ def test_option_schema_for_text_embedding_without_supported_dimensions() -> None
         model=model,
     )
 
-    assert schema.fields == ()
+    assert [field.name for field in schema.fields] == ["extra_options"]
 
 
-def test_option_schema_for_text_embedding_schema_default_options_is_empty() -> None:
-    """The embedding schema's default options are empty — the
-    ``dimensions`` field carries ``default=None`` and the schema
-    default-options helper only includes fields whose default is not
-    ``None``. The wire layer drops ``None`` anyway, so a binding with
-    no stored options produces a request without ``dimensions``.
-    """
+def test_option_schema_for_text_embedding_default_options_only_escape_hatch() -> None:
+    """The embedding schema's defaults carry only the empty escape hatch —
+    the ``dimensions`` field has ``default=None`` and the wire layer drops
+    empty placeholders, so a binding with no stored options produces a
+    request without ``dimensions``."""
 
     schema = option_schema_for(
         TASK_TEXT_EMBEDDING,
@@ -651,14 +735,12 @@ def test_option_schema_for_text_embedding_schema_default_options_is_empty() -> N
         model=None,
     )
 
-    assert schema.default_options() == {}
+    assert schema.default_options() == {"extra_options": {}}
 
 
 def test_option_schema_for_text_embedding_to_dict_has_dimensions_field() -> None:
     """The serialized form reaches the Settings UI as a ``number`` field
-    with min=1 and an explicit description of the Matryoshka
-    behavior.
-    """
+    with min=1 and an explicit description of the Matryoshka behavior."""
 
     schema = option_schema_for(
         TASK_TEXT_EMBEDDING,
@@ -670,9 +752,7 @@ def test_option_schema_for_text_embedding_to_dict_has_dimensions_field() -> None
     rendered = schema.to_dict()
     assert rendered["task_type"] == TASK_TEXT_EMBEDDING
     assert rendered["target"] == "openrouter/google/gemini-embedding-2::api-key"
-    assert len(rendered["fields"]) == 1
-    field = rendered["fields"][0]
-    assert field["name"] == "dimensions"
+    field = next(item for item in rendered["fields"] if item["name"] == "dimensions")
     assert field["type"] == "number"
     assert field["default"] is None
     assert field["min"] == 1

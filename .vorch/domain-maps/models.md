@@ -11,17 +11,32 @@ join key used only during assembly — it never goes on the wire.
 The system splits cleanly into two moments:
 
 - **Refresh** (`discovery.py` + `models_dev.py`) — the DUMB half. It *fetches*
-  (provider `/models` endpoints + the public models.dev `catalog.json`) and
-  *projects* the results to disk. Needs network and, for provider catalogs, a
-  credential. Rare and explicit (the `model.refresh_db` RPC / the regen script).
-  It writes the **pure projection per file** — it does NOT merge across files and
-  does NOT join across providers. Where a provider's `/models` endpoint omits
-  facts (a bare gateway like opencode-go returns ids only), refresh **fills them
-  from that provider's own models.dev section** — `context_window`,
+  (provider `/models` endpoints + the public models.dev `catalog.json` + any
+  provider task-capability catalog the adapter declares) and *projects* the
+  results to disk. Needs network and, for provider catalogs, a credential. Rare
+  and explicit (the `model.refresh_db` RPC / the regen script). It writes the
+  **pure projection per file** — it does NOT merge across files and does NOT
+  join across providers. Where a provider's `/models` endpoint omits facts (a
+  bare gateway like opencode-go returns ids only), refresh **fills them from
+  that provider's own models.dev section** — `context_window`,
   `max_output_tokens`, `family`, the bare `reasoning` flag, and modalities
   (widened only as a strict superset) — so the provider layer carries the
   provider's real facts instead of a hand-maintained override
   (`discovery._enrich_provider_model`; "fill, don't overwrite").
+
+  **Task-capability catalogs:** an adapter may declare an async classmethod
+  `discover_task_models(normalized_models, fetch_json)`; discovery calls it
+  after normalization with retry-wrapped fetch plumbing and merges the returned
+  models. OpenRouter implements it against the dedicated image API
+  (`GET /images/models` + per-model `…/endpoints`, bounded-concurrency): it
+  projects each model's **typed parameter schema** and per-provider
+  **passthrough key lists** into `capabilities.task_options.image_generation`,
+  enriches models already discovered through `/models`, and creates minimal
+  models for image-API-only entries (no context window, chat capabilities
+  honestly off) — new OpenRouter image models land exclusively on that API. A
+  task-catalog failure degrades to a catalog without task options, never a
+  failed refresh. The raw task responses are appended to the
+  `<provider>.raw.json` dump under `raw_task_responses`.
 - **Load** (`assembly.py` behind `ModelRegistry.load`) — the SMART half. It
   *assembles* each effective model in memory from the on-disk layers, resolving
   the canonical join and the field-level merge. **No network, no key.** Frequent.
@@ -168,6 +183,17 @@ resolution is read-side and shared".
 - Data classes live in `models.py`: `Model`, `Capabilities`,
   `ReasoningCapabilities` are frozen. Keep the map at the contract level; the exact
   field list belongs in the dataclasses.
+- `Capabilities.task_options` is a frozen mapping keyed by task type (today:
+  `image_generation`) holding typed option specs for specialized task
+  execution: `parameters` (per wire-parameter `{"type": "enum"|"range"|
+  "boolean"|"string", …}`) and `passthrough` (upstream provider slug → allowed
+  passthrough keys). Projected at refresh from provider task-capability feeds
+  or hand-authored in `<provider>.overrides.json` (OpenAI native profiles live
+  in `openai.overrides.json`). As a `capabilities` sub-field it merges
+  one-level-deep at load like the rest: an override's `task_options` replaces
+  the generated one wholesale. Consumed by the task-model option schema
+  builder (`model_tasks.md`); serialization omits it when empty so non-task
+  catalogs stay clean.
 - `Model.model_id` is the exact string sent to the provider API — no remapping,
   no alias layer between registry lookup and adapter request. `family` is a
   first-class fact on the model (the provider/feed lineage), replacing per-adapter
