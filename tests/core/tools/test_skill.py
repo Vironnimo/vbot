@@ -37,12 +37,14 @@ def test_skill_tool_loads_body_and_resources(tmp_path: Path) -> None:
     result = asyncio.run(async_dispatch(tools, _context(tmp_path, activate), {"name": "debugging"}))
     data = cast(dict[str, Any], result["data"])
     stored_data = cast(dict[str, Any], stored["debugging"])
+    skill_directory = _skill_directory(tmp_path)
 
     assert result["ok"] is True
     assert data == {
         "name": "debugging",
         "status": "loaded",
         "message": "Skill 'debugging' loaded into session context.",
+        "directory": skill_directory,
         "resources": ["scripts/run.py", "references/guide.md"],
     }
     assert "content" not in data
@@ -51,6 +53,8 @@ def test_skill_tool_loads_body_and_resources(tmp_path: Path) -> None:
     assert stored_data["resources"] == ["scripts/run.py", "references/guide.md"]
     assert "frontmatter" not in stored_data["content"]
     assert str(stored_data["content"]).startswith('<skill_content name="debugging">')
+    assert f"Skill directory: {skill_directory}" in str(stored_data["content"])
+    assert "resolve against the skill directory" in str(stored_data["content"])
     assert "Investigate failures methodically." in str(stored_data["content"])
 
 
@@ -64,6 +68,7 @@ def test_skill_tool_without_activation_hook_returns_minimal_status(tmp_path: Pat
 
     assert result["ok"] is True
     assert data["resources"] == ["scripts/run.py", "references/guide.md"]
+    assert data["directory"] == _skill_directory(tmp_path)
     assert data["status"] == "loaded"
     assert "content" not in data
     assert "<skill_content" not in str(result)
@@ -131,6 +136,7 @@ def test_skill_tool_dedup_uses_session_activation_hook(tmp_path: Path) -> None:
         "name": "debugging",
         "status": "already_active",
         "message": "Skill 'debugging' was already active in this session.",
+        "directory": _skill_directory(tmp_path),
         "resources": ["scripts/run.py", "references/guide.md"],
     }
     assert "content" not in data
@@ -262,9 +268,39 @@ Body.
 
     result = load_skill_content('bad" name><tag', skill_file)
 
+    directory = skill_file.resolve().parent.as_posix()
     assert result["content"] == (
-        '<skill_content name="bad&quot; name&gt;&lt;tag">\nBody.\n</skill_content>'
+        '<skill_content name="bad&quot; name&gt;&lt;tag">\n'
+        f"Skill directory: {directory}\n"
+        "Relative paths in this skill resolve against the skill directory; "
+        "use absolute paths in tool calls.\n"
+        "Body.\n</skill_content>"
     )
+
+
+def test_load_skill_content_substitutes_base_dir_marker(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "deploy"
+    (skill_dir / "scripts").mkdir(parents=True)
+    (skill_dir / "scripts" / "ship.py").write_text("", encoding="utf-8")
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        """---
+name: deploy
+description: Ship it.
+---
+
+Run `python {baseDir}/scripts/ship.py` to deploy.
+""",
+        encoding="utf-8",
+    )
+
+    result = load_skill_content("deploy", skill_file)
+
+    directory = skill_file.resolve().parent.as_posix()
+    content = cast(str, result["content"])
+    assert "{baseDir}" not in content
+    assert f"Run `python {directory}/scripts/ship.py` to deploy." in content
+    assert result["directory"] == directory
 
 
 async def async_dispatch(
@@ -294,6 +330,11 @@ Investigate failures methodically.
         encoding="utf-8",
     )
     return tmp_path / "skills"
+
+
+def _skill_directory(tmp_path: Path) -> str:
+    """The debugging fixture skill's directory as the activation payload reports it."""
+    return (tmp_path / "skills" / "debugging").resolve().as_posix()
 
 
 def _context(

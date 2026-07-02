@@ -38,6 +38,14 @@ SKILL_TOOL_DESCRIPTION = (
 )
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"
+# OpenClaw-compatible marker skill authors may use in the body to reference bundled
+# files (e.g. ``python {baseDir}/scripts/run.py``); replaced with the absolute skill
+# directory at activation time.
+SKILL_BASE_DIR_MARKER = "{baseDir}"
+SKILL_PATH_RESOLUTION_NOTE = (
+    "Relative paths in this skill resolve against the skill directory; "
+    "use absolute paths in tool calls."
+)
 SKILL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
@@ -137,8 +145,15 @@ def register_skill_tool(registry: ToolRegistry, resolve_registry: SkillRegistryR
 def load_skill_content(skill_name: str, skill_file: Path) -> JsonObject:
     """Load and wrap activation content for one skill file."""
     body = _read_skill_body(skill_file)
-    resources = _scan_skill_resources(skill_file.parent)
-    return {"content": _wrap_skill_content(skill_name, body, resources), "resources": resources}
+    skill_directory = skill_file.resolve().parent
+    directory = skill_directory.as_posix()
+    body = body.replace(SKILL_BASE_DIR_MARKER, directory)
+    resources = _scan_skill_resources(skill_directory)
+    return {
+        "content": _wrap_skill_content(skill_name, body, resources, directory),
+        "resources": resources,
+        "directory": directory,
+    }
 
 
 def _skill_activation_result(
@@ -163,6 +178,9 @@ def _minimal_skill_result(
     resources = data.get("resources", [])
     if not isinstance(resources, list):
         resources = []
+    directory = data.get("directory")
+    if not isinstance(directory, str):
+        directory = ""
 
     status = SKILL_STATUS_ALREADY_ACTIVE if already_active else SKILL_STATUS_LOADED
     message = (
@@ -175,6 +193,7 @@ def _minimal_skill_result(
             "name": skill_name,
             "status": status,
             "message": message,
+            "directory": directory,
             "resources": list(resources),
         }
     )
@@ -249,8 +268,10 @@ def _read_skill_body(skill_file: Path) -> str:
     raise ValueError(f"Skill metadata front matter is not closed: {skill_file}")
 
 
-def _wrap_skill_content(skill_name: str, body: str, resources: list[str]) -> str:
+def _wrap_skill_content(skill_name: str, body: str, resources: list[str], directory: str) -> str:
     lines = [f'<skill_content name="{escape(skill_name, quote=True)}">']
+    lines.append(f"Skill directory: {escape(directory)}")
+    lines.append(SKILL_PATH_RESOLUTION_NOTE)
     if resources:
         lines.append("<resources>")
         lines.extend(f"- {resource}" for resource in resources)

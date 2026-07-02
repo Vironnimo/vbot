@@ -7,5 +7,9 @@ Users may explicitly request a skill with `/skill-name` at the start of a
 message or `$skill-name` anywhere in a message. When matching `<skill_content>`
 is already present in the conversation, treat those tokens as activation hints
 and follow the loaded skill instructions without repeating the marker.
+Loaded skill content states its skill directory and may list bundled resource
+files (`scripts/`, `references/`, `assets/`). Resolve such relative paths
+against that skill directory — not the working directory — and use absolute
+paths in tool calls; read resource files only when the instructions need them.
 
 {generated:skill_list}

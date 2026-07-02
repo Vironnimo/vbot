@@ -107,7 +107,7 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 **Not:** Deleting the Session, rolling back already persisted history, or erasing output that was already shown to the user.
 
 ## Skill
-**Definition:** A reusable playbook for an agent — a `SKILL.md` file with instructions that teach the agent *how* to handle a specific task or domain. A skill may optionally bundle specialized CLI utilities under a `resources/` subdirectory, but most skills consist solely of the Markdown instructions.
+**Definition:** A reusable playbook for an agent — a `SKILL.md` file with instructions that teach the agent *how* to handle a specific task or domain. A skill may optionally bundle support files under its `scripts/`, `references/`, and `assets/` subdirectories (helper programs, reference documents, templates), but most skills consist solely of the Markdown instructions. On activation the agent is told the skill's absolute directory so it can read or run those bundled files.
 **Not:** A Tool. A tool does one thing; a skill teaches a workflow or convention. The utilities a skill may bundle are specialized CLI programs, not agent-tools.
 
 ## Per-Agent Skill

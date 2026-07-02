@@ -512,13 +512,15 @@ class TestSkillRegistryFilterAllowed:
 
 
 class TestScanSkillResources:
-    def test_returns_scripts_and_references_relative_paths(self, tmp_path: Path) -> None:
+    def test_returns_resource_directory_relative_paths(self, tmp_path: Path) -> None:
         skill_dir = tmp_path / "skills" / "coder"
         (skill_dir / "scripts" / "nested").mkdir(parents=True)
         (skill_dir / "references").mkdir()
+        (skill_dir / "assets").mkdir()
         (skill_dir / "scripts" / "run.py").write_text("", encoding="utf-8")
         (skill_dir / "scripts" / "nested" / "helper.py").write_text("", encoding="utf-8")
         (skill_dir / "references" / "guide.md").write_text("", encoding="utf-8")
+        (skill_dir / "assets" / "template.html").write_text("", encoding="utf-8")
         (skill_dir / "notes" / "ignored.md").parent.mkdir()
         (skill_dir / "notes" / "ignored.md").write_text("", encoding="utf-8")
 
@@ -528,6 +530,7 @@ class TestScanSkillResources:
             "scripts/nested/helper.py",
             "scripts/run.py",
             "references/guide.md",
+            "assets/template.html",
         ]
 
     def test_returns_empty_list_when_resource_directories_are_missing(self, tmp_path: Path) -> None:
