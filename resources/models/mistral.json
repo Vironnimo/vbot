@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-25T15:33:36.489375+00:00",
+  "fetched_at": "2026-07-02T20:35:12.755102+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -154,7 +154,7 @@
       "max_output_tokens": 262144,
       "name": "devstral-2512"
     },
-    "labs-leanstral-2603": {
+    "labs-leanstral-1-5": {
       "capabilities": {
         "input_modalities": [
           "text",
@@ -185,9 +185,44 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 196608,
+      "context_window": 262144,
       "max_output_tokens": null,
-      "name": "labs-leanstral-2603"
+      "name": "labs-leanstral-1-5-1"
+    },
+    "labs-leanstral-1-5-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": null,
+      "name": "labs-leanstral-1-5-1"
     },
     "magistral-medium-2509": {
       "capabilities": {

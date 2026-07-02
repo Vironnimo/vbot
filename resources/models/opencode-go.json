@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-25T15:33:38.018071+00:00",
+  "fetched_at": "2026-07-02T20:35:14.013992+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -157,6 +157,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [],
@@ -544,7 +549,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 512000,
+      "context_window": 1000000,
       "family": "minimax-m3",
       "max_output_tokens": 131072,
       "name": "minimax-m3"
@@ -561,6 +566,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [],
@@ -592,6 +599,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [],
@@ -621,6 +630,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 262144,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [],
@@ -652,6 +663,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 262144,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [],
