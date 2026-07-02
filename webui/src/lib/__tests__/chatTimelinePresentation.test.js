@@ -6,6 +6,7 @@ import {
   isRowCancellable,
   labelForEvent,
   labelForMessage,
+  resolveSubAgentCancelPlan,
   runMetaParts,
   subAgentDisplayResult,
   subAgentDotStatus,
@@ -262,6 +263,37 @@ describe('chatTimelinePresentation', () => {
         'queueRun:queue-item-1': 'run-from-queue',
       }),
     ).toBe('run-from-queue');
+  });
+
+  it('plans a run cancel for any resolvable child run id', () => {
+    // Descriptor-carried run id (a directly started spawn).
+    expect(resolveSubAgentCancelPlan(runningSubAgentTool())).toEqual({
+      kind: 'run',
+      runId: 'run-child',
+    });
+    // A queued spawn that has since started resolves through the
+    // queueRun:<item> mapping — never through the frozen descriptor.
+    expect(
+      resolveSubAgentCancelPlan(queuedSubAgentTool(), {
+        'queueRun:queue-item-1': 'run-from-queue',
+      }),
+    ).toEqual({ kind: 'run', runId: 'run-from-queue' });
+  });
+
+  it('plans a queue removal for a queued spawn without a resolvable run id', () => {
+    expect(resolveSubAgentCancelPlan(queuedSubAgentTool())).toEqual({
+      kind: 'queue',
+      queueItemId: 'queue-item-1',
+      agentId: 'worker',
+      sessionId: 'session-child',
+    });
+  });
+
+  it('plans nothing when the row addresses no run and no queue item', () => {
+    expect(resolveSubAgentCancelPlan(null)).toBeNull();
+    expect(
+      resolveSubAgentCancelPlan({ name: 'subagent', arguments: {} }),
+    ).toBeNull();
   });
 
   it('allows fetching when no entry exists and retries failed entries after the cooldown', () => {
