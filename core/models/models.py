@@ -117,7 +117,26 @@ class ReasoningCapabilities:
 
 @dataclass(frozen=True)
 class Capabilities:
-    """Provider-specific capability flags for a model."""
+    """Provider-specific capability flags for a model.
+
+    ``task_options`` holds typed option schemas for specialized task execution,
+    keyed by task type (e.g. ``image_generation``). Each entry carries the
+    provider-published facts the Settings option builder renders generically:
+
+    * ``parameters`` — mapping of wire parameter name to a typed spec:
+      ``{"type": "enum", "values": [...]}``, ``{"type": "range", "min": n,
+      "max": n}``, or ``{"type": "boolean"}`` (the parameter is supported,
+      value free-form).
+    * ``passthrough`` — mapping of upstream provider slug to the list of
+      provider-specific option keys accepted via passthrough (OpenRouter
+      ``provider.options``).
+
+    Projected at refresh from provider task-capability feeds (e.g. the
+    OpenRouter image API) or hand-authored in ``<provider>.overrides.json``
+    for providers whose APIs publish nothing (OpenAI native). Like
+    ``metadata``, it is frozen on construction and merged wholesale as one
+    ``capabilities`` sub-field at load.
+    """
 
     vision: bool
     tools: bool
@@ -128,6 +147,7 @@ class Capabilities:
     supported_parameters: tuple[str, ...] = ()
     supported_voices: tuple[str, ...] = ()
     task_types: tuple[str, ...] = ()
+    task_options: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         input_modalities = _normalize_string_tuple(self.input_modalities)
@@ -149,6 +169,7 @@ class Capabilities:
         object.__setattr__(self, "supported_parameters", supported_parameters)
         object.__setattr__(self, "supported_voices", supported_voices)
         object.__setattr__(self, "task_types", task_types)
+        object.__setattr__(self, "task_options", _freeze_metadata_value(self.task_options))
 
 
 def derive_model_task_types(
@@ -492,6 +513,7 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
         supported_parameters=tuple(caps.get("supported_parameters", ())),
         supported_voices=tuple(caps.get("supported_voices", ())),
         task_types=tuple(caps.get("task_types", ())),
+        task_options=caps.get("task_options", {}),
     )
     return Model(
         model_id=model_id,

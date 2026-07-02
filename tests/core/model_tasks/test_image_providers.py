@@ -10,8 +10,8 @@ import pytest
 import respx
 
 from core.model_tasks.image_providers import (
-    _IMAGE_CONFIG_KEYS,
     _OPENAI_IMAGE_KEYS,
+    _UNIFIED_IMAGE_KEYS,
     ProviderImageClient,
     _build_openai_image_payload,
     _build_openrouter_image_payload,
@@ -19,332 +19,154 @@ from core.model_tasks.image_providers import (
 from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
+OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images"
+
+
+def _unified_image_response(*image_bytes: bytes, usage: dict | None = None) -> dict:
+    """Build an OpenRouter unified image API response body."""
+
+    body: dict = {
+        "created": 1,
+        "data": [
+            {"b64_json": base64.b64encode(payload).decode("ascii")} for payload in image_bytes
+        ],
+    }
+    if usage is not None:
+        body["usage"] = usage
+    return body
+
+
 # ---------------------------------------------------------------------------
-# Payload builder — the heart of the wire-shaping contract
+# OpenRouter payload builder — the heart of the wire-shaping contract
 # ---------------------------------------------------------------------------
 
 
-def test_build_payload_omits_image_config_when_no_options_present() -> None:
-    """An empty options dict produces a request without ``image_config`` and
-    without a top-level ``seed``. The provider's own defaults take over."""
+def test_build_payload_carries_only_model_and_prompt_when_no_options() -> None:
+    """An empty options dict produces a request with only ``model`` and
+    ``prompt`` — the provider's own defaults take over."""
+
+    payload = _build_openrouter_image_payload("openai/gpt-image-1", "a cat", {})
+
+    assert payload == {"model": "openai/gpt-image-1", "prompt": "a cat"}
+
+
+def test_build_payload_includes_present_unified_keys_top_level() -> None:
+    """Unified image parameters (aspect_ratio, resolution, seed, n, …) are
+    sent at the top level of the request when present in options."""
 
     payload = _build_openrouter_image_payload(
-        "openai/gpt-image-1",
+        "black-forest-labs/flux.2-pro",
         "a cat",
-        {},
+        {"aspect_ratio": "16:9", "resolution": "2K", "seed": 12345, "n": 2},
     )
 
     assert payload == {
-        "model": "openai/gpt-image-1",
-        "messages": [{"role": "user", "content": "a cat"}],
-        "modalities": ["image"],
+        "model": "black-forest-labs/flux.2-pro",
+        "prompt": "a cat",
+        "aspect_ratio": "16:9",
+        "resolution": "2K",
+        "seed": 12345,
+        "n": 2,
     }
-    assert "image_config" not in payload
-    assert "seed" not in payload
 
 
-def test_build_payload_includes_universal_aspect_ratio_and_size() -> None:
-    """``aspect_ratio`` and ``image_size`` are sent under ``image_config``
-    when present — the universal OpenRouter image fields."""
+def test_build_payload_ignores_unknown_and_legacy_keys() -> None:
+    """Keys outside the unified contract — including legacy ``image_size``
+    from a stale stored binding — are dropped."""
 
     payload = _build_openrouter_image_payload(
         "black-forest-labs/flux.2-pro",
-        "a cat",
-        {"aspect_ratio": "16:9", "image_size": "2K"},
-    )
-
-    assert payload["image_config"] == {"aspect_ratio": "16:9", "image_size": "2K"}
-
-
-def test_build_payload_sends_seed_at_top_level() -> None:
-    """``seed`` is a top-level field on the chat/completions request — it
-    must NOT be nested under ``image_config`` (that was the previous bug)."""
-
-    payload = _build_openrouter_image_payload(
-        "black-forest-labs/flux.2-pro",
-        "a cat",
-        {"aspect_ratio": "1:1", "image_size": "1K", "seed": 12345},
-    )
-
-    assert payload["seed"] == 12345
-    assert "seed" not in payload["image_config"]
-    assert payload["image_config"] == {"aspect_ratio": "1:1", "image_size": "1K"}
-
-
-def test_build_payload_omits_seed_when_absent() -> None:
-    """When ``seed`` is not in options, it is not sent at the top level."""
-
-    payload = _build_openrouter_image_payload(
-        "recraft/recraft-v3",
-        "a cat",
-        {"aspect_ratio": "1:1", "image_size": "1K"},
-    )
-
-    assert "seed" not in payload
-
-
-def test_build_payload_gemini_half_k_size_passes_through() -> None:
-    """``0.5K`` is a Gemini-3.1-flash-image-only image_size that the wire
-    must pass through unchanged when the user has selected it."""
-
-    payload = _build_openrouter_image_payload(
-        "google/gemini-3.1-flash-image-preview",
-        "a cat",
-        {"aspect_ratio": "1:1", "image_size": "0.5K", "seed": 7},
-    )
-
-    assert payload["image_config"] == {"aspect_ratio": "1:1", "image_size": "0.5K"}
-    assert payload["seed"] == 7
-
-
-def test_build_payload_recraft_style_and_rgb_colors_passthrough() -> None:
-    """Recraft family fields (``style`` text + ``rgb_colors`` array) are
-    passed through under ``image_config`` when present. The
-    ``rgb_colors`` array keeps its nested structure verbatim."""
-
-    rgb_colors = [[0, 128, 255], [255, 0, 0]]
-    payload = _build_openrouter_image_payload(
-        "recraft/recraft-v3",
         "a cat",
         {
             "aspect_ratio": "1:1",
             "image_size": "1K",
             "strength": 0.5,
-            "style": "any_style",
-            "rgb_colors": rgb_colors,
-            "background_rgb_color": [255, 255, 255],
-            "text_layout": [{"text": "hi", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]]}],
+            "some_future_field": "ignored",
         },
-    )
-
-    assert payload["image_config"] == {
-        "aspect_ratio": "1:1",
-        "image_size": "1K",
-        "strength": 0.5,
-        "style": "any_style",
-        "rgb_colors": rgb_colors,
-        "background_rgb_color": [255, 255, 255],
-        "text_layout": [{"text": "hi", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]]}],
-    }
-    assert "seed" not in payload
-
-
-def test_build_payload_sourceful_v2_5_fields_passthrough() -> None:
-    """Sourceful v2.5 fields (``font_inputs``, ``scoring_rubric``,
-    ``scoring_prompt``, ``background_mode``, ``background_hex_color``) are
-    passed through with their JSON-typed structures intact."""
-
-    font_inputs = [{"font_url": "https://example.com/font.ttf", "text": "Hello"}]
-    scoring_rubric = [
-        {
-            "key": "clarity",
-            "label": "Clarity",
-            "description": "Visual clarity",
-            "weight": 0.6,
-            "passing_score": 0.5,
-        }
-    ]
-
-    payload = _build_openrouter_image_payload(
-        "sourceful/riverflow-v2.5-pro",
-        "a cat",
-        {
-            "aspect_ratio": "1:1",
-            "image_size": "1K",
-            "font_inputs": font_inputs,
-            "scoring_prompt": "Score this image",
-            "scoring_rubric": scoring_rubric,
-            "background_mode": "solid",
-            "background_hex_color": "#FFFFFF",
-        },
-    )
-
-    assert payload["image_config"] == {
-        "aspect_ratio": "1:1",
-        "image_size": "1K",
-        "font_inputs": font_inputs,
-        "scoring_prompt": "Score this image",
-        "scoring_rubric": scoring_rubric,
-        "background_mode": "solid",
-        "background_hex_color": "#FFFFFF",
-    }
-
-
-def test_build_payload_sourceful_v2_super_resolution_references() -> None:
-    """Sourceful v2 ``super_resolution_references`` is a v2-only field —
-    an array of URL strings — and must be passed through unchanged."""
-
-    refs = [
-        "https://example.com/ref1.png",
-        "https://example.com/ref2.png",
-    ]
-    payload = _build_openrouter_image_payload(
-        "sourceful/riverflow-v2",
-        "a cat",
-        {
-            "aspect_ratio": "1:1",
-            "image_size": "1K",
-            "font_inputs": [],
-            "super_resolution_references": refs,
-        },
-    )
-
-    assert payload["image_config"]["super_resolution_references"] == refs
-    # v2.5-only fields stay out when only v2 fields are provided.
-    assert "scoring_prompt" not in payload["image_config"]
-    assert "scoring_rubric" not in payload["image_config"]
-    assert "background_mode" not in payload["image_config"]
-
-
-def test_build_payload_ignores_unknown_keys() -> None:
-    """Keys outside the known image_config set and the top-level ``seed``
-    are dropped — the wire only carries the contract we know about."""
-
-    payload = _build_openrouter_image_payload(
-        "black-forest-labs/flux.2-pro",
-        "a cat",
-        {
-            "aspect_ratio": "1:1",
-            "image_size": "1K",
-            "extra_unsupported_field": "ignored",
-            "n": 4,
-            "quality": "hd",
-        },
-    )
-
-    assert payload["image_config"] == {"aspect_ratio": "1:1", "image_size": "1K"}
-    assert "extra_unsupported_field" not in payload
-    assert "n" not in payload
-    assert "quality" not in payload
-
-
-def test_build_payload_does_not_invent_defaults_for_absent_universal_keys() -> None:
-    """When the universal ``aspect_ratio`` and ``image_size`` are absent
-    from options, the wire does not invent defaults. The provider's own
-    defaults (1:1, 1K) are relied on instead."""
-
-    payload = _build_openrouter_image_payload(
-        "recraft/recraft-v3",
-        "a cat",
-        {"style": "any_style"},
-    )
-
-    # ``style`` is present, universal keys are not — image_config only
-    # contains the keys actually present in options.
-    assert payload["image_config"] == {"style": "any_style"}
-    assert "aspect_ratio" not in payload["image_config"]
-    assert "image_size" not in payload["image_config"]
-
-
-def test_build_payload_does_not_send_seed_under_image_config() -> None:
-    """Even if a caller mistakenly places ``seed`` under image_config-shaped
-    data, the helper keys off the top-level options dict — the wire stays
-    correct. This is a regression guard for the historical bug where
-    aspect_ratio/image_size were the only fields sent."""
-
-    payload = _build_openrouter_image_payload(
-        "black-forest-labs/flux.2-pro",
-        "a cat",
-        {"aspect_ratio": "1:1", "image_size": "1K", "seed": 99},
-    )
-
-    assert "seed" not in payload["image_config"]
-    assert payload["seed"] == 99
-
-
-def test_build_payload_drops_explicit_none_for_seed() -> None:
-    """An explicit ``seed: None`` in options is treated the same as a missing
-    key — the wire omits the field rather than sending ``null``."""
-
-    payload = _build_openrouter_image_payload(
-        "black-forest-labs/flux.2-pro",
-        "a cat",
-        {"aspect_ratio": "1:1", "image_size": "1K", "seed": None},
-    )
-
-    assert "seed" not in payload
-
-
-def test_build_payload_drops_empty_placeholder_image_config_values() -> None:
-    """Empty option placeholders injected by the schema defaults
-    (``background_hex_color: ""``, empty ``font_inputs``/``scoring_rubric``
-    arrays, empty ``style``) are unset and must not reach the wire. Sourceful
-    rejects ``background_hex_color: ""`` with a 400, so the regression guard
-    is that these keys are absent while real values stay."""
-
-    payload = _build_openrouter_image_payload(
-        "sourceful/riverflow-v2.5-pro",
-        "a cat",
-        {
-            "aspect_ratio": "1:1",
-            "background_mode": "original",
-            "background_hex_color": "",
-            "scoring_prompt": "",
-            "scoring_rubric": [],
-            "font_inputs": [],
-            "style": "",
-        },
-    )
-
-    assert payload["image_config"] == {
-        "aspect_ratio": "1:1",
-        "background_mode": "original",
-    }
-    assert "background_hex_color" not in payload["image_config"]
-    assert "scoring_prompt" not in payload["image_config"]
-    assert "scoring_rubric" not in payload["image_config"]
-    assert "font_inputs" not in payload["image_config"]
-    assert "style" not in payload["image_config"]
-
-
-def test_build_payload_keeps_zero_and_false_image_config_values() -> None:
-    """Numeric ``0`` and ``False`` are real values, not empty placeholders,
-    and must be forwarded — only ``None``/``""``/``[]``/``{}`` are dropped."""
-
-    payload = _build_openrouter_image_payload(
-        "recraft/recraft-v3",
-        "a cat",
-        {"strength": 0.0},
-    )
-
-    assert payload["image_config"] == {"strength": 0.0}
-
-
-def test_build_openai_payload_drops_empty_placeholder_values() -> None:
-    """The OpenAI builder also drops empty placeholders so a cleared optional
-    field is not forwarded to ``/v1/images/generations``."""
-
-    payload = _build_openai_image_payload(
-        "gpt-image-1",
-        "a cat",
-        {"size": "1024x1024", "style": "", "output_format": "", "n": 1},
     )
 
     assert payload == {
-        "model": "gpt-image-1",
+        "model": "black-forest-labs/flux.2-pro",
         "prompt": "a cat",
-        "size": "1024x1024",
-        "n": 1,
+        "aspect_ratio": "1:1",
     }
 
 
-def test_image_config_keys_constant_matches_plan() -> None:
-    """The image_config key whitelist must match the spec in the plan."""
+def test_build_payload_drops_empty_placeholder_values() -> None:
+    """Empty option placeholders injected by the schema defaults (the
+    "Provider default" select value ``""``, empty json objects) are unset
+    and must not reach the wire; numeric ``0`` stays."""
 
-    assert _IMAGE_CONFIG_KEYS == (
+    payload = _build_openrouter_image_payload(
+        "bytedance-seed/seedream-4.5",
+        "a cat",
+        {
+            "aspect_ratio": "",
+            "resolution": "2K",
+            "output_compression": 0,
+            "seed": None,
+            "provider_options": {},
+            "extra_options": {},
+        },
+    )
+
+    assert payload == {
+        "model": "bytedance-seed/seedream-4.5",
+        "prompt": "a cat",
+        "resolution": "2K",
+        "output_compression": 0,
+    }
+
+
+def test_build_payload_nests_provider_options() -> None:
+    """``provider_options`` becomes the nested ``provider.options`` object —
+    the passthrough channel for provider-specific keys (Recraft controls,
+    style, text_layout, …)."""
+
+    provider_options = {"recraft": {"style": "vector_illustration", "controls": {"colors": []}}}
+    payload = _build_openrouter_image_payload(
+        "recraft/recraft-v3",
+        "a cat",
+        {"n": 2, "provider_options": provider_options},
+    )
+
+    assert payload["provider"] == {"options": provider_options}
+    assert "provider_options" not in payload
+
+
+def test_build_payload_merges_extra_options_last() -> None:
+    """The ``extra_options`` escape hatch merges into the top-level payload
+    and wins over authored keys — it is the user's last word."""
+
+    payload = _build_openrouter_image_payload(
+        "black-forest-labs/flux.2-pro",
+        "a cat",
+        {
+            "aspect_ratio": "1:1",
+            "extra_options": {"aspect_ratio": "21:9", "guidance": 3.5, "empty": ""},
+        },
+    )
+
+    assert payload["aspect_ratio"] == "21:9"
+    assert payload["guidance"] == 3.5
+    assert "empty" not in payload
+    assert "extra_options" not in payload
+
+
+def test_unified_image_keys_constant_matches_contract() -> None:
+    """The unified key whitelist must match OpenRouter's documented image
+    API parameters."""
+
+    assert _UNIFIED_IMAGE_KEYS == (
         "aspect_ratio",
-        "image_size",
-        "strength",
-        "style",
-        "rgb_colors",
-        "background_rgb_color",
-        "text_layout",
-        "font_inputs",
-        "super_resolution_references",
-        "scoring_prompt",
-        "scoring_rubric",
-        "background_mode",
-        "background_hex_color",
+        "resolution",
+        "size",
+        "quality",
+        "output_format",
+        "background",
+        "output_compression",
+        "n",
+        "seed",
     )
 
 
@@ -355,192 +177,117 @@ def test_image_config_keys_constant_matches_plan() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_openrouter_image_generate_sends_universal_image_config() -> None:
-    """The HTTP request body carries the merged image_config as JSON when
-    only the universal fields are present. Result is normalized."""
+async def test_openrouter_image_generate_posts_unified_endpoint() -> None:
+    """The request goes to ``POST /images`` with top-level unified
+    parameters; the response ``data[].b64_json`` entries are decoded and
+    usage is preserved."""
 
-    route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+    route = respx.post(OPENROUTER_IMAGES_URL).mock(
         return_value=httpx.Response(
             200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "images": [{"image_url": {"url": "data:image/png;base64,aGVsbG8="}}]
-                        }
-                    }
-                ],
-                "usage": {"prompt_tokens": 1},
-            },
+            json=_unified_image_response(b"hello", usage={"cost": 0.04}),
         )
     )
     client = _openrouter_image_client("black-forest-labs/flux.2-pro")
 
     result = await client.generate(
         "a cat",
-        options={"aspect_ratio": "16:9", "image_size": "2K"},
+        options={"aspect_ratio": "16:9", "resolution": "2K"},
     )
 
     payload = json.loads(route.calls[0].request.content)
-    assert payload["model"] == "black-forest-labs/flux.2-pro"
-    assert payload["messages"] == [{"role": "user", "content": "a cat"}]
-    assert payload["modalities"] == ["image"]
-    assert payload["image_config"] == {"aspect_ratio": "16:9", "image_size": "2K"}
-    assert "seed" not in payload
+    assert payload == {
+        "model": "black-forest-labs/flux.2-pro",
+        "prompt": "a cat",
+        "aspect_ratio": "16:9",
+        "resolution": "2K",
+    }
 
-    # Normalized result contract: bytes, media type, model, usage, raw.
     assert isinstance(result, ImageGenerationResult)
     assert result.images == (b"hello",)
     assert result.media_type == "image/png"
     assert result.model == "black-forest-labs/flux.2-pro"
-    assert result.usage == {"prompt_tokens": 1}
+    assert result.usage == {"cost": 0.04}
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_openrouter_image_generate_sends_top_level_seed() -> None:
-    """When ``seed`` is in options, the wire carries it at the top level of
-    the request body. ``image_config`` does not contain it."""
+async def test_openrouter_image_generate_sends_provider_options() -> None:
+    """Provider passthrough options reach the wire as ``provider.options``."""
 
-    route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "images": [{"image_url": {"url": "data:image/png;base64,aGVsbG8="}}]
-                        }
-                    }
-                ]
-            },
-        )
-    )
-    client = _openrouter_image_client("black-forest-labs/flux.2-pro")
-
-    await client.generate(
-        "a cat",
-        options={"aspect_ratio": "1:1", "image_size": "1K", "seed": 42},
-    )
-
-    payload = json.loads(route.calls[0].request.content)
-    assert payload["seed"] == 42
-    assert "seed" not in payload["image_config"]
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_image_generate_sends_recraft_family_fields() -> None:
-    """A Recraft request with style + rgb_colors + text_layout hits the
-    wire with the full Recraft image_config and no top-level seed."""
-
-    route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "images": [{"image_url": {"url": "data:image/png;base64,aGVsbG8="}}]
-                        }
-                    }
-                ]
-            },
-        )
+    route = respx.post(OPENROUTER_IMAGES_URL).mock(
+        return_value=httpx.Response(200, json=_unified_image_response(b"img"))
     )
     client = _openrouter_image_client("recraft/recraft-v3")
 
-    rgb_colors = [[0, 128, 255], [255, 0, 0]]
-    text_layout = [{"text": "label", "bbox": [[0, 0], [0.5, 0], [0.5, 0.2], [0, 0.2]]}]
     await client.generate(
         "a cat",
         options={
-            "aspect_ratio": "1:1",
-            "image_size": "1K",
-            "strength": 0.5,
-            "style": "any_style",
-            "rgb_colors": rgb_colors,
-            "background_rgb_color": [255, 255, 255],
-            "text_layout": text_layout,
+            "n": 2,
+            "provider_options": {"recraft": {"style": "any_style"}},
         },
     )
 
     payload = json.loads(route.calls[0].request.content)
-    assert payload["image_config"] == {
-        "aspect_ratio": "1:1",
-        "image_size": "1K",
-        "strength": 0.5,
-        "style": "any_style",
-        "rgb_colors": rgb_colors,
-        "background_rgb_color": [255, 255, 255],
-        "text_layout": text_layout,
-    }
-    assert "seed" not in payload
+    assert payload["provider"] == {"options": {"recraft": {"style": "any_style"}}}
+    assert payload["n"] == 2
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_openrouter_image_generate_sends_gemini_half_k_and_seed() -> None:
-    """A Gemini 3.1 flash image request with ``0.5K`` and ``seed`` sends
-    the size inside ``image_config`` and the seed at the top level."""
+async def test_openrouter_image_generate_decodes_multiple_images() -> None:
+    """``n > 1`` responses map one-to-one into the ``images`` tuple."""
 
-    route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+    route = respx.post(OPENROUTER_IMAGES_URL).mock(
         return_value=httpx.Response(
             200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "images": [{"image_url": {"url": "data:image/png;base64,aGVsbG8="}}]
-                        }
-                    }
-                ]
-            },
+            json=_unified_image_response(b"alpha", b"beta", b"gamma"),
         )
     )
-    client = _openrouter_image_client("google/gemini-3.1-flash-image-preview")
+    client = _openrouter_image_client("recraft/recraft-v3")
 
-    await client.generate(
-        "a cat",
-        options={"aspect_ratio": "1:1", "image_size": "0.5K", "seed": 12345},
-    )
+    result = await client.generate("a cat", options={"n": 3})
 
-    payload = json.loads(route.calls[0].request.content)
-    assert payload["image_config"] == {"aspect_ratio": "1:1", "image_size": "0.5K"}
-    assert payload["seed"] == 12345
+    assert json.loads(route.calls[0].request.content)["n"] == 3
+    assert result.images == (b"alpha", b"beta", b"gamma")
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_openrouter_image_generate_omits_image_config_when_no_options() -> None:
-    """When no image_config keys are in options, the wire omits the
-    ``image_config`` object entirely (so the provider's own defaults
-    take effect)."""
+async def test_openrouter_image_generate_media_type_from_entry_or_format() -> None:
+    """A per-entry ``media_type`` (vector outputs) wins; otherwise the
+    requested ``output_format`` decides; the fallback stays ``image/png``."""
 
-    route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "images": [{"image_url": {"url": "data:image/png;base64,aGVsbG8="}}]
-                        }
-                    }
-                ]
-            },
-        )
+    svg_body = _unified_image_response(b"<svg/>")
+    svg_body["data"][0]["media_type"] = "image/svg+xml"
+    respx.post(OPENROUTER_IMAGES_URL).mock(return_value=httpx.Response(200, json=svg_body))
+    client = _openrouter_image_client("recraft/recraft-v4-vector")
+
+    result = await client.generate("a cat", options={})
+    assert result.media_type == "image/svg+xml"
+
+    respx.post(OPENROUTER_IMAGES_URL).mock(
+        return_value=httpx.Response(200, json=_unified_image_response(b"jpg"))
+    )
+    result = await client.generate("a cat", options={"output_format": "jpeg"})
+    assert result.media_type == "image/jpeg"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_image_generate_rejects_empty_data() -> None:
+    """A 200 with no ``data`` entries is a malformed response and surfaces
+    as a retryable ``ProviderError``."""
+
+    from core.providers.errors import ProviderError
+
+    respx.post(OPENROUTER_IMAGES_URL).mock(
+        return_value=httpx.Response(200, json={"created": 1, "data": []})
     )
     client = _openrouter_image_client("black-forest-labs/flux.2-pro")
 
-    await client.generate("a cat", options={})
-
-    payload = json.loads(route.calls[0].request.content)
-    assert "image_config" not in payload
-    assert "seed" not in payload
-    # The mandatory framing fields are still present.
-    assert payload["model"] == "black-forest-labs/flux.2-pro"
-    assert payload["modalities"] == ["image"]
+    with pytest.raises(ProviderError, match="no data"):
+        await client.generate("a cat", options={})
 
 
 @pytest.mark.asyncio
@@ -549,29 +296,16 @@ async def test_openrouter_image_generate_uses_bearer_auth_header() -> None:
     """The Authorization header is set from the connection's auth config —
     a guard that the refactor did not drop the auth wiring."""
 
-    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "images": [{"image_url": {"url": "data:image/png;base64,aGVsbG8="}}]
-                        }
-                    }
-                ]
-            },
-        )
+    route = respx.post(OPENROUTER_IMAGES_URL).mock(
+        return_value=httpx.Response(200, json=_unified_image_response(b"img"))
     )
     client = _openrouter_image_client("black-forest-labs/flux.2-pro")
 
-    await client.generate("a cat", options={"aspect_ratio": "1:1", "image_size": "1K"})
+    await client.generate("a cat", options={"aspect_ratio": "1:1"})
 
-    # The respx mock captures the last call; check its auth header.
-    # (We re-assert via route to keep the contract explicit.)
-    route = respx.post("https://openrouter.ai/api/v1/chat/completions")
     assert route.call_count >= 1
     assert route.calls[0].request.headers["authorization"] == "Bearer sk-test"
+    assert route.calls[0].request.headers["x-title"] == "vBot"
 
 
 # ---------------------------------------------------------------------------
@@ -654,9 +388,8 @@ def test_build_openai_payload_includes_only_known_option_keys() -> None:
     """The OpenAI request only carries the documented ``/v1/images/generations``
     keys — OpenRouter-only fields like ``aspect_ratio`` and ``seed`` are not
     forwarded. ``style`` and ``response_format`` are valid OpenAI fields for
-    dall-e-3, so they are forwarded when present even if the request targets
-    gpt-image-1 (the provider is responsible for rejecting the unsupported
-    shape)."""
+    dall-e models, so they are forwarded when present (the provider is
+    responsible for rejecting an unsupported shape)."""
 
     payload = _build_openai_image_payload(
         "gpt-image-1",
@@ -665,14 +398,15 @@ def test_build_openai_payload_includes_only_known_option_keys() -> None:
             "size": "1024x1024",
             "quality": "auto",
             "background": "opaque",
+            "moderation": "low",
             "n": 2,
             "output_format": "png",
+            "output_compression": 80,
             # OpenRouter-only fields — must be dropped.
             "aspect_ratio": "1:1",
-            "image_size": "1K",
+            "resolution": "1K",
             "seed": 42,
-            "strength": 0.5,
-            "image_config": {"aspect_ratio": "1:1"},
+            "provider_options": {"recraft": {}},
         },
     )
 
@@ -682,45 +416,59 @@ def test_build_openai_payload_includes_only_known_option_keys() -> None:
         "size": "1024x1024",
         "quality": "auto",
         "background": "opaque",
+        "moderation": "low",
         "n": 2,
         "output_format": "png",
+        "output_compression": 80,
     }
 
 
-def test_build_openai_payload_dall_e_3_style_and_response_format() -> None:
-    """dall-e-3-specific options ``style`` and ``response_format`` are
-    forwarded to the wire when present in options."""
+def test_build_openai_payload_drops_empty_placeholder_values() -> None:
+    """The OpenAI builder also drops empty placeholders so a cleared optional
+    field is not forwarded to ``/v1/images/generations``."""
 
     payload = _build_openai_image_payload(
-        "dall-e-3",
+        "gpt-image-1",
         "a cat",
-        {
-            "size": "1792x1024",
-            "quality": "hd",
-            "style": "natural",
-            "response_format": "b64_json",
-        },
+        {"size": "1024x1024", "style": "", "output_format": "", "n": 1},
     )
 
     assert payload == {
-        "model": "dall-e-3",
+        "model": "gpt-image-1",
         "prompt": "a cat",
-        "size": "1792x1024",
-        "quality": "hd",
-        "style": "natural",
-        "response_format": "b64_json",
+        "size": "1024x1024",
+        "n": 1,
     }
 
 
-def test_openai_image_keys_constant_matches_plan() -> None:
-    """The OpenAI image key whitelist must match the spec in the plan."""
+def test_build_openai_payload_merges_extra_options_last() -> None:
+    """The escape hatch also applies to the OpenAI native path."""
+
+    payload = _build_openai_image_payload(
+        "gpt-image-2",
+        "a cat",
+        {
+            "size": "1024x1024",
+            "extra_options": {"size": "2048x1152", "partial_images": 2},
+        },
+    )
+
+    assert payload["size"] == "2048x1152"
+    assert payload["partial_images"] == 2
+
+
+def test_openai_image_keys_constant_matches_contract() -> None:
+    """The OpenAI image key whitelist must match the documented
+    ``/v1/images/generations`` parameters."""
 
     assert _OPENAI_IMAGE_KEYS == (
         "n",
         "size",
         "quality",
         "background",
+        "moderation",
         "output_format",
+        "output_compression",
         "style",
         "response_format",
     )

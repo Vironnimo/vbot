@@ -54,6 +54,8 @@ OpenRouter STT sends Base64 JSON to `/audio/transcriptions`:
 
 Executable non-OpenRouter STT targets are treated as OpenAI-compatible audio endpoints and send multipart form data to `/audio/transcriptions` with `file`, `model`, and normalized optional fields such as `language`, `prompt`, `response_format`, and `temperature`.
 
+All speech requests honor the universal `extra_options` escape hatch: for JSON payloads (OpenRouter STT, all TTS) the object merges into the top-level payload last and overrides authored keys (`merge_extra_options` from `core/providers/task_client.py`); for the multipart OpenAI-compatible STT path values are stringified as form fields (booleans as lowercase literals, containers JSON-encoded).
+
 Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. `voice` is taken from stored task-model options, populated from `model.capabilities.supported_voices` when the model provides them — OpenRouter models get model-specific voice lists (e.g. Kokoro 54, Gemini TTS 30, Voxtral 30); OpenAI models get the canonical OpenAI voice list; other providers fall back to free-text `voice` input. `response_format` per provider (OpenRouter `mp3`/`pcm`; OpenAI full set `mp3`/`opus`/`aac`/`flac`/`wav`/`pcm`). Numeric `speed` stays top-level for all providers. OpenRouter receives only OpenAI speaking instructions nested under `provider.options.openai.instructions` when `instructions` is set (gated on `model.capabilities.supported_parameters`); other OpenAI-compatible providers receive `instructions` at the top level. If the provider omits `content-type`, `SpeechSynthesisResult.media_type` is derived from `response_format`.
 
 ## Server & Tool Contracts

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
@@ -24,6 +26,7 @@ from core.providers.reasoning import (
     model_reasoning_levels,
     resolve_reasoning_intent,
 )
+from core.utils.logging import get_logger
 
 OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 # OpenRouter's documented off-shape for a native thinking toggle (``on_off``
@@ -49,6 +52,19 @@ SUPPLEMENTARY_OUTPUT_MODALITIES = (
     "embeddings",
 )
 
+# OpenRouter's dedicated image API publishes a typed parameter schema per
+# model (enum values, numeric ranges, boolean support flags) plus per-endpoint
+# provider passthrough keys — facts the ``/models`` catalog omits entirely.
+# New image models are added exclusively to this API.
+IMAGE_MODELS_ENDPOINT = "/images/models"
+
+# Per-model endpoint-detail fetches run concurrently but bounded, so a large
+# image catalog does not open dozens of simultaneous connections during an
+# explicit refresh.
+_IMAGE_DETAIL_CONCURRENCY = 8
+
+_LOGGER = get_logger("providers.openrouter")
+
 
 class OpenRouterAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter with OpenRouter-specific behavior."""
@@ -69,6 +85,80 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         are merged into the main catalog (deduplicated by ``model_id``).
         """
         return [{"output_modalities": m} for m in SUPPLEMENTARY_OUTPUT_MODALITIES]
+
+    @classmethod
+    async def discover_task_models(
+        cls,
+        normalized_models: Mapping[str, Model],
+        fetch_json: Callable[[str], Awaitable[Any]],
+    ) -> dict[str, Model]:
+        """Discover image models and their typed option schemas.
+
+        Fetches the dedicated image API catalog plus the per-model endpoint
+        details and projects them into ``capabilities.task_options`` under the
+        ``image_generation`` key: the typed ``parameters`` schema from the
+        list entry and the per-provider ``passthrough`` key lists from the
+        endpoint records. Models already discovered through ``/models`` are
+        returned enriched; image-API-only entries become new minimal models
+        (no context window, no chat capabilities) so they still appear as
+        image-generation targets.
+        """
+
+        payload = await fetch_json(IMAGE_MODELS_ENDPOINT)
+        entries = payload.get("data") if isinstance(payload, Mapping) else None
+        if not isinstance(entries, list):
+            raise ValueError("Image models response must contain a data list")
+
+        valid_entries = [
+            entry
+            for entry in entries
+            if isinstance(entry, Mapping) and isinstance(entry.get("id"), str) and entry.get("id")
+        ]
+
+        semaphore = asyncio.Semaphore(_IMAGE_DETAIL_CONCURRENCY)
+
+        async def _fetch_detail(model_id: str) -> Any:
+            async with semaphore:
+                return await fetch_json(f"{IMAGE_MODELS_ENDPOINT}/{model_id}/endpoints")
+
+        details = await asyncio.gather(
+            *(_fetch_detail(entry["id"]) for entry in valid_entries),
+            return_exceptions=True,
+        )
+
+        discovered: dict[str, Model] = {}
+        for entry, detail in zip(valid_entries, details, strict=True):
+            model_id = entry["id"]
+            if isinstance(detail, BaseException) and not isinstance(detail, Exception):
+                raise detail
+            if isinstance(detail, Exception):
+                _LOGGER.warning("Image endpoint detail fetch failed for '%s': %s", model_id, detail)
+                detail = None
+
+            image_options: dict[str, Any] = {}
+            parameters = _normalize_image_parameters(entry.get("supported_parameters"))
+            if parameters:
+                image_options["parameters"] = parameters
+            passthrough = _passthrough_from_detail(detail)
+            if passthrough:
+                image_options["passthrough"] = passthrough
+
+            existing = normalized_models.get(model_id)
+            if existing is not None:
+                if not image_options:
+                    continue
+                merged_task_options = dict(existing.capabilities.task_options)
+                merged_task_options["image_generation"] = image_options
+                discovered[model_id] = replace(
+                    existing,
+                    capabilities=replace(
+                        existing.capabilities,
+                        task_options=merged_task_options,
+                    ),
+                )
+                continue
+            discovered[model_id] = _image_catalog_model(entry, image_options)
+        return discovered
 
     @classmethod
     def normalize_catalog_entry(
@@ -185,6 +275,101 @@ def _render_openrouter_reasoning(payload: dict[str, Any], intent: ReasoningInten
             payload["include_reasoning"] = True
         else:
             payload["reasoning"] = dict(OPENROUTER_REASONING_OFF)
+
+
+def _normalize_image_parameters(raw_parameters: Any) -> dict[str, Any]:
+    """Project the image API's typed parameter schema to plain JSON data.
+
+    Known spec shapes are validated strictly (an ``enum`` needs a string list,
+    a ``range`` numeric bounds); an unknown spec ``type`` is kept verbatim so
+    a feed extension survives the projection and only the render layer needs
+    to learn it. Shapeless entries are dropped.
+    """
+
+    if not isinstance(raw_parameters, Mapping):
+        return {}
+    parameters: dict[str, Any] = {}
+    for name, spec in raw_parameters.items():
+        if not isinstance(name, str) or not name or not isinstance(spec, Mapping):
+            continue
+        spec_type = spec.get("type")
+        if not isinstance(spec_type, str) or not spec_type:
+            continue
+        if spec_type == "enum":
+            values = spec.get("values")
+            if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+                continue
+            parameters[name] = {"type": "enum", "values": list(values)}
+        elif spec_type == "range":
+            minimum = spec.get("min")
+            maximum = spec.get("max")
+            if not isinstance(minimum, int | float) or not isinstance(maximum, int | float):
+                continue
+            parameters[name] = {"type": "range", "min": minimum, "max": maximum}
+        elif spec_type == "boolean":
+            parameters[name] = {"type": "boolean"}
+        else:
+            parameters[name] = {str(key): value for key, value in spec.items()}
+    return parameters
+
+
+def _passthrough_from_detail(detail: Any) -> dict[str, list[str]]:
+    """Collect per-provider passthrough keys from an endpoint-detail response.
+
+    Multiple endpoints of the same upstream provider merge their key lists
+    (union, sorted) so the projection is deterministic regardless of endpoint
+    ordering.
+    """
+
+    if not isinstance(detail, Mapping):
+        return {}
+    endpoints = detail.get("endpoints")
+    if not isinstance(endpoints, list):
+        return {}
+    passthrough: dict[str, set[str]] = {}
+    for endpoint in endpoints:
+        if not isinstance(endpoint, Mapping):
+            continue
+        slug = endpoint.get("provider_slug")
+        keys = endpoint.get("allowed_passthrough_parameters")
+        if not isinstance(slug, str) or not slug or not isinstance(keys, list):
+            continue
+        valid_keys = {key for key in keys if isinstance(key, str) and key}
+        if valid_keys:
+            passthrough.setdefault(slug, set()).update(valid_keys)
+    return {slug: sorted(keys) for slug, keys in sorted(passthrough.items())}
+
+
+def _image_catalog_model(entry: Mapping[str, Any], image_options: dict[str, Any]) -> Model:
+    """Build a minimal ``Model`` for an image-API-only catalog entry.
+
+    The image API publishes no context window, no chat parameters, and no
+    reasoning facts — the entry exists so the model appears as an
+    image-generation target with its typed option schema; chat-facing
+    capabilities honestly stay off/unknown.
+    """
+
+    raw_architecture = entry.get("architecture")
+    architecture = raw_architecture if isinstance(raw_architecture, Mapping) else {}
+    input_modalities = _read_optional_string_list(architecture, "input_modalities") or ["text"]
+    output_modalities = _read_optional_string_list(architecture, "output_modalities") or ["image"]
+    name = entry.get("name")
+    task_options = {"image_generation": image_options} if image_options else {}
+    return Model(
+        model_id=str(entry["id"]),
+        name=name if isinstance(name, str) and name else str(entry["id"]),
+        capabilities=Capabilities(
+            vision="image" in input_modalities,
+            tools=False,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+            input_modalities=tuple(input_modalities),
+            output_modalities=tuple(output_modalities),
+            task_options=task_options,
+        ),
+        context_window=None,
+        max_output_tokens=None,
+    )
 
 
 def _openrouter_runtime_metadata(architecture: Mapping[str, Any]) -> Mapping[str, Any]:

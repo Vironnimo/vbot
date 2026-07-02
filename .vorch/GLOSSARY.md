@@ -42,7 +42,7 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 **Not:** A wire `model-id` (the exact string an API expects). The canonical id never leaves assembly; the model-id is what providers receive. A missed join is not an error — the model runs on provider + override data.
 
 ## Refresh
-**Definition:** The DUMB half of the Model DB: fetch provider `/models` and the public models.dev `catalog.json`, then project the results onto disk per file. Needs network and (for provider catalogs) a credential; rare and explicit (`model.refresh_db`). It writes the pure per-file projection — no merge across files, no join across providers.
+**Definition:** The DUMB half of the Model DB: fetch provider `/models`, the public models.dev `catalog.json`, and any provider task-capability catalog the adapter declares (e.g. OpenRouter's image API with typed per-model option schemas), then project the results onto disk per file. Needs network and (for provider catalogs) a credential; rare and explicit (`model.refresh_db`). It writes the pure per-file projection — no merge across files, no join across providers.
 **Not:** Load. Refresh writes disk from the network; a hand-edit to an override file takes effect on the next **Load**, with no refresh.
 
 ## Load

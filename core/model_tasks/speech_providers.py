@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,12 @@ import httpx
 
 from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
 from core.providers.errors import ProviderError
-from core.providers.task_client import ProviderTaskClient
+from core.providers.task_client import (
+    EXTRA_OPTIONS_KEY,
+    ProviderTaskClient,
+    is_omittable_option,
+    merge_extra_options,
+)
 
 JsonObject = dict[str, Any]
 OPENROUTER_TRANSCRIPTIONS_ENDPOINT = "/audio/transcriptions"
@@ -72,6 +78,7 @@ class ProviderSpeechClient(ProviderTaskClient):
             },
         }
         payload.update(_normalized_stt_options(options, provider_id=self._provider.id))
+        merge_extra_options(payload, options)
 
         return await self.post_and_parse(
             OPENROUTER_TRANSCRIPTIONS_ENDPOINT,
@@ -91,6 +98,7 @@ class ProviderSpeechClient(ProviderTaskClient):
         normalized_filename = filename or f"recording.{audio_format_from(media_type=media_type)}"
         data = {"model": self._model_id}
         data.update(_multipart_stt_options(options))
+        data.update(_multipart_extra_options(options))
         files = {"file": (normalized_filename, audio, media_type or "application/octet-stream")}
 
         def _parse(response: httpx.Response) -> SpeechTranscriptionResult:
@@ -119,6 +127,7 @@ class ProviderSpeechClient(ProviderTaskClient):
             "input": text,
         }
         payload.update(_normalized_tts_options(options, provider_id=self._provider.id))
+        merge_extra_options(payload, options)
 
         def _parse(response: httpx.Response) -> SpeechSynthesisResult:
             media_type = response.headers.get("content-type", "")
@@ -188,6 +197,32 @@ def _multipart_stt_options(options: JsonObject) -> dict[str, str]:
     if isinstance(temperature, int | float) and not isinstance(temperature, bool):
         normalized["temperature"] = str(float(temperature))
     return normalized
+
+
+def _multipart_extra_options(options: JsonObject) -> dict[str, str]:
+    """Render the ``extra_options`` escape hatch as multipart form fields.
+
+    Multipart values must be strings: scalars are stringified (booleans as
+    lowercase JSON literals), containers are JSON-encoded. Empty placeholders
+    are dropped like everywhere else.
+    """
+
+    extra = options.get(EXTRA_OPTIONS_KEY)
+    if not isinstance(extra, dict):
+        return {}
+    rendered: dict[str, str] = {}
+    for key, value in extra.items():
+        if not isinstance(key, str) or not key or is_omittable_option(value):
+            continue
+        if isinstance(value, str):
+            rendered[key] = value
+        elif isinstance(value, bool):
+            rendered[key] = "true" if value else "false"
+        elif isinstance(value, int | float):
+            rendered[key] = str(value)
+        else:
+            rendered[key] = json.dumps(value)
+    return rendered
 
 
 def _normalized_tts_options(options: JsonObject, *, provider_id: str) -> JsonObject:
