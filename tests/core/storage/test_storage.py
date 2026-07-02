@@ -885,39 +885,6 @@ def test_update_skill_directory_settings_accepts_windows_absolute_paths(
     assert updated["skills"]["directories"] == ["C:/skills/team"]
 
 
-def test_copy_prompt_fragments_preserves_existing_user_copy(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    data_dir = tmp_path / "data"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(data_dir, resources_dir=resources_dir)
-    storage.ensure_directories()
-    (data_dir / "prompts" / "runtime.md").write_text("custom", encoding="utf-8")
-
-    written_paths = storage.copy_prompt_fragments()
-
-    assert (data_dir / "prompts" / "runtime.md").read_text(encoding="utf-8") == "custom"
-    assert sorted(path.name for path in written_paths) == [
-        "channels.md",
-        "compaction.md",
-        "skills.md",
-        "tools.md",
-        "tools_list.md",
-    ]
-
-
-def test_copy_prompt_fragments_can_overwrite_existing_user_copy(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    data_dir = tmp_path / "data"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(data_dir, resources_dir=resources_dir)
-    storage.ensure_directories()
-    (data_dir / "prompts" / "runtime.md").write_text("custom", encoding="utf-8")
-
-    storage.copy_prompt_fragments(overwrite=True)
-
-    assert (data_dir / "prompts" / "runtime.md").read_text(encoding="utf-8") == "runtime.md bundled"
-
-
 def test_read_prompt_fragment_prefers_user_copy(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     data_dir = tmp_path / "data"
@@ -960,56 +927,14 @@ def test_read_prompt_fragment_rejects_unknown_names(tmp_path: Path) -> None:
         storage.read_prompt_fragment("other.md")
 
 
-def test_reset_prompt_fragment_overwrites_user_copy_with_bundled_content(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    data_dir = tmp_path / "data"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(data_dir, resources_dir=resources_dir)
-    storage.ensure_directories()
-    (data_dir / "prompts" / "runtime.md").write_text("user modified content", encoding="utf-8")
-
-    written_path = storage.reset_prompt_fragment("runtime.md")
-
-    assert written_path == data_dir / "prompts" / "runtime.md"
-    assert written_path.read_text(encoding="utf-8") == "runtime.md bundled"
-
-
-def test_reset_prompt_fragment_rejects_unknown_name(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
-
-    with pytest.raises(StorageError, match="Unknown prompt fragment"):
-        storage.reset_prompt_fragment("unknown.md")
-
-
-def test_write_prompt_fragment_writes_given_content(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    data_dir = tmp_path / "data"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(data_dir, resources_dir=resources_dir)
-    storage.ensure_directories()
-
-    written_path = storage.write_prompt_fragment("tools.md", "custom tools content")
-
-    assert written_path == data_dir / "prompts" / "tools.md"
-    assert written_path.read_text(encoding="utf-8") == "custom tools content"
-
-
-def test_write_prompt_fragment_rejects_unknown_name(tmp_path: Path) -> None:
-    storage = StorageManager(tmp_path / "data")
-
-    with pytest.raises(StorageError, match="Unknown prompt fragment"):
-        storage.write_prompt_fragment("unknown.md", "content")
-
-
 def test_copy_agent_prompt_fragments_seeds_editable_defaults_only(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     data_dir = tmp_path / "data"
     create_prompt_resources(resources_dir)
     storage = StorageManager(data_dir, resources_dir=resources_dir)
     storage.ensure_directories()
-    storage.write_prompt_fragment("runtime.md", "custom default runtime")
+    # A hand-created data-dir copy overrides the bundled default and seeds the scope.
+    (data_dir / "prompts" / "runtime.md").write_text("custom default runtime", encoding="utf-8")
 
     written_paths = storage.copy_agent_prompt_fragments("coder")
 
@@ -1029,7 +954,9 @@ def test_copy_agent_prompt_fragments_preserves_existing_files(tmp_path: Path) ->
     data_dir = tmp_path / "data"
     create_prompt_resources(resources_dir)
     storage = StorageManager(data_dir, resources_dir=resources_dir)
-    storage.write_agent_prompt_fragment("coder", "runtime.md", "custom agent runtime")
+    agent_prompts_dir = data_dir / "agents" / "coder" / "prompts"
+    agent_prompts_dir.mkdir(parents=True)
+    (agent_prompts_dir / "runtime.md").write_text("custom agent runtime", encoding="utf-8")
 
     storage.copy_agent_prompt_fragments("coder")
 
@@ -1042,31 +969,6 @@ def test_read_missing_agent_prompt_fragment_returns_empty_string(tmp_path: Path)
     storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
 
     assert storage.read_agent_prompt_fragment("coder", "skills.md") == ""
-
-
-def test_write_agent_prompt_fragment_creates_file(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    data_dir = tmp_path / "data"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(data_dir, resources_dir=resources_dir)
-
-    written_path = storage.write_agent_prompt_fragment("coder", "tools.md", "agent tools")
-
-    assert written_path == data_dir / "agents" / "coder" / "prompts" / "tools.md"
-    assert storage.read_agent_prompt_fragment("coder", "tools.md") == "agent tools"
-
-
-def test_reset_agent_prompt_fragment_uses_current_default_scope(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    data_dir = tmp_path / "data"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(data_dir, resources_dir=resources_dir)
-    storage.write_prompt_fragment("skills.md", "custom default skills")
-    storage.write_agent_prompt_fragment("coder", "skills.md", "agent skills")
-
-    storage.reset_agent_prompt_fragment("coder", "skills.md")
-
-    assert storage.read_agent_prompt_fragment("coder", "skills.md") == "custom default skills"
 
 
 @pytest.mark.parametrize(
