@@ -151,6 +151,11 @@ class BlockDefinition:
     default_text: str | None = None
     render: BlockRenderer | None = None
     default_rank: int = 0
+    # The enabled state a block defaults in with when a scope's layout does not
+    # list it. ``False`` lets a contributor ship an opt-in block that stays off
+    # even for scopes with an older persisted layout (a layout entry, once
+    # written, always wins over this default).
+    default_enabled: bool = True
 
     def __post_init__(self) -> None:
         # Exactly one of default_text / render: a static block carries text, a
@@ -183,7 +188,8 @@ class LayoutEntry:
 
     The source is persisted so an entry whose definition is momentarily gone
     (a contributor removed between writes) can still be ranked by its namespace's
-    default rank. An entry is ``enabled`` by default — a defaulted-in block is on.
+    default rank. A listed entry with no explicit flag is ``enabled``; a block
+    with no entry at all defaults in with its definition's ``default_enabled``.
     """
 
     id: str
@@ -267,8 +273,8 @@ def resolve_layout(
     - A layout entry with **no** matching definition (contributor gone) is inert:
       skipped here, never an error (Phase 2 prunes it on the next write).
     - A definition **absent** from the layout is inserted at its ``default_rank``
-      (ties broken by id, lexicographically), defaulting to ``enabled=True`` —
-      this is how a newly added contributor appears.
+      (ties broken by id, lexicographically), with its ``default_enabled`` state —
+      this is how a newly added contributor appears (opt-in blocks default in off).
 
     Defaulted-in blocks are appended after the explicitly-laid-out ones in
     rank/id order, so the user's chosen order is never disturbed by a new block.
@@ -291,7 +297,10 @@ def resolve_layout(
 
     missing = [definition for definition in deduped if definition.id not in laid_out_ids]
     missing.sort(key=lambda definition: (definition.default_rank, definition.id))
-    resolved.extend(ResolvedBlock(definition=definition, enabled=True) for definition in missing)
+    resolved.extend(
+        ResolvedBlock(definition=definition, enabled=definition.default_enabled)
+        for definition in missing
+    )
     return resolved
 
 
@@ -305,7 +314,8 @@ def passes_gates(
 
     A block renders only when **all three** hold:
 
-    1. user-enabled — its layout entry is ``enabled`` (a defaulted-in block is on).
+    1. user-enabled — its layout entry is ``enabled`` (a defaulted-in block
+       follows its definition's ``default_enabled``).
     2. owner-active — the owner is active for this agent/run (delegated to the
        injected :class:`OwnerActivity`, never hardcoded here).
     3. non-empty — the effective rendered text is non-empty after trim.

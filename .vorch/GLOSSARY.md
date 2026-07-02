@@ -178,7 +178,7 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 **Not:** A prompt fragment. The old closed set of five editable fragment files (`system.md`/`runtime.md`/`tools.md`/`channels.md`/`skills.md`) is gone — a block is fragment-sized but reorderable, toggleable, gated, and contributable from any source.
 
 ## Block Layout
-**Definition:** The persisted, per-scope ordered list of `{id, enabled, source}` that owns a scope's block order and on/off state, stored as `layout.json` under the scope (default scope in `<data_dir>/prompts/`, agent scope under the agent dir). A block absent from the layout is inserted at its definition's `default_rank` (ranks never come from this file); a layout entry whose definition is gone is inert — skipped at build, pruned on the next write.
+**Definition:** The persisted, per-scope ordered list of `{id, enabled, source}` that owns a scope's block order and on/off state, stored as `layout.json` under the scope (default scope in `<data_dir>/prompts/`, agent scope under the agent dir). A block absent from the layout is inserted at its definition's `default_rank` with its definition's `default_enabled` state (ranks never come from this file; an opt-in block like the tool list defaults in off); a layout entry whose definition is gone is inert — skipped at build, pruned on the next write.
 **Not:** The block definitions or their text. The layout owns order + enabled only; a block's text/owner/kind/source live in its definition and per-scope text override, never in `layout.json`.
 
 ## Block Owner (three-gate filter)
