@@ -677,63 +677,51 @@ def test_options_for_tts_response_format_differs_between_openai_and_openrouter()
     assert openrouter_formats == {"mp3", "pcm"}
 
 
-def test_options_for_image_recraft_v3_includes_strength_style_text_layout_and_rgb_colors() -> None:
-    """recraft-v3 gets the full v3 profile: strength (number), style
-    (text), text_layout (json), rgb_colors (json), background_rgb_color
-    (json). The strength default is 0.2 and the json fields default to
-    an empty array (text_layout/rgb_colors) or None (background)."""
+def test_options_for_image_renders_model_task_options_from_registry() -> None:
+    """``TaskModelService.options`` resolves the target's model from the
+    registry and hands its typed ``task_options`` parameter schema to the
+    builder — the rendered fields mirror the data, not any hardcoded
+    family profile."""
 
-    models = _Models([_model("recraft/recraft-v3", (TASK_IMAGE_GENERATION,), name="Recraft v3")])
+    models = _Models(
+        [
+            _model(
+                "recraft/recraft-v3",
+                (TASK_IMAGE_GENERATION,),
+                name="Recraft v3",
+                task_options={
+                    "image_generation": {
+                        "parameters": {
+                            "n": {"type": "range", "min": 1, "max": 6},
+                            "aspect_ratio": {"type": "enum", "values": ["1:1", "16:9"]},
+                        },
+                        "passthrough": {"recraft": ["controls", "style", "text_layout"]},
+                    }
+                },
+            )
+        ]
+    )
     service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
 
     schema = service.options(TASK_IMAGE_GENERATION, "openrouter/recraft/recraft-v3::api-key")
-    field_names = {field.name for field in schema.fields}
+    fields_by_name = {field.name: field for field in schema.fields}
 
-    assert "aspect_ratio" in field_names
-    assert "image_size" in field_names
-    assert "strength" in field_names
-    assert "style" in field_names
-    assert "text_layout" in field_names
-    assert "rgb_colors" in field_names
-    assert "background_rgb_color" in field_names
-
-    strength = next(field for field in schema.fields if field.name == "strength")
-    assert strength.type == "number"
-    assert strength.default == 0.2
-    assert strength.min_value == 0.0
-    assert strength.max_value == 1.0
-
-    text_layout = next(field for field in schema.fields if field.name == "text_layout")
-    assert text_layout.type == "json"
-    style = next(field for field in schema.fields if field.name == "style")
-    assert style.type == "text"
-    rgb_colors = next(field for field in schema.fields if field.name == "rgb_colors")
-    assert rgb_colors.type == "json"
+    assert fields_by_name["n"].type == "number"
+    assert fields_by_name["n"].max_value == 6
+    aspect = fields_by_name["aspect_ratio"]
+    assert aspect.type == "select"
+    assert {choice.value for choice in aspect.options} == {"", "1:1", "16:9"}
+    provider_options = fields_by_name["provider_options"]
+    assert provider_options.type == "json"
+    assert "recraft: controls, style, text_layout" in provider_options.description
+    # No hardcoded family fields leak in anymore.
+    assert "strength" not in fields_by_name
+    assert "rgb_colors" not in fields_by_name
 
 
-def test_options_for_image_recraft_v4_omits_v3_only_fields() -> None:
-    """recraft-v4 shares strength + rgb_colors + background_rgb_color with
-    v3 but loses text_layout and style. v4-pro behaves the same."""
-
-    for model_id in ("recraft/recraft-v4", "recraft/recraft-v4-pro", "recraft/recraft-v4.1"):
-        models = _Models([_model(model_id, (TASK_IMAGE_GENERATION,), name=model_id)])
-        service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
-
-        schema = service.options(TASK_IMAGE_GENERATION, f"openrouter/{model_id}::api-key")
-        field_names = {field.name for field in schema.fields}
-
-        assert "strength" in field_names
-        assert "rgb_colors" in field_names
-        assert "background_rgb_color" in field_names
-        # v3-only fields do not leak into v4 profiles.
-        assert "text_layout" not in field_names
-        assert "style" not in field_names
-
-
-def test_options_for_image_non_recraft_excludes_recraft_fields() -> None:
-    """A non-recraft model (e.g. flux) must not expose the recraft family
-    fields even when the schema builder is reached — the family profile
-    is gated on ``model_id`` prefix."""
+def test_options_for_image_without_task_options_uses_fallback() -> None:
+    """A model with no typed parameter schema (unrefreshed catalog) gets the
+    conservative aspect-ratio/resolution fallback."""
 
     models = _Models(
         [_model("black-forest-labs/flux.2-pro", (TASK_IMAGE_GENERATION,), name="Flux 2 Pro")]
@@ -745,143 +733,14 @@ def test_options_for_image_non_recraft_excludes_recraft_fields() -> None:
     )
     field_names = {field.name for field in schema.fields}
 
-    for recraft_only in ("strength", "style", "text_layout", "rgb_colors", "background_rgb_color"):
-        assert recraft_only not in field_names
-
-
-def test_options_for_image_sourceful_v2_includes_v2_specific_fields() -> None:
-    """sourceful/riverflow-v2-* gets font_inputs (json) and
-    super_resolution_references (json) but not the v2.5-only scoring
-    rubric / scoring_prompt / background controls."""
-
-    models = _Models(
-        [_model("sourceful/riverflow-v2-pro", (TASK_IMAGE_GENERATION,), name="Riverflow v2")]
-    )
-    service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
-
-    schema = service.options(
-        TASK_IMAGE_GENERATION, "openrouter/sourceful/riverflow-v2-pro::api-key"
-    )
-    field_names = {field.name for field in schema.fields}
-
-    assert "font_inputs" in field_names
-    assert "super_resolution_references" in field_names
-    for v25_only in (
-        "scoring_prompt",
-        "scoring_rubric",
-        "background_mode",
-        "background_hex_color",
-    ):
-        assert v25_only not in field_names
-
-    font_inputs = next(field for field in schema.fields if field.name == "font_inputs")
-    assert font_inputs.type == "json"
-    super_resolution = next(
-        field for field in schema.fields if field.name == "super_resolution_references"
-    )
-    assert super_resolution.type == "json"
-
-
-def test_options_for_image_sourceful_v25_includes_v25_specific_fields() -> None:
-    """sourceful/riverflow-v2.5-* gets font_inputs plus the v2.5-only
-    scoring_prompt, scoring_rubric, background_mode, and
-    background_hex_color fields. v2-only super_resolution_references is
-    absent on v2.5."""
-
-    models = _Models(
-        [_model("sourceful/riverflow-v2.5-pro", (TASK_IMAGE_GENERATION,), name="Riverflow v2.5")]
-    )
-    service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
-
-    schema = service.options(
-        TASK_IMAGE_GENERATION, "openrouter/sourceful/riverflow-v2.5-pro::api-key"
-    )
-    field_names = {field.name for field in schema.fields}
-
-    assert "font_inputs" in field_names
-    assert "scoring_prompt" in field_names
-    assert "scoring_rubric" in field_names
-    assert "background_mode" in field_names
-    assert "background_hex_color" in field_names
-    # v2-only super_resolution_references is not exposed on v2.5.
-    assert "super_resolution_references" not in field_names
-
-    scoring_rubric = next(field for field in schema.fields if field.name == "scoring_rubric")
-    assert scoring_rubric.type == "json"
-    background_mode = next(field for field in schema.fields if field.name == "background_mode")
-    assert background_mode.type == "select"
-    background_hex = next(field for field in schema.fields if field.name == "background_hex_color")
-    assert background_hex.type == "text"
-
-
-def test_options_for_image_gemini_flash_image_preview_includes_half_k_and_extended_ratios() -> None:
-    """google/gemini-3.1-flash-image-preview is the only model that adds
-    0.5K to image_size and the only one that extends aspect_ratio with
-    the very narrow/wide 1:4, 4:1, 1:8, 8:1 ratios."""
-
-    models = _Models(
-        [
-            _model(
-                "google/gemini-3.1-flash-image-preview",
-                (TASK_IMAGE_GENERATION,),
-                name="Gemini 3.1 Flash Image Preview",
-            )
-        ]
-    )
-    service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
-
-    schema = service.options(
-        TASK_IMAGE_GENERATION, "openrouter/google/gemini-3.1-flash-image-preview::api-key"
-    )
-
-    aspect_field = next(field for field in schema.fields if field.name == "aspect_ratio")
-    size_field = next(field for field in schema.fields if field.name == "image_size")
-
-    aspect_values = {choice.value for choice in aspect_field.options}
-    size_values = {choice.value for choice in size_field.options}
-
-    # Base 10 ratios are all present.
-    for base in ("1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"):
-        assert base in aspect_values
-    # Extra narrow/wide ratios.
-    for extra in ("1:4", "4:1", "1:8", "8:1"):
-        assert extra in aspect_values
-    # Image size gains 0.5K alongside 1K/2K/4K.
-    assert size_values == {"0.5K", "1K", "2K", "4K"}
-
-
-def test_options_for_image_mai_image_2_5_uses_reduced_aspect_ratios() -> None:
-    """microsoft/mai-image-2.5 advertises only 7 of the 10 base aspect
-    ratios. The schema exposes exactly that set."""
-
-    models = _Models(
-        [
-            _model(
-                "microsoft/mai-image-2.5",
-                (TASK_IMAGE_GENERATION,),
-                name="MAI Image 2.5",
-            )
-        ]
-    )
-    service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
-
-    schema = service.options(TASK_IMAGE_GENERATION, "openrouter/microsoft/mai-image-2.5::api-key")
-
-    aspect_field = next(field for field in schema.fields if field.name == "aspect_ratio")
-    aspect_values = {choice.value for choice in aspect_field.options}
-
-    assert aspect_values == {"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3"}
-    # Ratios removed by mai-image-2.5 are not exposed.
-    for excluded in ("4:5", "5:4", "21:9"):
-        assert excluded not in aspect_values
+    assert {"aspect_ratio", "resolution", "extra_options"} <= field_names
+    assert "provider_options" not in field_names
 
 
 def test_options_for_image_seed_only_when_supported_by_model() -> None:
-    """``seed`` appears only when the model's ``supported_parameters``
-    includes it. Flux-family models list ``seed``; recraft models do not.
-    The provider passes top-level ``seed`` to the OpenRouter request, so
-    exposing the field only where it is accepted prevents users from
-    setting a value the provider will silently drop or reject."""
+    """In the fallback, ``seed`` appears only when the model's flat
+    ``supported_parameters`` includes it — the typed schema replaces this
+    gate for refreshed models."""
 
     flux_models = _Models(
         [
@@ -1045,26 +904,45 @@ def test_options_with_defaults_uses_model_specific_voice_default() -> None:
     assert options["speed"] == 1.0
 
 
-def test_options_with_defaults_propagates_recraft_strength_default() -> None:
-    """``options_with_defaults`` for a Recraft v3 binding surfaces the
-    strength default (0.2) when the binding did not override it. This
-    is the seam execution domains rely on to know which image_config
-    keys to send without re-reading the schema."""
+def test_options_with_defaults_carries_forced_and_escape_hatch_defaults() -> None:
+    """``options_with_defaults`` surfaces the schema defaults execution
+    domains rely on: a forced enum default (dall-e response_format →
+    b64_json) and the empty escape-hatch object, while unpinned
+    "Provider default" selects contribute empty strings the wire layer
+    drops."""
 
-    models = _Models([_model("recraft/recraft-v3", (TASK_IMAGE_GENERATION,))])
+    models = _Models(
+        [
+            _model(
+                "dall-e-3",
+                (TASK_IMAGE_GENERATION,),
+                provider_id="openai",
+                task_options={
+                    "image_generation": {
+                        "parameters": {
+                            "size": {
+                                "type": "enum",
+                                "values": ["1024x1024", "1792x1024", "1024x1792"],
+                            },
+                            "response_format": {"type": "enum", "values": ["b64_json", "url"]},
+                        }
+                    }
+                },
+            )
+        ]
+    )
     service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
     binding = TaskModelBinding(
         task_type=TASK_IMAGE_GENERATION,
-        target="openrouter/recraft/recraft-v3::api-key",
+        target="openai/dall-e-3::api-key",
         options={},
     )
 
     options = service.options_with_defaults(binding)
 
-    assert options["strength"] == 0.2
-    # Universal image fields still carry their defaults.
-    assert options["aspect_ratio"] == "1:1"
-    assert options["image_size"] == "1K"
+    assert options["response_format"] == "b64_json"
+    assert options["size"] == ""
+    assert options["extra_options"] == {}
 
 
 def _model(
@@ -1076,6 +954,7 @@ def _model(
     supported_voices: tuple[str, ...] = (),
     supported_parameters: tuple[str, ...] = (),
     connections: tuple[str, ...] = (),
+    task_options: dict | None = None,
 ) -> SimpleNamespace:
     """Build a model stub that satisfies ``ModelQuery.matches``.
 
@@ -1117,6 +996,7 @@ def _model(
             reasoning=SimpleNamespace(supported=False),
             supported_voices=supported_voices,
             supported_parameters=supported_parameters,
+            task_options=task_options or {},
         ),
     )
 

@@ -23,7 +23,7 @@ import json
 from typing import Any
 
 from core.providers.errors import ProviderError
-from core.providers.task_client import ProviderTaskClient
+from core.providers.task_client import ProviderTaskClient, merge_extra_options
 
 JsonObject = dict[str, Any]
 EMBEDDINGS_ENDPOINT = "/embeddings"
@@ -40,9 +40,10 @@ class ProviderEmbeddingClient(ProviderTaskClient):
         *inputs* is forwarded verbatim as the ``input`` array — the
         wire contract accepts a single string or an array, and we always
         pass an array so callers can batch. *options* is the merged
-        task-model options dict; only ``dimensions`` is currently
-        forwarded (when set as a real value — empty placeholders are
-        dropped so the provider does not see a stray ``null``).
+        task-model options dict; ``dimensions`` is forwarded when set as
+        a real value (empty placeholders are dropped so the provider
+        does not see a stray ``null``), and the ``extra_options`` escape
+        hatch merges last.
         """
 
         payload = _build_embeddings_payload(self._model_id, inputs, options)
@@ -83,6 +84,7 @@ def _build_embeddings_payload(
         payload["dimensions"] = dimensions
     elif isinstance(dimensions, float) and not isinstance(dimensions, bool) and dimensions > 0:
         payload["dimensions"] = int(dimensions)
+    merge_extra_options(payload, options)
     return payload
 
 

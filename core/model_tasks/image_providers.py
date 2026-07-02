@@ -3,39 +3,36 @@
 from __future__ import annotations
 
 import base64
-import re
 from typing import Any
 
 from core.model_tasks.image_types import ImageGenerationResult, JsonObject
 from core.providers.errors import ProviderError
-from core.providers.task_client import ProviderTaskClient
+from core.providers.task_client import (
+    ProviderTaskClient,
+    is_omittable_option,
+    merge_extra_options,
+)
 from core.utils.logging import get_logger
 
-_CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
+_OPENROUTER_IMAGES_ENDPOINT = "/images"
 _OPENAI_IMAGES_GENERATIONS_ENDPOINT = "/images/generations"
 _DEFAULT_IMAGE_TIMEOUT = 120.0
-_BASE64_DATA_URL_PATTERN = re.compile(r"^data:([^;]+);base64,(.+)$", re.ASCII)
 _LOGGER = get_logger("image.providers")
 
-# All known OpenRouter ``image_config`` keys. The wire layer only sends a key
-# when it is present in the merged task-model options; the values are passed
-# through unchanged so the provider receives the shape it expects (arrays for
-# ``rgb_colors`` / ``text_layout`` / ``font_inputs`` / etc., strings for
-# ``style`` / ``scoring_prompt``, numbers for ``strength``).
-_IMAGE_CONFIG_KEYS: tuple[str, ...] = (
+# OpenRouter's unified image API top-level parameters. The wire layer only
+# sends a key when it is present in the merged task-model options with a
+# non-empty value; absent keys are never invented, so the provider's own
+# defaults stay authoritative.
+_UNIFIED_IMAGE_KEYS: tuple[str, ...] = (
     "aspect_ratio",
-    "image_size",
-    "strength",
-    "style",
-    "rgb_colors",
-    "background_rgb_color",
-    "text_layout",
-    "font_inputs",
-    "super_resolution_references",
-    "scoring_prompt",
-    "scoring_rubric",
-    "background_mode",
-    "background_hex_color",
+    "resolution",
+    "size",
+    "quality",
+    "output_format",
+    "background",
+    "output_compression",
+    "n",
+    "seed",
 )
 
 # OpenAI ``/v1/images/generations`` option keys. The wire layer sends each
@@ -46,10 +43,16 @@ _OPENAI_IMAGE_KEYS: tuple[str, ...] = (
     "size",
     "quality",
     "background",
+    "moderation",
     "output_format",
+    "output_compression",
     "style",
     "response_format",
 )
+
+# Option name owned by the option-schema layer that is never forwarded as a
+# literal request field: it maps to the nested ``provider.options`` object.
+_PROVIDER_OPTIONS_KEY = "provider_options"
 
 
 class ProviderImageClient(ProviderTaskClient):
@@ -79,18 +82,23 @@ class ProviderImageClient(ProviderTaskClient):
         options: JsonObject,
     ) -> ImageGenerationResult:
         payload = _build_openrouter_image_payload(self._model_id, prompt, options)
+        requested_output_format = options.get("output_format")
 
         _LOGGER.debug(
             "Image generation request: url=%s%s model=%s",
             self._base_url,
-            _CHAT_COMPLETIONS_ENDPOINT,
+            _OPENROUTER_IMAGES_ENDPOINT,
             self._model_id,
         )
 
         return await self.post_and_parse(
-            _CHAT_COMPLETIONS_ENDPOINT,
+            _OPENROUTER_IMAGES_ENDPOINT,
             timeout=_DEFAULT_IMAGE_TIMEOUT,
-            parse=lambda response: _parse_image_response(response.json(), model=self._model_id),
+            parse=lambda response: _parse_unified_image_response(
+                response.json(),
+                model=self._model_id,
+                requested_output_format=requested_output_format,
+            ),
             json=payload,
         )
 
@@ -122,52 +130,36 @@ class ProviderImageClient(ProviderTaskClient):
         )
 
 
-def _is_omittable_option(value: Any) -> bool:
-    """True when an option value carries nothing to forward to the provider.
-
-    Empty placeholders (``None``, ``""``, ``[]``, ``{}``) are option-form
-    defaults that mean "unset" — they are injected by the schema's
-    ``default_options`` for optional text/json fields and must not reach the
-    wire (e.g. Sourceful rejects ``background_hex_color: ""``). Real values
-    such as numeric ``0``/``0.0`` and ``False`` carry information and are kept.
-    """
-
-    if value is None:
-        return True
-    return isinstance(value, (str, list, dict)) and len(value) == 0
-
-
 def _build_openrouter_image_payload(
     model_id: str,
     prompt: str,
     options: JsonObject,
 ) -> JsonObject:
-    """Build the OpenRouter image-generation request payload.
+    """Build the OpenRouter unified image API request payload.
 
-    ``image_config`` is assembled from the known image_config keys that are
+    Top-level parameters are taken from the known unified keys that are
     actually present in *options* — no defaults are invented for absent keys,
-    so providers that default to ``1:1``/``1K`` (or any other value) keep
-    their own defaults when the user has not pinned a value. Keys whose value
-    is an empty placeholder (see :func:`_is_omittable_option`) are dropped so
-    unset optional fields are not forwarded. The top-level ``seed`` is sent
-    when it is present in *options*; the field is provider-level, not nested
-    under ``image_config``.
+    so the provider's own defaults apply when the user has not pinned a
+    value. Keys whose value is an empty placeholder (see
+    :func:`core.providers.task_client.is_omittable_option`) are dropped so unset optional fields are
+    not forwarded. ``provider_options`` becomes the nested
+    ``provider.options`` object (provider-specific passthrough keys), and
+    ``extra_options`` merges last.
     """
-
-    image_config: JsonObject = {}
-    for key in _IMAGE_CONFIG_KEYS:
-        if key in options and not _is_omittable_option(options[key]):
-            image_config[key] = options[key]
 
     payload: JsonObject = {
         "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
-        "modalities": ["image"],
+        "prompt": prompt,
     }
-    if image_config:
-        payload["image_config"] = image_config
-    if options.get("seed") is not None:
-        payload["seed"] = options["seed"]
+    for key in _UNIFIED_IMAGE_KEYS:
+        if key in options and not is_omittable_option(options[key]):
+            payload[key] = options[key]
+
+    provider_options = options.get(_PROVIDER_OPTIONS_KEY)
+    if isinstance(provider_options, dict) and provider_options:
+        payload["provider"] = {"options": provider_options}
+
+    merge_extra_options(payload, options)
     return payload
 
 
@@ -180,10 +172,10 @@ def _build_openai_image_payload(
 
     Only fields that are present in *options* with a non-empty value are
     included; no defaults are invented and empty placeholders are dropped
-    (see :func:`_is_omittable_option`). ``n > 1`` is honored: the response
+    (see :func:`core.providers.task_client.is_omittable_option`). ``n > 1`` is honored: the response
     ``data`` array is mapped to one image per element downstream, and
     ``ImageService.generate_artifacts`` already loops over the result to
-    persist one artifact per image.
+    persist one artifact per image. ``extra_options`` merges last.
     """
 
     payload: JsonObject = {
@@ -191,61 +183,54 @@ def _build_openai_image_payload(
         "prompt": prompt,
     }
     for key in _OPENAI_IMAGE_KEYS:
-        if key in options and not _is_omittable_option(options[key]):
+        if key in options and not is_omittable_option(options[key]):
             payload[key] = options[key]
+    merge_extra_options(payload, options)
     return payload
 
 
-def _parse_image_response(payload: JsonObject, *, model: str) -> ImageGenerationResult:
-    """Extract images from an OpenRouter chat/completions response."""
+def _parse_unified_image_response(
+    payload: JsonObject,
+    *,
+    model: str,
+    requested_output_format: Any = None,
+) -> ImageGenerationResult:
+    """Extract images from an OpenRouter unified image API response.
 
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise ProviderError(
-            "Image generation response contains no choices",
-            retryable=True,
-        )
+    The response shape is ``{"created": <int>, "data": [<entry>, ...],
+    "usage": {...}}`` where each entry carries ``b64_json`` and optionally a
+    ``media_type`` (vector outputs). The media type falls back to the
+    requested ``output_format`` because raster entries do not echo it.
+    """
 
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    if not isinstance(message, dict):
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
         raise ProviderError(
-            "Image generation response message is missing",
-            retryable=True,
-        )
-
-    images_raw = message.get("images")
-    if not isinstance(images_raw, list) or not images_raw:
-        raise ProviderError(
-            "Image generation response contains no images",
+            "Image generation response contains no data",
             retryable=True,
         )
 
     image_bytes_list: list[bytes] = []
-    detected_media_type = "image/png"
-
-    for entry in images_raw:
-        if isinstance(entry, dict):
-            image_url = entry.get("image_url", {})
-            url = image_url.get("url", "") if isinstance(image_url, dict) else entry.get("url", "")
-        elif isinstance(entry, str):
-            url = entry
-        else:
+    detected_media_type = ""
+    for entry in data:
+        if not isinstance(entry, dict):
             continue
-
-        if not url:
+        b64_json = entry.get("b64_json")
+        if not isinstance(b64_json, str) or not b64_json:
             continue
-
-        match = _BASE64_DATA_URL_PATTERN.match(url)
-        if match:
-            detected_media_type = match.group(1)
-            raw_bytes = base64.b64decode(match.group(2))
-            image_bytes_list.append(raw_bytes)
+        image_bytes_list.append(base64.b64decode(b64_json))
+        entry_media_type = entry.get("media_type")
+        if not detected_media_type and isinstance(entry_media_type, str):
+            detected_media_type = entry_media_type
 
     if not image_bytes_list:
         raise ProviderError(
             "Image generation response images could not be decoded",
             retryable=True,
         )
+
+    if not detected_media_type:
+        detected_media_type = _media_type_from_output_format(requested_output_format)
 
     usage = payload.get("usage")
     return ImageGenerationResult(
@@ -255,6 +240,12 @@ def _parse_image_response(payload: JsonObject, *, model: str) -> ImageGeneration
         usage=usage if isinstance(usage, dict) else None,
         raw=payload,
     )
+
+
+def _media_type_from_output_format(requested_output_format: Any) -> str:
+    if isinstance(requested_output_format, str) and requested_output_format:
+        return "image/" + requested_output_format
+    return "image/png"
 
 
 def _parse_openai_image_response(
@@ -310,14 +301,9 @@ def _parse_openai_image_response(
     # body does not echo the format, so we record the value the caller
     # asked for. The artifact layer falls back to ``image/png`` when no
     # format was requested.
-    if isinstance(requested_output_format, str) and requested_output_format:
-        media_type = "image/" + requested_output_format
-    else:
-        media_type = "image/png"
-
     return ImageGenerationResult(
         images=tuple(image_bytes_list),
-        media_type=media_type,
+        media_type=_media_type_from_output_format(requested_output_format),
         model=model,
         raw=payload,
     )

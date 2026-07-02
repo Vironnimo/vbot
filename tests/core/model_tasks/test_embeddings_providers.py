@@ -516,3 +516,19 @@ def _openrouter_embedding_client(model_id: str) -> ProviderEmbeddingClient:
         credential="sk-test",
         model_id=model_id,
     )
+
+
+def test_build_payload_merges_extra_options_last() -> None:
+    """The ``extra_options`` escape hatch merges into the request payload
+    and wins over authored keys; empty placeholders are dropped."""
+
+    payload = _build_embeddings_payload(
+        "openai/text-embedding-3-small",
+        ["hello"],
+        {"dimensions": 256, "extra_options": {"dimensions": 512, "user": "abc", "empty": ""}},
+    )
+
+    assert payload["dimensions"] == 512
+    assert payload["user"] == "abc"
+    assert "empty" not in payload
+    assert "extra_options" not in payload
