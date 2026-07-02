@@ -4,6 +4,7 @@ import {
   createNavigationHistoryState,
   isNavigationHistoryState,
   locationHashForView,
+  sameNavigationSelection,
   sameSessionOverride,
   viewIdFromLocationHash,
 } from '../navigationHistory.js';
@@ -39,6 +40,87 @@ describe('createNavigationHistoryState', () => {
     });
 
     expect(state.session.subAgent).toBe(true);
+  });
+
+  it('defaults the selection to null when none is given', () => {
+    const state = createNavigationHistoryState('chat', null);
+
+    expect(state.selection).toBeNull();
+  });
+
+  it('normalizes the selection fields, keeping the projectAgentId tri-state', () => {
+    const state = createNavigationHistoryState('chat', null, {
+      agentId: 'alpha',
+      projectId: 'vbot',
+      projectAgentId: 'builder',
+    });
+
+    expect(state.selection).toEqual({
+      agentId: 'alpha',
+      projectId: 'vbot',
+      projectAgentId: 'builder',
+    });
+
+    const identityAlongsideProject = createNavigationHistoryState(
+      'chat',
+      null,
+      {
+        agentId: 'alpha',
+        projectId: 'vbot',
+        projectAgentId: '',
+      },
+    );
+    expect(identityAlongsideProject.selection.projectAgentId).toBe('');
+
+    const nothingRemembered = createNavigationHistoryState('chat', null, {
+      agentId: 'alpha',
+    });
+    expect(nothingRemembered.selection).toEqual({
+      agentId: 'alpha',
+      projectId: '',
+      projectAgentId: null,
+    });
+  });
+});
+
+describe('sameNavigationSelection', () => {
+  it('treats two empty selections as equal (legacy/foreign entries)', () => {
+    expect(sameNavigationSelection(null, null)).toBe(true);
+    expect(sameNavigationSelection(undefined, null)).toBe(true);
+  });
+
+  it('distinguishes empty from set selections', () => {
+    const selection = { agentId: 'alpha', projectId: '', projectAgentId: null };
+
+    expect(sameNavigationSelection(null, selection)).toBe(false);
+    expect(sameNavigationSelection(selection, null)).toBe(false);
+  });
+
+  it('compares agent, project, and project-agent (tri-state) fields', () => {
+    const base = { agentId: 'alpha', projectId: 'vbot', projectAgentId: '' };
+
+    expect(sameNavigationSelection(base, { ...base })).toBe(true);
+    expect(sameNavigationSelection(base, { ...base, agentId: 'beta' })).toBe(
+      false,
+    );
+    expect(sameNavigationSelection(base, { ...base, projectId: '' })).toBe(
+      false,
+    );
+    expect(
+      sameNavigationSelection(base, { ...base, projectAgentId: 'builder' }),
+    ).toBe(false);
+    expect(
+      sameNavigationSelection(base, { ...base, projectAgentId: null }),
+    ).toBe(false);
+  });
+
+  it('coerces missing fields to their empty forms', () => {
+    expect(
+      sameNavigationSelection(
+        { agentId: 'alpha' },
+        { agentId: 'alpha', projectId: '', projectAgentId: null },
+      ),
+    ).toBe(true);
   });
 });
 

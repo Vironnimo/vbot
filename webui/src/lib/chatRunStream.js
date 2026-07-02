@@ -33,6 +33,18 @@ const RUN_SERVER_EVENT_TYPES = new Set([
   'run_failed',
 ]);
 
+// Session-scoped status keys are read against persisted spawn descriptors,
+// which carry the child's BARE agent id. Live `/ws` events arrive re-addressed
+// to the full `agent@projekt` form (the session-STATE key), while SSE-delivered
+// run events stay bare — stripping the project suffix makes both sides write
+// the same key. Session ids are globally unique UUIDs, so a bare key cannot
+// collide across projects; an identity id has no `@` and passes unchanged.
+function bareAgentIdForStatusKey(agentId) {
+  const value = typeof agentId === 'string' ? agentId : '';
+  const separatorIndex = value.indexOf('@');
+  return separatorIndex === -1 ? value : value.slice(0, separatorIndex);
+}
+
 export function createChatRunStream({
   chatState,
   subscribeRunEvents,
@@ -210,6 +222,7 @@ export function createChatRunStream({
 
   function trackSubAgentRunStatus(event) {
     const updates = {};
+    const statusAgentId = bareAgentIdForStatusKey(event.agent_id);
 
     // The most recent tool call a run made, so a running sub-agent row can
     // show live activity instead of its frozen prompt preview. Recorded for
@@ -220,9 +233,8 @@ export function createChatRunStream({
       if (event.run_id) {
         updates[`runTool:${event.run_id}`] = toolName;
       }
-      if (event.agent_id && event.session_id) {
-        updates[`sessionTool:${event.agent_id}::${event.session_id}`] =
-          toolName;
+      if (statusAgentId && event.session_id) {
+        updates[`sessionTool:${statusAgentId}::${event.session_id}`] = toolName;
       }
     }
 
@@ -231,14 +243,14 @@ export function createChatRunStream({
       if (event.run_id) {
         updates[`run:${event.run_id}`] = status;
       }
-      if (event.agent_id && event.session_id) {
-        updates[`session:${event.agent_id}::${event.session_id}`] = status;
+      if (statusAgentId && event.session_id) {
+        updates[`session:${statusAgentId}::${event.session_id}`] = status;
       }
 
       // A reused child session must not surface the previous run's last tool
       // on run-id-less rows, so a fresh run clears the session-scoped name.
-      if (event.type === 'run_started' && event.agent_id && event.session_id) {
-        updates[`sessionTool:${event.agent_id}::${event.session_id}`] = '';
+      if (event.type === 'run_started' && statusAgentId && event.session_id) {
+        updates[`sessionTool:${statusAgentId}::${event.session_id}`] = '';
       }
 
       // A queued sub-agent spawn's persisted descriptor only knows its
@@ -264,8 +276,8 @@ export function createChatRunStream({
         if (event.run_id) {
           updates[`runDuration:${event.run_id}`] = durationMs;
         }
-        if (event.agent_id && event.session_id) {
-          updates[`sessionDuration:${event.agent_id}::${event.session_id}`] =
+        if (statusAgentId && event.session_id) {
+          updates[`sessionDuration:${statusAgentId}::${event.session_id}`] =
             durationMs;
         }
       }
@@ -530,13 +542,12 @@ export function createChatRunStream({
         continue;
       }
       subAgentUpdates[`run:${activeRun.run_id}`] = 'running';
+      // Status keys stay bare (the snapshot's agent_id already is) so they meet
+      // the descriptor-derived reads; only session STATE below keys by address.
       if (activeRun.agent_id && activeRun.session_id) {
-        const agentAddress = formatAgentAddress(
-          activeRun.agent_id,
-          activeRun.project_id,
-        );
-        subAgentUpdates[`session:${agentAddress}::${activeRun.session_id}`] =
-          'running';
+        subAgentUpdates[
+          `session:${activeRun.agent_id}::${activeRun.session_id}`
+        ] = 'running';
       }
     }
     if (Object.keys(subAgentUpdates).length > 0) {

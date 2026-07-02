@@ -8,6 +8,7 @@ import { init } from '../../lib/i18n.js';
 const rpcMock = vi.fn();
 const listClientsMock = vi.fn(() => Promise.resolve({ clients: [] }));
 const listQueueMock = vi.fn(() => Promise.resolve({ items: [] }));
+const listSessionsMock = vi.fn(() => Promise.resolve({ sessions: [] }));
 const listLogsMock = vi.fn();
 const readLogFileMock = vi.fn();
 const subscribeLogEventsMock = vi.fn(() => ({
@@ -35,6 +36,7 @@ vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
   listClients: (...args) => listClientsMock(...args),
   listQueue: (...args) => listQueueMock(...args),
+  listSessions: (...args) => listSessionsMock(...args),
   listLogs: (...args) => listLogsMock(...args),
   readLogFile: (...args) => readLogFileMock(...args),
   subscribeLogEvents: (...args) => subscribeLogEventsMock(...args),
@@ -60,6 +62,8 @@ describe('App', () => {
     listClientsMock.mockResolvedValue({ clients: [] });
     listQueueMock.mockReset();
     listQueueMock.mockResolvedValue({ items: [] });
+    listSessionsMock.mockReset();
+    listSessionsMock.mockResolvedValue({ sessions: [] });
     readLogFileMock.mockReset();
     subscribeLogEventsMock.mockClear();
     subscribeRunEventsMock.mockClear();
@@ -452,6 +456,96 @@ describe('App', () => {
     await waitForCondition(() => {
       expect(document.body.textContent).toContain('Inspect again');
       expect(returnToCurrentSessionButton()).toBeFalsy();
+    });
+  });
+
+  it('restores the selected agent together with the session override on browser back (item 1)', async () => {
+    const agents = [
+      { id: 'alpha', name: 'Alpha', current_session_id: 'session-parent' },
+      { id: 'beta', name: 'Beta', current_session_id: 'session-beta' },
+    ];
+    rpcMock.mockImplementation(createSubAgentNavigationRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain('Inspect again');
+    });
+
+    // Open the sub-agent session (override entry pushed with selection alpha).
+    viewSessionButton()?.click();
+    flushSync();
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain('Sub-agent response');
+    });
+
+    // Switch to Beta — override clears, a new entry with selection beta lands.
+    agentTabByName('Beta')?.click();
+    flushSync();
+    await waitForAssertion(() => {
+      expect(activeAgentTab()?.textContent).toContain('Beta');
+      expect(document.body.textContent).not.toContain('Sub-agent response');
+    });
+
+    window.history.back();
+
+    // Back restores the WHOLE chat context of the entry: the sub-agent
+    // session view AND the selected-agent chip (previously the chip stayed
+    // on Beta while Alpha's child session was displayed).
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain('Sub-agent response');
+      expect(activeAgentTab()?.textContent).toContain('Alpha');
+    });
+  });
+
+  it('keeps display and history entry in sync after tab-away/tab-back plus double back (item 3)', async () => {
+    const agents = [
+      { id: 'alpha', name: 'Alpha', current_session_id: 'session-parent' },
+    ];
+    rpcMock.mockImplementation(createSubAgentNavigationRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain('Inspect again');
+    });
+
+    viewSessionButton()?.click();
+    flushSync();
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain('Sub-agent response');
+    });
+
+    // Tab away (override dies with ChatView) and back to Chat.
+    sidebarNavButton('Logs')?.click();
+    flushSync();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#logs');
+    });
+    sidebarNavButton('Chat')?.click();
+    flushSync();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#chat');
+    });
+
+    // Back #1 lands on the Logs entry.
+    window.history.back();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#logs');
+    });
+
+    // Back #2 pops the chat+child entry: the sub-agent session is displayed
+    // AND history.state still carries the override — the remount must not
+    // push a phantom chat(null) entry over the restored one.
+    window.history.back();
+    await waitForAssertion(() => {
+      expect(window.location.hash).toBe('#chat');
+      expect(document.body.textContent).toContain('Sub-agent response');
+      expect(window.history.state?.session?.sessionId).toBe(
+        'sub-session-repeat',
+      );
     });
   });
 
