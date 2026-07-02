@@ -8,6 +8,7 @@ from core.chat import (
     ChatMessage,
     CommandAction,
     CommandHandled,
+    aggregate_session_usage,
     parse_agent_argument,
     parse_handoff_argument,
 )
@@ -153,9 +154,10 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     try:
         active_session_id = _resolve_history_session_id(state, agent_id, session_id, project_id)
         session = state.runtime.chat_sessions.get(agent_id, active_session_id, project_id)
+        loaded_messages = session.load()
         visible_messages = [
             _visible_message(message)
-            for message in session.load()
+            for message in loaded_messages
             if _is_visible_history_message(message)
         ]
         messages, has_more = _history_page(visible_messages, limit=limit, before=before)
@@ -167,6 +169,9 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         "session_id": active_session_id,
         "messages": messages,
         "has_more": has_more,
+        # Whole-session usage totals (measured turns only) — the page above may
+        # be a slice, but these always cover the full transcript.
+        "session_usage": aggregate_session_usage(loaded_messages),
     }
     if active_run is not None:
         response["active_run"] = active_run

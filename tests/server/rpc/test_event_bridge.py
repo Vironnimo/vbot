@@ -112,6 +112,40 @@ def test_server_event_keeps_project_id_none_for_identity_run() -> None:
     assert summary["payload"]["project_id"] is None
 
 
+def test_server_event_forwards_session_usage_on_terminal_events() -> None:
+    """Terminal events carry the end-of-run session usage totals so clients can
+    refresh their session-level token/cache display without re-fetching
+    history."""
+    session_usage = {"measured_turns": 3, "input_tokens": 1200, "cache_read_tokens": 900}
+    event = RunEvent(
+        sequence=9,
+        run_id="run-1",
+        agent_id="builder",
+        session_id="sess-uuid",
+        type="run_completed",
+        payload={"status": "completed", "session_usage": session_usage},
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert summary["payload"]["session_usage"] == session_usage
+
+
+def test_server_event_omits_session_usage_when_absent() -> None:
+    event = RunEvent(
+        sequence=9,
+        run_id="run-1",
+        agent_id="builder",
+        session_id="sess-uuid",
+        type="run_completed",
+        payload={"status": "completed"},
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert "session_usage" not in summary["payload"]
+
+
 def test_publish_resource_changed_emits_kind_only_payload() -> None:
     state = SimpleNamespace(event_bus=ServerEventBus())
 

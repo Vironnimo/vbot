@@ -82,6 +82,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       error: null,
       streamStatus: CHAT_STATUS_IDLE,
       usage: null,
+      sessionUsage: null,
       hasOlderHistory: false,
       loadingOlderHistory: false,
     };
@@ -139,6 +140,11 @@ export function loadHistory(sessionState, messages, options = {}) {
   const lastUsage = findLastUsage(sessionState.messages);
   if (lastUsage) {
     sessionState.usage = lastUsage;
+  }
+  // Whole-session totals come from the server (the loaded page may be a
+  // slice); terminal run events refresh them between history loads.
+  if (options.sessionUsage) {
+    sessionState.sessionUsage = options.sessionUsage;
   }
   return sessionState;
 }
@@ -280,6 +286,9 @@ export function finishRun(sessionState, event) {
   }
   if (type === 'run_completed' && event?.payload?.usage) {
     updateSessionUsage(sessionState, event.payload.usage);
+  }
+  if (event?.payload?.session_usage) {
+    sessionState.sessionUsage = event.payload.session_usage;
   }
   return sessionState;
 }

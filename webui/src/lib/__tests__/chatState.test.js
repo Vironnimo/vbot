@@ -3397,6 +3397,79 @@ describe('chat state helpers', () => {
     });
   });
 
+  it('initializes sessionUsage as null and fills it from loadHistory options', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    expect(sessionState.sessionUsage).toBeNull();
+
+    const sessionUsage = {
+      measured_turns: 3,
+      estimated_turns: 0,
+      cache_turns: 3,
+      input_tokens: 4200,
+      output_tokens: 300,
+      cache_read_tokens: 3600,
+      cache_write_tokens: 120,
+    };
+    loadHistory(sessionState, [], { sessionUsage });
+
+    expect(sessionState.sessionUsage).toEqual(sessionUsage);
+  });
+
+  it('keeps previous sessionUsage when a history load has none', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const sessionUsage = { measured_turns: 1, input_tokens: 100 };
+    loadHistory(sessionState, [], { sessionUsage });
+
+    loadHistory(sessionState, [], {});
+
+    expect(sessionState.sessionUsage).toEqual(sessionUsage);
+  });
+
+  it('refreshes sessionUsage from every terminal run event that carries it', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    const sessionUsage = {
+      measured_turns: 5,
+      estimated_turns: 1,
+      cache_turns: 5,
+      input_tokens: 9000,
+      output_tokens: 800,
+      cache_read_tokens: 7200,
+      cache_write_tokens: 400,
+    };
+    appendRunEvent(sessionState, {
+      type: 'run_failed',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        status: CHAT_STATUS_FAILED,
+        error: 'boom',
+        session_usage: sessionUsage,
+      },
+    });
+
+    expect(sessionState.sessionUsage).toEqual(sessionUsage);
+    expect(sessionState.usage).toBeNull();
+  });
+
   it('sets usage from last assistant message when loading history', () => {
     const sessionState = ensureSessionState(
       createChatState(),
