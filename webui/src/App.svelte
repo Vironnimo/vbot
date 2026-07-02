@@ -77,6 +77,7 @@
     createNavigationHistoryState,
     isNavigationHistoryState,
     locationHashForView,
+    sameNavigationSelection,
     sameSessionOverride,
     viewIdFromLocationHash,
   } from '$lib/navigationHistory.js';
@@ -303,10 +304,24 @@
     }
   };
 
+  // The selection half of a history entry: which identity agent and which
+  // project context were active when the entry was created. Restored together
+  // with the session override so Back/Forward re-establish the whole chat
+  // context (chips, project bar, and displayed session agree again).
+  const currentNavigationSelection = () => ({
+    agentId: selectedAgentId,
+    projectId: selectedProjectId,
+    projectAgentId: selectedProjectAgentId,
+  });
+
   const pushNavigationState = () => {
     try {
       history.pushState(
-        createNavigationHistoryState(activeViewId, chatSessionOverride),
+        createNavigationHistoryState(
+          activeViewId,
+          chatSessionOverride,
+          currentNavigationSelection(),
+        ),
         '',
         locationHashForView(activeViewId),
       );
@@ -359,14 +374,26 @@
     }
 
     const target = navState.session ?? null;
-    if (sameSessionOverride(chatSessionOverride, target)) {
+    // Entries written before the selection field existed (or foreign states)
+    // carry no selection; they restore only the session override, as before.
+    const selection = navState.selection ?? null;
+    const selectionDiffers =
+      selection &&
+      !sameNavigationSelection(selection, currentNavigationSelection());
+    if (!selectionDiffers && sameSessionOverride(chatSessionOverride, target)) {
       return;
     }
     chatSessionOverride = target;
     sessionNavigationRequestId += 1;
-    pendingSessionNavigation = target
-      ? { ...target, requestId: sessionNavigationRequestId }
-      : { returnToCurrent: true, requestId: sessionNavigationRequestId };
+    // ChatView applies the selection itself and reports it back through the
+    // normal non-pushing callbacks (`onAgentSelected`/`onProjectSelected`/
+    // `onProjectAgentSelected`), so App's mirrors converge without this
+    // restore ever echoing into a new history push.
+    pendingSessionNavigation = {
+      ...(target ? { ...target } : { returnToCurrent: true }),
+      requestId: sessionNavigationRequestId,
+      selection,
+    };
   };
 
   const handlePopState = (event) => {
@@ -593,13 +620,38 @@
     let cancelled = false;
 
     try {
-      // Seed the current history entry so Back can always restore it; later
-      // navigation pushes new entries on top.
-      history.replaceState(
-        createNavigationHistoryState(activeViewId, null),
-        '',
-        locationHashForView(activeViewId),
-      );
+      const existingState = isNavigationHistoryState(history.state)
+        ? history.state
+        : null;
+      if (
+        existingState &&
+        existingState.view === activeViewId &&
+        existingState.session
+      ) {
+        // Reload with a session override on top of the history stack: adopt
+        // the entry instead of overwriting it, so the override survives the
+        // reload and Back/Forward keep working from it. The selection half is
+        // already restored through the localStorage mirrors — they were
+        // persisted by the same state that pushed this entry.
+        chatSessionOverride = existingState.session;
+        sessionNavigationRequestId += 1;
+        pendingSessionNavigation = {
+          ...existingState.session,
+          requestId: sessionNavigationRequestId,
+        };
+      } else {
+        // Seed the current history entry so Back can always restore it; later
+        // navigation pushes new entries on top.
+        history.replaceState(
+          createNavigationHistoryState(
+            activeViewId,
+            null,
+            currentNavigationSelection(),
+          ),
+          '',
+          locationHashForView(activeViewId),
+        );
+      }
     } catch {
       // History API unavailable (non-browser environment)
     }

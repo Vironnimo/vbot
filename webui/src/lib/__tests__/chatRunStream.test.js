@@ -675,11 +675,16 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
     expect(
       chatState.sessions[`${BARE_AGENT_ID}::${SESSION_ID}`],
     ).toBeUndefined();
+    // The status projection keys stay BARE: persisted spawn descriptors carry
+    // the child's bare id, so bare keys are the only ones their reads meet.
+    expect(
+      harness.subAgentRunStatuses[`session:${BARE_AGENT_ID}::${SESSION_ID}`],
+    ).toBe('running');
     expect(
       harness.subAgentRunStatuses[
         `session:${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`
       ],
-    ).toBe('running');
+    ).toBeUndefined();
     expect(harness.isDisplayedSession).toHaveBeenCalledWith(
       PROJECT_AGENT_ADDRESS,
       SESSION_ID,
@@ -687,7 +692,7 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
     expect(subscribeRunEvents).toHaveBeenCalledTimes(1);
   });
 
-  it('rebuilds the address from a snapshot active run so the project sub-agent status key and re-attach use agent@projekt', () => {
+  it('rebuilds the address from a snapshot active run for the re-attach while keeping the sub-agent status key bare', () => {
     const subscribeRunEvents = vi.fn(() => ({ close: vi.fn() }));
     const harness = makeStreamHarness({
       chatState,
@@ -712,10 +717,10 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
       ],
     });
 
+    // Status key bare (descriptor-compatible); session STATE stays
+    // address-keyed for the displayed-session match below.
     expect(
-      harness.subAgentRunStatuses[
-        `session:${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`
-      ],
+      harness.subAgentRunStatuses[`session:${BARE_AGENT_ID}::${SESSION_ID}`],
     ).toBe('running');
     expect(harness.isDisplayedSession).toHaveBeenCalledWith(
       PROJECT_AGENT_ADDRESS,

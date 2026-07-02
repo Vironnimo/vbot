@@ -117,6 +117,9 @@ function normalizeSubagentParent(parent) {
   return {
     agent_id: agentId,
     session_id: sessionId,
+    // The parent's project anchor (null for an identity parent). A project
+    // parent must be addressed as `agent@projekt` on navigation paths.
+    project_id: asOptionalText(parent.project_id),
     run_id: asOptionalText(parent.run_id),
     tool_call_id: asOptionalText(parent.tool_call_id),
     tool_call_index: Number.isSafeInteger(parent.tool_call_index)

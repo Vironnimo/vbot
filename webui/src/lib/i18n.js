@@ -132,6 +132,9 @@ export const englishCatalog = Object.freeze({
   'chat.subagent.loadingResult': 'loading result…',
   'chat.subagent.viewSession': 'view session',
   'chat.subagentSessionNotice': 'Viewing a sub-agent session',
+  'chat.subagentSessionParentHint':
+    'Messages here continue this sub-agent session. Return to the parent session when you are done.',
+  'chat.returnToParentSession': 'Return to parent session',
   'chat.subagentSessionHint':
     'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
   'chat.returnToCurrentSession': 'Return to current session',
