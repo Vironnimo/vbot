@@ -10,6 +10,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -95,6 +96,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -122,6 +124,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -233,6 +236,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -260,6 +264,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -449,6 +454,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -477,6 +483,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -507,6 +514,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -536,6 +544,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -565,6 +574,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -594,6 +604,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -648,6 +659,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -678,6 +690,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -707,6 +720,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -735,6 +749,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -761,6 +776,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -790,6 +806,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -817,6 +834,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -844,6 +862,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -1519,6 +1538,40 @@
       "release_date": "2026-02-17",
       "temperature": true
     },
+    "anthropic/claude-sonnet-5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "claude-sonnet",
+      "knowledge": "2026-01-31",
+      "last_updated": "2026-06-30",
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5",
+      "release_date": "2026-06-30",
+      "temperature": false
+    },
     "cohere/command-a-03-2025": {
       "capabilities": {
         "input_modalities": [
@@ -1686,6 +1739,114 @@
       "max_output_tokens": 64000,
       "name": "North Mini Code",
       "release_date": "2026-06-09",
+      "temperature": true
+    },
+    "deepreinforce/ornith-1.0-31b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "ornith",
+      "last_updated": "2026-06-25",
+      "max_output_tokens": null,
+      "name": "Ornith 1.0 31B",
+      "release_date": "2026-06-25",
+      "temperature": true
+    },
+    "deepreinforce/ornith-1.0-35b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "ornith",
+      "last_updated": "2026-06-25",
+      "max_output_tokens": null,
+      "name": "Ornith 1.0 35B",
+      "release_date": "2026-06-25",
+      "temperature": true
+    },
+    "deepreinforce/ornith-1.0-397b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "ornith",
+      "last_updated": "2026-06-25",
+      "max_output_tokens": null,
+      "name": "Ornith 1.0 397B",
+      "release_date": "2026-06-25",
+      "temperature": true
+    },
+    "deepreinforce/ornith-1.0-9b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "ornith",
+      "last_updated": "2026-06-25",
+      "max_output_tokens": null,
+      "name": "Ornith 1.0 9B",
+      "release_date": "2026-06-25",
       "temperature": true
     },
     "deepseek/deepseek-chat": {
@@ -2683,6 +2844,33 @@
       "max_output_tokens": 16384,
       "name": "Llama 4 Scout 17B Instruct",
       "release_date": "2025-04-05",
+      "temperature": true
+    },
+    "microsoft/mai-code-1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "family": "mai",
+      "knowledge": "2025-12",
+      "last_updated": "2026-06-08",
+      "max_output_tokens": 128000,
+      "name": "MAI-Code-1-Flash",
+      "release_date": "2026-06-02",
       "temperature": true
     },
     "minimax/MiniMax-M2": {
@@ -5192,6 +5380,58 @@
       "release_date": "2026-04-21",
       "temperature": false
     },
+    "openai/gpt-oss-120b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "gpt-oss",
+      "last_updated": "2025-08-05",
+      "max_output_tokens": 32768,
+      "name": "GPT OSS 120B",
+      "release_date": "2025-08-05",
+      "temperature": true
+    },
+    "openai/gpt-oss-safeguard-120b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "gpt-oss",
+      "last_updated": "2025-10-29",
+      "max_output_tokens": 32768,
+      "name": "GPT OSS Safeguard 120B",
+      "release_date": "2025-10-29",
+      "temperature": true
+    },
     "openai/o1": {
       "capabilities": {
         "input_modalities": [
@@ -5570,6 +5810,64 @@
       "name": "Sonar Reasoning Pro",
       "release_date": "2024-01-01",
       "temperature": true
+    },
+    "sakana/fugu": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "fugu",
+      "last_updated": "2026-06-15",
+      "max_output_tokens": null,
+      "name": "Fugu",
+      "release_date": "2026-06-15",
+      "temperature": false
+    },
+    "sakana/fugu-ultra": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "fugu",
+      "last_updated": "2026-06-15",
+      "max_output_tokens": null,
+      "name": "Fugu Ultra",
+      "release_date": "2026-06-15",
+      "temperature": false
     },
     "sarvam/sarvam-105b": {
       "capabilities": {
