@@ -60,6 +60,10 @@ JsonObject = dict[str, Any]
 # identity agent at home reproduces today's content/order.
 CORE_RUNTIME_BLOCK_ID = "core:runtime"
 CORE_TOOLS_BLOCK_ID = "core:tools"
+# The full name-and-description tool list. Ships disabled: providers already
+# receive every tool's description in the native tool definitions, so the prompt
+# copy is an opt-in booster for models that attend poorly to tool schemas.
+CORE_TOOLS_LIST_BLOCK_ID = "core:tools_list"
 CORE_CHANNELS_BLOCK_ID = "core:channels"
 CORE_SKILLS_BLOCK_ID = "core:skills"
 CORE_SOUL_BLOCK_ID = "core:soul"
@@ -660,6 +664,12 @@ class SystemPromptManager:
                 default_text=self._read_prompt_fragment(prompt_scope, agent_id, "tools.md"),
             ),
             BlockDefinition(
+                id=CORE_TOOLS_LIST_BLOCK_ID,
+                owner=BLOCK_OWNER_ALWAYS,
+                default_text=self._read_prompt_fragment(prompt_scope, agent_id, "tools_list.md"),
+                default_enabled=False,
+            ),
+            BlockDefinition(
                 id=CORE_CHANNELS_BLOCK_ID,
                 owner=BLOCK_OWNER_CHANNEL,
                 default_text=self._read_prompt_fragment(prompt_scope, agent_id, "channels.md"),
@@ -963,9 +973,12 @@ class SystemPromptManager:
         resource for the default scope, the agent copy for an agent scope — with no
         default fallback, exactly as today). The runtime block keeps its ``{host}``/
         ``{model}``/… placeholders (filled by the build-time replacements); the
-        tools/channels/skills blocks carry the ``{generated:…}`` list markers. The
-        channels block is owner ``channel`` so it drops entirely when no channel is
-        active (no more ``- None``).
+        tools-list/channels/skills blocks carry the ``{generated:…}`` list markers.
+        The tools-list block ships ``default_enabled=False`` — the native provider
+        tool definitions already carry every description, so the prompt copy is an
+        opt-in booster for models that attend poorly to tool schemas. The channels
+        block is owner ``channel`` so it drops entirely when no channel is active
+        (no more ``- None``).
         """
         return [
             BlockDefinition(
@@ -977,6 +990,12 @@ class SystemPromptManager:
                 id=CORE_TOOLS_BLOCK_ID,
                 owner=BLOCK_OWNER_ALWAYS,
                 default_text=self._read_prompt_fragment(prompt_scope, agent.id, "tools.md"),
+            ),
+            BlockDefinition(
+                id=CORE_TOOLS_LIST_BLOCK_ID,
+                owner=BLOCK_OWNER_ALWAYS,
+                default_text=self._read_prompt_fragment(prompt_scope, agent.id, "tools_list.md"),
+                default_enabled=False,
             ),
             BlockDefinition(
                 id=CORE_CHANNELS_BLOCK_ID,

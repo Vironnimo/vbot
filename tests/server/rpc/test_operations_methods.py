@@ -200,6 +200,7 @@ def test_list_returns_blocks_in_layout_order_with_scopes(tmp_path: Path) -> None
         "memory:guidance",
         "core:runtime",
         "core:tools",
+        "core:tools_list",
         "core:channels",
         "core:skills",
         "core:agent_body",
