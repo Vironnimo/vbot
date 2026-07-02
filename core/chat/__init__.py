@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from core.chat.errors import ChatMessageValidationError as ChatMessageValidationError
     from core.chat.errors import ChatSessionError as ChatSessionError
     from core.chat.errors import ToolIterationLimitError as ToolIterationLimitError
+    from core.chat.usage import aggregate_session_usage as aggregate_session_usage
     from core.sessions import ChatSession as ChatSession
     from core.sessions import ChatSessionManager as ChatSessionManager
 
@@ -58,6 +59,7 @@ _EXPORT_MODULES = {
     "parse_handoff_argument": "core.chat.commands",
     "ToolCall": "core.chat.chat",
     "ToolIterationLimitError": "core.chat.errors",
+    "aggregate_session_usage": "core.chat.usage",
 }
 
 __all__ = list(_EXPORT_MODULES)

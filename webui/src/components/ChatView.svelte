@@ -839,6 +839,7 @@
       });
       loadHistory(sessionState, history.messages ?? [], {
         hasMore: history.has_more === true,
+        sessionUsage: history.session_usage,
       });
       // History is the durable source of truth for which run is active. If
       // it says "no active run" but the local state still claims a run is
@@ -1108,6 +1109,7 @@
       });
       loadHistory(sessionState, history.messages ?? [], {
         hasMore: history.has_more === true,
+        sessionUsage: history.session_usage,
       });
       if (
         !history.active_run &&
