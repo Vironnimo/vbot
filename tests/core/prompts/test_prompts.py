@@ -40,7 +40,7 @@ from core.prompts.prompts import (
 
 _RESOURCES_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "resources" / "prompts"
 # The core text-block fragment files whose contents are the blocks' default texts.
-_CORE_FRAGMENT_NAMES = ("runtime.md", "tools.md", "channels.md", "skills.md")
+_CORE_FRAGMENT_NAMES = ("runtime.md", "tools.md", "tools_list.md", "channels.md", "skills.md")
 
 
 @dataclass(frozen=True)
@@ -271,8 +271,12 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert f"{workspace}" in prompt
     assert "- Thinking level: high" in prompt
     assert "- Date: 2026-05-04" in prompt
-    # Tools block.
-    assert "- read_file: Read a workspace file" in prompt
+    # Tools block: call-style guidance only. The full name/description list lives
+    # in the opt-in core:tools_list block, which ships disabled — the provider tool
+    # definitions already carry every description.
+    assert "## Tool Call Style" in prompt
+    assert "## Available Tools" not in prompt
+    assert "- read_file: Read a workspace file" not in prompt
     assert "shell" not in prompt
     # Channels block (only this agent's active channels).
     assert "## Channels" in prompt
@@ -296,7 +300,7 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert prompt == prompt.strip()
     assert "\n\n\n" not in prompt
     # Order: SOUL < memory < runtime < tools < channels < skills.
-    order = ["Soul text", "<memory>", "## Runtime", "## Available Tools", "## Channels"]
+    order = ["Soul text", "<memory>", "## Runtime", "## Tool Call Style", "## Channels"]
     positions = [prompt.index(section) for section in order]
     assert positions == sorted(positions)
     assert prompt.index("## Channels") < prompt.index("## Available Skills")
@@ -758,6 +762,35 @@ def test_saved_layout_disables_a_core_block(workspace: Path, tmp_path: Path) -> 
     assert "## Runtime" in prompt  # other blocks still present
 
 
+def test_enabling_tools_list_block_renders_tool_descriptions(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # core:tools_list ships disabled (default_enabled=False + bundled layout off);
+    # a saved layout that switches it on renders the full name/description list —
+    # the opt-in booster for models that attend poorly to native tool schemas.
+    layout = [LayoutEntry(id="core:tools_list", enabled=True, source="core")]
+    store = StubBlockStore(layouts={"default": layout})
+    manager = SystemPromptManager(
+        StubStorage(),
+        StubTools(),
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+        host="h",
+        os_name="o",
+        current_date=lambda: "2026-05-04",
+        block_store=store,
+    )
+    agent = _agent(workspace, allowed_tools=["read_file"])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Available Tools" in prompt
+    assert "- read_file: Read a workspace file" in prompt
+    assert "## Tool Call Style" in prompt  # the style block stays on independently
+
+
 def test_block_override_replaces_owner_default_text(workspace: Path, tmp_path: Path) -> None:
     store = StubBlockStore(
         overrides={("default", "core:tools"): "## Custom Tools\n{generated:tool_list}"}
@@ -973,6 +1006,7 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
         "memory:guidance",
         "core:runtime",
         "core:tools",
+        "core:tools_list",
         "core:channels",
         "core:skills",
         "core:agent_body",
@@ -988,6 +1022,10 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
     assert tools["source"] == "core"
     assert tools["owner"] == "always"
     assert tools["enabled"] is True
+    # The opt-in tool list ships disabled but stays a normal editable text block.
+    tools_list = by_id["core:tools_list"]
+    assert tools_list["enabled"] is False
+    assert tools_list["editable"] is True
     assert "text" in tools and tools["is_modified"] is False
     # The default scope omits the inheritance badge (T5 is agent-scope only).
     assert "inheritance" not in tools
@@ -1196,12 +1234,15 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
         "memory:guidance",
         "core:runtime",
         "core:tools",
+        "core:tools_list",
         "core:channels",
         "core:skills",
         "core:agent_body",
         "core:project_files",
     ]
-    assert all(entry.enabled for entry in persisted)
+    # Everything ships enabled except the opt-in tool list.
+    disabled_ids = {entry.id for entry in persisted if not entry.enabled}
+    assert disabled_ids == {"core:tools_list"}
     assert [entry["id"] for entry in result["layout"]] == [entry.id for entry in persisted]
 
 
