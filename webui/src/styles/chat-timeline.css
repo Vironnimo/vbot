@@ -330,6 +330,9 @@
   font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1.2;
+  /* Hidden (not just transparent) during the reveal delay: an invisible
+     button must not catch clicks — a mis-click here kills a real process. */
+  visibility: hidden;
   opacity: 0;
   animation: row-cancel-reveal 0.5s ease 0.5s forwards;
 }
@@ -346,7 +349,13 @@
 }
 
 @keyframes row-cancel-reveal {
+  from {
+    visibility: visible;
+    opacity: 0;
+  }
+
   to {
+    visibility: visible;
     opacity: 1;
   }
 }
