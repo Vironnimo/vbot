@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 from core.tools.arguments import (
@@ -14,9 +17,18 @@ from core.tools.arguments import (
     optional_string,
 )
 from core.tools.search import (
+    MAX_OUTPUT_BYTES,
+    OUTPUT_TRUNCATED_MARKER,
+    RESULTS_LIMITED_MARKER,
+    SEARCH_CANCELLED_FAILURE_CODE,
+    SEARCH_CANCELLED_FAILURE_MESSAGE,
+    SEARCH_TIMEOUT_MARKER,
+    SearchBudget,
+    display_search_path,
     file_filter_matches,
     normalize_file_filter_pattern,
     relative_forward_path,
+    render_limited_results,
     resolve_search_path,
 )
 from core.tools.tools import (
@@ -30,9 +42,6 @@ from core.tools.tools import (
 
 DEFAULT_LIMIT = 100
 MAX_LINE_CHARS = 500
-MAX_OUTPUT_BYTES = 50 * 1024
-OUTPUT_TRUNCATED_MARKER = "[... output truncated ...]"
-RESULTS_LIMITED_MARKER = "[Results limited to {limit} matches.]"
 SUPPORTED_OUTPUT_MODES = {"content", "files_with_matches", "count"}
 ALLOWED_ARGUMENTS = {
     "pattern",
@@ -46,12 +55,15 @@ ALLOWED_ARGUMENTS = {
 }
 # camelCase variant some models emit; normalized before validation like edit's aliases.
 _GREP_ARGUMENT_ALIASES = {"ignoreCase": "ignore_case"}
+# Bounded drain of a finished/killed ripgrep process; generous, never load-bearing.
+_RG_DRAIN_TIMEOUT_SECONDS = 5.0
 
 GREP_TOOL_NAME = "grep"
 GREP_TOOL_DESCRIPTION = (
     "Search file contents with a regex pattern by default. Set literal=true for "
     "fixed-string matching. Optional glob filters candidate files only. Returns "
-    "path:line:text rows unless output_mode requests matching files or counts."
+    "path:line:text rows unless output_mode requests matching files or counts; "
+    "paths are relative to the working directory (absolute when outside it)."
 )
 GREP_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -107,53 +119,36 @@ def _truncate_line(content: str) -> str:
     return f"{content[:MAX_LINE_CHARS]}...[truncated]"
 
 
-def _cap_output_bytes(content: str, *, trailing_lines: list[str] | None = None) -> str:
-    encoded = content.encode("utf-8")
-    suffix = "".join(f"\n{line}" for line in (trailing_lines or []) if line)
-    suffix_bytes = suffix.encode("utf-8")
-    if len(encoded) + len(suffix_bytes) <= MAX_OUTPUT_BYTES:
-        return content + suffix
-
-    marker = f"\n{OUTPUT_TRUNCATED_MARKER}{suffix}"
-    marker_bytes = marker.encode("utf-8")
-    keep_bytes = max(MAX_OUTPUT_BYTES - len(marker_bytes), 0)
-    clipped = encoded[:keep_bytes].decode("utf-8", errors="ignore")
-    return clipped + marker
-
-
-def _render_limited_results(lines: list[str], *, observed_results: int, limit: int) -> str:
-    if not lines:
-        return ""
-    trailing_lines: list[str] = []
-    if observed_results > limit:
-        trailing_lines.append(RESULTS_LIMITED_MARKER.format(limit=limit))
-    return _cap_output_bytes("\n".join(lines), trailing_lines=trailing_lines)
-
-
-def _rendered_relative_path(file_path: Path, *, base: Path) -> str:
+def _filter_relative_path(file_path: Path, *, base: Path) -> str:
+    """Return the search-root-relative path used for glob filtering and sorting."""
     try:
         return relative_forward_path(file_path, base=base)
     except ValueError:
         return file_path.name
 
 
-def _iter_candidate_files(search_target: Path, glob_pattern: str | None) -> tuple[list[Path], Path]:
+def _iter_candidate_files(
+    search_target: Path, glob_pattern: str | None, *, budget: SearchBudget
+) -> tuple[list[Path], Path]:
     base = search_target if search_target.is_dir() else search_target.parent
+    candidates: list[Path] = []
     if search_target.is_file():
         candidates = [search_target]
     elif search_target.is_dir():
-        candidates = [path for path in search_target.rglob("*") if path.is_file()]
-    else:
-        candidates = []
+        for path in search_target.rglob("*"):
+            if not budget.keep_going():
+                break
+            if path.is_file():
+                candidates.append(path)
 
     if glob_pattern:
         candidates = [
             candidate
             for candidate in candidates
-            if file_filter_matches(_rendered_relative_path(candidate, base=base), glob_pattern)
+            if file_filter_matches(_filter_relative_path(candidate, base=base), glob_pattern)
         ]
 
-    candidates.sort(key=lambda path: _rendered_relative_path(path, base=base))
+    candidates.sort(key=lambda path: _filter_relative_path(path, base=base))
     return candidates, base
 
 
@@ -173,20 +168,24 @@ def _read_lines(file_path: Path) -> list[str] | None:
 def _grep_content_python(
     files: list[Path],
     *,
-    base: Path,
+    cwd: Path,
     pattern: re.Pattern[str],
     context_lines: int,
     limit: int,
+    budget: SearchBudget,
 ) -> tuple[list[str], int]:
     rendered: list[str] = []
+    rendered_bytes = 0
     match_count = 0
 
     for file_path in files:
+        if not budget.keep_going():
+            break
         all_lines = _read_lines(file_path)
         if all_lines is None:
             continue
 
-        relative = _rendered_relative_path(file_path, base=base)
+        display = display_search_path(file_path, cwd=cwd)
         emitted_line_numbers: set[int] = set()
         for line_index, line in enumerate(all_lines, start=1):
             if pattern.search(line) is None:
@@ -201,35 +200,45 @@ def _grep_content_python(
                 if context_index in emitted_line_numbers:
                     continue
                 emitted_line_numbers.add(context_index)
-                rendered.append(
-                    f"{relative}:{context_index}: {_truncate_line(all_lines[context_index - 1])}"
+                rendered_line = (
+                    f"{display}:{context_index}: {_truncate_line(all_lines[context_index - 1])}"
                 )
+                rendered.append(rendered_line)
+                rendered_bytes += len(rendered_line.encode("utf-8")) + 1
+            if rendered_bytes > MAX_OUTPUT_BYTES:
+                # Already past the byte cap; scanning further files only buys
+                # output the cap would discard.
+                return rendered, match_count
 
     return rendered, match_count
 
 
 def _grep_files_with_matches_python(
-    files: list[Path], *, base: Path, pattern: re.Pattern[str], limit: int
+    files: list[Path], *, cwd: Path, pattern: re.Pattern[str], limit: int, budget: SearchBudget
 ) -> tuple[list[str], int]:
     rendered: list[str] = []
     file_count = 0
     for file_path in files:
+        if not budget.keep_going():
+            break
         all_lines = _read_lines(file_path)
         if all_lines is None or not any(pattern.search(line) for line in all_lines):
             continue
         file_count += 1
         if file_count > limit:
             break
-        rendered.append(_rendered_relative_path(file_path, base=base))
+        rendered.append(display_search_path(file_path, cwd=cwd))
     return rendered, file_count
 
 
 def _grep_count_python(
-    files: list[Path], *, base: Path, pattern: re.Pattern[str], limit: int
+    files: list[Path], *, cwd: Path, pattern: re.Pattern[str], limit: int, budget: SearchBudget
 ) -> tuple[list[str], int]:
     rendered: list[str] = []
     file_count = 0
     for file_path in files:
+        if not budget.keep_going():
+            break
         all_lines = _read_lines(file_path)
         if all_lines is None:
             continue
@@ -240,7 +249,7 @@ def _grep_count_python(
         file_count += 1
         if file_count > limit:
             break
-        rendered.append(f"{_rendered_relative_path(file_path, base=base)}:{count}")
+        rendered.append(f"{display_search_path(file_path, cwd=cwd)}:{count}")
     return rendered, file_count
 
 
@@ -253,6 +262,9 @@ def _normalize_rg_path(path_value: str) -> str:
 
 def _grep_with_rg(
     *,
+    context: ToolContext,
+    budget: SearchBudget,
+    cwd: Path,
     pattern: str,
     search_target: Path,
     glob_pattern: str | None,
@@ -268,7 +280,7 @@ def _grep_with_rg(
     if not rg_path:
         return None, None
 
-    cwd = search_target if search_target.is_dir() else search_target.parent
+    base = search_target if search_target.is_dir() else search_target.parent
     search_argument = "." if search_target.is_dir() else search_target.name
     command = [
         rg_path,
@@ -298,57 +310,114 @@ def _grep_with_rg(
     command.extend(["--regexp", pattern, "--", search_argument])
 
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
-            cwd=str(cwd),
-            capture_output=True,
+            cwd=str(base),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            check=False,
         )
     except OSError as error:
         return None, f"failed to execute ripgrep: {error}"
 
-    if completed.returncode not in (0, 1):
-        return None, completed.stderr.strip() or "ripgrep failed"
+    def kill_process() -> None:
+        if process.poll() is None:
+            with contextlib.suppress(OSError):
+                process.kill()
 
-    raw_lines = [line for line in completed.stdout.splitlines() if line.strip()]
-    if not raw_lines:
-        return "", None
+    def expire() -> None:
+        budget.timed_out = True
+        kill_process()
+
+    # Killing the process closes its stdout, so the blocking line reads below
+    # always terminate: the watchdog covers a silent long scan, the cancel hook
+    # covers a per-call user cancel arriving while this thread is blocked.
+    watchdog = threading.Timer(budget.remaining_seconds(), expire)
+    watchdog.daemon = True
+    watchdog.start()
+    context.on_cancel(kill_process)
 
     rendered: list[str] = []
     observed_results = 0
-    for raw_line in raw_lines:
-        rendered_line = _render_rg_line(raw_line, output_mode)
-        if rendered_line is None:
-            continue
-        observed_results += 1
-        if observed_results > limit:
-            break
-        rendered.append(rendered_line)
-    return _render_limited_results(rendered, observed_results=observed_results, limit=limit), None
+    rendered_bytes = 0
+    stopped_early = False
+    stderr_output = ""
+    try:
+        stdout_stream = process.stdout
+        if stdout_stream is not None:
+            for raw_line in stdout_stream:
+                line = raw_line.rstrip("\n")
+                if not line.strip():
+                    continue
+                rendered_line = _render_rg_line(line, output_mode, base=base, cwd=cwd)
+                if rendered_line is None:
+                    continue
+                observed_results += 1
+                if observed_results > limit:
+                    stopped_early = True
+                    break
+                rendered.append(rendered_line)
+                rendered_bytes += len(rendered_line.encode("utf-8")) + 1
+                if rendered_bytes > MAX_OUTPUT_BYTES or not budget.keep_going():
+                    stopped_early = True
+                    break
+    finally:
+        watchdog.cancel()
+        if stopped_early:
+            kill_process()
+        try:
+            _, stderr_output = process.communicate(timeout=_RG_DRAIN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            kill_process()
+            _, stderr_output = process.communicate()
+
+    # A kill by the cancel hook or the watchdog surfaces above as plain EOF;
+    # poll once more so that exit is not misread as an rg failure.
+    if not stopped_early:
+        budget.keep_going()
+    intentionally_stopped = stopped_early or budget.stopped
+    if not intentionally_stopped and process.returncode not in (0, 1):
+        return None, stderr_output.strip() or "ripgrep failed"
+
+    return (
+        render_limited_results(
+            rendered,
+            observed_results=observed_results,
+            limit=limit,
+            timed_out=budget.timed_out,
+        ),
+        None,
+    )
 
 
-def _render_rg_line(raw_line: str, output_mode: str) -> str | None:
+def _render_rg_line(raw_line: str, output_mode: str, *, base: Path, cwd: Path) -> str | None:
     if output_mode == "content":
         parts = raw_line.split(":", 2)
         if len(parts) != 3:
             return None
         file_part, line_part, content_part = parts
-        return f"{_normalize_rg_path(file_part)}:{line_part}: {_truncate_line(content_part)}"
+        display = display_search_path(base / _normalize_rg_path(file_part), cwd=cwd)
+        return f"{display}:{line_part}: {_truncate_line(content_part)}"
     if output_mode == "files_with_matches":
-        return _normalize_rg_path(raw_line)
+        return display_search_path(base / _normalize_rg_path(raw_line), cwd=cwd)
 
     parts = raw_line.rsplit(":", 1)
     if len(parts) != 2:
         return None
     file_part, count_part = parts
-    return f"{_normalize_rg_path(file_part)}:{count_part.strip()}"
+    display = display_search_path(base / _normalize_rg_path(file_part), cwd=cwd)
+    return f"{display}:{count_part.strip()}"
 
 
 def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    """Handle a grep tool call and return a stable vBot result envelope."""
+    """Handle a grep tool call and return a stable vBot result envelope.
+
+    Sync core; registered behind an ``asyncio.to_thread`` wrapper so the
+    ripgrep subprocess and the fallback file scan never block the kernel
+    event loop.
+    """
     arguments = normalize_aliases(arguments, _GREP_ARGUMENT_ALIASES)
     unknown_arguments = set(arguments) - ALLOWED_ARGUMENTS
     if unknown_arguments:
@@ -391,7 +460,13 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     except re.error as error:
         return tool_failure("invalid_regex", f"invalid regex pattern: {error}")
 
+    cwd_root = context.effective_cwd.expanduser().resolve()
+    budget = SearchBudget(context)
+
     rg_result, rg_error = _grep_with_rg(
+        context=context,
+        budget=budget,
+        cwd=cwd_root,
         pattern=pattern_argument,
         search_target=search_target,
         glob_pattern=glob_pattern,
@@ -403,41 +478,57 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     )
     if rg_error is not None:
         return tool_failure("grep_error", rg_error)
+    if budget.cancelled_by_user:
+        return tool_failure(SEARCH_CANCELLED_FAILURE_CODE, SEARCH_CANCELLED_FAILURE_MESSAGE)
     if rg_result is not None:
-        return tool_success(
-            {"content": rg_result or f"No matches found for pattern: {pattern_argument}"}
-        )
+        return tool_success({"content": rg_result or _no_match_content(pattern_argument, budget)})
 
-    files, base = _iter_candidate_files(search_target, glob_pattern)
+    files, _base = _iter_candidate_files(search_target, glob_pattern, budget=budget)
     if output_mode == "content":
         rendered, observed_results = _grep_content_python(
             files,
-            base=base,
+            cwd=cwd_root,
             pattern=compiled_pattern,
             context_lines=context_lines,
             limit=match_limit,
+            budget=budget,
         )
     elif output_mode == "files_with_matches":
         rendered, observed_results = _grep_files_with_matches_python(
             files,
-            base=base,
+            cwd=cwd_root,
             pattern=compiled_pattern,
             limit=match_limit,
+            budget=budget,
         )
     else:
         rendered, observed_results = _grep_count_python(
             files,
-            base=base,
+            cwd=cwd_root,
             pattern=compiled_pattern,
             limit=match_limit,
+            budget=budget,
         )
 
-    content = _render_limited_results(
-        rendered, observed_results=observed_results, limit=match_limit
+    if budget.cancelled_by_user:
+        return tool_failure(SEARCH_CANCELLED_FAILURE_CODE, SEARCH_CANCELLED_FAILURE_MESSAGE)
+
+    content = render_limited_results(
+        rendered,
+        observed_results=observed_results,
+        limit=match_limit,
+        timed_out=budget.timed_out,
     )
     if not content:
-        content = f"No matches found for pattern: {pattern_argument}"
+        content = _no_match_content(pattern_argument, budget)
     return tool_success({"content": content})
+
+
+def _no_match_content(pattern: str, budget: SearchBudget) -> str:
+    content = f"No matches found for pattern: {pattern}"
+    if budget.timed_out:
+        return f"{content}\n{SEARCH_TIMEOUT_MARKER}"
+    return content
 
 
 def _normalize_glob_argument(value: object) -> str | None:
@@ -449,13 +540,17 @@ def _normalize_glob_argument(value: object) -> str | None:
     return normalized or None
 
 
+async def _grep_handler_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    return await asyncio.to_thread(grep_handler, context, arguments)
+
+
 def register_grep_tool(registry: ToolRegistry) -> None:
     """Register the grep tool with a vBot tool registry."""
     registry.register(
         GREP_TOOL_NAME,
         GREP_TOOL_DESCRIPTION,
         GREP_TOOL_PARAMETERS,
-        grep_handler,
+        _grep_handler_async,
         display=ToolDisplay(summary_fields=("pattern", "path")),
     )
 
@@ -465,6 +560,9 @@ __all__ = [
     "GREP_TOOL_DESCRIPTION",
     "GREP_TOOL_NAME",
     "GREP_TOOL_PARAMETERS",
+    "MAX_OUTPUT_BYTES",
+    "OUTPUT_TRUNCATED_MARKER",
+    "RESULTS_LIMITED_MARKER",
     "grep_handler",
     "register_grep_tool",
 ]

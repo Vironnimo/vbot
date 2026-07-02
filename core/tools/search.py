@@ -3,12 +3,111 @@
 from __future__ import annotations
 
 import fnmatch
+import time
 from functools import cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.tools.tools import ToolContext
+
+SEARCH_TIMEOUT_SECONDS = 30.0
+MAX_OUTPUT_BYTES = 50 * 1024
+OUTPUT_TRUNCATED_MARKER = "[... output truncated ...]"
+RESULTS_LIMITED_MARKER = "[Results limited to {limit} matches.]"
+SEARCH_TIMEOUT_MARKER = "[Search timed out; results may be incomplete.]"
+SEARCH_CANCELLED_FAILURE_CODE = "cancelled_by_user"
+SEARCH_CANCELLED_FAILURE_MESSAGE = "Search aborted by the user"
+
+
+class SearchBudget:
+    """Cooperative stop signal for one search tool call.
+
+    Search handlers run in a worker thread, so nothing external can interrupt
+    a long filesystem walk: the loops must poll. ``keep_going()`` folds the
+    three stop reasons (user cancel, run cancel, wall-clock timeout) into one
+    check and records which one fired, so the handler can decide between a
+    cancel failure envelope and partial results with a timeout marker.
+    """
+
+    def __init__(self, context: ToolContext, timeout_seconds: float | None = None) -> None:
+        # Resolved at call time (not import time) so tests can shrink the
+        # module-level timeout via monkeypatch.
+        if timeout_seconds is None:
+            timeout_seconds = SEARCH_TIMEOUT_SECONDS
+        self._context = context
+        self._deadline = time.monotonic() + timeout_seconds
+        self.timed_out = False
+        self.cancelled_by_user = False
+        self.run_cancelled = False
+
+    def remaining_seconds(self) -> float:
+        """Return the wall-clock budget left, floored at zero."""
+        return max(self._deadline - time.monotonic(), 0.0)
+
+    def keep_going(self) -> bool:
+        """Poll all stop conditions; record and return False on the first hit."""
+        if self._context.was_cancelled_by_user():
+            self.cancelled_by_user = True
+            return False
+        if self._context.is_cancelled():
+            self.run_cancelled = True
+            return False
+        if time.monotonic() > self._deadline:
+            self.timed_out = True
+            return False
+        return True
+
+    @property
+    def stopped(self) -> bool:
+        """Return whether any stop condition has been recorded."""
+        return self.timed_out or self.cancelled_by_user or self.run_cancelled
+
+
+def display_search_path(path: Path, *, cwd: Path) -> str:
+    """Render a result path relative to the working directory, absolute outside it.
+
+    Relative tool paths resolve against the working directory, so a result
+    rendered this way always round-trips into a follow-up read/edit call —
+    regardless of which search root produced it.
+    """
+    try:
+        return path.relative_to(cwd).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def cap_output_bytes(content: str, *, trailing_lines: list[str] | None = None) -> str:
+    """Cap rendered output at ``MAX_OUTPUT_BYTES``, keeping trailing marker lines."""
+    encoded = content.encode("utf-8")
+    suffix = "".join(f"\n{line}" for line in (trailing_lines or []) if line)
+    suffix_bytes = suffix.encode("utf-8")
+    if len(encoded) + len(suffix_bytes) <= MAX_OUTPUT_BYTES:
+        return content + suffix
+
+    marker = f"\n{OUTPUT_TRUNCATED_MARKER}{suffix}"
+    marker_bytes = marker.encode("utf-8")
+    keep_bytes = max(MAX_OUTPUT_BYTES - len(marker_bytes), 0)
+    clipped = encoded[:keep_bytes].decode("utf-8", errors="ignore")
+    return clipped + marker
+
+
+def render_limited_results(
+    lines: list[str],
+    *,
+    observed_results: int,
+    limit: int,
+    timed_out: bool = False,
+) -> str:
+    """Join result lines, appending explicit limit/timeout markers within the byte cap."""
+    if not lines:
+        return ""
+    trailing_lines: list[str] = []
+    if observed_results > limit:
+        trailing_lines.append(RESULTS_LIMITED_MARKER.format(limit=limit))
+    if timed_out:
+        trailing_lines.append(SEARCH_TIMEOUT_MARKER)
+    return cap_output_bytes("\n".join(lines), trailing_lines=trailing_lines)
 
 
 def resolve_search_path(context: ToolContext, path: str | None) -> Path:
@@ -128,8 +227,19 @@ def _match_glob_path_segments(
 
 
 __all__ = [
+    "MAX_OUTPUT_BYTES",
+    "OUTPUT_TRUNCATED_MARKER",
+    "RESULTS_LIMITED_MARKER",
+    "SEARCH_CANCELLED_FAILURE_CODE",
+    "SEARCH_CANCELLED_FAILURE_MESSAGE",
+    "SEARCH_TIMEOUT_MARKER",
+    "SEARCH_TIMEOUT_SECONDS",
+    "SearchBudget",
+    "cap_output_bytes",
+    "display_search_path",
     "file_filter_matches",
     "normalize_file_filter_pattern",
     "relative_forward_path",
+    "render_limited_results",
     "resolve_search_path",
 ]
