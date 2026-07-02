@@ -909,9 +909,12 @@ function appendHistoryToolResult(assistantRun, message) {
       timing: message.timing,
     },
   });
-  assistantRun.status = hasResultFailure(message.content)
-    ? CHAT_STATUS_FAILED
-    : CHAT_STATUS_COMPLETED;
+  // A per-tool user cancel is not a run failure — the run continued past it.
+  // (Only relevant for runs without a run_summary; the summary overrides.)
+  const runFailed =
+    hasResultFailure(message.content) &&
+    !toolResultCancelledByUser(message.content);
+  assistantRun.status = runFailed ? CHAT_STATUS_FAILED : CHAT_STATUS_COMPLETED;
 }
 
 // A run row built from a cancelled run_summary alone (no assistant/tool
@@ -1190,9 +1193,20 @@ function mergeToolResult(assistantRun, event) {
     normalizedTiming(event.payload?.timing ?? event.payload?.message?.timing) ??
     tool.timing;
   tool.durationMs = timingDurationMs(tool.timing) ?? tool.durationMs;
-  tool.status = hasToolResultFailure(event) ? CHAT_STATUS_FAILED : 'success';
+  tool.status = toolStatusFromResultEvent(event);
   tool.events = [...tool.events, event];
   syncAssistantRunCollections(assistantRun);
+}
+
+// A per-tool-call user cancel returns the stable `cancelled_by_user` failure
+// envelope; the row renders as "cancelled" — the user's own action — instead
+// of a red failure. Any other failure envelope stays "failed".
+function toolStatusFromResultEvent(event) {
+  const result = event.payload?.result ?? event.payload?.message?.content;
+  if (toolResultCancelledByUser(result)) {
+    return CHAT_STATUS_CANCELLED;
+  }
+  return hasToolResultFailure(event) ? CHAT_STATUS_FAILED : 'success';
 }
 
 function mergeSubAgentSessionStarted(assistantRun, event) {
@@ -1406,6 +1420,15 @@ function moreStableToolKey(existingKey, candidateKey) {
     return candidateKey;
   }
   return existingKey;
+}
+
+// Failure code the per-tool-call user cancel produces (the bash tool's
+// `tool_failure("cancelled_by_user", …)` envelope).
+const USER_CANCELLED_TOOL_RESULT_CODE = 'cancelled_by_user';
+
+function toolResultCancelledByUser(result) {
+  const normalizedResult = parseResult(result);
+  return normalizedResult?.error?.code === USER_CANCELLED_TOOL_RESULT_CODE;
 }
 
 function hasToolResultFailure(event) {
