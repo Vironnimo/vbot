@@ -481,3 +481,105 @@ describe('cancelled run rendering', () => {
     expect(run.outputs[0].interrupted).toBe(true);
   });
 });
+
+describe('per-tool-call user cancel projection', () => {
+  const cancelledEnvelope = {
+    ok: false,
+    error: {
+      code: 'cancelled_by_user',
+      message: 'Command aborted by the user',
+    },
+    data: null,
+    artifacts: [],
+  };
+
+  function liveSessionWithToolResult(result) {
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-1');
+    startRun(sessionState, {
+      run_id: 'run-1',
+      sse_url: '/api/runs/run-1/events',
+      status: 'running',
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-1',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-bash',
+          index: 0,
+          name: 'bash',
+          arguments: { command: 'sleep 600' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-1',
+      sequence: 2,
+      payload: {
+        tool_call: { id: 'call-bash', index: 0, name: 'bash' },
+        result,
+      },
+    });
+    return sessionState;
+  }
+
+  it('renders a user-cancelled tool result as cancelled, not failed (live)', () => {
+    const sessionState = liveSessionWithToolResult(cancelledEnvelope);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const run = items.find((item) => item.type === 'assistant_run');
+    expect(run.tools).toHaveLength(1);
+    expect(run.tools[0].status).toBe('cancelled');
+  });
+
+  it('keeps any other failure envelope failed (live)', () => {
+    const sessionState = liveSessionWithToolResult({
+      ok: false,
+      error: { code: 'process_timeout', message: 'timed out' },
+      data: null,
+      artifacts: [],
+    });
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const run = items.find((item) => item.type === 'assistant_run');
+    expect(run.tools[0].status).toBe('failed');
+  });
+
+  it('renders a user-cancelled tool result as cancelled after reload, without failing the run (history)', () => {
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-1');
+    loadHistory(sessionState, [
+      { id: 'user-1', role: 'user', content: 'Run it' },
+      {
+        id: 'assistant-tool',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-bash',
+            name: 'bash',
+            arguments: { command: 'sleep 600' },
+          },
+        ],
+      },
+      {
+        id: 'tool-bash',
+        role: 'tool',
+        tool_call_id: 'call-bash',
+        name: 'bash',
+        content: JSON.stringify(cancelledEnvelope),
+        timing: { duration_ms: 1200 },
+      },
+    ]);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const run = items.find((item) => item.type === 'assistant_run');
+    expect(run.tools).toHaveLength(1);
+    expect(run.tools[0].status).toBe('cancelled');
+    // The user's per-tool cancel is not a run failure.
+    expect(run.status).not.toBe('failed');
+  });
+});
