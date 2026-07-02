@@ -1,12 +1,14 @@
 """Tests for the built-in grep tool."""
 
-import subprocess
+import inspect
+import io
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 import core.tools.grep as grep_module
+import core.tools.search as search_module
 from core.tools.grep import (
     GREP_TOOL_NAME,
     GREP_TOOL_PARAMETERS,
@@ -14,11 +16,16 @@ from core.tools.grep import (
     grep_handler,
     register_grep_tool,
 )
+from core.tools.search import RESULTS_LIMITED_MARKER, SEARCH_TIMEOUT_MARKER
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
 
 def make_context(
-    workspace: Path, tool_name: str = GREP_TOOL_NAME, *, cwd: Path | None = None
+    workspace: Path,
+    tool_name: str = GREP_TOOL_NAME,
+    *,
+    cwd: Path | None = None,
+    user_cancelled: bool = False,
 ) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
@@ -31,11 +38,57 @@ def make_context(
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
         cwd=cwd,
+        cancel_check_hook=(lambda: True) if user_cancelled else None,
     )
 
 
 def force_python_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(grep_module.shutil, "which", lambda _name: None)
+
+
+class FakeRgProcess:
+    """Streaming stand-in for the ripgrep Popen handle."""
+
+    def __init__(
+        self, command: list[str], cwd: str, stdout_text: str, stderr_text: str, returncode: int
+    ) -> None:
+        self.command = command
+        self.cwd = cwd
+        self.stdout = io.StringIO(stdout_text)
+        self.stderr = io.StringIO(stderr_text)
+        self.returncode = returncode
+        self.killed = False
+        self._finished = False
+
+    def poll(self) -> int | None:
+        return self.returncode if self._finished else None
+
+    def kill(self) -> None:
+        self.killed = True
+        self._finished = True
+
+    def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+        self._finished = True
+        return ("", self.stderr.read())
+
+
+def install_fake_rg(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    stdout_text: str = "",
+    stderr_text: str = "",
+    returncode: int = 0,
+) -> list[FakeRgProcess]:
+    monkeypatch.setattr(grep_module.shutil, "which", lambda _name: "rg")
+    created: list[FakeRgProcess] = []
+
+    def fake_popen(command: list[str], cwd: str | None = None, **_kwargs: Any) -> FakeRgProcess:
+        process = FakeRgProcess(command, cwd or "", stdout_text, stderr_text, returncode)
+        created.append(process)
+        return process
+
+    monkeypatch.setattr(grep_module.subprocess, "Popen", fake_popen)
+    return created
 
 
 def get_success_content(result: dict[str, object]) -> str:
@@ -98,6 +151,8 @@ def test_register_grep_tool_exposes_provider_schema() -> None:
     tool = registry.get("grep")
     assert tool.name == GREP_TOOL_NAME == "grep"
     assert tool.parameters == GREP_TOOL_PARAMETERS
+    # The registered handler must run the sync search off the event loop.
+    assert inspect.iscoroutinefunction(tool.handler)
 
     definitions = registry.provider_definitions(["grep"])
     assert len(definitions) == 1
@@ -148,7 +203,9 @@ def test_grep_defaults_to_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert data["content"] == "notes.txt:1: target"
 
 
-def test_grep_searches_absolute_file_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_grep_renders_absolute_path_for_file_outside_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     force_python_fallback(monkeypatch)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -158,10 +215,10 @@ def test_grep_searches_absolute_file_path(tmp_path: Path, monkeypatch: pytest.Mo
     result = grep_handler(make_context(workspace), {"pattern": "hit", "path": str(target)})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "outside.txt:1: absolute hit"
+    assert data["content"] == f"{target.resolve().as_posix()}:1: absolute hit"
 
 
-def test_grep_searches_absolute_directory_path(
+def test_grep_renders_absolute_paths_for_directory_outside_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     force_python_fallback(monkeypatch)
@@ -174,7 +231,7 @@ def test_grep_searches_absolute_directory_path(
     result = grep_handler(make_context(workspace), {"pattern": "alpha", "path": str(directory)})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "a.txt:1: alpha"
+    assert data["content"] == f"{(directory / 'a.txt').resolve().as_posix()}:1: alpha"
 
 
 def test_grep_returns_failure_for_invalid_regex(
@@ -401,6 +458,32 @@ def test_grep_skips_read_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert data["content"] == "good.txt:1: needle"
 
 
+def test_grep_returns_cancelled_failure_when_user_cancels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace, user_cancelled=True), {"pattern": "needle"})
+
+    assert_failure_envelope(result, "cancelled_by_user")
+
+
+def test_grep_marks_timed_out_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(search_module, "SEARCH_TIMEOUT_SECONDS", -1.0)
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle"})
+
+    content = get_success_content(result)
+    assert SEARCH_TIMEOUT_MARKER in content
+
+
 def test_grep_uses_python_fallback_when_rg_is_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -409,10 +492,10 @@ def test_grep_uses_python_fallback_when_rg_is_unavailable(
     workspace.mkdir()
     workspace.joinpath("notes.txt").write_text("fallback hit\n", encoding="utf-8")
 
-    def fail_if_called(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        raise AssertionError("subprocess.run should not be called without rg")
+    def fail_if_called(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("subprocess.Popen should not be called without rg")
 
-    monkeypatch.setattr(grep_module.subprocess, "run", fail_if_called)
+    monkeypatch.setattr(grep_module.subprocess, "Popen", fail_if_called)
 
     result = grep_handler(make_context(workspace), {"pattern": "fallback"})
     data = assert_success_envelope(result)
@@ -425,12 +508,7 @@ def test_grep_returns_failure_for_rg_nonzero_error(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("notes.txt").write_text("hello\n", encoding="utf-8")
-    monkeypatch.setattr(grep_module.shutil, "which", lambda _name: "rg")
-
-    def fail_rg(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(command, 2, stdout="", stderr="regex parse error")
-
-    monkeypatch.setattr(grep_module.subprocess, "run", fail_rg)
+    install_fake_rg(monkeypatch, stderr_text="regex parse error", returncode=2)
 
     result = grep_handler(make_context(workspace), {"pattern": "hello"})
     error = assert_failure_envelope(result, "grep_error")
@@ -445,10 +523,10 @@ def test_grep_returns_failure_for_discovered_rg_execution_oserror(
     workspace.joinpath("notes.txt").write_text("hello\n", encoding="utf-8")
     monkeypatch.setattr(grep_module.shutil, "which", lambda _name: "rg")
 
-    def raise_oserror(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def raise_oserror(*_args: Any, **_kwargs: Any) -> None:
         raise OSError("permission denied")
 
-    monkeypatch.setattr(grep_module.subprocess, "run", raise_oserror)
+    monkeypatch.setattr(grep_module.subprocess, "Popen", raise_oserror)
 
     result = grep_handler(make_context(workspace), {"pattern": "hello"})
     error = assert_failure_envelope(result, "grep_error")
@@ -462,16 +540,49 @@ def test_grep_uses_rg_success_output_when_available(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("notes.txt").write_text("hello\n", encoding="utf-8")
-    monkeypatch.setattr(grep_module.shutil, "which", lambda _name: "rg")
-
-    def succeed_rg(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(command, 0, stdout="notes.txt:1:hello\n", stderr="")
-
-    monkeypatch.setattr(grep_module.subprocess, "run", succeed_rg)
+    install_fake_rg(monkeypatch, stdout_text="notes.txt:1:hello\n")
 
     result = grep_handler(make_context(workspace), {"pattern": "hello"})
     data = assert_success_envelope(result)
     assert data["content"] == "notes.txt:1: hello"
+
+
+def test_grep_stops_reading_rg_output_at_limit_and_kills_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    stdout_text = "".join(f"notes.txt:{index}:hit\n" for index in range(1, 6))
+    created = install_fake_rg(monkeypatch, stdout_text=stdout_text)
+
+    result = grep_handler(make_context(workspace), {"pattern": "hit", "limit": 2})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == (
+        f"notes.txt:1: hit\nnotes.txt:2: hit\n{RESULTS_LIMITED_MARKER.format(limit=2)}"
+    )
+    assert len(created) == 1
+    assert created[0].killed is True
+
+
+def test_grep_renders_rg_paths_relative_to_cwd_or_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    install_fake_rg(monkeypatch, stdout_text="sub\\a.txt:1:alpha\n")
+
+    inside_result = grep_handler(make_context(workspace), {"pattern": "alpha"})
+    outside_result = grep_handler(
+        make_context(workspace), {"pattern": "alpha", "path": str(outside)}
+    )
+
+    assert get_success_content(inside_result) == "sub/a.txt:1: alpha"
+    assert get_success_content(outside_result) == (
+        f"{(outside / 'sub' / 'a.txt').resolve().as_posix()}:1: alpha"
+    )
 
 
 def test_grep_rejects_unknown_arguments(tmp_path: Path) -> None:
