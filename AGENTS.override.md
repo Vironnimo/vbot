@@ -19,16 +19,18 @@ The user reads no code. All user-facing communication — discovery, plan review
 
 **Decisions — surface by whether it's a real choice, not by whether the user can feel it.** A change built to be imperceptible still has sub-decisions worth seeing; "the user won't feel it" is never a reason to bury one.
 
-- **Ask first** when the user has a stake in the outcome — product behavior, or a trade-off they'd want to weigh in on: give your recommendation and the alternative, then wait.
+- **Ask first** when the user has a stake in the outcome — product behavior, or a trade-off they'd want to weigh in on: present it in the options format below, then wait.
 - **Decide, then disclose in one line** when it's a real choice among defensible options the user would likely leave to good practice (a 0.5s vs 0.8s debounce, a threshold, a library): make the call and show it — what you chose, the alternative, and why, in one overridable line.
 - **Settle silently** only when no alternative exists that the user could hold a view on — naming, code structure below domain level, where code lives.
 
 Between the last two, disclose whenever you actively picked among options with no single obvious right answer; a lone obvious path stays silent.
 
+**Options format — every decision that goes to the user uses it, always.** Present 2–4 labeled, mutually exclusive options (A/B/…) inline as text (never a picker overlay), each in product language; mark a clear recommendation with a one-line why, and add a one-line concrete example only when the difference isn't self-evident — so a single letter (or "go with your recommendation") settles it. Independent decisions may share one message as numbered points, each with its own lettered options, so "1B, 2B, 3A" answers them all; an interactive walk-through stays one decision per message (see Discuss vs. Act).
+
 ## Discuss vs. Act
 When the user asks to discuss, audit, explain, or think through something, DO NOT start writing files or generating plans. Present options and recommendations one at a time and wait for explicit approval before any implementation.
 
-During such a walk-through, take one decision per message and wait for the answer before the next; present each as 2–4 labeled, mutually exclusive options (A/B/…) inline as text (never a picker overlay), add a one-line concrete example only when the difference isn't self-evident, and mark a clear recommendation with a one-line why — so a single letter (or "go with your recommendation") settles it. Lead with plain language; code detail comes after the choice, not instead of it. Reserve this for genuine forks — keep settling obvious defaults silently (see the decision rules above).
+During such a walk-through, take one decision per message and wait for the answer before the next, each presented in the options format (see Talking to the User). Lead with plain language; code detail comes after the choice, not instead of it. Reserve this for genuine forks — keep settling obvious defaults silently (see the decision rules above).
 
 ## Architecture & code
 
