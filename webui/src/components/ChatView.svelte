@@ -24,6 +24,7 @@
     subAgentResultTextFromMessages,
   } from '$lib/chatTimelinePresentation.js';
 
+  import { parseAgentAddress } from '$lib/agentAddress.js';
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
     addServerQueuedMessage,
@@ -31,6 +32,7 @@
     createChatState,
     currentSessionState,
     ensureSessionState,
+    formatAgentAddress,
     isProjectSelected,
     isRunActive,
     loadHistory,
@@ -196,9 +198,77 @@
 
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
+  // Outside address of the displayed agent (bare id for identity, full
+  // `agent@projekt` otherwise) — what address-parsing RPCs like session.list
+  // need (trap 2). The session drawer lists sessions through it.
+  let activeAgentAddress = $derived(activeAddressing().agentAddress);
   let subAgentSessionActive = $derived(
     Boolean(viewingSessionId) && viewingSubAgentSession,
   );
+  // The parent-session target of the displayed sub-agent session, resolved
+  // from the child's `subagent_parent` metadata (via session.list) when the
+  // sub-agent view opens — so the banner button can say "Return to parent
+  // session" only when the parent is actually reachable. `null` while
+  // unresolved or for child sessions without usable parent metadata.
+  let subAgentParentTarget = $state(null);
+  let subAgentParentFetchKey = '';
+
+  $effect(() => {
+    if (!subAgentSessionActive) {
+      subAgentParentFetchKey = '';
+      subAgentParentTarget = null;
+      return;
+    }
+    const key = displayedSessionKey();
+    if (!key || key === subAgentParentFetchKey) {
+      return;
+    }
+    subAgentParentFetchKey = key;
+    subAgentParentTarget = null;
+    loadSubAgentParentTarget(key, overrideAgentAddress(), viewingSessionId);
+  });
+
+  const loadSubAgentParentTarget = async (
+    displayKey,
+    childAddress,
+    childSessionId,
+  ) => {
+    if (!childAddress || !childSessionId) {
+      return;
+    }
+    try {
+      const listed = await listSessions(childAddress);
+      // A newer navigation may have superseded this child view mid-flight.
+      if (displayedSessionKey() !== displayKey) {
+        return;
+      }
+      const childSession = (listed?.sessions ?? []).find(
+        (session) => String(session?.id ?? '').trim() === childSessionId,
+      );
+      const parent = childSession?.subagent_parent;
+      const parentAgentId =
+        typeof parent?.agent_id === 'string' ? parent.agent_id.trim() : '';
+      const parentSessionId =
+        typeof parent?.session_id === 'string' ? parent.session_id.trim() : '';
+      if (!parentAgentId || !parentSessionId) {
+        return;
+      }
+      const parentProjectId =
+        typeof parent?.project_id === 'string' ? parent.project_id.trim() : '';
+      // A vanished identity parent cannot be opened — keep the
+      // return-to-current fallback (a project parent is not roster-checkable
+      // and surfaces a load error instead of dead-ending).
+      if (!parentProjectId && !agentById(parentAgentId)) {
+        return;
+      }
+      subAgentParentTarget = {
+        agentAddress: formatAgentAddress(parentAgentId, parentProjectId),
+        sessionId: parentSessionId,
+      };
+    } catch {
+      // Best effort — the banner button falls back to return-to-current.
+    }
+  };
   // Any local override away from the selected agent's current session — also
   // true for same-agent drawer selections, which must offer a return path too.
   let sessionOverrideActive = $derived(Boolean(viewingSessionId));
@@ -231,13 +301,45 @@
     );
   }
 
+  // The outside address of the agent that owns the non-override ("current")
+  // view: the active project team agent when one is chosen, else the selected
+  // identity agent (bare id — identity addressing is unchanged).
+  function activeOwnAgentAddress() {
+    if (projectAgentActive) {
+      return currentProjectAgentAddress();
+    }
+    return chatState.selectedAgentId;
+  }
+
+  // The outside address of the agent that owns the overridden (viewed)
+  // session. `viewingSessionAgentId` stores the explicit owner (a bare
+  // identity id or a full `agent@projekt` address); '' means "the active
+  // agent's own past session".
+  function overrideAgentAddress() {
+    return viewingSessionAgentId || activeOwnAgentAddress();
+  }
+
   // Resolve the addressing for the active agent (RPC-contract traps 1 & 2).
+  // An active session override wins over both the project branch and the
+  // identity-current branch — a drawer pick or sub-agent link decides what is
+  // displayed regardless of which agent bar is active. Without an override:
   // - identity agent: `agentAddress === bareAgentId`, `projectId: null`,
-  //   session from the identity `current_session_id`/override path. Byte-
-  //   identical to today.
+  //   session from the identity `current_session_id` path. Byte-identical
+  //   to today.
   // - project agent: full `agent@projekt` address for chat/session/history,
   //   bare id for queue/cancel-tool; session chosen locally (trap 1).
   function activeAddressing() {
+    if (viewingSessionId) {
+      const agentAddress = overrideAgentAddress();
+      const { agentId, projectId } = parseAgentAddress(agentAddress);
+      return {
+        bareAgentId: agentId,
+        projectId: projectId || null,
+        agentAddress,
+        isProjectAgent: Boolean(projectId),
+        sessionId: viewingSessionId,
+      };
+    }
     if (projectAgentActive) {
       const addressing = resolveAgentAddressing(
         selectedProjectAgentId,
@@ -250,26 +352,51 @@
         sessionId: projectAgentSessions[addressing.agentAddress] ?? '',
       };
     }
-    const agent = getActiveAgent();
+    const agent = selectedAgent(chatState);
     const bareAgentId = agent?.id ?? '';
-    const sessionId = viewingSessionId || agent?.current_session_id || '';
     return {
       bareAgentId,
       projectId: null,
       agentAddress: bareAgentId,
       isProjectAgent: false,
-      sessionId,
+      sessionId: agent?.current_session_id || '',
     };
   }
 
   function getActiveAgent() {
+    if (viewingSessionId) {
+      if (!viewingSessionAgentId) {
+        // The active agent's own past session.
+        return projectAgentActive
+          ? projectAgentAsAgent(activeProjectMember())
+          : selectedAgent(chatState);
+      }
+      return (
+        agentById(viewingSessionAgentId) ??
+        overrideAgentDisplayStandIn(viewingSessionAgentId)
+      );
+    }
     if (projectAgentActive) {
       return projectAgentAsAgent(activeProjectMember());
     }
-    if (viewingSessionAgentId) {
-      return agentById(viewingSessionAgentId);
-    }
     return selectedAgent(chatState);
+  }
+
+  // Minimal agent-like object for an overridden session whose owner is not an
+  // identity-roster agent — a project team agent's session (or a project
+  // child), or an identity agent deleted while its session is still viewed.
+  // Keeps the chat surface (header, banner, return button) alive instead of
+  // dead-ending on "choose an agent". The bare id stays in `id` so queue and
+  // cancel-tool payloads keep the bare spelling (trap 2).
+  function overrideAgentDisplayStandIn(agentAddress) {
+    const { agentId } = parseAgentAddress(agentAddress);
+    return {
+      id: agentId,
+      name: agentId || agentAddress,
+      current_session_id: '',
+      context_window: null,
+      __overrideAddress: agentAddress,
+    };
   }
 
   // Shape a projected team member into the minimal agent-like object the chat
@@ -299,6 +426,12 @@
   }
 
   function getActiveSessionState() {
+    if (viewingSessionId) {
+      const agentAddress = overrideAgentAddress();
+      return agentAddress
+        ? (chatState.sessions[`${agentAddress}::${viewingSessionId}`] ?? null)
+        : null;
+    }
     if (projectAgentActive) {
       const { agentAddress, sessionId } = activeAddressing();
       if (!agentAddress || !sessionId) {
@@ -306,21 +439,43 @@
       }
       return chatState.sessions[`${agentAddress}::${sessionId}`] ?? null;
     }
-    const agent = getActiveAgent();
-    if (agent && viewingSessionId) {
-      return chatState.sessions[`${agent.id}::${viewingSessionId}`] ?? null;
-    }
     return currentSessionState(chatState);
   }
 
   function displayedSessionKey() {
+    if (viewingSessionId) {
+      const agentAddress = overrideAgentAddress();
+      return agentAddress ? `${agentAddress}::${viewingSessionId}` : '';
+    }
     if (projectAgentActive) {
       const { agentAddress, sessionId } = activeAddressing();
       return agentAddress && sessionId ? `${agentAddress}::${sessionId}` : '';
     }
-    const agent = getActiveAgent();
-    const sessionId = viewingSessionId || agent?.current_session_id;
+    const agent = selectedAgent(chatState);
+    const sessionId = agent?.current_session_id;
     return agent?.id && sessionId ? `${agent.id}::${sessionId}` : '';
+  }
+
+  // The project the displayed session runs under (parsed from its agent
+  // address). Used to qualify bare child-agent ids from persisted spawn
+  // descriptors: a project run's children live under the same project anchor,
+  // so their history/navigation RPCs need the full `child@projekt` address
+  // (trap 2), while the status projection stays keyed by the bare id.
+  function displayedSessionProjectId() {
+    const key = displayedSessionKey();
+    const separator = key.indexOf('::');
+    const agentPart = separator >= 0 ? key.slice(0, separator) : '';
+    const { projectId } = parseAgentAddress(agentPart);
+    return projectId || '';
+  }
+
+  function qualifiedChildAgentAddress(agentId) {
+    const bareId = typeof agentId === 'string' ? agentId.trim() : '';
+    if (!bareId || bareId.includes('@')) {
+      return bareId;
+    }
+    const projectId = displayedSessionProjectId();
+    return projectId ? formatAgentAddress(bareId, projectId) : bareId;
   }
 
   function isDisplayedSession(agentId, sessionId) {
@@ -345,7 +500,10 @@
     }
   });
 
+  let initialSharedAgentSyncDone = false;
   $effect(() => {
+    const firstSync = !initialSharedAgentSyncDone;
+    initialSharedAgentSyncDone = true;
     if (
       sharedSelectedAgentId &&
       sharedSelectedAgentId !== lastSharedSelectedAgentId &&
@@ -353,6 +511,16 @@
       chatState.agents.some((agent) => agent.id === sharedSelectedAgentId)
     ) {
       lastSharedSelectedAgentId = sharedSelectedAgentId;
+      if (firstSync) {
+        // Mount-time prop reconciliation, not user navigation: sync silently.
+        // Routing this through handleSelectAgent would clear a just-restored
+        // override and report a session navigation during a history restore —
+        // the report then pushes a phantom entry over the restored one (the
+        // mount-path echo hole). The mount's loadAgents already loads the
+        // current history when the current session is displayed.
+        selectAgent(chatState, sharedSelectedAgentId);
+        return;
+      }
       handleSelectAgent(sharedSelectedAgentId);
     }
   });
@@ -375,16 +543,23 @@
     if (projectId === lastLoadedProjectId) {
       return;
     }
-    const restoreAgentId = initialProjectRestoreDone
-      ? null
-      : (sharedSelectedProjectAgentId ?? null);
+    const isInitialRestore = !initialProjectRestoreDone;
+    const restoreAgentId = isInitialRestore
+      ? (sharedSelectedProjectAgentId ?? null)
+      : null;
     initialProjectRestoreDone = true;
     lastLoadedProjectId = projectId;
     if (!projectId) {
       clearProjectContext();
       return;
     }
-    loadProjectTeam(projectId, { restoreAgentId });
+    // The initial (reload) restore must not clear a session override that a
+    // mount-adopted history entry has just applied — the override stays the
+    // displayed session, the member session loads invisibly behind it.
+    loadProjectTeam(projectId, {
+      restoreAgentId,
+      keepOverride: isInitialRestore,
+    });
   });
 
   // App-driven session navigation: sub-agent link clicks routed through
@@ -671,8 +846,10 @@
     }
     subAgentStatusInflightKeys.add(key);
     try {
+      // The RPC needs the full `child@projekt` address for a project child
+      // (trap 2); the projection keys below stay bare like the descriptors.
       const history = await rpc('chat.history', {
-        agent_id: agentId,
+        agent_id: qualifiedChildAgentAddress(agentId),
         session_id: sessionId,
         limit: SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT,
       });
@@ -773,8 +950,11 @@
     chatState.agentsError = null;
     try {
       const result = await rpc('agent.list');
+      // Prefer the live in-component selection over the captured option: a
+      // navigation restore may have re-aimed the selection while agent.list
+      // was in flight, and the roster refresh must not undo it.
       const preferredAgentId =
-        options.preferredAgentId ?? chatState.selectedAgentId;
+        chatState.selectedAgentId || options.preferredAgentId;
       if (preferredAgentId) {
         selectAgent(chatState, preferredAgentId);
       }
@@ -783,7 +963,12 @@
       if (selectedAgentId) {
         onAgentSelected?.(selectedAgentId);
       }
-      if (selectedAgentId) {
+      // Reload current-session history only while the display actually follows
+      // the identity current pointer. With a session override (past session or
+      // sub-agent view) or an active project agent displayed, a roster refresh
+      // must not steal the displayed session's SSE stream or lock the composer
+      // for an invisible load.
+      if (selectedAgentId && !viewingSessionId && !projectAgentActive) {
         await loadCurrentHistory();
       }
     } catch (error) {
@@ -818,11 +1003,31 @@
     }
   };
 
+  // Load a session's history by its outside agent spelling (bare id for an
+  // identity session, `agent@projekt` for a project-agent session) — one path
+  // for both worlds, since `chat.history` parses the address (trap 2).
+  //
+  // Stale-response discipline: the displayed session can change while
+  // `chat.history` is in flight (rapid switching, fast Back/Forward). After
+  // every await, per-session state may always be written (each response lands
+  // in its own session state), but global UI state (`loadingHistory`,
+  // `historyError`) and the SSE stream attach belong to the DISPLAYED session
+  // only — a stale response must not re-open a subscription the newer
+  // navigation just closed, unlock the composer early, or banner-error a
+  // healthy session.
   const loadHistoryForSession = async (agentId, sessionId) => {
-    loadingHistory = true;
-    historyError = '';
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
-    runStream.closeSubscriptionsExcept(sessionState.key);
+    const isDisplayed = () => displayedSessionKey() === sessionState.key;
+    // A load for a session that is not displayed at start (a background
+    // refresh racing a navigation) must not lock the composer or close the
+    // displayed session's subscriptions — and must never own the global
+    // loading flag, or an invisible load would leave it stuck on.
+    const startedDisplayed = isDisplayed();
+    if (startedDisplayed) {
+      loadingHistory = true;
+      historyError = '';
+      runStream.closeSubscriptionsExcept(sessionState.key);
+    }
     // Snapshot the run id we are about to ask the server about so the
     // reconcile step below can distinguish a *stale* run (terminal event was
     // missed, SSE gave up, bus buffer rolled, or the server restarted and
@@ -858,13 +1063,21 @@
         resetStaleRun(sessionState);
         runStream.closeSubscriptionFor(sessionState.key);
       }
-      runStream.attachRunStream(sessionState, history.active_run);
+      if (isDisplayed()) {
+        runStream.attachRunStream(sessionState, history.active_run);
+      }
       await syncSessionQueue(sessionState);
     } catch (error) {
-      historyError = error.message;
+      if (isDisplayed()) {
+        historyError = error.message;
+      }
       markSessionError(sessionState, error);
     } finally {
-      loadingHistory = false;
+      // Only the call that set the flag while still owning the display clears
+      // it; a superseded (stale) call leaves the newer navigation's flag alone.
+      if (startedDisplayed && isDisplayed()) {
+        loadingHistory = false;
+      }
     }
   };
 
@@ -883,8 +1096,10 @@
     }
     setSubAgentResultEntry(key, { loading: true, result: '' });
     try {
+      // Project children are fetched with the full address (trap 2); the cache
+      // key stays the caller-provided bare-keyed one.
       const history = await rpc('chat.history', {
-        agent_id: agentId,
+        agent_id: qualifiedChildAgentAddress(agentId),
         session_id: sessionId,
         limit: SUBAGENT_RESULT_HISTORY_LIMIT,
       });
@@ -972,7 +1187,10 @@
   //     project: open no team member, the identity bar stays in control.
   //   - a team-member id — a reload restore: reopen that member if it is still
   //     on the team, otherwise fall through to the default.
-  const loadProjectTeam = async (projectId, { restoreAgentId = null } = {}) => {
+  const loadProjectTeam = async (
+    projectId,
+    { restoreAgentId = null, keepOverride = false } = {},
+  ) => {
     loadingProjectTeam = true;
     projectScanError = '';
     selectedProjectAgentId = '';
@@ -992,7 +1210,7 @@
           (member) => member.agent_id === restoreAgentId,
         );
         if (remembered) {
-          await openProjectAgent(remembered.agent_id);
+          await openProjectAgent(remembered.agent_id, { keepOverride });
           return;
         }
       }
@@ -1002,7 +1220,7 @@
         projectTeam[0] ??
         null;
       if (target) {
-        await openProjectAgent(target.agent_id);
+        await openProjectAgent(target.agent_id, { keepOverride });
       }
     } catch (error) {
       if (selectedProjectId !== projectId) {
@@ -1027,10 +1245,18 @@
   // override and resolves the project agent's session locally (trap 1): the
   // most recent from `session.list`, else a fresh `session.create`. The session
   // is held in `projectAgentSessions` keyed by the agent's full address.
-  const openProjectAgent = async (agentId) => {
-    clearSessionOverride();
+  const openProjectAgent = async (agentId, { keepOverride = false } = {}) => {
+    const hadOverride = sessionOverrideActive;
+    if (!keepOverride) {
+      clearSessionOverride();
+    }
     selectedProjectAgentId = agentId;
     onProjectAgentSelected?.(agentId);
+    if (!keepOverride && hadOverride) {
+      // An override cleared by switching agents is an override change and
+      // becomes a history entry, mirroring the identity chip path.
+      reportSessionNavigation();
+    }
     const addressing = resolveAgentAddressing(agentId, selectedProjectId, true);
     await ensureProjectAgentSession(addressing);
   };
@@ -1067,7 +1293,7 @@
           [agentAddress]: sessionId,
         };
       }
-      await loadProjectAgentHistory(agentAddress, sessionId);
+      await loadHistoryForSession(agentAddress, sessionId);
     } catch (error) {
       if (currentProjectAgentAddress() !== agentAddress) {
         return;
@@ -1088,46 +1314,6 @@
       true,
     ).agentAddress;
   }
-
-  // Load history for a project-agent session. The session state is keyed by the
-  // full address (so the same bare id in two projects never collides), and the
-  // state's `agentId` carries the address — so older-history loads and queue
-  // syncs send the address to `chat.history`/`session.list` (trap 2). Queue and
-  // cancel-tool paths translate the address back to the bare id (see send/queue
-  // handlers).
-  const loadProjectAgentHistory = async (agentAddress, sessionId) => {
-    loadingHistory = true;
-    historyError = '';
-    const sessionState = ensureSessionState(chatState, agentAddress, sessionId);
-    runStream.closeSubscriptionsExcept(sessionState.key);
-    const staleRunId = sessionState.currentRun?.runId ?? '';
-    try {
-      const history = await rpc('chat.history', {
-        agent_id: agentAddress,
-        session_id: sessionId,
-        limit: HISTORY_INITIAL_LIMIT,
-      });
-      loadHistory(sessionState, history.messages ?? [], {
-        hasMore: history.has_more === true,
-        sessionUsage: history.session_usage,
-      });
-      if (
-        !history.active_run &&
-        isRunActive(sessionState) &&
-        sessionState.currentRun?.runId === staleRunId
-      ) {
-        resetStaleRun(sessionState);
-        runStream.closeSubscriptionFor(sessionState.key);
-      }
-      runStream.attachRunStream(sessionState, history.active_run);
-      await syncSessionQueue(sessionState);
-    } catch (error) {
-      historyError = error.message;
-      markSessionError(sessionState, error);
-    } finally {
-      loadingHistory = false;
-    }
-  };
 
   const handleSelectProject = (projectId) => {
     const next = isProjectSelected(projectId) ? projectId : '';
@@ -1183,10 +1369,15 @@
   // browser-history restore. Restores re-enter past overrides (or return to
   // the current session) without creating new history entries.
   const applySessionNavigation = async (navigation) => {
+    const selectionChanged = await applyNavigationSelection(
+      navigation.selection,
+    );
+
     if (navigation.returnToCurrent) {
-      if (sessionOverrideActive) {
-        clearSessionOverride();
-        await loadCurrentHistory();
+      const hadOverride = sessionOverrideActive;
+      clearSessionOverride();
+      if (hadOverride || selectionChanged) {
+        await loadActiveOwnHistory();
       }
       return;
     }
@@ -1197,30 +1388,95 @@
     }
 
     viewingSessionAgentId =
-      navigation.agentId === chatState.selectedAgentId
-        ? ''
-        : navigation.agentId;
+      navigation.agentId === activeOwnAgentAddress() ? '' : navigation.agentId;
     viewingSubAgentSession = false;
     viewingSessionId = navigation.sessionId;
     await loadHistoryForSession(navigation.agentId, navigation.sessionId);
   };
 
+  // Restore the selection half of a history entry: the selected identity
+  // agent, the chosen project, and the active project agent. Applied here
+  // (not in App) so the restore never routes through the user-action handlers
+  // that report navigation — the mirrors converge through the non-pushing
+  // callbacks, and the watching prop effects are pre-synced
+  // (`lastSharedSelectedAgentId`/`lastLoadedProjectId`) so the round-trip
+  // cannot re-run the restore as a fresh user action. Returns whether the
+  // active chat target changed (the caller then reloads the current view).
+  const applyNavigationSelection = async (selection) => {
+    if (!selection) {
+      return false;
+    }
+    let changed = false;
+
+    const agentId =
+      typeof selection.agentId === 'string' ? selection.agentId : '';
+    if (
+      agentId &&
+      agentId !== chatState.selectedAgentId &&
+      chatState.agents.some((agent) => agent.id === agentId)
+    ) {
+      selectAgent(chatState, agentId);
+      lastSharedSelectedAgentId = agentId;
+      onAgentSelected?.(agentId);
+      changed = true;
+    }
+
+    const projectId = isProjectSelected(selection.projectId)
+      ? selection.projectId
+      : '';
+    const projectAgentId =
+      typeof selection.projectAgentId === 'string'
+        ? selection.projectAgentId
+        : '';
+    if (projectId !== lastLoadedProjectId) {
+      // Same imperative ownership as the /agent move: pre-sync the guard so
+      // the dropdown-watching effect treats the round-tripped prop as
+      // already loaded instead of jumping to the project default.
+      initialProjectRestoreDone = true;
+      lastLoadedProjectId = projectId;
+      onProjectSelected?.(projectId);
+      changed = true;
+      if (!projectId) {
+        clearProjectContext();
+      } else {
+        selectedProjectAgentId = '';
+        await loadProjectTeamForMove(projectId);
+      }
+    }
+    if (projectId && projectAgentId !== selectedProjectAgentId) {
+      selectedProjectAgentId = projectAgentId;
+      onProjectAgentSelected?.(projectAgentId);
+      changed = true;
+    }
+    return changed;
+  };
+
   const handleSessionSelected = async (sessionId) => {
-    const agent = activeAgent;
+    const agentAddress = activeAddressing().agentAddress;
     const normalizedSessionId = String(sessionId ?? '').trim();
-    if (!agent || !normalizedSessionId) {
+    if (!agentAddress || !normalizedSessionId) {
       return;
     }
 
-    const isSelectedAgent = agent.id === chatState.selectedAgentId;
-    viewingSessionAgentId = isSelectedAgent ? '' : agent.id;
-    viewingSubAgentSession = !isSelectedAgent;
+    // The drawer lists the displayed agent's sessions. Picking one of the
+    // active agent's own sessions is a same-agent past-session view (or a
+    // return to its current session); picking while a cross-agent override is
+    // displayed keeps that agent's framing. The address form serves both
+    // worlds — a project agent's sessions go through `agent@projekt`.
+    const isOwnAgent = agentAddress === activeOwnAgentAddress();
+    const ownCurrentSessionId = isOwnAgent
+      ? projectAgentActive
+        ? (projectAgentSessions[agentAddress] ?? '')
+        : (selectedAgent(chatState)?.current_session_id ?? '')
+      : '';
+    viewingSessionAgentId = isOwnAgent ? '' : agentAddress;
+    viewingSubAgentSession = !isOwnAgent;
     viewingSessionId =
-      isSelectedAgent && normalizedSessionId === agent.current_session_id
+      isOwnAgent && normalizedSessionId === ownCurrentSessionId
         ? ''
         : normalizedSessionId;
     reportSessionNavigation();
-    await loadHistoryForSession(agent.id, normalizedSessionId);
+    await loadHistoryForSession(agentAddress, normalizedSessionId);
   };
 
   // A session was deleted from the drawer. If this window was viewing it (the
@@ -1275,7 +1531,7 @@
     onSessionNavigation?.(
       viewingSessionId
         ? {
-            agentId: viewingSessionAgentId || chatState.selectedAgentId,
+            agentId: viewingSessionAgentId || activeOwnAgentAddress(),
             sessionId: viewingSessionId,
             subAgent: viewingSubAgentSession,
           }
@@ -1283,14 +1539,57 @@
     );
   };
 
+  // Load the active agent's own current view after an override was cleared:
+  // the project team agent's locally chosen session when one is active, else
+  // the selected identity agent's current session.
+  const loadActiveOwnHistory = async () => {
+    if (projectAgentActive) {
+      await ensureProjectAgentSession(
+        resolveAgentAddressing(selectedProjectAgentId, selectedProjectId, true),
+      );
+      return;
+    }
+    await loadCurrentHistory();
+  };
+
   const handleReturnToCurrentSession = async () => {
     if (!sessionOverrideActive || loadingHistory) {
       return;
     }
 
+    // A sub-agent session returns to its PARENT session (from the child's
+    // `subagent_parent` metadata). Without resolvable parent metadata (old
+    // child sessions, deleted parent agent) the button falls back to the
+    // return-to-current behavior below.
+    if (subAgentSessionActive && subAgentParentTarget) {
+      await navigateToParentSession(subAgentParentTarget);
+      return;
+    }
+
     clearSessionOverride();
     reportSessionNavigation();
-    await loadCurrentHistory();
+    await loadActiveOwnHistory();
+  };
+
+  // User-initiated navigation from a child session to its parent session: a
+  // normal session navigation, so it reports up and becomes a history push —
+  // Back returns to the child. A parent that is not the owning agent's
+  // current session displays as a normal past-session view with its own
+  // past-session banner.
+  const navigateToParentSession = async ({ agentAddress, sessionId }) => {
+    const ownAddress = activeOwnAgentAddress();
+    const ownCurrentSessionId = projectAgentActive
+      ? (projectAgentSessions[ownAddress] ?? '')
+      : (selectedAgent(chatState)?.current_session_id ?? '');
+    viewingSubAgentSession = false;
+    if (agentAddress === ownAddress && sessionId === ownCurrentSessionId) {
+      clearSessionOverride();
+    } else {
+      viewingSessionAgentId = agentAddress === ownAddress ? '' : agentAddress;
+      viewingSessionId = sessionId;
+    }
+    reportSessionNavigation();
+    await loadHistoryForSession(agentAddress, sessionId);
   };
 
   const handleNewSession = async () => {
@@ -1298,6 +1597,10 @@
       return;
     }
     if (projectAgentActive) {
+      // Symmetric with the identity path below: a new session always leaves
+      // any override view and becomes the displayed session.
+      clearSessionOverride();
+      reportSessionNavigation();
       await createProjectAgentSession();
       return;
     }
@@ -1325,7 +1628,7 @@
   // NO `make_current` (the backend ignores it for project agents anyway — trap
   // 1), then point the local session store at it and load it.
   const createProjectAgentSession = async () => {
-    const { agentAddress } = activeAddressing();
+    const agentAddress = currentProjectAgentAddress();
     if (!agentAddress) {
       return;
     }
@@ -1341,7 +1644,7 @@
         ...projectAgentSessions,
         [agentAddress]: sessionId,
       };
-      await loadProjectAgentHistory(agentAddress, sessionId);
+      await loadHistoryForSession(agentAddress, sessionId);
     } catch (error) {
       actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
     } finally {
@@ -1451,6 +1754,21 @@
     } finally {
       loadingProjectTeam = false;
     }
+  };
+
+  // Spawn-row "view session" links carry the child's BARE agent id from the
+  // persisted descriptor. A project run's child lives under the same project
+  // anchor, so the navigation address must be qualified as `child@projekt`
+  // before it reaches the App-level navigation (identity children pass
+  // through unchanged).
+  const handleNavigateToSubAgentLink = (target) => {
+    if (!target?.agentId || !target?.sessionId) {
+      return;
+    }
+    navigateToSubAgent({
+      ...target,
+      agentId: qualifiedChildAgentAddress(target.agentId),
+    });
   };
 
   const handleSendMessage = async (content, options = {}) => {
@@ -1803,7 +2121,7 @@
     <div class="chat-view__content-shell">
       {#if showSessionDrawer}
         <SessionListDrawer
-          agentId={activeAgent.id}
+          agentId={activeAgentAddress}
           currentSessionId={viewingSessionId || activeAgent.current_session_id}
           agentCurrentSessionId={activeAgent.current_session_id}
           reloadToken={sessionsRefreshToken}
@@ -1845,6 +2163,7 @@
           <ChatTimeline
             sessionState={activeSessionState}
             agentName={activeAgent.name}
+            {loadingHistory}
             {transientCards}
             {submittedTurnScrollKey}
             {submittedTurnScrollRunId}
@@ -1854,7 +2173,7 @@
             subAgentStatuses={subAgentRunStatuses}
             {subAgentResults}
             onLoadOlder={loadOlderHistory}
-            onNavigateToSubAgent={navigateToSubAgent}
+            onNavigateToSubAgent={handleNavigateToSubAgentLink}
             onRequestSubAgentResult={requestSubAgentResult}
             onVerifySubAgentStatus={verifySubAgentStatus}
             onRetry={handleRetry}
@@ -1876,10 +2195,15 @@
                 </p>
                 <p class="chat-view__subagent-session-hint">
                   {subAgentSessionActive
-                    ? t(
-                        'chat.subagentSessionHint',
-                        'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
-                      )
+                    ? subAgentParentTarget
+                      ? t(
+                          'chat.subagentSessionParentHint',
+                          'Messages here continue this sub-agent session. Return to the parent session when you are done.',
+                        )
+                      : t(
+                          'chat.subagentSessionHint',
+                          'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
+                        )
                     : t(
                         'chat.pastSessionHint',
                         'This is not the agent’s current session. Messages sent here continue this past session.',
@@ -1892,7 +2216,12 @@
                 disabled={loadingHistory}
                 onClick={handleReturnToCurrentSession}
               >
-                {t('chat.returnToCurrentSession', 'Return to current session')}
+                {subAgentSessionActive && subAgentParentTarget
+                  ? t('chat.returnToParentSession', 'Return to parent session')
+                  : t(
+                      'chat.returnToCurrentSession',
+                      'Return to current session',
+                    )}
               </Button>
             </div>
           {/if}

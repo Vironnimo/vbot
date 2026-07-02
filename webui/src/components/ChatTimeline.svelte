@@ -34,6 +34,10 @@
     onCancelSubAgent = () => {},
     hasOlderHistory = false,
     loadingOlderHistory = false,
+    // True while the displayed session's initial history request is in
+    // flight; swaps the "No messages yet" empty state for a loading
+    // placeholder so stepping through sessions does not flash it.
+    loadingHistory = false,
     onLoadOlder = async () => false,
   } = $props();
 
@@ -461,20 +465,31 @@
 >
   <div class="messages__content">
     {#if timelineItems.length === 0 && transientCards.length === 0}
-      <div class="empty-state chat-empty-state">
-        <svg class="empty-state-icon" viewBox="0 0 32 32" aria-hidden="true">
-          <path d="M5 7h22v14H16l-6 5v-5H5z" />
-        </svg>
-        <p class="empty-state-title">
-          {t('chat.historyEmptyTitle', 'No messages yet')}
-        </p>
-        <p class="empty-state-sub">
-          {t(
-            'chat.historyEmpty',
-            'No messages yet. Send the first message to this agent.',
-          )}
-        </p>
-      </div>
+      {#if loadingHistory}
+        <!-- While history is loading, a quiet placeholder — flashing the
+             "No messages yet" empty state would be a lie for a session whose
+             messages just have not arrived yet. -->
+        <div class="empty-state chat-empty-state">
+          <p class="empty-state-sub">
+            {t('loading.history', 'Loading chat history…')}
+          </p>
+        </div>
+      {:else}
+        <div class="empty-state chat-empty-state">
+          <svg class="empty-state-icon" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M5 7h22v14H16l-6 5v-5H5z" />
+          </svg>
+          <p class="empty-state-title">
+            {t('chat.historyEmptyTitle', 'No messages yet')}
+          </p>
+          <p class="empty-state-sub">
+            {t(
+              'chat.historyEmpty',
+              'No messages yet. Send the first message to this agent.',
+            )}
+          </p>
+        </div>
+      {/if}
     {:else}
       {#each transientCardGroups.leading as card (card.id)}
         {@render transientCard(card)}
