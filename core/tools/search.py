@@ -183,6 +183,9 @@ def iter_search_entries(
         for name in sorted(file_names):
             if not budget.keep_going():
                 return
+            # A worktree's .git is a pointer *file*, not a directory.
+            if skip_git_directories and name == ".git":
+                continue
             child = current / name
             if ignore_filter is not None and ignore_filter.is_ignored(child, is_directory=False):
                 continue
