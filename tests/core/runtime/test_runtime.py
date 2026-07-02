@@ -379,7 +379,10 @@ def test_start_ensures_data_directories_and_prompt_fragments(config: Config):
         "logs",
     ):
         assert (data_dir / directory_name).is_dir()
-    assert (data_dir / "prompts" / "runtime.md").is_file()
+    # Startup must NOT seed fragment copies into the data dir: a seeded copy would
+    # shadow the bundled resource forever and freeze prompt defaults at first-run
+    # state. Bundled fragments are read live; only a hand-created copy overrides.
+    assert not (data_dir / "prompts" / "runtime.md").exists()
 
 
 def test_runtime_resolve_environment_credential_prefers_process_env(
