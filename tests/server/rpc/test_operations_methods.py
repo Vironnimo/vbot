@@ -95,7 +95,7 @@ class StubTools:
     def provider_definitions(
         self, allowed_tools: Sequence[str] | None = None, *, include_internal: bool = False
     ) -> list[JsonObject]:
-        return []
+        return [{"name": "read", "description": "Read a file", "parameters": {"type": "object"}}]
 
 
 @dataclass(frozen=True)
@@ -439,6 +439,9 @@ async def test_preview_includes_extension_block(tmp_path: Path) -> None:
 
     assert "EXTENSION-BLOCK-MARKER" in result["text"]
     assert isinstance(result["tokens"], int)
+    # The provider tool-definition array is reported beside the prompt text.
+    assert result["tool_count"] == 1
+    assert result["tool_tokens"] > 0
     assert result["estimated"] is True
 
 
