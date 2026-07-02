@@ -318,7 +318,7 @@ Each variant emits exactly **one** canonical class (the historical aliases `btn-
 
 3. **Tertiary (`btn-tertiary`)** — Smallest footprint. `border` border, `text-lo` color, 3px radius. Hover becomes accent. With `icon`, becomes the 30px borderless square icon button (composer mic/attach); the engaged state adds the `btn-icon--active` accent tint.
 
-4. **Danger (`btn-danger`)** — Destructive actions (Archive, Delete, Remove). Same neutral-ghost base as secondary, but hover shifts to `red` border and tint.
+4. **Danger (`btn-danger`)** — Destructive actions (Archive, Delete, Remove). Same neutral-ghost base as secondary, but hover shifts to `red` border and tint. With `icon`, becomes the 32px square stop-style button (composer run cancel) and is red **at rest** (`rgba(red, 0.07)` fill, `rgba(red, 0.22)` border, red icon; hover deepens) — an icon-only danger button has no label, so color must carry the destructive meaning.
 
 Primary save buttons inside long editor panels stay enabled even when the form is already clean. When nothing changed, the interaction should confirm trust via lightweight success feedback instead of disabling the control.
 

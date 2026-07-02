@@ -805,6 +805,58 @@ describe('ChatComposer', () => {
     expect(event.defaultPrevented).toBe(false);
     expect(input.value).toBe('line one\nline two');
   });
+
+  it('shows no stop button while no run is active', () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { isRunning: false },
+    });
+    flushSync();
+
+    expect(cancelRunButton()).toBeUndefined();
+  });
+
+  it('offers the stop button next to Send while a run is active', () => {
+    const onCancelRun = vi.fn();
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { isRunning: true, onCancelRun },
+    });
+    flushSync();
+
+    const stopButton = cancelRunButton();
+    expect(stopButton).toBeTruthy();
+    expect(stopButton.disabled).toBe(false);
+
+    stopButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    expect(onCancelRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the stop button clickable while the composer itself is disabled', () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { isRunning: true, disabled: true },
+    });
+    flushSync();
+
+    expect(cancelRunButton().disabled).toBe(false);
+  });
+
+  it('disables the stop button while a cancel is in flight', () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { isRunning: true, cancelling: true },
+    });
+    flushSync();
+
+    const stopButton = Array.from(
+      document.body.querySelectorAll('button'),
+    ).find((button) => button.getAttribute('aria-label') === 'Cancelling run…');
+    expect(stopButton).toBeTruthy();
+    expect(stopButton.disabled).toBe(true);
+  });
 });
 
 function typeInComposer(input, value, caret = value.length) {
@@ -842,6 +894,12 @@ function skillFixtures() {
 
 function composerInput() {
   return document.body.querySelector('#chat-composer-input');
+}
+
+function cancelRunButton() {
+  return Array.from(document.body.querySelectorAll('button')).find(
+    (button) => button.getAttribute('aria-label') === 'Cancel run',
+  );
 }
 
 function autocompleteOptions() {
