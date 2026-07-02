@@ -25,6 +25,42 @@ from core.utils.retry import retry_async
 JsonObject = dict[str, Any]
 ParsedResultT = TypeVar("ParsedResultT")
 
+# Option name of the JSON escape hatch every provider task target carries:
+# a free-form object merged into the request payload by the task wire
+# clients, so an option vBot does not surface stays usable without a code
+# change. Owned here because all task wire clients share the semantics.
+EXTRA_OPTIONS_KEY = "extra_options"
+
+
+def is_omittable_option(value: Any) -> bool:
+    """True when an option value carries nothing to forward to the provider.
+
+    Empty placeholders (``None``, ``""``, ``[]``, ``{}``) are option-form
+    defaults that mean "unset" — they are injected by the schema's
+    ``default_options`` for optional text/json fields and must not reach the
+    wire (providers reject stray empties). Real values such as numeric
+    ``0``/``0.0`` and ``False`` carry information and are kept.
+    """
+
+    if value is None:
+        return True
+    return isinstance(value, str | list | dict) and len(value) == 0
+
+
+def merge_extra_options(payload: JsonObject, options: JsonObject) -> None:
+    """Merge the ``extra_options`` escape hatch into *payload* (extra wins).
+
+    Letting the escape hatch override authored keys keeps it a true last
+    word; empty placeholder values are dropped like everywhere else.
+    """
+
+    extra = options.get(EXTRA_OPTIONS_KEY)
+    if not isinstance(extra, dict):
+        return
+    for key, value in extra.items():
+        if isinstance(key, str) and key and not is_omittable_option(value):
+            payload[key] = value
+
 
 class _ProviderLookupProtocol(Protocol):
     """Provider-config lookup surface used during target resolution."""

@@ -36,6 +36,7 @@ OPENAI_SUBSCRIPTION_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
 OPENCODE_GO_MODELS_URL = "https://opencode-go.example/v1/models"
 STUB_DISCOVERY_MODELS_URL = "https://stub-provider.example/v1/models"
 _SIMPLE_MODELS_URL = "https://simple.example/v1/models"
+OPENROUTER_IMAGE_MODELS_URL = "https://openrouter.ai/api/v1/images/models"
 API_KEY = "test-openrouter-key"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -61,6 +62,20 @@ def _simple_compatible_config() -> ProviderConfig:
         ],
         defaults={},
         models_endpoint="/models",
+    )
+
+
+def mock_openrouter_image_catalog(entries: list[dict[str, Any]] | None = None) -> None:
+    """Mock the image-API catalog fetch the OpenRouter adapter performs.
+
+    Registered inside each test's ``respx.mock`` context. The default empty
+    catalog lets a refresh proceed without task options; entries with ids
+    also get their per-model endpoint-detail route mocked as empty.
+    """
+
+    entries = entries or []
+    respx.get(OPENROUTER_IMAGE_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"data": entries})
     )
 
 
@@ -756,6 +771,7 @@ class TestRefreshModels:
         openrouter_config: ProviderConfig,
     ):
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
         route = respx.get(OPENROUTER_MODELS_URL).mock(
             return_value=httpx.Response(
                 200,
@@ -806,6 +822,7 @@ class TestRefreshModels:
         come in at LOAD (Phase 2 assembly) instead — proving the move."""
 
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
         models_dir = resources_dir / "models"
         models_dir.mkdir(parents=True)
         overrides_path = models_dir / "openrouter.overrides.json"
@@ -881,6 +898,7 @@ class TestRefreshModels:
             )
         )
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
 
         await refresh_models(
             provider_config,
@@ -952,6 +970,7 @@ class TestRefreshModels:
         openrouter_config: ProviderConfig,
     ):
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
         raw_response = {
             "data": [
                 {
@@ -989,6 +1008,7 @@ class TestRefreshModels:
                 return raw_model.get("id") != "model-b"
 
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
         raw_response = {
             "data": [
                 raw_openrouter_model(model_id="model-a", name="Model A"),
@@ -1280,6 +1300,7 @@ class TestRefreshModels:
     ):
         """OpenRouter discovery fetches STT/TTS models via supplementary API calls."""
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
 
         # Main catalog returns a chat model and a multimodal audio model.
         main_models = {
@@ -1356,6 +1377,7 @@ class TestRefreshModels:
     ):
         """Supplementary fetches that return already-known models are deduplicated."""
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
 
         # Main catalog includes gpt-audio; supplementary also returns it.
         main_models = {
@@ -1410,6 +1432,7 @@ class TestRefreshModels:
     ):
         """If a supplementary fetch fails, discovery still completes with main models."""
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
 
         main_models = {
             "data": [
@@ -1437,6 +1460,128 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_refresh_models_projects_image_task_options(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        """The image task catalog projects typed option schemas into the
+        provider file: an existing chat-catalog model is enriched, an
+        image-API-only model is added, and the raw dump records the task
+        responses."""
+
+        resources_dir = tmp_path / "resources"
+        respx.get(OPENROUTER_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        raw_openrouter_model(
+                            model_id="recraft/recraft-v3",
+                            name="Recraft V3",
+                            output_modalities=["image"],
+                        )
+                    ]
+                },
+            )
+        )
+        mock_openrouter_image_catalog(
+            [
+                {
+                    "id": "recraft/recraft-v3",
+                    "name": "Recraft: Recraft V3",
+                    "supported_parameters": {"n": {"type": "range", "min": 1, "max": 6}},
+                },
+                {
+                    "id": "future-lab/pixel-marvel",
+                    "name": "Pixel Marvel",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["image"],
+                    },
+                    "supported_parameters": {
+                        "aspect_ratio": {"type": "enum", "values": ["1:1", "16:9"]}
+                    },
+                },
+            ]
+        )
+        respx.get("https://openrouter.ai/api/v1/images/models/recraft/recraft-v3/endpoints").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "endpoints": [
+                        {
+                            "provider_slug": "recraft",
+                            "allowed_passthrough_parameters": ["style", "controls"],
+                        }
+                    ]
+                },
+            )
+        )
+        respx.get(
+            "https://openrouter.ai/api/v1/images/models/future-lab/pixel-marvel/endpoints"
+        ).mock(return_value=httpx.Response(200, json={"endpoints": []}))
+
+        result = await refresh_models(openrouter_config, API_KEY, resources_dir)
+
+        assert result["model_count"] == 2
+        written = json.loads(
+            (resources_dir / "models" / "openrouter.json").read_text(encoding="utf-8")
+        )
+        recraft = written["models"]["recraft/recraft-v3"]
+        image_options = recraft["capabilities"]["task_options"]["image_generation"]
+        assert image_options["parameters"]["n"] == {"type": "range", "min": 1, "max": 6}
+        assert image_options["passthrough"] == {"recraft": ["controls", "style"]}
+        # The chat-catalog identity is preserved on the enriched model.
+        assert recraft["name"] == "Recraft V3"
+
+        pixel = written["models"]["future-lab/pixel-marvel"]
+        assert pixel["name"] == "Pixel Marvel"
+        pixel_parameters = pixel["capabilities"]["task_options"]["image_generation"]["parameters"]
+        assert pixel_parameters["aspect_ratio"] == {"type": "enum", "values": ["1:1", "16:9"]}
+
+        raw_output_data = json.loads(
+            (resources_dir / "models" / "openrouter.raw.json").read_text(encoding="utf-8")
+        )
+        assert "/images/models" in raw_output_data["raw_task_responses"]
+
+        # The assembled registry surfaces both models with their task options.
+        registry = ModelRegistry.load(resources_dir)
+        loaded = registry.get("openrouter", "future-lab/pixel-marvel")
+        loaded_parameters = loaded.capabilities.task_options["image_generation"]["parameters"]
+        assert loaded_parameters["aspect_ratio"]["values"] == ("1:1", "16:9")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_image_catalog_failure_does_not_block(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        """A failing image task catalog degrades to a refresh without task
+        options — the chat catalog still lands."""
+
+        resources_dir = tmp_path / "resources"
+        respx.get(OPENROUTER_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [raw_openrouter_model(model_id="model-a", name="Model A")]},
+            )
+        )
+        respx.get(OPENROUTER_IMAGE_MODELS_URL).mock(
+            return_value=httpx.Response(500, text="Internal Server Error")
+        )
+
+        result = await refresh_models(openrouter_config, API_KEY, resources_dir)
+
+        assert result["model_count"] == 1
+        written = json.loads(
+            (resources_dir / "models" / "openrouter.json").read_text(encoding="utf-8")
+        )
+        assert "task_options" not in written["models"]["model-a"]["capabilities"]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_refresh_models_raw_file_records_supplementary_models_once(
         self,
         tmp_path: Path,
@@ -1444,6 +1589,7 @@ class TestRefreshModels:
     ):
         """Supplementary models appear exactly once in the persisted raw payload."""
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
 
         main_models = {
             "data": [raw_openrouter_model(model_id="openai/gpt-4o", name="GPT-4o")],
@@ -1603,6 +1749,7 @@ class TestRefreshModelsDevEnrichment:
         OpenRouter [high, xhigh] (provider deviation), via refresh → load."""
 
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
         catalog = _fixture_catalog()
 
         # Canonical layer (models.json) with the lifted lab ladder.
@@ -1737,6 +1884,7 @@ class TestRefreshModelsDevEnrichment:
         """models.dev ``interleaved`` projects to metadata.<provider>.reasoning_response_field."""
 
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
         respx.get(OPENROUTER_MODELS_URL).mock(
             return_value=httpx.Response(
                 200,
@@ -1781,6 +1929,7 @@ class TestRefreshModelsDevEnrichment:
         """A model with no models.dev ``interleaved`` gets no reasoning_response_field."""
 
         resources_dir = tmp_path / "resources"
+        mock_openrouter_image_catalog()
         respx.get(OPENROUTER_MODELS_URL).mock(
             return_value=httpx.Response(
                 200,
