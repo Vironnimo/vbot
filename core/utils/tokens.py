@@ -64,6 +64,17 @@ def estimate_message_tokens(message: Mapping[str, Any]) -> tuple[int, bool]:
     return estimate_tokens("\n".join(chunks))
 
 
+def estimate_json_tokens(value: Any) -> tuple[int, bool]:
+    """Estimate tokens for a JSON-serializable value via its compact JSON size.
+
+    Used for payloads that reach the provider as structured data rather than
+    prose — e.g. the tool-definition array sent alongside the system prompt.
+    Providers render such payloads into model context in provider-specific
+    formats, so the compact JSON size is the provider-neutral approximation.
+    """
+    return estimate_tokens(_render_token_estimate_value(value))
+
+
 def _render_token_estimate_value(value: Any) -> str:
     if value is None:
         return ""

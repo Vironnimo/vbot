@@ -7,7 +7,7 @@ from typing import Any, cast
 from core.projects import resolve_prompt_project, runtime_agent_body
 from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
 from core.utils.log_viewer import LogViewer
-from core.utils.tokens import estimate_tokens
+from core.utils.tokens import estimate_json_tokens, estimate_tokens
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
@@ -194,8 +194,19 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    # The provider tool-definition array occupies model context alongside the
+    # prompt text but is not part of it — report it separately so the preview
+    # reflects the request's real prompt-side footprint.
+    tool_definitions = prompt_manager.provider_tool_definitions(agent)
     token_count, estimated = estimate_tokens(text)
-    return {"text": text, "tokens": token_count, "estimated": estimated}
+    tool_tokens = estimate_json_tokens(tool_definitions)[0] if tool_definitions else 0
+    return {
+        "text": text,
+        "tokens": token_count,
+        "tool_tokens": tool_tokens,
+        "tool_count": len(tool_definitions),
+        "estimated": estimated,
+    }
 
 
 def _preview_project_context(

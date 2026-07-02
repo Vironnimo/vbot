@@ -426,6 +426,10 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.preview.refresh': 'Refresh',
   'systemPrompt.preview.copy': 'Copy',
   'systemPrompt.preview.tokenCount': '~{count} tokens',
+  'systemPrompt.preview.tokenBreakdown':
+    '~{prompt} prompt + ~{tools} tools = ~{total} tokens',
+  'systemPrompt.preview.tokenBreakdownHint':
+    'Estimated. Tools = the {count} tool definitions sent to the provider with every request alongside the system prompt.',
   'systemPrompt.preview.agentLabel': 'Agent',
   'systemPrompt.preview.agentGroup.identity': 'Identity agents',
   'systemPrompt.preview.agentGroup.project': 'Project agents',
