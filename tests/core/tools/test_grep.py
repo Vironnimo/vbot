@@ -707,7 +707,7 @@ def test_grep_rg_command_uses_ignore_respecting_defaults(
     assert "--hidden" in command
     assert "--no-require-git" in command
     assert "--glob-case-insensitive" in command
-    exclusion_index = command.index("!**/.git/**")
+    exclusion_index = command.index("!**/.git")
     assert command[exclusion_index - 1] == "--glob"
 
 
@@ -722,7 +722,7 @@ def test_grep_rg_command_disables_ignore_rules_on_opt_in(
 
     command = created[0].command
     assert "--no-ignore" in command
-    assert "!**/.git/**" in command
+    assert "!**/.git" in command
 
 
 def test_grep_rg_command_enables_multiline_flags(
@@ -854,6 +854,46 @@ def test_grep_reports_invalid_regex_without_rg(
 
     error = assert_failure_envelope(result, "invalid_regex")
     assert "invalid regex pattern" in error["message"]
+
+
+def test_grep_searches_worktree_under_ignored_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Worktrees typically live in a gitignored .worktrees/ folder of the main
+    # repo. A worktree carries its own .git pointer *file*, which bounds the
+    # gitignore evaluation: the main repo's ".worktrees/" rule must not blank
+    # out searches running inside the worktree, while the worktree's own
+    # checked-out .gitignore still applies.
+    force_python_fallback(monkeypatch)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    repo.joinpath(".git").mkdir()
+    repo.joinpath(".gitignore").write_text(".worktrees/\nnode_modules/\n", encoding="utf-8")
+    worktree = repo / ".worktrees" / "task"
+    worktree.mkdir(parents=True)
+    worktree.joinpath(".git").write_text("gitdir: ../../.git/worktrees/task\n", encoding="utf-8")
+    worktree.joinpath(".gitignore").write_text(".worktrees/\nnode_modules/\n", encoding="utf-8")
+    worktree.joinpath("app.py").write_text("needle in worktree\n", encoding="utf-8")
+    worktree.joinpath("node_modules").mkdir()
+    worktree.joinpath("node_modules", "lib.js").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(worktree), {"pattern": "needle"})
+
+    assert get_success_content(result) == "app.py:1: needle in worktree"
+
+
+def test_grep_never_surfaces_git_pointer_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath(".git").write_text("gitdir: ../elsewhere\n", encoding="utf-8")
+    workspace.joinpath("app.py").write_text("gitdir mention\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "gitdir"})
+
+    assert get_success_content(result) == "app.py:1: gitdir mention"
 
 
 def test_grep_glob_filter_matches_case_insensitively(

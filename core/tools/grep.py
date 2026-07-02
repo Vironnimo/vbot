@@ -65,7 +65,9 @@ _GREP_ARGUMENT_ALIASES = {"ignoreCase": "ignore_case", "includeIgnored": "includ
 # Bounded drain of a finished/killed ripgrep process; generous, never load-bearing.
 _RG_DRAIN_TIMEOUT_SECONDS = 5.0
 # rg exclusion for version-control internals; composes with any user glob.
-_GIT_INTERNALS_EXCLUSION_GLOB = "!**/.git/**"
+# Matches the .git entry itself so it covers both the directory (never
+# descended) and a worktree's .git pointer file.
+_GIT_INTERNALS_EXCLUSION_GLOB = "!**/.git"
 
 GREP_TOOL_NAME = "grep"
 GREP_TOOL_DESCRIPTION = (
