@@ -78,8 +78,9 @@ class SkillAuthoringService:
 
     Operates on an already-resolved *target root* (a scope's skills directory):
     ``create`` / ``edit`` / ``patch`` / ``delete`` for the skill itself, plus
-    ``write_file`` / ``remove_file`` for its ``scripts/`` / ``references/`` support
-    files. Scope→root resolution is the caller's job; this service confines every
+    ``write_file`` / ``remove_file`` for its ``scripts/`` / ``references/`` /
+    ``assets/`` support files. Scope→root resolution is the caller's job; this
+    service confines every
     path strictly under the target root, refuses protected (bundled) roots,
     validates the skill document, and stamps provenance into ``metadata.vbot``.
 
@@ -176,7 +177,7 @@ class SkillAuthoringService:
     def write_file(
         self, target_root: Path, skill_name: str, relative_path: str, content: str
     ) -> SkillWriteResult:
-        """Write a support file under the skill's ``scripts/`` or ``references/``."""
+        """Write a support file under the skill's ``scripts/``, ``references/``, or ``assets/``."""
         skill_dir = self._existing_skill_dir(target_root, skill_name)
         resource_path = self._resource_path(skill_dir, relative_path)
         resource_path.parent.mkdir(parents=True, exist_ok=True)
@@ -186,7 +187,7 @@ class SkillAuthoringService:
     def remove_file(
         self, target_root: Path, skill_name: str, relative_path: str
     ) -> SkillWriteResult:
-        """Remove a support file under the skill's ``scripts/`` or ``references/``."""
+        """Remove a support file under the skill's ``scripts/``, ``references/``, or ``assets/``."""
         skill_dir = self._existing_skill_dir(target_root, skill_name)
         resource_path = self._resource_path(skill_dir, relative_path)
         if not resource_path.is_file():

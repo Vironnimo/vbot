@@ -39,7 +39,7 @@ from core.utils.logging import get_logger
 FRONT_MATTER_DELIMITER = "---"
 WILDCARD_ALLOWLIST = "*"
 SKILL_FILENAME = "SKILL.md"
-RESOURCE_DIRECTORIES = ("scripts", "references")
+RESOURCE_DIRECTORIES = ("scripts", "references", "assets")
 # A project's own skills live beside its OpenCode agents, under
 # ``<repo>/.opencode/skills/`` (the v1 project-skill location). Scanned per project
 # and merged with the bundled skills, project-first so a project skill wins a name
