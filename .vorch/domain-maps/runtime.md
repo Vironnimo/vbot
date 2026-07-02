@@ -23,7 +23,7 @@ Idempotent — a second call logs at debug and preserves the existing service in
 
 1. Create the `vbot.core` logger, log `Runtime startup initiated`, and record `started_at` (UTC).
 2. Build `StorageManager`, `ensure_directories()`, load `settings.json`, and read the `attachment_max_size_bytes` / `speech_upload_max_size_bytes` size limits (positive-int validated, else default with a warning).
-3. Instantiate the runtime-owned `AttachmentStore` (`<data_dir>/attachments/`, sized by `attachment_max_size_bytes`); read `<data_dir>/.env` as a fallback credential snapshot **without** mutating `os.environ`; copy prompt fragments.
+3. Instantiate the runtime-owned `AttachmentStore` (`<data_dir>/attachments/`, sized by `attachment_max_size_bytes`); read `<data_dir>/.env` as a fallback credential snapshot **without** mutating `os.environ`. (Prompt fragments are no longer seeded into the data dir at startup — bundled resources are read live; see `storage.md`.)
 4. Load provider + model registries; instantiate the OAuth `TokenStore` and the central `ProviderCredentialResolver` (process environment takes precedence over the data-dir fallback).
 5. Create `TaskModelService`, then `SpeechService` (STT/TTS + artifacts) and `ImageService` (image generation).
 6. Wire `AgentStore` with `defaults_provider=lambda: storage.load_defaults().get("agent", {})` so resolved Agent reads always use the latest persisted defaults without rewriting agent files.

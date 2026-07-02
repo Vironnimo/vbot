@@ -707,11 +707,6 @@ class StorageManager:
                 remove_temporary_file(temp_path)
                 raise StorageError(f"Cannot write {self.settings_path}: {exc}") from exc
 
-    def copy_prompt_fragments(self, *, overwrite: bool = False) -> list[Path]:
-        """Copy bundled prompt fragments into ``<data_dir>/prompts``."""
-
-        return self._prompt_fragments.copy_prompt_fragments(overwrite=overwrite)
-
     def copy_agent_prompt_fragments(self, agent_id: str, *, overwrite: bool = False) -> list[Path]:
         """Seed an Agent prompt scope from the currently effective default fragments."""
 
@@ -722,35 +717,10 @@ class StorageManager:
 
         return self._prompt_fragments.agent_prompts_dir(agent_id)
 
-    def agent_prompt_fragment_exists(self, agent_id: str, fragment_name: str) -> bool:
-        """Return whether an Agent prompt fragment exists on disk."""
-
-        return self._prompt_fragments.agent_prompt_fragment_exists(agent_id, fragment_name)
-
     def read_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> str:
         """Read an Agent prompt fragment, returning an empty string when absent."""
 
         return self._prompt_fragments.read_agent_prompt_fragment(agent_id, fragment_name)
-
-    def write_agent_prompt_fragment(self, agent_id: str, fragment_name: str, content: str) -> Path:
-        """Write one Agent prompt fragment."""
-
-        return self._prompt_fragments.write_agent_prompt_fragment(agent_id, fragment_name, content)
-
-    def reset_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> Path:
-        """Reset one Agent prompt fragment to the current default-scope content."""
-
-        return self._prompt_fragments.reset_agent_prompt_fragment(agent_id, fragment_name)
-
-    def reset_prompt_fragment(self, fragment_name: str) -> Path:
-        """Reset a user-copy prompt fragment to its bundled default."""
-
-        return self._prompt_fragments.reset_prompt_fragment(fragment_name)
-
-    def write_prompt_fragment(self, fragment_name: str, content: str) -> Path:
-        """Write arbitrary content to a user-copy prompt fragment."""
-
-        return self._prompt_fragments.write_prompt_fragment(fragment_name, content)
 
     def read_prompt_fragment(self, fragment_name: str) -> str:
         """Read a prompt fragment from the data directory, falling back to resources."""

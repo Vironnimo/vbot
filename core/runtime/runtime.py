@@ -388,7 +388,6 @@ class Runtime:
         )
         data_dir_credentials = self._storage.load_environment()
         self._fallback_environment = dict(data_dir_credentials)
-        self._storage.copy_prompt_fragments()
 
         self._providers = ProviderRegistry.load(resources_path)
         self._token_store = TokenStore(self._storage.data_dir)
