@@ -16,7 +16,8 @@ Discovers filesystem paths by glob-style pattern.
 - Relative `path` resolves from `ToolContext.effective_cwd` (the working directory); absolute search roots are allowed.
 - Result paths are rendered relative to the **working directory** when the match lies under it, absolute otherwise (`display_search_path`) — so every result round-trips directly into a follow-up `read`/`edit` call regardless of the search root.
 - Matches are sorted by modification time, newest first; equal mtimes tie-break alphabetically. Directory entries end with `/`.
-- **Ignore semantics (user decision 2026-07-02):** `.gitignore`'d paths are skipped by default (shared walker `iter_search_entries` + `GitIgnoreFilter`); `include_ignored: true` opts in. Hidden dotfiles are always matched; `.git` internals are always pruned. Explicitly targeting an ignored directory as `path` auto-disables the rules (`ignore_rules_apply`) instead of returning a misleading empty result.
+- **Ignore semantics (user decision 2026-07-02):** `.gitignore`'d paths are skipped by default (shared walker `iter_search_entries` + `GitIgnoreFilter`); `include_ignored: true` opts in. Hidden dotfiles are always matched; `.git` is always pruned in both forms (directory and a worktree's pointer file). Explicitly targeting an ignored directory as `path` auto-disables the rules (`ignore_rules_apply`) instead of returning a misleading empty result.
+- **Worktree boundary:** a `.git` pointer file bounds gitignore evaluation like a `.git` directory, so a worktree inside the main repo's gitignored `.worktrees/` folder matches normally from inside — the parent repo's rule never blanks it out (regression-tested).
 
 ## Constraints & Gotchas
 
