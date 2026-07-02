@@ -407,6 +407,24 @@ def test_glob_searches_explicitly_targeted_ignored_directory(tmp_path: Path) -> 
     assert get_success_content(result) == "vendor/lib.js"
 
 
+def test_glob_matches_worktree_under_ignored_directory(tmp_path: Path) -> None:
+    # A worktree's .git pointer file bounds the gitignore evaluation: the main
+    # repo's ".worktrees/" rule must not blank out matching inside the
+    # worktree, and the pointer file itself is never listed.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    repo.joinpath(".git").mkdir()
+    repo.joinpath(".gitignore").write_text(".worktrees/\n", encoding="utf-8")
+    worktree = repo / ".worktrees" / "task"
+    worktree.mkdir(parents=True)
+    worktree.joinpath(".git").write_text("gitdir: ../../.git/worktrees/task\n", encoding="utf-8")
+    worktree.joinpath("app.py").write_text("", encoding="utf-8")
+
+    result = glob_handler(make_context(worktree), {"pattern": "**"})
+
+    assert get_success_content(result) == "app.py"
+
+
 def test_glob_pages_results_with_offset(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
