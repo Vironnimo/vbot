@@ -21,6 +21,7 @@ git commit -m "<type>(<scope>): <what this phase accomplished>"
 
 **Commit rules:**
 - Stage only application files — never the plan file.
+- Never stage or commit `.vorch/FLAGGED.md`; it is a local-only ignored runtime log.
 - Subject: lowercase, no trailing period, max 72 chars.
 - Body (optional): explain *why*, not *what*.
 - Breaking change: append `!` → `feat(api)!: rename endpoint`.
