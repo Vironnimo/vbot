@@ -124,6 +124,7 @@ from core.chat.tool_dispatch import (
     _sync_skill_context_messages,
     _visiting_candidate_paths,
 )
+from core.chat.usage import aggregate_session_usage
 from core.debug import DebugContext
 from core.extensions import HookContext
 from core.projects import resolve_prompt_project, runtime_agent_body
@@ -739,6 +740,17 @@ class ChatLoop:
                     timing=_timing_payload(run_timing_started_at, run_timing_started_perf),
                 )
             )
+            # Session usage totals ride every terminal event so accessors can
+            # keep their session-level token/cache display current without
+            # re-fetching history. Diagnostics only — never mask the outcome.
+            try:
+                run.terminal_payload_extras["session_usage"] = aggregate_session_usage(
+                    session.load()
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to aggregate session usage for run %s", run.id, exc_info=True
+                )
 
             extension_registry = self._runtime.extensions
             if extension_registry is not None:

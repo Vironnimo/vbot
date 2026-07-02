@@ -4327,6 +4327,44 @@ async def test_non_streaming_response_with_usage_produces_assistant_with_usage(
 
 
 @pytest.mark.asyncio
+async def test_run_completed_payload_carries_whole_session_usage_totals(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": "Hello",
+                "reasoning": None,
+                "tool_calls": None,
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 40,
+                    "cache_read_tokens": 700,
+                    "cache_write_tokens": 200,
+                },
+            }
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    completed = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed) == 1
+    assert completed[0].payload["session_usage"] == {
+        "measured_turns": 1,
+        "estimated_turns": 0,
+        "cache_turns": 1,
+        "input_tokens": 1000,
+        "output_tokens": 40,
+        "cache_read_tokens": 700,
+        "cache_write_tokens": 200,
+    }
+
+
+@pytest.mark.asyncio
 async def test_streaming_response_with_usage_delta_produces_assistant_with_usage(
     tmp_path: Path,
 ) -> None:

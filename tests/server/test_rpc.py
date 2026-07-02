@@ -4745,6 +4745,51 @@ async def test_chat_history_loads_current_session_and_strips_reasoning_meta(tmp_
 
 
 @pytest.mark.asyncio
+async def test_chat_history_includes_whole_session_usage_totals(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create("coder", session_id="usage-session")
+    state.runtime.agents.update("coder", current_session_id="usage-session")
+    session.append(ChatMessage.user(content="hello"))
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="One",
+            usage={"input_tokens": 1000, "output_tokens": 50, "cache_read_tokens": 800},
+        )
+    )
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Two",
+            usage={
+                "input_tokens": 2000,
+                "output_tokens": 100,
+                "cache_read_tokens": 1500,
+                "cache_write_tokens": 300,
+            },
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "coder", "limit": 1}},
+    )
+
+    assert response["ok"] is True
+    # The page is a slice; the totals still cover the whole transcript.
+    assert len(response["result"]["messages"]) == 1
+    assert response["result"]["session_usage"] == {
+        "measured_turns": 2,
+        "estimated_turns": 0,
+        "cache_turns": 2,
+        "input_tokens": 3000,
+        "output_tokens": 150,
+        "cache_read_tokens": 2300,
+        "cache_write_tokens": 300,
+    }
+
+
+@pytest.mark.asyncio
 async def test_chat_history_includes_active_run_descriptor(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.chat_sessions.create("coder", session_id="active-session")

@@ -251,7 +251,7 @@ describe('ChatView', () => {
     expect(badgeText).not.toContain('/');
   });
 
-  it('shows the usage breakdown with cache tokens in the token badge tooltip', async () => {
+  it('shows the last-turn and session usage breakdown in the token badge tooltip', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         usage: {
@@ -260,18 +260,34 @@ describe('ChatView', () => {
           cache_read_tokens: 3000,
           cache_write_tokens: 200,
         },
+        sessionUsage: {
+          measured_turns: 12,
+          estimated_turns: 0,
+          cache_turns: 12,
+          input_tokens: 40000,
+          output_tokens: 1500,
+          cache_read_tokens: 32000,
+          cache_write_tokens: 900,
+        },
       }),
     );
 
     mountedComponent = mount(ChatView, { target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat('en');
     const expectedTooltip = [
-      `Input: ${numberFormat.format(3886)} tok`,
-      `Cache read: ${numberFormat.format(3000)} tok`,
-      `Cache write: ${numberFormat.format(200)} tok`,
-      `Output: ${numberFormat.format(92)} tok`,
+      'Last turn',
+      'Input: 3,886 tok',
+      '  · read from cache: 3,000 (77%)',
+      '  · newly written to cache: 200',
+      '  · uncached: 686',
+      'Output: 92 tok',
+      '',
+      'Session (12 measured turns)',
+      'Input: 40,000 tok',
+      '  · read from cache: 32,000 (80%)',
+      'Output: 1,500 tok',
+      'Avg cache read per turn: 2,667 tok',
     ].join('\n');
 
     await waitForCondition(
@@ -296,10 +312,10 @@ describe('ChatView', () => {
     mountedComponent = mount(ChatView, { target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat('en');
     const expectedTooltip = [
-      `Input: ${numberFormat.format(3886)} tok`,
-      `Output: ${numberFormat.format(92)} tok`,
+      'Last turn',
+      'Input: 3,886 tok',
+      'Output: 92 tok',
     ].join('\n');
 
     await waitForCondition(
@@ -4049,6 +4065,7 @@ describe('ChatView', () => {
 });
 function createChatRpcMock({
   usage,
+  sessionUsage,
   contextWindow = 262144,
   sessionMessages,
   activeRuns,
@@ -4104,6 +4121,9 @@ function createChatRpcMock({
           messages: pageMessages,
           has_more: sourceMessages.length > pageMessages.length,
         };
+        if (sessionUsage) {
+          response.session_usage = sessionUsage;
+        }
         if (activeRuns?.[params.session_id]) {
           response.active_run = activeRuns[params.session_id];
         }
