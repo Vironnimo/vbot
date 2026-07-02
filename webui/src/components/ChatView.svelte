@@ -19,7 +19,7 @@
   } from '$lib/clientCaches.js';
   import { t } from '$lib/i18n.js';
   import {
-    subAgentResultData,
+    resolveSubAgentCancelPlan,
     subAgentResultEntryAllowsFetch,
     subAgentResultTextFromMessages,
   } from '$lib/chatTimelinePresentation.js';
@@ -806,6 +806,12 @@
   // churn across re-renders; the error path releases the guard so a later
   // attempt can retry.
   const SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT = 20;
+  // The cancel fallback only needs the `active_run` envelope field, not the
+  // transcript, so it fetches the smallest allowed page.
+  const SUBAGENT_CANCEL_LOOKUP_HISTORY_LIMIT = 1;
+  // Server RPC error code for a queue item that no longer exists (already
+  // started or already removed) — the sub-agent cancel fallback pivots on it.
+  const RPC_ERROR_QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
   const subAgentStatusVerificationKeys = new SvelteSet();
   const subAgentStatusInflightKeys = new SvelteSet();
 
@@ -832,11 +838,18 @@
       SUBAGENT_RESULT_CACHE_LIMIT,
     ).entries;
   };
-  const handleVerifySubAgentStatus = async (agentId, sessionId, runId) => {
+  const handleVerifySubAgentStatus = async (
+    agentId,
+    sessionId,
+    runId,
+    queueItemId = '',
+  ) => {
     if (!agentId || !sessionId) {
       return;
     }
     const trimmedRunId = typeof runId === 'string' ? runId.trim() : '';
+    const trimmedQueueItemId =
+      typeof queueItemId === 'string' ? queueItemId.trim() : '';
     const key = trimmedRunId || `${agentId}::${sessionId}`;
     if (
       subAgentStatusVerificationKeys.has(key) ||
@@ -892,9 +905,25 @@
           summary = message;
           break;
         }
-        const status = summary
-          ? normalizeSubAgentRunSummaryStatus(summary.status)
-          : 'completed';
+        let status;
+        if (summary) {
+          status = normalizeSubAgentRunSummaryStatus(summary.status);
+        } else if (!trimmedRunId && trimmedQueueItemId) {
+          // A queued spawn that never started leaves no summary and no active
+          // run — "no trace" must not read as success. When its queue item
+          // still waits, the child is genuinely pending; when the item is
+          // gone without a run ever starting, the spawn was cancelled before
+          // start.
+          status = (await queuedSubAgentStillPending(
+            agentId,
+            sessionId,
+            trimmedQueueItemId,
+          ))
+            ? 'running'
+            : 'cancelled';
+        } else {
+          status = 'completed';
+        }
         const summaryRunId = summary
           ? typeof summary.run_id === 'string'
             ? summary.run_id.trim()
@@ -927,6 +956,20 @@
     } finally {
       subAgentStatusInflightKeys.delete(key);
     }
+  };
+
+  // Whether a queued sub-agent spawn's queue item is still pending in the
+  // child session's queue. `chat.queue_list` keys on the BARE agent id
+  // (trap 2), which the descriptor's agent_id already is; a sub-agent spawn's
+  // queue item is public, so the list contains it.
+  const queuedSubAgentStillPending = async (
+    agentId,
+    sessionId,
+    queueItemId,
+  ) => {
+    const result = await listQueue(agentId, sessionId);
+    const items = Array.isArray(result?.items) ? result.items : [];
+    return items.some((item) => item?.id === queueItemId);
   };
 
   // Normalizes a `run_summary` message's terminal `status` into one of the
@@ -1905,37 +1948,75 @@
     }
   };
 
-  // Per-sub-agent cancel: a running sub-agent is itself a Run, so route through
-  // chat.cancel with reason="user". A queued sub-agent (no run_id yet) falls
-  // back to chat.queue_remove.
+  // Per-sub-agent cancel: a running child is itself a Run, so route through
+  // chat.cancel with reason="user". The child run id comes from the frozen
+  // descriptor or the queueRun:<item> mapping — a queued spawn's descriptor
+  // never learns it (B6). A still-queued child is removed from the child
+  // session's queue instead; when the queue item is already consumed and no
+  // mapping survived (page reload), the child session's active run is looked
+  // up server-side and cancelled.
   const handleCancelSubAgent = async ({ tool } = {}) => {
     const sessionState = activeSessionState;
-    const agent = activeAgent;
     if (!tool || !sessionState) {
       return;
     }
-    const data = subAgentResultData(tool);
-    const childRunId =
-      typeof data.run_id === 'string' ? data.run_id.trim() : '';
-    const childAgentId =
-      typeof data.agent_id === 'string' ? data.agent_id.trim() : '';
-    const childSessionId =
-      typeof data.session_id === 'string' ? data.session_id.trim() : '';
-    const queueItemId =
-      typeof data.queue_item_id === 'string' ? data.queue_item_id.trim() : '';
+    const plan = resolveSubAgentCancelPlan(tool, subAgentRunStatuses);
+    if (!plan) {
+      return;
+    }
 
     actionError = '';
     try {
-      if (childRunId) {
-        await cancelRun(childRunId, { reason: 'user' });
+      if (plan.kind === 'run') {
+        await cancelRun(plan.runId, { reason: 'user' });
         return;
       }
-      if (queueItemId && agent && childAgentId && childSessionId) {
-        await removeFromQueue(childAgentId, childSessionId, queueItemId);
+      try {
+        // `chat.queue_remove` keys on the BARE agent id (trap 2), which the
+        // descriptor's agent_id already is.
+        await removeFromQueue(plan.agentId, plan.sessionId, plan.queueItemId);
+        // Nothing will ever report this never-started child (no run, no
+        // summary), so settle the row's run-id-less session key here.
+        applySubAgentRunStatusUpdates({
+          [`session:${plan.agentId}::${plan.sessionId}`]: 'cancelled',
+        });
+      } catch (error) {
+        if (error?.code !== RPC_ERROR_QUEUE_ITEM_NOT_FOUND) {
+          throw error;
+        }
+        await cancelSubAgentActiveRun(plan.agentId, plan.sessionId);
       }
     } catch (error) {
       actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
     }
+  };
+
+  // Post-reload fallback for a formerly queued spawn: the queue item is gone
+  // but no run id survived (the queueRun mapping lives only in this tab's
+  // memory). Ask the server whether the child session is running right now —
+  // cancel that run, or, when the child is already terminal, force a fresh
+  // verification so the stale "running" dot settles to the durable state.
+  const cancelSubAgentActiveRun = async (agentId, sessionId) => {
+    const history = await rpc('chat.history', {
+      agent_id: qualifiedChildAgentAddress(agentId),
+      session_id: sessionId,
+      limit: SUBAGENT_CANCEL_LOOKUP_HISTORY_LIMIT,
+    });
+    const activeRunId =
+      typeof history?.active_run?.run_id === 'string'
+        ? history.active_run.run_id.trim()
+        : '';
+    if (activeRunId) {
+      await cancelRun(activeRunId, { reason: 'user' });
+      // The run-id-less row reads the session key; write it immediately so
+      // the dot settles without waiting for the bridged run_cancelled event.
+      applySubAgentRunStatusUpdates({
+        [`session:${agentId}::${sessionId}`]: 'cancelled',
+      });
+      return;
+    }
+    subAgentStatusVerificationKeys.delete(`${agentId}::${sessionId}`);
+    await handleVerifySubAgentStatus(agentId, sessionId, '');
   };
 
   const handleRetry = async () => {
@@ -1970,8 +2051,19 @@
   // (`onVerifySubAgentStatus` callback chain → ChatTimeline → ChatAssistantRun
   // → subAgentNeedsStatusVerification). Returns a promise that resolves when
   // the verification round-trip finishes.
-  export async function verifySubAgentStatus(agentId, sessionId, runId) {
-    await handleVerifySubAgentStatus(agentId, sessionId, runId);
+  export async function verifySubAgentStatus(
+    agentId,
+    sessionId,
+    runId,
+    queueItemId = '',
+  ) {
+    await handleVerifySubAgentStatus(agentId, sessionId, runId, queueItemId);
+  }
+
+  // Exposed for tests (mirrors `verifySubAgentStatus`): drives the per-row
+  // sub-agent cancel exactly as the timeline button's callback does.
+  export async function cancelSubAgent(tool) {
+    await handleCancelSubAgent({ tool });
   }
 
   const handleRemoveQueuedMessage = async (queuedMessageId) => {

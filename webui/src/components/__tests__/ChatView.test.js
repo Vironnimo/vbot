@@ -11,6 +11,8 @@ const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
 const listQueueMock = vi.fn(async () => ({ items: [] }));
 const removeFromQueueMock = vi.fn(async () => ({ ok: true }));
 const updateQueueItemMock = vi.fn(async () => ({ ok: true }));
+const cancelRunMock = vi.fn(async () => ({ ok: true }));
+const cancelToolCallMock = vi.fn(async () => ({ ok: true }));
 const showProjectMock = vi.fn(async () => ({ project: {}, scan: {} }));
 const applyConnectionSnapshotMock = vi.fn();
 const closeSubscriptionForMock = vi.fn();
@@ -37,6 +39,8 @@ vi.mock('$lib/api.js', () => ({
   listQueue: (...args) => listQueueMock(...args),
   removeFromQueue: (...args) => removeFromQueueMock(...args),
   updateQueueItem: (...args) => updateQueueItemMock(...args),
+  cancelRun: (...args) => cancelRunMock(...args),
+  cancelToolCall: (...args) => cancelToolCallMock(...args),
   showProject: (...args) => showProjectMock(...args),
 }));
 
@@ -97,6 +101,10 @@ describe('ChatView', () => {
     removeFromQueueMock.mockResolvedValue({ ok: true });
     updateQueueItemMock.mockReset();
     updateQueueItemMock.mockResolvedValue({ ok: true });
+    cancelRunMock.mockReset();
+    cancelRunMock.mockResolvedValue({ ok: true });
+    cancelToolCallMock.mockReset();
+    cancelToolCallMock.mockResolvedValue({ ok: true });
     showProjectMock.mockReset();
     showProjectMock.mockResolvedValue({ project: {}, scan: {} });
     applyConnectionSnapshotMock.mockReset();
@@ -3174,6 +3182,306 @@ describe('ChatView', () => {
     const finalRow = document.querySelector('.subagent-tool-event');
     expect(finalRow?.querySelector('.te-dot.running')).not.toBeNull();
     expect(finalRow?.querySelector('.te-dot.done')).toBeNull();
+  });
+
+  // Helper: render a single QUEUED sub-agent tool row in the parent timeline
+  // (the busy-child-session spawn path): the frozen descriptor carries only a
+  // queue_item_id — never a run id. The caller installs the `rpcMock`
+  // implementation and the `listQueueMock` behaviour first; mounting fires
+  // the row's automatic status verification, which consults both.
+  async function mountChatViewWithQueuedSubAgent() {
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Spawn queued sub-agent');
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+    handlers.onEvent({
+      data: {
+        type: 'tool_call_started',
+        run_id: 'run-verify-1',
+        sequence: 1,
+        payload: {
+          tool_call: {
+            id: 'call-queued-1',
+            index: 0,
+            name: 'subagent',
+            arguments: {
+              agent_id: 'alpha',
+              background: true,
+              content: 'Inspect the project',
+            },
+          },
+        },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'subagent_session_started',
+        run_id: 'run-verify-1',
+        sequence: 2,
+        payload: {
+          tool_call: { id: 'call-queued-1', index: 0, name: 'subagent' },
+          data: {
+            agent_id: 'alpha',
+            session_id: 'sub-session-1',
+            queue_item_id: 'queue-item-1',
+            status: 'queued',
+          },
+        },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'tool_call_result',
+        run_id: 'run-verify-1',
+        sequence: 3,
+        payload: {
+          tool_call: { id: 'call-queued-1', index: 0, name: 'subagent' },
+          result: JSON.stringify({
+            ok: true,
+            data: {
+              agent_id: 'alpha',
+              session_id: 'sub-session-1',
+              queue_item_id: 'queue-item-1',
+              status: 'queued',
+            },
+          }),
+        },
+      },
+    });
+    flushSync();
+
+    const row = document.querySelector('.subagent-tool-event');
+    expect(row).not.toBeNull();
+    return row;
+  }
+
+  // The tool row object the timeline's cancel button hands to
+  // `onCancelSubAgent` for a queued spawn (frozen descriptor, no run id).
+  function queuedSpawnToolFixture() {
+    return {
+      name: 'subagent',
+      status: 'success',
+      arguments: { agent_id: 'alpha', content: 'Inspect the project' },
+      result: JSON.stringify({
+        ok: true,
+        error: null,
+        data: {
+          agent_id: 'alpha',
+          session_id: 'sub-session-1',
+          queue_item_id: 'queue-item-1',
+          status: 'queued',
+        },
+        artifacts: [],
+      }),
+    };
+  }
+
+  it('cancelSubAgent: cancels a directly started child run through chat.cancel with reason user', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    await mountedComponent.cancelSubAgent({
+      name: 'subagent',
+      status: 'success',
+      arguments: { agent_id: 'alpha', content: 'Inspect the project' },
+      result: JSON.stringify({
+        ok: true,
+        error: null,
+        data: {
+          agent_id: 'alpha',
+          session_id: 'sub-session-1',
+          run_id: 'child-run-7',
+          status: 'running',
+        },
+        artifacts: [],
+      }),
+    });
+
+    expect(cancelRunMock).toHaveBeenCalledWith('child-run-7', {
+      reason: 'user',
+    });
+    expect(removeFromQueueMock).not.toHaveBeenCalled();
+  });
+
+  it('cancelSubAgent: removes a still-queued child and settles the dot to cancelled', async () => {
+    rpcMock.mockImplementation(
+      createVerifyRpcMock({
+        subSessionHistory: {
+          session_id: 'sub-session-1',
+          messages: [],
+          has_more: false,
+        },
+      }),
+    );
+    // The queue item still waits, so the automatic verification keeps the
+    // row running instead of settling it.
+    listQueueMock.mockImplementation(async (agentId, sessionId) =>
+      sessionId === 'sub-session-1'
+        ? {
+            items: [
+              { id: 'queue-item-1', content: 'Inspect', internal: false },
+            ],
+          }
+        : { items: [] },
+    );
+
+    await mountChatViewWithQueuedSubAgent();
+    await waitForCondition(
+      () =>
+        document.querySelector('.subagent-tool-event .te-dot.running') !== null,
+      100,
+    );
+
+    await mountedComponent.cancelSubAgent(queuedSpawnToolFixture());
+    flushSync();
+
+    // `chat.queue_remove` keys on the BARE child agent id (trap 2).
+    expect(removeFromQueueMock).toHaveBeenCalledWith(
+      'alpha',
+      'sub-session-1',
+      'queue-item-1',
+    );
+    expect(cancelRunMock).not.toHaveBeenCalled();
+    // Nothing else will ever report the never-started child, so the cancel
+    // settles the row immediately.
+    const row = document.querySelector('.subagent-tool-event');
+    expect(row?.querySelector('.te-dot.cancelled')).not.toBeNull();
+  });
+
+  it('cancelSubAgent: falls back to the child session active run when the queue item is already consumed', async () => {
+    rpcMock.mockImplementation(
+      createVerifyRpcMock({
+        subSessionHistory: {
+          session_id: 'sub-session-1',
+          messages: [],
+          has_more: false,
+          active_run: {
+            run_id: 'child-active-run',
+            sse_url: '/api/runs/child-active-run/events',
+            status: 'running',
+            events: [],
+          },
+        },
+      }),
+    );
+    // The formerly queued child started server-side; its queue item is gone
+    // and (post-reload) no queueRun mapping survived in this tab.
+    removeFromQueueMock.mockRejectedValue(
+      Object.assign(new Error('queued item not found: queue-item-1'), {
+        code: 'queue_item_not_found',
+      }),
+    );
+
+    await mountChatViewWithQueuedSubAgent();
+    await waitForCondition(
+      () =>
+        document.querySelector('.subagent-tool-event .te-dot.running') !== null,
+      100,
+    );
+
+    await mountedComponent.cancelSubAgent(queuedSpawnToolFixture());
+    flushSync();
+
+    expect(cancelRunMock).toHaveBeenCalledWith('child-active-run', {
+      reason: 'user',
+    });
+    const row = document.querySelector('.subagent-tool-event');
+    expect(row?.querySelector('.te-dot.cancelled')).not.toBeNull();
+  });
+
+  it('verifySubAgentStatus: keeps a queued spawn running while its queue item is still pending', async () => {
+    rpcMock.mockImplementation(
+      createVerifyRpcMock({
+        subSessionHistory: {
+          session_id: 'sub-session-1',
+          messages: [],
+          has_more: false,
+        },
+      }),
+    );
+    listQueueMock.mockImplementation(async (agentId, sessionId) =>
+      sessionId === 'sub-session-1'
+        ? {
+            items: [
+              { id: 'queue-item-1', content: 'Inspect', internal: false },
+            ],
+          }
+        : { items: [] },
+    );
+
+    await mountChatViewWithQueuedSubAgent();
+
+    // The automatic run-id-less verification consulted the child queue…
+    await waitForCondition(
+      () =>
+        listQueueMock.mock.calls.some(
+          ([agentId, sessionId]) =>
+            agentId === 'alpha' && sessionId === 'sub-session-1',
+        ),
+      100,
+    );
+    flushSync();
+
+    // …and kept the dot running instead of settling "no trace" as success.
+    const row = document.querySelector('.subagent-tool-event');
+    expect(row?.querySelector('.te-dot.running')).not.toBeNull();
+    expect(row?.querySelector('.te-dot.done')).toBeNull();
+    expect(row?.querySelector('.te-dot.cancelled')).toBeNull();
+  });
+
+  it('verifySubAgentStatus: settles a never-started queued spawn to cancelled once its queue item is gone', async () => {
+    rpcMock.mockImplementation(
+      createVerifyRpcMock({
+        subSessionHistory: {
+          session_id: 'sub-session-1',
+          messages: [],
+          has_more: false,
+        },
+      }),
+    );
+    // Default `listQueueMock`: empty queue — the item is gone and no run ever
+    // started, so the spawn was cancelled before start (not "completed").
+
+    await mountChatViewWithQueuedSubAgent();
+
+    await waitForCondition(
+      () =>
+        document.querySelector('.subagent-tool-event .te-dot.cancelled') !==
+        null,
+      100,
+    );
+    const row = document.querySelector('.subagent-tool-event');
+    expect(row?.querySelector('.te-dot.done')).toBeNull();
   });
 
   // --- Two-bar project chat (Phase 2) -------------------------------------
