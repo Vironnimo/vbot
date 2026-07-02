@@ -457,6 +457,33 @@ svg {
   border-color: transparent;
 }
 
+/* Danger icon footprint: the 32px stop-style square (composer run cancel).
+   Unlike the text danger button (neutral at rest), the icon-only variant is
+   red at rest — with no label, color is the only carrier of the destructive
+   meaning. */
+.btn-danger.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-color: rgba(252, 129, 129, 0.22);
+  color: var(--red);
+  background: rgba(252, 129, 129, 0.07);
+}
+
+.btn-danger.btn-icon:hover {
+  border-color: rgba(252, 129, 129, 0.45);
+  color: var(--red);
+  background: rgba(252, 129, 129, 0.14);
+}
+
+/* Keep the icon variant red when disabled (cancel in flight) — the shared
+   danger disabled:hover reset below would flip it to the neutral ghost. */
+.btn-danger.btn-icon:disabled:hover {
+  border-color: rgba(252, 129, 129, 0.22);
+  color: var(--red);
+  background: rgba(252, 129, 129, 0.07);
+}
+
 .btn-icon.btn-icon--active {
   border-color: rgba(232, 135, 10, 0.45);
   color: var(--accent);

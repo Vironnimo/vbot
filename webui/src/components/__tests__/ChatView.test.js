@@ -1208,7 +1208,7 @@ describe('ChatView', () => {
 
     sendComposerMessage('Start a long run');
 
-    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    await waitForCondition(() => Boolean(findCancelRunButton()), 100);
 
     sendComposerMessage('/debugging investigate this run');
 
@@ -1289,7 +1289,7 @@ describe('ChatView', () => {
 
     sendComposerMessage('Start a long run');
 
-    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    await waitForCondition(() => Boolean(findCancelRunButton()), 100);
 
     sendComposerMessage('/debugging investigate this run');
 
@@ -1371,7 +1371,7 @@ describe('ChatView', () => {
 
     sendComposerMessage('Start a long run');
 
-    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    await waitForCondition(() => Boolean(findCancelRunButton()), 100);
 
     sendComposerMessage('/compact');
 
@@ -1490,7 +1490,7 @@ describe('ChatView', () => {
 
     sendComposerMessage('Start a long run');
 
-    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    await waitForCondition(() => Boolean(findCancelRunButton()), 100);
 
     sendComposerMessage('Queue this while running');
 
@@ -2710,7 +2710,7 @@ describe('ChatView', () => {
     flushSync();
 
     // Initial mount attaches the SSE stream for the active run from history.
-    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    await waitForCondition(() => Boolean(findCancelRunButton()), 100);
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
 
     // The server has lost the run (terminal event missed, bus buffer rolled,
@@ -2729,12 +2729,9 @@ describe('ChatView', () => {
     // Reconcile: the "Cancel run" button disappears, "New session" is no
     // longer disabled (so `canCreateNewSession(...)` is now true), and the
     // run stream's `closeSubscriptionFor` was called for this session key.
-    await waitForCondition(
-      () => findButtonByText('Cancel run') === undefined,
-      100,
-    );
+    await waitForCondition(() => findCancelRunButton() === undefined, 100);
 
-    expect(findButtonByText('Cancel run')).toBeUndefined();
+    expect(findCancelRunButton()).toBeUndefined();
     expect(findButtonByText('New session')?.disabled).toBe(false);
     expect(closeSubscriptionForMock).toHaveBeenCalledWith('alpha::session-1');
     // No new SSE attach — the dead run is gone, not replaced.
@@ -2770,7 +2767,7 @@ describe('ChatView', () => {
     });
     flushSync();
 
-    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    await waitForCondition(() => Boolean(findCancelRunButton()), 100);
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
 
     // `chat.history` still reports the same active run — the active_run is
@@ -2795,7 +2792,7 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(findButtonByText('Cancel run')).toBeTruthy();
+    expect(findCancelRunButton()).toBeTruthy();
     expect(findButtonByText('New session')?.disabled).toBe(true);
     expect(closeSubscriptionForMock).not.toHaveBeenCalled();
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
@@ -2870,7 +2867,7 @@ describe('ChatView', () => {
 
     // Wait for the first `chat.history` response to land and the SSE stream
     // to be attached for the initial active run.
-    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    await waitForCondition(() => Boolean(findCancelRunButton()), 100);
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
 
     // Trigger a second `loadHistoryForSession`. This call is held on the
@@ -2930,7 +2927,7 @@ describe('ChatView', () => {
     expect(sessionState.status).toBe('running');
     expect(sessionState.currentRun?.runId).toBe('run-replacement');
     expect(closeSubscriptionForMock).not.toHaveBeenCalled();
-    expect(findButtonByText('Cancel run')).toBeTruthy();
+    expect(findCancelRunButton()).toBeTruthy();
     expect(findButtonByText('New session')?.disabled).toBe(true);
   });
 
@@ -4730,6 +4727,14 @@ function createAgent(overrides = {}) {
 function findButtonByText(text) {
   return Array.from(document.querySelectorAll('button')).find((button) =>
     button.textContent.includes(text),
+  );
+}
+
+// The run-level cancel is the icon-only stop button in the composer — no text
+// content, so it is matched by its aria-label instead.
+function findCancelRunButton() {
+  return Array.from(document.querySelectorAll('button')).find(
+    (button) => button.getAttribute('aria-label') === 'Cancel run',
   );
 }
 

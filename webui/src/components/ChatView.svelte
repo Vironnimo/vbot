@@ -2041,7 +2041,6 @@
     {activeAgent}
     {activeSessionState}
     {showSessionDrawer}
-    {cancellingRun}
     {creatingSession}
     {newSessionBlocked}
     {projects}
@@ -2053,7 +2052,6 @@
     onToggleSessionDrawer={() => {
       showSessionDrawer = !showSessionDrawer;
     }}
-    onCancelRun={handleCancelRun}
     onNewSession={handleNewSession}
     {onNavigateToVoiceSettings}
   />
@@ -2245,10 +2243,12 @@
             <ChatComposer
               disabled={composerDisabled}
               isRunning={isRunActive(activeSessionState)}
+              cancelling={cancellingRun}
               draftKey={composerDraftKey}
               historyKey={composerHistoryKey}
               {availableSkills}
               onSendMessage={handleSendMessage}
+              onCancelRun={handleCancelRun}
               onTranscriptionError={handleTranscriptionError}
             />
           </div>

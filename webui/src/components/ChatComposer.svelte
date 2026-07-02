@@ -22,10 +22,12 @@
   let {
     disabled = false,
     isRunning = false,
+    cancelling = false,
     availableSkills = [],
     draftKey = '',
     historyKey = '',
     onSendMessage,
+    onCancelRun = () => {},
     onTranscriptionError,
   } = $props();
   let content = $state('');
@@ -962,6 +964,37 @@
           />
         </svg>
       </Button>
+      {#if isRunning}
+        <!-- Run-level cancel lives next to Send: while a run is active both
+             actions coexist — Send queues, the stop button cancels. It is
+             deliberately independent of the composer `disabled` state so a
+             run stays cancellable even while the input is locked. -->
+        <Button
+          variant="danger"
+          icon
+          class="composer-stop"
+          disabled={cancelling}
+          ariaLabel={cancelling
+            ? t('cancel.cancelling', 'Cancelling run…')
+            : t('chat.cancelRun', 'Cancel run')}
+          title={cancelling
+            ? t('cancel.cancelling', 'Cancelling run…')
+            : t('chat.cancelRun', 'Cancel run')}
+          onClick={onCancelRun}
+        >
+          <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
+            <rect
+              x="3.5"
+              y="3.5"
+              width="7"
+              height="7"
+              rx="1"
+              fill="currentColor"
+              stroke="none"
+            />
+          </svg>
+        </Button>
+      {/if}
       <Button
         type="submit"
         variant="primary"
@@ -1074,6 +1107,13 @@
 
   .msg-input {
     height: 22px;
+  }
+
+  /* Extra breathing room around the stop button: cancelling by accident is the
+     only costly misclick in this row, so it gets double the row gap on both
+     sides (mic/attach and Send are harmless neighbors). */
+  :global(.composer-stop) {
+    margin-inline: 4px;
   }
 
   .input-area.drag-over .input-wrap {
