@@ -147,12 +147,14 @@ describe('SettingsExtensionsPanel', () => {
     expect(document.body.textContent).toContain('Waiting for: Token');
   });
 
-  it('disables an extension and shows the restart-required notice', async () => {
+  it('disables an extension live without showing a restart notice', async () => {
+    // Disabling applies live: the server returns no restart_required, so the
+    // panel must not surface the restart notice.
     rpcMock.mockImplementation((method) => {
       if (method === 'extensions.list') {
         return Promise.resolve(extensionsResult());
       }
-      return Promise.resolve({ restart_required: true });
+      return Promise.resolve({});
     });
 
     mountedComponent = mount(SettingsExtensionsPanel, {
@@ -171,8 +173,42 @@ describe('SettingsExtensionsPanel', () => {
     expect(updateCall[1]).toEqual({
       extensions: { disabled: ['guard_bash'], config: {} },
     });
+    expect(document.body.textContent).not.toContain('vbot server restart');
+  });
+
+  it('enables an extension and shows the restart-required notice', async () => {
+    // Enabling loads code and stays restart-applied: the server returns
+    // restart_required and the panel surfaces the notice.
+    const disabledExtension = {
+      ...extensionsResult().extensions[0],
+      disabled: true,
+      status: 'disabled',
+    };
+    rpcMock.mockImplementation((method) => {
+      if (method === 'extensions.list') {
+        return Promise.resolve({ extensions: [disabledExtension] });
+      }
+      return Promise.resolve({ restart_required: true });
+    });
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+
+    buttonByText('Enable').click();
+    await flushAsync();
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'settings.update',
+    );
+    expect(updateCall).toBeTruthy();
+    expect(updateCall[1]).toEqual({
+      extensions: { disabled: [], config: {} },
+    });
     expect(document.body.textContent).toContain(
-      'Extension changes apply after a restart',
+      'Enabling an extension applies after a restart',
     );
     expect(document.body.textContent).toContain('vbot server restart');
   });
