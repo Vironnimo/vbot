@@ -27,7 +27,7 @@
   let loading = $state(true);
   let loadError = $state('');
   let actionError = $state('');
-  let restartRequired = $state(false);
+  let reloading = $state(false);
   let actionName = $state('');
   let savingConfigName = $state('');
   let configDrafts = $state({});
@@ -39,6 +39,7 @@
 
   let panelBusy = $derived(
     loading ||
+      reloading ||
       actionName.length > 0 ||
       savingConfigName.length > 0 ||
       savingSecret.length > 0,
@@ -77,6 +78,28 @@
       loadError = `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`;
     } finally {
       loading = false;
+    }
+  }
+
+  async function reloadExtensions() {
+    if (panelBusy) {
+      return;
+    }
+
+    reloading = true;
+    actionError = '';
+
+    try {
+      await rpc('extensions.reload');
+      onToast({
+        title: t('settings.extensions.reloadSuccess', 'Extensions reloaded.'),
+        variant: 'success',
+      });
+      await loadExtensions();
+    } catch (error) {
+      actionError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      reloading = false;
     }
   }
 
@@ -122,10 +145,7 @@
     });
 
     try {
-      const response = await rpc('settings.update', payload);
-      if (response?.restart_required) {
-        restartRequired = true;
-      }
+      await rpc('settings.update', payload);
       onToast({
         title: t(
           'settings.extensions.configSaveSuccess',
@@ -209,10 +229,7 @@
     });
 
     try {
-      const response = await rpc('settings.update', payload);
-      if (response?.restart_required) {
-        restartRequired = true;
-      }
+      await rpc('settings.update', payload);
       onToast({
         title: extension.disabled
           ? t('settings.extensions.enableSuccess', 'Extension enabled.')
@@ -253,10 +270,7 @@
     });
 
     try {
-      const response = await rpc('settings.update', payload);
-      if (response?.restart_required) {
-        restartRequired = true;
-      }
+      await rpc('settings.update', payload);
       onToast({
         title: t(
           'settings.extensions.configSaveSuccess',
@@ -279,19 +293,16 @@
       <Button variant="secondary" disabled={panelBusy} onClick={loadExtensions}>
         {t('common.refresh', 'Refresh')}
       </Button>
+      <Button
+        variant="secondary"
+        disabled={panelBusy}
+        onClick={reloadExtensions}
+      >
+        {t('settings.extensions.reload', 'Reload extensions')}
+      </Button>
     </div>
   </div>
 </div>
-
-{#if restartRequired}
-  <div class="s-feedback s-ext-restart">
-    {t(
-      'settings.extensions.restartRequired',
-      'Enabling an extension applies after a restart. Disabling applies immediately.',
-    )}
-    <code>vbot server restart</code>
-  </div>
-{/if}
 
 {#if actionError}
   <div class="s-feedback s-feedback--error">{actionError}</div>

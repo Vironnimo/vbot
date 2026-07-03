@@ -879,22 +879,6 @@
 
 /* --- Extensions panel --- */
 
-.s-ext-restart {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  border-color: rgba(245, 158, 11, 0.35);
-  background: rgba(245, 158, 11, 0.08);
-  color: var(--text-hi);
-}
-
-.s-ext-restart code {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--amber);
-}
-
 .s-ext-list {
   display: flex;
   flex-direction: column;
