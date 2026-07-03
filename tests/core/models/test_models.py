@@ -1352,6 +1352,36 @@ class TestModelRegistryRealResources:
         tts = registry.get("openai", "tts-1")
         assert tts.capabilities.task_types == ("text_to_speech", "audio_generation")
 
+    def test_openai_task_model_overrides_are_limited_to_working_connections(self):
+        """OpenAI task models without a subscription wire are api-key only, while
+        ``gpt-image-2`` stays valid for both connections."""
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        api_key_only_models = (
+            "tts-1",
+            "tts-1-hd",
+            "gpt-4o-mini-tts",
+            "whisper-1",
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+            "dall-e-2",
+            "dall-e-3",
+            "gpt-image-1",
+            "gpt-image-1-mini",
+            "gpt-image-1.5",
+        )
+        for model_id in api_key_only_models:
+            model = registry.get("openai", model_id)
+            assert model.connections == ("api-key",)
+            assert model.allows_connection("api-key") is True
+            assert model.allows_connection("subscription") is False
+
+        gpt_image_2 = registry.get("openai", "gpt-image-2")
+        assert gpt_image_2.connections == ()
+        assert gpt_image_2.allows_connection("api-key") is True
+        assert gpt_image_2.allows_connection("subscription") is True
+
     def test_anthropic_opus_4_5_override_pins_budget_control(self):
         """``anthropic.overrides.json`` pins Opus 4.5 to ``budget`` control.
 
