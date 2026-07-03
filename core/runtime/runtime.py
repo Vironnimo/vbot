@@ -411,7 +411,9 @@ class Runtime:
             template_dir=resources_path / "workspace-templates",
             defaults_provider=lambda: storage.load_defaults().get("agent", {}),
         )
-        self._process_manager = ProcessManager()
+        self._process_manager = ProcessManager(
+            spool_dir=self._storage.data_dir / "processes",
+        )
         self._start_process_manager()
         self._tools = ToolRegistry()
         # Tool-owned System Prompt block declarations (D6): the tool side of the

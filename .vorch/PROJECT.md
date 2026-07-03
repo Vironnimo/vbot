@@ -148,7 +148,7 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 
 **Releasing:** When the user wants to release a new version, read `.vorch/workflows/release-workflow.md`.
 
-**Data directory:** `~/.vbot` — created on first run. Holds `.env`, `settings.json`, and all runtime data: `attachments/`, `logs/`, `oauth/`, `cron/jobs.json`, `speech/`, the disposable recall index under `recall/` (`session_index.sqlite` for FTS, `session_vectors.sqlite` for vector), and prompt overrides under `prompts/` and `agents/<agent-id>/prompts/`. Per-domain layout details live in the relevant domain maps.
+**Data directory:** `~/.vbot` — created on first run. Holds `.env`, `settings.json`, and all runtime data: `attachments/`, `logs/`, `oauth/`, `cron/jobs.json`, `speech/`, `processes/` (per-process shell output logs, swept after 24 h), the disposable recall index under `recall/` (`session_index.sqlite` for FTS, `session_vectors.sqlite` for vector), and prompt overrides under `prompts/` and `agents/<agent-id>/prompts/`. Per-domain layout details live in the relevant domain maps.
 
 ## Testing
 

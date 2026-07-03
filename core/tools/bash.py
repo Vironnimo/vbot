@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from core.tools.arguments import coerce_bool, optional_number, optional_string
-from core.tools.process_manager import ProcessManager, SessionNotFoundError
+from core.tools.process_manager import ProcessManager, ProcessSession, SessionNotFoundError
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -24,6 +24,14 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 BASH_TOOL_NAME = "bash"
+
+# Model-facing output cap. The complete output always lands in the process log
+# file, so the result only ever carries the newest slice; anything bigger is a
+# context bomb (500 KiB of build output is >100k tokens in one tool message).
+BASH_MODEL_OUTPUT_CAP_CHARS = 30_000
+# Failure messages (timeout, sub-agent kill) carry a shorter tail: enough to
+# diagnose, small enough not to bloat an error envelope.
+FAILURE_OUTPUT_TAIL_CHARS = 10_000
 
 
 def _shell_syntax_notes() -> str:
@@ -45,7 +53,10 @@ def _shell_syntax_notes() -> str:
 BASH_TOOL_DESCRIPTION = (
     "Run a shell command on the host system. Short commands complete in the foreground; "
     "commands still running after yield_after seconds (default 30) are moved to the "
-    "background and return a session_id for the process tool." + _shell_syntax_notes()
+    "background and return a session_id for the process tool. Result output keeps only "
+    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, the result "
+    "names the log file holding the complete output — search that file with grep/read."
+    + _shell_syntax_notes()
 )
 BASH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -196,7 +207,7 @@ async def bash_handler(
             cwd=workdir,
         )
     except (OSError, ValueError) as error:
-        return tool_failure("process_spawn_failed", f"failed to start process: {error}")
+        return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
 
     _register_user_cancel_callback(process_manager, context, session_id)
 
@@ -237,9 +248,10 @@ async def bash_handler(
         # background it: kill the process and fail instead of spawning a watcher.
         if _background_blocked_at_depth(context):
             await process_manager.kill(session_id, context.agent_id)
+            suffix = await _failure_output_suffix(process_manager, context, session_id)
             return tool_failure(
                 BACKGROUND_AT_DEPTH_FAILURE_CODE,
-                _background_at_depth_timeout_message(yield_after),
+                _background_at_depth_timeout_message(yield_after) + suffix,
             )
         _maybe_spawn_completion_watcher(
             process_manager,
@@ -253,8 +265,10 @@ async def bash_handler(
     if timeout_state["timed_out"] and _timed_out_process_killed(
         process_manager, context, session_id
     ):
+        suffix = await _failure_output_suffix(process_manager, context, session_id)
         return tool_failure(
-            "process_timeout", f"process timed out after {parsed['timeout']} seconds"
+            "process_timeout",
+            f"process timed out after {parsed['timeout']} seconds" + suffix,
         )
 
     return result
@@ -339,6 +353,9 @@ async def _watch_background_process(
     output = log_result.get("output", "")
     if not isinstance(output, str):
         output = ""
+    # The wake-up message lands in the model's context like a tool result, so
+    # the same output cap and full-log pointer apply here.
+    output = str(_shape_output_fields(session, output)["output"])
 
     user_cancelled = process_session_id in _user_cancelled_session_ids
 
@@ -723,8 +740,14 @@ async def _background_result(
     session_id: str,
 ) -> JsonObject:
     process_manager.mark_backgrounded(session_id, context.agent_id)
+    session = process_manager.get_session(session_id, context.agent_id)
     output = await _combined_output(process_manager, context, session_id)
-    return tool_success({"status": "running", "session_id": session_id, "output": output})
+    fields = _shape_output_fields(session, output)
+    if session.log_file is not None:
+        # A background process keeps writing after this result; always hand the
+        # model the log path so it can grep progress without polling.
+        fields["log_file"] = str(session.log_file)
+    return tool_success({"status": "running", "session_id": session_id, **fields})
 
 
 async def _completion_result(
@@ -738,10 +761,73 @@ async def _completion_result(
         {
             "status": "completed",
             "exit_code": session.exit_code,
-            "output": output,
-            "truncated": session.truncated,
+            **_shape_output_fields(session, output),
         }
     )
+
+
+def _shape_output_fields(session: ProcessSession, output: str) -> JsonObject:
+    """Cap model-facing output to the newest chars and point at the full log.
+
+    ``truncated`` covers both cut points: the model cap applied here and the
+    process buffer cap that already dropped the oldest bytes in memory. Either
+    way the missing part is the beginning, and the marker says so.
+    """
+    log_file = str(session.log_file) if session.log_file is not None else None
+    capped = len(output) > BASH_MODEL_OUTPUT_CAP_CHARS
+    truncated = capped or session.truncated
+    if capped:
+        output = output[-BASH_MODEL_OUTPUT_CAP_CHARS:]
+    if truncated:
+        output = _truncation_marker(log_file) + output
+
+    fields: JsonObject = {"output": output, "truncated": truncated}
+    if truncated and log_file is not None:
+        fields["log_file"] = log_file
+    return fields
+
+
+def _truncation_marker(log_file: str | None) -> str:
+    if log_file is None:
+        return "[earlier output truncated]\n"
+    return f"[earlier output truncated — complete output in {log_file}; grep/read it]\n"
+
+
+async def _failure_output_suffix(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    session_id: str,
+) -> str:
+    """Build the output tail + log pointer appended to timeout-style failures.
+
+    Without it a killed command fails with only the timing fact and every byte
+    of diagnostics the process printed is lost to the model.
+    """
+    output = await _combined_output(process_manager, context, session_id)
+    session = process_manager.get_session(session_id, context.agent_id)
+
+    parts: list[str] = []
+    if output:
+        tail = output[-FAILURE_OUTPUT_TAIL_CHARS:]
+        label = "Output tail" if len(output) > len(tail) else "Output"
+        parts.append(f"\n{label}:\n{tail}")
+    if session.log_file is not None:
+        parts.append(f"\nComplete output: {session.log_file}")
+    return "".join(parts)
+
+
+def _spawn_failure_message(argv: list[str], error: Exception) -> str:
+    message = f"failed to start process: {error}"
+    if not isinstance(error, FileNotFoundError):
+        return message
+
+    shell = argv[0] if argv else "the shell"
+    message += f". The shell '{shell}' was not found on this host"
+    if shell == "pwsh":
+        message += (
+            " — the bash tool requires PowerShell 7 (pwsh) on Windows; install it or add it to PATH"
+        )
+    return message
 
 
 async def _combined_output(
@@ -755,9 +841,11 @@ async def _combined_output(
 
 
 __all__ = [
+    "BASH_MODEL_OUTPUT_CAP_CHARS",
     "BASH_TOOL_DESCRIPTION",
     "BASH_TOOL_NAME",
     "BASH_TOOL_PARAMETERS",
+    "FAILURE_OUTPUT_TAIL_CHARS",
     "bash_handler",
     "register_bash_tool",
 ]
