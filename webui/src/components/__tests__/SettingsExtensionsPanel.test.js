@@ -30,9 +30,10 @@ function extensionsResult() {
         error: null,
         config: {},
         capability_errors: [],
+        ready_state: 'ready',
         capabilities: {
           hooks: { tool_call: 1 },
-          tools: ['word_count'],
+          tools: [{ name: 'word_count', ready: true }],
           recall_backends: [],
           startup: false,
           shutdown: false,
@@ -47,6 +48,7 @@ function extensionsResult() {
         error: 'import failed: boom',
         config: {},
         capability_errors: [],
+        ready_state: 'ready',
         capabilities: {},
       },
     ],
@@ -98,6 +100,51 @@ describe('SettingsExtensionsPanel', () => {
     expect(document.body.textContent).toContain('Tools: word_count');
     expect(document.body.textContent).toContain('broken');
     expect(document.body.textContent).toContain('import failed: boom');
+  });
+
+  it('shows the waiting hint and names unset secret fields', async () => {
+    rpcMock.mockResolvedValue({
+      extensions: [
+        {
+          name: 'homeassistant',
+          status: 'loaded',
+          disabled: false,
+          version: null,
+          description: null,
+          error: null,
+          config: {},
+          capability_errors: [],
+          ready_state: 'waiting',
+          settings_schema: [
+            {
+              key: 'token',
+              type: 'secret',
+              label: 'Token',
+              env_key: 'HASS_TOKEN',
+              set: false,
+            },
+          ],
+          capabilities: {
+            hooks: {},
+            tools: [{ name: 'ha_call_service', ready: false }],
+            recall_backends: [],
+            startup: false,
+            shutdown: false,
+          },
+        },
+      ],
+    });
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+
+    expect(document.body.textContent).toContain(
+      'On, waiting for configuration',
+    );
+    expect(document.body.textContent).toContain('Waiting for: Token');
   });
 
   it('disables an extension and shows the restart-required notice', async () => {

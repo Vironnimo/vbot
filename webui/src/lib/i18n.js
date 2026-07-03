@@ -776,6 +776,8 @@ export const englishCatalog = Object.freeze({
   'settings.extensions.statusDisabled': 'Disabled',
   'settings.extensions.statusOverridden': 'Overridden',
   'settings.extensions.overriddenBy': 'Overridden by your copy at {path}',
+  'settings.extensions.waiting': 'On, waiting for configuration',
+  'settings.extensions.waitingFor': 'Waiting for: {fields}',
   'settings.extensions.enable': 'Enable',
   'settings.extensions.disable': 'Disable',
   'settings.extensions.enableAria': 'Enable extension {name}',

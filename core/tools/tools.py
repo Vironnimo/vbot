@@ -28,6 +28,7 @@ ToolCallCancelCheck = Callable[[str], bool]
 ToolNoteHook = Callable[[str], None]
 ToolSkillActivationHook = Callable[[str, JsonObject], JsonObject]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
+ToolReadinessPredicate = Callable[[], bool]
 ToolSummaryBuilder = Callable[[JsonObject], str | None]
 MAX_TOOL_DISPLAY_SUMMARY_LENGTH = 120
 
@@ -246,6 +247,31 @@ class Tool:
     handler: ToolHandler
     internal: bool = False
     display: ToolDisplay = field(default_factory=ToolDisplay)
+    # Optional readiness predicate (zero-arg, cheap, I/O-free) — e.g. "the token
+    # is a non-empty string", never a network ping, since it runs on every
+    # prompt/tool-definition build. ``None`` means always ready. A predicate that
+    # raises is treated as **not ready** (logged once at ``warning``). Readiness
+    # is a separate axis from the allowlist: a not-ready tool stays registered
+    # (its persisted permissions survive) but is filtered out of the model-facing
+    # surfaces and returns a clean failure envelope on a direct dispatch.
+    ready: ToolReadinessPredicate | None = None
+
+
+def tool_is_ready(tool: Tool) -> bool:
+    """Return whether *tool* is ready to be offered right now.
+
+    A tool with no predicate is always ready. A predicate that raises is logged
+    once at ``warning`` and treated as **not ready** — a broken predicate must
+    never take a prompt/tool-definition build down or make a tool spuriously
+    available.
+    """
+    if tool.ready is None:
+        return True
+    try:
+        return bool(tool.ready())
+    except Exception as error:
+        _LOGGER.warning("Tool %s readiness predicate raised: %s", tool.name, error)
+        return False
 
 
 def tool_success(data: JsonObject, artifacts: list[JsonObject] | None = None) -> JsonObject:
@@ -333,9 +359,15 @@ class ToolRegistry:
         *,
         internal: bool = False,
         display: ToolDisplay | None = None,
+        ready: ToolReadinessPredicate | None = None,
     ) -> Tool:
-        """Register a tool and return its immutable definition."""
-        self._validate_tool(name, description, parameters, handler, display)
+        """Register a tool and return its immutable definition.
+
+        ``ready`` is an optional zero-arg readiness predicate (see :class:`Tool`):
+        a not-ready tool stays registered but is filtered out of the model-facing
+        surfaces and returns a failure envelope on a direct dispatch.
+        """
+        self._validate_tool(name, description, parameters, handler, display, ready)
         if name in self._tools:
             raise DuplicateToolError(f"Tool already registered: {name}")
 
@@ -346,6 +378,7 @@ class ToolRegistry:
             handler=handler,
             internal=internal,
             display=display or ToolDisplay(),
+            ready=ready,
         )
         self._tools[name] = tool
         return tool
@@ -370,8 +403,18 @@ class ToolRegistry:
         allowed_tools: Sequence[str] | None = None,
         *,
         include_internal: bool = False,
+        ready_only: bool = False,
     ) -> list[Tool]:
-        """Return registered tools filtered by an allowlist."""
+        """Return registered tools filtered by an allowlist.
+
+        The filter order is **registered → allowed → ready**: when *ready_only*
+        is true (opt-in; default ``False``), the readiness predicate is applied
+        **after** the allowlist/internal filters, so a not-ready tool is dropped
+        only from the model-facing surfaces — it stays registered and keeps its
+        persisted permissions. Callers that must keep seeing not-ready tools
+        (collision detection, the effective-allowlist computation, the startup
+        inventory count) leave *ready_only* at its default.
+        """
         if allowed_tools is not None and TOOL_ALLOWLIST_WILDCARD not in allowed_tools:
             allowed_names = set(allowed_tools)
             tools = [tool for name, tool in self._tools.items() if name in allowed_names]
@@ -381,6 +424,9 @@ class ToolRegistry:
         if not include_internal:
             tools = [tool for tool in tools if not tool.internal]
 
+        if ready_only:
+            tools = [tool for tool in tools if tool_is_ready(tool)]
+
         return sorted(tools, key=lambda tool: tool.name)
 
     def provider_definitions(
@@ -388,11 +434,18 @@ class ToolRegistry:
         allowed_tools: Sequence[str] | None = None,
         *,
         include_internal: bool = False,
+        ready_only: bool = True,
     ) -> list[JsonObject]:
-        """Return provider-ready tool definitions for allowed tools."""
+        """Return provider-ready tool definitions for allowed, ready tools.
+
+        *ready_only* defaults to ``True``: provider definitions are a model-facing
+        surface, so a not-ready tool is hidden by default.
+        """
         return [
             self._to_provider_definition(tool)
-            for tool in self.list_tools(allowed_tools, include_internal=include_internal)
+            for tool in self.list_tools(
+                allowed_tools, include_internal=include_internal, ready_only=ready_only
+            )
         ]
 
     def prompt_definitions(
@@ -400,11 +453,19 @@ class ToolRegistry:
         allowed_tools: Sequence[str] | None = None,
         *,
         include_internal: bool = False,
+        ready_only: bool = True,
     ) -> list[JsonObject]:
-        """Return prompt-ready name and description pairs for allowed tools."""
+        """Return prompt-ready name and description pairs for allowed, ready tools.
+
+        *ready_only* defaults to ``True`` (a model-facing surface); a not-ready
+        tool is absent from the prompt tool list and, through it, gate 2 of a
+        ``tool:<name>``-owned prompt block.
+        """
         return [
             {"name": tool.name, "description": tool.description}
-            for tool in self.list_tools(allowed_tools, include_internal=include_internal)
+            for tool in self.list_tools(
+                allowed_tools, include_internal=include_internal, ready_only=ready_only
+            )
         ]
 
     async def dispatch(
@@ -417,6 +478,17 @@ class ToolRegistry:
         tool = self.get(context.tool_name)
         if not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
             raise ToolNotAllowedError(f"Tool not allowed: {context.tool_name}")
+        # Readiness safety net: dispatch is not list-filtered, so a prompt built
+        # moments before the credential vanished could still request a now
+        # not-ready tool. Re-evaluate live and return a clean failure envelope
+        # instead of running the handler (no exception, so the model just gets a
+        # normal failed result naming the cause).
+        if not tool_is_ready(tool):
+            return tool_failure(
+                "tool_not_ready",
+                f"tool '{context.tool_name}' is not available: its extension is not configured",
+                retryable=False,
+            )
         if not isinstance(arguments, dict):
             raise ValueError("Tool arguments must be a JSON object")
 
@@ -440,6 +512,7 @@ class ToolRegistry:
         parameters: JsonObject,
         handler: ToolHandler,
         display: ToolDisplay | None = None,
+        ready: ToolReadinessPredicate | None = None,
     ) -> None:
         if not name:
             raise ValueError("Tool name is required")
@@ -451,6 +524,8 @@ class ToolRegistry:
             raise ValueError("Tool handler must be callable")
         if display is not None and not isinstance(display, ToolDisplay):
             raise ValueError("Tool display must be a ToolDisplay instance")
+        if ready is not None and not callable(ready):
+            raise ValueError("Tool ready predicate must be callable")
 
     @staticmethod
     def _is_allowed(
@@ -764,8 +839,10 @@ __all__ = [
     "ToolNotAllowedError",
     "ToolNotFoundError",
     "ToolPromptBlockRegistry",
+    "ToolReadinessPredicate",
     "ToolRegistry",
     "is_tool_result_envelope",
     "tool_failure",
+    "tool_is_ready",
     "tool_success",
 ]

@@ -55,6 +55,18 @@ def _tool_extension_source(tool_name: str, marker: str) -> str:
     )
 
 
+def _ready_tool_extension_source(tool_name: str, *, ready: bool) -> str:
+    """Extension registering one tool with a fixed readiness predicate."""
+    return (
+        "from core.tools import tool_success\n"
+        "def _handler(context, arguments):\n"
+        "    return tool_success({})\n"
+        "def register(api):\n"
+        f"    api.register_tool({tool_name!r}, 'desc', {{'type': 'object'}}, _handler, "
+        f"ready=lambda: {ready!r})\n"
+    )
+
+
 def _recall_extension_source(backend_name: str) -> str:
     """Extension registering a trivial recall backend class as a factory."""
     return (
@@ -124,6 +136,35 @@ def test_extension_tool_respects_allowlist(tmp_path: Path) -> None:
 
     assert "ext_echo" in allowed
     assert "ext_echo" not in excluded
+
+
+def test_extension_tool_with_readiness_predicate_lands_in_registry(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "ready_ext", _ready_tool_extension_source("ext_ready", ready=True))
+
+    registry = ExtensionRegistry.load(root)
+    tool_registry = ToolRegistry()
+    registry.apply_tools(tool_registry)
+
+    tool = tool_registry.get("ext_ready")
+    assert tool.ready is not None
+    assert tool.ready() is True
+
+
+def test_extension_not_ready_tool_hidden_from_provider_definitions_but_registered(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "gated_ext", _ready_tool_extension_source("ext_gated", ready=False))
+
+    registry = ExtensionRegistry.load(root)
+    tool_registry = ToolRegistry()
+    registry.apply_tools(tool_registry)
+
+    # Registered and visible in a plain list, but absent from the model-facing
+    # provider definitions (default ready_only=True).
+    assert [tool.name for tool in tool_registry.list_tools()] == ["ext_gated"]
+    assert tool_registry.provider_definitions(["ext_gated"]) == []
 
 
 def test_extension_tool_colliding_with_builtin_is_skipped_and_diagnosed(tmp_path: Path) -> None:

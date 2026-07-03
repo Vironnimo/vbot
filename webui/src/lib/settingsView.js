@@ -346,8 +346,26 @@ export function applyExtensionsPanelList(result) {
           ? extension.config
           : {},
       settingsSchema: normalizeSchemaFields(extension.settings_schema),
+      readyState: extension.ready_state === 'waiting' ? 'waiting' : 'ready',
       capabilities: normalizeExtensionCapabilities(extension.capabilities),
     }));
+}
+
+// Each capability tool is a ``{ name, ready }`` object; ``ready`` defaults to
+// true when absent so an older-shaped payload never reads as "waiting".
+function normalizeCapabilityTools(tools) {
+  if (!Array.isArray(tools)) {
+    return [];
+  }
+  return tools
+    .filter(
+      (tool) =>
+        tool &&
+        typeof tool === 'object' &&
+        typeof tool.name === 'string' &&
+        tool.name.length > 0,
+    )
+    .map((tool) => ({ name: tool.name, ready: tool.ready !== false }));
 }
 
 function normalizeExtensionCapabilities(capabilities) {
@@ -360,11 +378,7 @@ function normalizeExtensionCapabilities(capabilities) {
     hooks: EXTENSION_HOOK_EVENT_ORDER.filter(
       (event) => Number(hooks[event]) > 0,
     ).map((event) => ({ event, count: Number(hooks[event]) })),
-    tools: Array.isArray(source.tools)
-      ? source.tools.filter(
-          (tool) => typeof tool === 'string' && tool.length > 0,
-        )
-      : [],
+    tools: normalizeCapabilityTools(source.tools),
     recallBackends: Array.isArray(source.recall_backends)
       ? source.recall_backends.filter(
           (backend) => typeof backend === 'string' && backend.length > 0,
@@ -403,8 +417,11 @@ export function summarizeExtensionCapabilities(capabilities, translate) {
     );
   }
   if (normalized.tools.length > 0) {
+    const toolNames = normalized.tools
+      .map((tool) => (typeof tool === 'string' ? tool : tool.name))
+      .join(', ');
     parts.push(
-      `${translate('settings.extensions.tools', 'Tools')}: ${normalized.tools.join(', ')}`,
+      `${translate('settings.extensions.tools', 'Tools')}: ${toolNames}`,
     );
   }
   if (normalized.recallBackends.length > 0) {
@@ -420,6 +437,39 @@ export function summarizeExtensionCapabilities(capabilities, translate) {
   }
 
   return parts.join(' · ');
+}
+
+/**
+ * Describe an extension's derived waiting state for the Extensions panel (the
+ * one place the waiting state is shown). Returns ``null`` when the extension is
+ * ready. When waiting, returns the status hint and, if the schema (Phase 2)
+ * declares unset secret fields, a line naming them by label:
+ *   { hint, waitingFor }  // waitingFor is null when no unset secret is known
+ */
+export function describeExtensionWaiting(extension, translate) {
+  if (!extension || extension.readyState !== 'waiting') {
+    return null;
+  }
+  const hint = translate(
+    'settings.extensions.waiting',
+    'On, waiting for configuration',
+  );
+  const unsetSecretLabels = Array.isArray(extension.settingsSchema)
+    ? extension.settingsSchema
+        .filter((field) => field.type === 'secret' && field.set === false)
+        .map((field) => field.label)
+    : [];
+  if (unsetSecretLabels.length === 0) {
+    return { hint, waitingFor: null };
+  }
+  return {
+    hint,
+    waitingFor: translate(
+      'settings.extensions.waitingFor',
+      'Waiting for: {fields}',
+      { fields: unsetSecretLabels.join(', ') },
+    ),
+  };
 }
 
 export function formatExtensionConfig(config) {
