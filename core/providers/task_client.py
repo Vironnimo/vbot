@@ -1,7 +1,7 @@
 """Shared HTTP plumbing for provider-backed task-model clients.
 
 The speech, image, and embeddings domains each bind one resolved
-``(provider, connection, credential, model_id)`` tuple to a small
+``(provider, connection, token_getter, model_id)`` tuple to a small
 OpenAI-compatible HTTP client. :class:`ProviderTaskClient` owns that
 shared plumbing — target resolution from a runtime handle, auth
 headers, the POST/classify/parse request cycle, and retry semantics —
@@ -14,16 +14,18 @@ Task-specific execution lives in the per-task wire clients in
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, Self, TypeVar
 
 import httpx
 
 from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
 
 JsonObject = dict[str, Any]
 ParsedResultT = TypeVar("ParsedResultT")
+HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
 
 # Option name of the JSON escape hatch every provider task target carries:
 # a free-form object merged into the request payload by the task wire
@@ -68,12 +70,6 @@ class _ProviderLookupProtocol(Protocol):
     def get(self, provider_id: str) -> Any: ...
 
 
-class _ProviderCredentialsProtocol(Protocol):
-    """Credential resolution surface used during target resolution."""
-
-    def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str: ...
-
-
 class TaskClientRuntime(Protocol):
     """The runtime surface a provider task client needs.
 
@@ -86,8 +82,9 @@ class TaskClientRuntime(Protocol):
     @property
     def providers(self) -> _ProviderLookupProtocol: ...
 
-    @property
-    def provider_credentials(self) -> _ProviderCredentialsProtocol: ...
+    def get_connection_token_getter(self, provider_id: str, connection_id: str) -> TokenGetter:
+        """Return a refresh-capable token getter for one provider connection."""
+        ...
 
 
 class TaskTargetRef(Protocol):
@@ -119,12 +116,17 @@ class ProviderTaskClient:
         *,
         provider: Any,
         connection: Any,
-        credential: str,
         model_id: str,
+        credential: str | None = None,
+        token_getter: TokenGetter | None = None,
     ) -> None:
+        if token_getter is None:
+            if credential is None:
+                raise ValueError("Provider task clients require a credential or token getter")
+            token_getter = StaticTokenGetter(credential)
         self._provider = provider
         self._connection = connection
-        self._credential = credential
+        self._token_getter = token_getter
         self._model_id = model_id
         self._base_url = connection.base_url or provider.base_url
 
@@ -134,15 +136,15 @@ class ProviderTaskClient:
 
         provider = runtime.providers.get(target_ref.provider_id)
         connection = provider.get_connection(target_ref.local_connection_id)
-        credential = runtime.provider_credentials.get_credentials(
+        token_getter = runtime.get_connection_token_getter(
             target_ref.provider_id,
             target_ref.connection_id,
         )
         return cls(
             provider=provider,
             connection=connection,
-            credential=credential,
             model_id=target_ref.model_id,
+            token_getter=token_getter,
         )
 
     async def post_and_parse(
@@ -154,6 +156,7 @@ class ProviderTaskClient:
         json: JsonObject | None = None,
         data: dict[str, str] | None = None,
         files: Any | None = None,
+        headers: HeaderBuilder | None = None,
     ) -> ParsedResultT:
         """POST to *endpoint*, classify the status, and parse the response.
 
@@ -174,7 +177,7 @@ class ProviderTaskClient:
                         json=json,
                         data=data,
                         files=files,
-                        headers=self._headers(),
+                        headers=await (headers or self._headers)(),
                     )
                 except httpx.TransportError as exc:
                     # Classify every transport failure (timeout, read/write,
@@ -186,12 +189,20 @@ class ProviderTaskClient:
 
         return await retry_async(_do_request)
 
-    def _headers(self) -> dict[str, str]:
+    async def _credential_value(self) -> str:
+        """Return the current credential value for this request attempt."""
+
+        return await self._token_getter()
+
+    def _headers_from_credential(self, credential: str) -> dict[str, str]:
         auth = self._connection.auth
-        headers = {auth.header: f"{auth.prefix}{self._credential}"}
+        headers = {auth.header: f"{auth.prefix}{credential}"}
         if self._provider.extra_headers:
             headers.update(self._provider.extra_headers)
         return headers
+
+    async def _headers(self) -> dict[str, str]:
+        return self._headers_from_credential(await self._credential_value())
 
 
 def classify_task_response(response: httpx.Response) -> None:

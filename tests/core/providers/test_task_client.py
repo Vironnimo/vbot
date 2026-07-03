@@ -57,11 +57,15 @@ def _make_client(provider: ProviderConfig | None = None) -> ProviderTaskClient:
 class _StubRuntime:
     """Minimal ``TaskClientRuntime`` stand-in for target resolution."""
 
-    def __init__(self, provider: ProviderConfig) -> None:
+    def __init__(self, provider: ProviderConfig, token: str = "sk-test") -> None:
         self.providers = SimpleNamespace(get=lambda provider_id: provider)
-        self.provider_credentials = SimpleNamespace(
-            get_credentials=lambda provider_id, connection_id=None: "sk-test"
-        )
+        self._token = token
+
+    def get_connection_token_getter(self, provider_id: str, connection_id: str):
+        async def _get_token() -> str:
+            return self._token
+
+        return _get_token
 
 
 def _target_ref() -> SimpleNamespace:
@@ -177,6 +181,41 @@ async def test_post_and_parse_retries_retryable_status_until_success() -> None:
 
     assert result == {"ok": True}
     assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_post_and_parse_rebuilds_headers_inside_retry_loop() -> None:
+    """Each retry asks the token getter again so OAuth refreshes can take effect."""
+
+    route = respx.post(f"{_PROVIDER_BASE_URL}/things")
+    route.side_effect = [
+        httpx.Response(503, text="overloaded"),
+        httpx.Response(200, json={"ok": True}),
+    ]
+    tokens = ["first-token", "second-token"]
+
+    async def _get_token() -> str:
+        return tokens.pop(0)
+
+    provider = _make_provider()
+    client = ProviderTaskClient(
+        provider=provider,
+        connection=provider.get_connection("api-key"),
+        token_getter=_get_token,
+        model_id="example/some-model",
+    )
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await client.post_and_parse(
+            "/things", timeout=5.0, parse=lambda response: response.json()
+        )
+
+    assert result == {"ok": True}
+    assert [call.request.headers["authorization"] for call in route.calls] == [
+        "Bearer first-token",
+        "Bearer second-token",
+    ]
 
 
 @pytest.mark.asyncio

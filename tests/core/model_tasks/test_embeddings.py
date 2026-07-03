@@ -16,6 +16,7 @@ from core.model_tasks import (
     EmbeddingUnsupportedTargetError,
     TaskModelError,
 )
+from core.providers.token_getter import TokenGetter
 
 # ---------------------------------------------------------------------------
 # Configuration: no binding / malformed binding / unsupported target
@@ -382,6 +383,12 @@ class _RuntimeStub:
 
     providers: Any = None
     provider_credentials: Any = None
+
+    def get_connection_token_getter(self, _provider_id: str, _connection_id: str) -> TokenGetter:
+        async def _get_token() -> str:
+            return "unused-token"
+
+        return _get_token
 
 
 class _FakeProviderClient:
