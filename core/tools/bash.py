@@ -24,10 +24,28 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 BASH_TOOL_NAME = "bash"
+
+
+def _shell_syntax_notes() -> str:
+    """Name the actual shell so the model writes matching syntax.
+
+    The tool is called "bash", so without this a model on Windows guesses cmd or
+    bash syntax. Mirrors the platform branch in ``_shell_argv``; constant per host,
+    so provider prompt caching is unaffected.
+    """
+    if sys.platform == "win32":
+        return (
+            " Commands run in PowerShell 7 (pwsh) on this host — not cmd and not bash: "
+            "use $env:VAR (not %VAR% or export), 2>$null (not 2>/dev/null or NUL), "
+            "and set $env:VAR = 'x' on its own (there is no VAR=x command prefix)."
+        )
+    return " Commands run in bash on this host."
+
+
 BASH_TOOL_DESCRIPTION = (
     "Run a shell command on the host system. Short commands complete in the foreground; "
     "commands still running after yield_after seconds (default 30) are moved to the "
-    "background and return a session_id for the process tool."
+    "background and return a session_id for the process tool." + _shell_syntax_notes()
 )
 BASH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
