@@ -497,7 +497,8 @@ async def test_set_secret_no_schema_returns_invalid_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_settings_update_extensions_sets_restart_required(tmp_path: Path) -> None:
+async def test_settings_update_extensions_disable_persists_without_restart(tmp_path: Path) -> None:
+    # Disabling is applied live: the section persists but no restart flag is set.
     state = make_state(tmp_path, StubAdapter())
 
     result = await dispatch_rpc(
@@ -514,11 +515,30 @@ async def test_settings_update_extensions_sets_restart_required(tmp_path: Path) 
     )
 
     assert result["ok"] is True
-    assert result["result"]["restart_required"] is True
+    assert "restart_required" not in result["result"]
     assert state.runtime.storage.load_extensions_settings() == {
         "disabled": ["legacy"],
         "config": {"guard_bash": {"deny": ["rm -rf"]}},
     }
+
+
+@pytest.mark.asyncio
+async def test_settings_update_extensions_enable_sets_restart_required(tmp_path: Path) -> None:
+    # Enabling (removing a name from the persisted disabled set) loads code and
+    # stays restart-applied.
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.update_settings_sections(
+        {"extensions": {"disabled": ["legacy"], "config": {}}}
+    )
+
+    result = await dispatch_rpc(
+        state,
+        {"method": "settings.update", "params": {"extensions": {"disabled": [], "config": {}}}},
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["restart_required"] is True
+    assert state.runtime.storage.load_extensions_settings() == {"disabled": [], "config": {}}
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,11 @@
 """Extension visibility and enable/disable RPC commands for the vBot CLI.
 
 `list` reads `extensions.list`; `enable`/`disable` are thin wrappers over
-`settings.update` (full-replace `extensions` section). Enable/disable are
-restart-applied (extensions are never hot-reloaded), so the output points at
-`vbot server restart`.
+`settings.update` (full-replace `extensions` section). Disabling applies **live**
+(the server deactivates the extension immediately — hooks off, tools gone,
+shutdown fired); enabling loads code that was never imported and stays
+restart-applied. The output points at `vbot server restart` only when the server
+reports `restart_required` (the enable case).
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ def extensions_enable(instance: ServerInstance, name: str) -> CommandResult:
 
 
 def extensions_disable(instance: ServerInstance, name: str) -> CommandResult:
-    """Add *name* to the disabled set via `settings.update` (restart-applied)."""
+    """Add *name* to the disabled set via `settings.update` (applied live, no restart)."""
 
     return _set_disabled(instance, name, disable=True)
 

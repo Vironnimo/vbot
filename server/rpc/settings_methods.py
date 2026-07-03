@@ -92,15 +92,18 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
 
     _validate_model_connections(state.runtime.models, settings_update)
 
-    extensions_restart_required = False
+    newly_enabled: set[str] = set()
+    newly_disabled: set[str] = set()
     if "extensions" in settings_update:
         _validate_extension_configs(state.runtime, settings_update["extensions"])
-        # Only a change to the disabled set (code load/unload) is restart-bound;
-        # config-value changes are read live via ExtensionAPI.get_config().
+        # Disable is applied live (deactivation gate); only enable — loading code
+        # that was never imported — stays restart-bound. Config-value changes are
+        # read live via ExtensionAPI.get_config() and never touch either set.
         previous = storage.load_extensions_settings()
         old_disabled = set(previous.get("disabled", []))
         new_disabled = set(settings_update["extensions"].get("disabled", []))
-        extensions_restart_required = old_disabled != new_disabled
+        newly_enabled = old_disabled - new_disabled
+        newly_disabled = new_disabled - old_disabled
 
     try:
         storage.update_settings_sections(settings_update)
@@ -112,9 +115,15 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             reload_recall_backend = getattr(state.runtime, "reload_recall_backend", None)
             if callable(reload_recall_backend):
                 reload_recall_backend()
+        if newly_disabled:
+            # Persist first, then apply the disable live so runtime state matches
+            # what a restart would rebuild from the freshly-written disabled set.
+            apply_disabled = getattr(state.runtime, "apply_extension_disabled_change", None)
+            if callable(apply_disabled):
+                apply_disabled(newly_disabled)
         response = _settings_response(state)
-        if extensions_restart_required:
-            # Enabling/disabling an extension only takes effect at the next
+        if newly_enabled:
+            # Enabling an extension loads code and only takes effect at the next
             # Runtime.start(). Signal the caller so accessors can offer restart.
             response["restart_required"] = True
         return response
