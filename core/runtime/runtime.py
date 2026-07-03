@@ -1175,6 +1175,69 @@ class Runtime:
             self._tools.unregister("session_search")
             register_session_search_tool(self._tools, self._recall_backend)
 
+    def apply_extension_disabled_change(self, newly_disabled: set[str]) -> None:
+        """Deactivate each newly-disabled extension live, without a restart.
+
+        Called by ``settings.update`` after the new ``disabled`` set is persisted,
+        with the names that were **added** to it (enabling — removing from the set —
+        stays restart-applied, since it loads code that was never imported). For
+        each name it drives ``ExtensionRegistry.deactivate`` (hooks off, tools
+        unregistered, shutdown fired, record marked disabled), then refreshes the
+        prompt block definitions so any extension-owned block drops immediately, and
+        guards the recall edge (below). Names that are not currently ``loaded`` are
+        clean no-ops inside the registry.
+        """
+        self._ensure_started()
+        if self._extensions is None or not newly_disabled:
+            return
+
+        # Capture each deactivating extension's declared recall backends before the
+        # registry clears its declarations, so we can detect whether one of them is
+        # the currently-active backend and fall back to the default (see below).
+        deactivating_backend_names = self._extension_recall_backend_names(newly_disabled)
+
+        for name in newly_disabled:
+            self._extensions.deactivate_blocking(name, self._tools)
+
+        self._refresh_prompt_block_definitions()
+        self._recover_recall_backend_if_deactivated(deactivating_backend_names)
+
+    def _extension_recall_backend_names(self, names: set[str]) -> set[str]:
+        """Return the recall-backend names declared by the given loaded extensions."""
+        if self._extensions is None:
+            return set()
+        backend_names: set[str] = set()
+        for record in self._extensions.records():
+            if record.name in names and record.status == "loaded":
+                for declaration in record.declarations.recall_backends:
+                    backend_names.add(declaration.name)
+        return backend_names
+
+    def _recover_recall_backend_if_deactivated(self, removed_backend_names: set[str]) -> None:
+        """Fall the active recall backend back to the default if its provider left.
+
+        If a deactivated extension provided the *currently-selected* recall backend,
+        the live backend instance now points into dormant extension code. Rather than
+        leave recall broken, rebuild the registry (which no longer contains the
+        deactivated extension's backend) and re-resolve: an unknown selected name
+        falls back to the built-in default (``jsonl_scan``) with a warning, exactly
+        as it would on the next restart. The persisted ``recall.backend`` selection
+        is left untouched — re-enabling the extension (a restart) restores it.
+        """
+        if not removed_backend_names or self._storage is None:
+            return
+        active_backend = self._storage.load_recall_settings()["backend"]
+        if active_backend not in removed_backend_names:
+            return
+        if self.logger is not None:
+            self.logger.warning(
+                "Recall backend %r was provided by a disabled extension; "
+                "falling back to %s until the extension is re-enabled",
+                active_backend,
+                DEFAULT_RECALL_BACKEND,
+            )
+        self.reload_recall_backend()
+
     def available_recall_backends(self) -> list[str]:
         """Return all selectable recall backend names (built-ins + extensions)."""
         self._ensure_started()

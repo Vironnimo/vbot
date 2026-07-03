@@ -287,7 +287,7 @@
   <div class="s-feedback s-ext-restart">
     {t(
       'settings.extensions.restartRequired',
-      'Extension changes apply after a restart.',
+      'Enabling an extension applies after a restart. Disabling applies immediately.',
     )}
     <code>vbot server restart</code>
   </div>

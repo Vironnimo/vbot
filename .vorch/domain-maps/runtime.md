@@ -79,6 +79,7 @@ All service properties raise `RuntimeError` before `start()` and after `stop()`,
 - `reload_recall_backend()` — reload the configured Recall backend from `settings.recall.backend` and re-register `session_search` so Settings UI backend changes take effect without restart.
 - `reload_channel_tool()` — unregister/re-register `channel_send` to match `channel_service.has_active_channels()` so runtime channel enable/disable stays in sync.
 - `reload_provider_credentials()` — reload the data-dir `.env` fallback snapshot and rebuild the `ProviderCredentialResolver` from it.
+- `apply_extension_disabled_change(newly_disabled)` — apply an extension **disable** live, without a restart. Called by `settings.update` after the new `disabled` set is persisted, with the names **added** to it. For each name it drives `ExtensionRegistry.deactivate_blocking(name, self._tools)` (hooks off, tools unregistered, shutdown fired, record → `disabled`), then `_refresh_prompt_block_definitions()` so extension-owned blocks drop, and guards the recall edge: if a deactivated extension provided the *currently-active* recall backend, it rebuilds the registry and re-resolves to the built-in default (persisted `recall.backend` left untouched). Enabling — removing from the `disabled` set — is **not** handled here; loading code stays restart-applied. See `.vorch/domain-maps/extensions.md`.
 
 ### Adapter factory
 
