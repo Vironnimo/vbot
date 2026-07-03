@@ -1,11 +1,11 @@
-"""Extension visibility and enable/disable RPC commands for the vBot CLI.
+"""Extension visibility, enable/disable, and reload RPC commands for the vBot CLI.
 
-`list` reads `extensions.list`; `enable`/`disable` are thin wrappers over
-`settings.update` (full-replace `extensions` section). Disabling applies **live**
-(the server deactivates the extension immediately — hooks off, tools gone,
-shutdown fired); enabling loads code that was never imported and stays
-restart-applied. The output points at `vbot server restart` only when the server
-reports `restart_required` (the enable case).
+`list` reads `extensions.list`; `reload` drives `extensions.reload` (a full,
+restart-equivalent rebuild of the whole extension layer from disk); `enable` /
+`disable` are thin wrappers over `settings.update` (full-replace `extensions`
+section). Every change applies **live** without a restart: disabling deactivates
+the extension immediately (hooks off, tools gone, shutdown fired), and enabling
+rebuilds the layer so newly-loaded code takes effect at once.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
-RESTART_HINT = "restart required: run 'vbot server restart' to apply"
 _INTEGER_RE = re.compile(r"[+-]?\d+")
+_RELOAD_STATUSES = ("loaded", "failed", "disabled", "overridden")
 
 
 def extensions_list(instance: ServerInstance) -> CommandResult:
@@ -33,8 +33,45 @@ def extensions_list(instance: ServerInstance) -> CommandResult:
     return CommandResult(ok=True, message=_format_extension_rows(extensions), instance=instance)
 
 
+def extensions_reload(instance: ServerInstance) -> CommandResult:
+    """Rebuild the whole extension layer live via `extensions.reload`.
+
+    Prints one summary line with all four status counts, one line per failed
+    extension, and a pointer at `vbot extensions list` when anything failed.
+    """
+
+    result = _rpc_call(instance, "extensions.reload", {})
+    if not result.ok:
+        return result.to_command_result()
+    extensions = result.data.get("extensions")
+    if not isinstance(extensions, list):
+        return CommandResult(
+            ok=False, message="RPC result missing extensions list", instance=instance
+        )
+    return CommandResult(ok=True, message=_format_reload_summary(extensions), instance=instance)
+
+
+def _format_reload_summary(extensions: Sequence[Any]) -> str:
+    counts = dict.fromkeys(_RELOAD_STATUSES, 0)
+    for extension in extensions:
+        if isinstance(extension, dict) and extension.get("status") in counts:
+            counts[extension["status"]] += 1
+    summary = ", ".join(f"{counts[status]} {status}" for status in _RELOAD_STATUSES)
+    lines = [f"extensions reloaded: {summary}"]
+
+    failed = [ext for ext in extensions if isinstance(ext, dict) and ext.get("status") == "failed"]
+    for ext in failed:
+        name = _string_or_default(ext.get("name"), "?")
+        error = ext.get("error")
+        detail = error if isinstance(error, str) and error else "unknown error"
+        lines.append(f"  {name} failed: {detail}")
+    if failed:
+        lines.append("run 'vbot extensions list' for details")
+    return "\n".join(lines)
+
+
 def extensions_enable(instance: ServerInstance, name: str) -> CommandResult:
-    """Remove *name* from the disabled set via `settings.update` (restart-applied)."""
+    """Remove *name* from the disabled set via `settings.update` (applied live)."""
 
     return _set_disabled(instance, name, disable=False)
 
@@ -91,10 +128,29 @@ def _set_disabled(instance: ServerInstance, name: str, *, disable: bool) -> Comm
     if not update.ok:
         return update.to_command_result()
 
-    action = "disabled" if disable else "enabled"
-    lines = [f"extension '{name}' {action}"]
-    if update.data.get("restart_required"):
-        lines.append(RESTART_HINT)
+    if disable:
+        return CommandResult(ok=True, message=f"extension '{name}' disabled", instance=instance)
+    return _enabled_result(instance, name)
+
+
+def _enabled_result(instance: ServerInstance, name: str) -> CommandResult:
+    """Report a live enable, warning when the freshly-loaded extension is not loaded.
+
+    Enabling rebuilds the extension layer live, so we re-list and check the target:
+    a non-``loaded`` outcome (it failed to import, or is overridden by another copy)
+    is surfaced as a warning even though the toggle itself succeeded. If the re-list
+    fails, the enable is still reported as a plain success.
+    """
+    lines = [f"extension '{name}' enabled (applied live)"]
+    extensions = _load_extensions(instance)
+    if not isinstance(extensions, CommandResult):
+        record = _find_extension(extensions, name)
+        if record is not None and record.get("status") != "loaded":
+            status = _string_or_default(record.get("status"), "?")
+            lines.append(f"warning: '{name}' is {status}")
+            error = record.get("error")
+            if isinstance(error, str) and error:
+                lines.append(f"  error: {error}")
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
@@ -207,10 +263,8 @@ def _set_config_value(
     if not update.ok:
         return update.to_command_result()
 
-    lines = [f"set '{name}.{field}' = {json.dumps(value)} (applied live)"]
-    if update.data.get("restart_required"):
-        lines.append(RESTART_HINT)
-    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+    message = f"set '{name}.{field}' = {json.dumps(value)} (applied live)"
+    return CommandResult(ok=True, message=message, instance=instance)
 
 
 def _coerce_value(field_type: str, value: str) -> tuple[Any, str | None]:
