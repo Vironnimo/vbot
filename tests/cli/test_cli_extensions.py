@@ -112,6 +112,47 @@ def test_extensions_list_formats_rows(
     )
 
 
+def test_extensions_list_renders_overridden_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    overridden_payload = [
+        {
+            "name": "homeassistant",
+            "status": "overridden",
+            "disabled": False,
+            "version": None,
+            "description": None,
+            "error": None,
+            "overridden_by": "/data/extensions/homeassistant/__init__.py",
+            "config": {},
+            "capability_errors": [],
+            "capabilities": {},
+        }
+    ]
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200, json={"ok": True, "result": {"extensions": overridden_payload}}
+        )
+
+    monkeypatch.setattr(extensions_management.httpx, "post", fake_post)
+
+    result = extensions_management.extensions_list(instance)
+
+    assert result.ok is True
+    assert result.message == "\n".join(
+        [
+            "extensions:",
+            "- homeassistant  overridden",
+            "    overridden by /data/extensions/homeassistant/__init__.py",
+        ]
+    )
+
+
 def test_extensions_disable_writes_settings_and_prints_restart_hint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
