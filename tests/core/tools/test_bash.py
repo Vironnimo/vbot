@@ -786,7 +786,9 @@ async def test_large_foreground_stdout_is_bounded_and_truncated(
         )
 
         assert result["ok"] is True
-        assert result["data"]["output"] == "a" * 32
+        # No spool dir on this manager: the marker announces the head drop
+        # without a log pointer, followed by the surviving newest bytes.
+        assert result["data"]["output"] == "[earlier output truncated]\n" + "a" * 32
         assert result["data"]["truncated"] is True
     finally:
         await manager.aclose()
@@ -1196,3 +1198,162 @@ async def test_user_cancel_kill_failure_is_logged(
     ]
     assert kill_errors, "expected an error log for the failing user-cancel kill task"
     assert kill_errors[0].exc_info is not None
+
+
+def make_spool_manager(tmp_path: Path) -> ProcessManager:
+    return ProcessManager(
+        sweep_interval_seconds=3600,
+        spool_dir=tmp_path / "processes",
+    )
+
+
+@pytest.mark.asyncio
+async def test_output_cap_keeps_tail_and_names_log_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool_manager = make_spool_manager(tmp_path)
+    try:
+        monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+        monkeypatch.setattr(bash_module, "BASH_MODEL_OUTPUT_CAP_CHARS", 50)
+        context = make_context(tmp_path)
+
+        result = await bash_handler(
+            context,
+            {"command": "print('a' * 200 + 'END-MARKER')"},
+            spool_manager,
+        )
+
+        assert result["ok"] is True
+        data = result["data"]
+        assert data["truncated"] is True
+        assert "END-MARKER" in data["output"]
+        assert "[earlier output truncated" in data["output"]
+        assert data["output"].index("truncated") < data["output"].index("END-MARKER")
+
+        log_file = Path(data["log_file"])
+        content = log_file.read_text(encoding="utf-8")
+        assert "a" * 200 + "END-MARKER" in content, "log file must hold the uncut output"
+    finally:
+        await spool_manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_small_output_is_not_truncated_and_names_no_log_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool_manager = make_spool_manager(tmp_path)
+    try:
+        monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+        context = make_context(tmp_path)
+
+        result = await bash_handler(context, {"command": "print('tiny')"}, spool_manager)
+
+        assert result["ok"] is True
+        data = result["data"]
+        assert data["truncated"] is False
+        assert "log_file" not in data
+        assert "[earlier output truncated" not in data["output"]
+    finally:
+        await spool_manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_background_result_always_names_log_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool_manager = make_spool_manager(tmp_path)
+    try:
+        monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+        context = make_context(tmp_path)
+
+        result = await bash_handler(
+            context,
+            {"command": "import time; time.sleep(30)", "background": True},
+            spool_manager,
+        )
+
+        assert result["ok"] is True
+        data = result["data"]
+        assert data["status"] == "running"
+        assert Path(data["log_file"]).exists()
+
+        await kill_background(spool_manager, result)
+    finally:
+        await spool_manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_timeout_failure_carries_output_tail_and_log_pointer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool_manager = make_spool_manager(tmp_path)
+    try:
+        monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+        context = make_context(tmp_path)
+
+        result = await bash_handler(
+            context,
+            {
+                "command": ("print('diag-marker', flush=True); import time; time.sleep(30)"),
+                "timeout": 1.5,
+                "yield_after": 10,
+            },
+            spool_manager,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "process_timeout"
+        message = result["error"]["message"]
+        assert "diag-marker" in message, "output produced before the kill must survive"
+        assert "Complete output:" in message
+    finally:
+        await spool_manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_subagent_kill_failure_carries_output_tail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool_manager = make_spool_manager(tmp_path)
+    try:
+        monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+        context = make_context(tmp_path, nesting_depth=1)
+
+        result = await bash_handler(
+            context,
+            {
+                "command": ("print('diag-marker', flush=True); import time; time.sleep(30)"),
+                "yield_after": 1.5,
+            },
+            spool_manager,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == bash_module.BACKGROUND_AT_DEPTH_FAILURE_CODE
+        message = result["error"]["message"]
+        assert "did not finish" in message
+        assert "diag-marker" in message
+    finally:
+        await spool_manager.aclose()
+
+
+def test_spawn_failure_message_names_missing_shell() -> None:
+    message = bash_module._spawn_failure_message(
+        ["missing-vbot-shell", "-c", "x"], FileNotFoundError("no such file")
+    )
+
+    assert "missing-vbot-shell" in message
+    assert "was not found" in message
+
+
+def test_spawn_failure_message_explains_pwsh_requirement() -> None:
+    message = bash_module._spawn_failure_message(
+        ["pwsh", "-Command", "x"], FileNotFoundError("no such file")
+    )
+
+    assert "PowerShell 7" in message
