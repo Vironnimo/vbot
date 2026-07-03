@@ -121,6 +121,7 @@ async def test_list_action_returns_owned_sessions_only(
                 "exit_code": None,
                 "started_at": manager.get_session(owned_session_id, AGENT_A).started_at.isoformat(),
                 "finished_at": None,
+                "log_file": None,
             }
         ]
     }

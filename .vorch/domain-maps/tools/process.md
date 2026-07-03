@@ -6,13 +6,14 @@ Manages background process sessions created by `bash`.
 
 - Process session ids are distinct from chat Session ids.
 - `ProcessManager` stores process sessions in memory by process `session_id`, scoped by Agent and Run.
+- When constructed with a `spool_dir` (runtime wires `<data_dir>/processes/`), every session's combined output is also written incrementally to `<spool_dir>/<session_id>.log` — decoded via an incremental UTF-8 decoder (chunk-split multibyte safe) and ANSI-stripped, flushed per chunk so the file is greppable while the process runs. The file is the *complete* record: it is not subject to the in-memory buffer cap. `ProcessSession.log_file` exposes the path (`None` without spool dir or after a write error, which disables spooling for that session best-effort). Log files outlive their sessions on purpose (a tool result may reference them after the session TTL); the sweeper deletes files older than `PROCESS_LOG_FILE_TTL` (24 h), sparing running sessions' files.
 
 ## Interfaces
 
 - Tool name: `process`
 - Registration: `register_process_tool(registry, process_manager)`
 - Schema: required `action`; optional `session_id`, `timeout_ms`, `offset`, `limit`, `data`, and `eof`.
-- Actions: `list`, `poll`, `log`, `write`, `submit`, `kill`, `clear`.
+- Actions: `list`, `poll`, `log`, `write`, `submit`, `kill`, `clear`. `list` entries include `log_file` (path or `null`).
 - Display: summary fields `action` and `session_id`.
 - `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str`
 - `ProcessManager.poll/log/write/submit/kill/clear(..., agent_id=...)`
