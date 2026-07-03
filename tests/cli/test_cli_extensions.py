@@ -135,9 +135,7 @@ def test_extensions_list_renders_overridden_row(
     def fake_post(
         url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
     ) -> httpx.Response:
-        return httpx.Response(
-            200, json={"ok": True, "result": {"extensions": overridden_payload}}
-        )
+        return httpx.Response(200, json={"ok": True, "result": {"extensions": overridden_payload}})
 
     monkeypatch.setattr(extensions_management.httpx, "post", fake_post)
 
