@@ -5,6 +5,7 @@ import {
   buildExtensionsUpdatePayload,
   buildSchemaConfigFromForm,
   buildSchemaFormState,
+  describeExtensionWaiting,
   extensionStatusChipVariant,
   formatExtensionConfig,
   hasSettingsSchema,
@@ -15,7 +16,16 @@ import {
 
 import { englishCatalog } from '../i18n.js';
 
-const translate = (_key, fallback) => fallback;
+// Mirrors the real ``t()``: uses the fallback text and interpolates ``{name}``
+// placeholders from the values map, so a key like ``waitingFor`` resolves fully.
+const translate = (_key, fallback, values) =>
+  values
+    ? fallback.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name) =>
+        Object.prototype.hasOwnProperty.call(values, name)
+          ? String(values[name])
+          : match,
+      )
+    : fallback;
 
 function rawExtensions() {
   return {
@@ -31,7 +41,7 @@ function rawExtensions() {
         capability_errors: ['tool x skipped'],
         capabilities: {
           hooks: { tool_call: 1, run_end: 2 },
-          tools: ['word_count'],
+          tools: [{ name: 'word_count', ready: true }],
           recall_backends: [],
           startup: true,
           shutdown: false,
@@ -88,7 +98,10 @@ describe('applyExtensionsPanelList', () => {
       { event: 'tool_call', count: 1 },
       { event: 'run_end', count: 2 },
     ]);
-    expect(result[0].capabilities.tools).toEqual(['word_count']);
+    expect(result[0].capabilities.tools).toEqual([
+      { name: 'word_count', ready: true },
+    ]);
+    expect(result[0].readyState).toBe('ready');
     expect(result[0].capabilities.startup).toBe(true);
     expect(result[1].disabled).toBe(true);
     expect(result[2]).toMatchObject({
@@ -125,6 +138,61 @@ describe('summarizeExtensionCapabilities', () => {
 
   it('returns an empty string when nothing is contributed', () => {
     expect(summarizeExtensionCapabilities({}, translate)).toBe('');
+  });
+});
+
+describe('describeExtensionWaiting', () => {
+  it('returns null for a ready extension', () => {
+    const [extension] = applyExtensionsPanelList({
+      extensions: [{ name: 'ha', status: 'loaded', ready_state: 'ready' }],
+    });
+
+    expect(describeExtensionWaiting(extension, translate)).toBeNull();
+  });
+
+  it('names unset secret fields by label when waiting', () => {
+    const [extension] = applyExtensionsPanelList({
+      extensions: [
+        {
+          name: 'homeassistant',
+          status: 'loaded',
+          ready_state: 'waiting',
+          settings_schema: [
+            {
+              key: 'token',
+              type: 'secret',
+              label: 'Token',
+              env_key: 'HASS_TOKEN',
+              set: false,
+            },
+            {
+              key: 'other',
+              type: 'secret',
+              label: 'Other',
+              env_key: 'OTHER',
+              set: true,
+            },
+            { key: 'url', type: 'text', label: 'URL' },
+          ],
+        },
+      ],
+    });
+
+    expect(describeExtensionWaiting(extension, translate)).toEqual({
+      hint: 'On, waiting for configuration',
+      waitingFor: 'Waiting for: Token',
+    });
+  });
+
+  it('omits the waitingFor line when no unset secret is known', () => {
+    const [extension] = applyExtensionsPanelList({
+      extensions: [{ name: 'plain', status: 'loaded', ready_state: 'waiting' }],
+    });
+
+    expect(describeExtensionWaiting(extension, translate)).toEqual({
+      hint: 'On, waiting for configuration',
+      waitingFor: null,
+    });
   });
 });
 
@@ -348,6 +416,8 @@ describe('extension schema i18n keys', () => {
       'settings.extensions.secretAria',
       'settings.extensions.secretSaved',
       'settings.extensions.secretCleared',
+      'settings.extensions.waiting',
+      'settings.extensions.waitingFor',
     ];
 
     for (const key of requiredKeys) {

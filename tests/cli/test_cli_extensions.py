@@ -36,9 +36,10 @@ def _extensions_payload() -> list[dict[str, Any]]:
             "error": None,
             "config": {"deny": ["rm -rf"]},
             "capability_errors": [],
+            "ready_state": "ready",
             "capabilities": {
                 "hooks": {"tool_call": 1},
-                "tools": ["word_count"],
+                "tools": [{"name": "word_count", "ready": True}],
                 "recall_backends": [],
                 "startup": True,
                 "shutdown": False,
@@ -53,6 +54,7 @@ def _extensions_payload() -> list[dict[str, Any]]:
             "error": "import failed: boom",
             "config": {},
             "capability_errors": [],
+            "ready_state": "ready",
             "capabilities": {
                 "hooks": {},
                 "tools": [],
@@ -70,6 +72,7 @@ def _extensions_payload() -> list[dict[str, Any]]:
             "error": None,
             "config": {},
             "capability_errors": [],
+            "ready_state": "ready",
             "capabilities": {
                 "hooks": {},
                 "tools": [],
@@ -149,6 +152,56 @@ def test_extensions_list_renders_overridden_row(
             "    overridden by /data/extensions/homeassistant/__init__.py",
         ]
     )
+
+
+def test_extensions_list_renders_waiting_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    waiting_payload = [
+        {
+            "name": "homeassistant",
+            "status": "loaded",
+            "disabled": False,
+            "version": None,
+            "description": None,
+            "error": None,
+            "config": {},
+            "capability_errors": [],
+            "ready_state": "waiting",
+            "capabilities": {
+                "hooks": {},
+                "tools": [
+                    {"name": "ha_get_state", "ready": False},
+                    {"name": "ha_call_service", "ready": False},
+                ],
+                "recall_backends": [],
+                "startup": False,
+                "shutdown": False,
+            },
+        }
+    ]
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"extensions": waiting_payload}})
+
+    monkeypatch.setattr(extensions_management.httpx, "post", fake_post)
+
+    result = extensions_management.extensions_list(instance)
+
+    assert result.ok is True
+    lines = result.message.splitlines()
+    assert lines[0] == "extensions:"
+    assert lines[1] == "- homeassistant  loaded"
+    # The waiting line names the not-ready tools and points at the fix.
+    assert "waiting for configuration (ha_get_state, ha_call_service)" in lines[2]
+    assert "Settings > Extensions" in lines[2]
+    # The capability tool list marks each not-ready tool inline.
+    assert "ha_get_state (waiting)" in lines[3]
+    assert "ha_call_service (waiting)" in lines[3]
 
 
 def test_extensions_disable_writes_settings_and_prints_restart_hint(

@@ -11,6 +11,7 @@
     buildExtensionsUpdatePayload,
     buildSchemaConfigFromForm,
     buildSchemaFormState,
+    describeExtensionWaiting,
     extensionStatusChipVariant,
     formatExtensionConfig,
     hasSettingsSchema,
@@ -315,6 +316,7 @@
         extension.capabilities,
         t,
       )}
+      {@const waiting = describeExtensionWaiting(extension, t)}
       <div class="s-ext-card">
         <div class="s-ext-head">
           <div class="s-row-info">
@@ -344,6 +346,14 @@
                   'Overridden by your copy at {path}',
                   { path: extension.overriddenBy },
                 )}
+              </div>
+            {/if}
+            {#if !isOverridden && waiting}
+              <div class="s-row-desc s-ext-waiting">
+                {waiting.hint}
+                {#if waiting.waitingFor}
+                  <span class="s-ext-waiting-for">{waiting.waitingFor}</span>
+                {/if}
               </div>
             {/if}
             {#if capabilities}
