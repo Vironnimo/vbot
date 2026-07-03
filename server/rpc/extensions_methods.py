@@ -1,15 +1,17 @@
-"""Extension visibility RPC handlers."""
+"""Extension visibility and secret-field RPC handlers."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from core.extensions import ExtensionRecord
+from core.extensions import ExtensionRecord, SettingsFieldDeclaration
+from core.utils.logging import get_logger
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
 JsonObject = dict[str, Any]
+_LOGGER = get_logger("server.rpc.extensions")
 
 
 def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
@@ -17,8 +19,10 @@ def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
 
     Records come from the runtime's :class:`ExtensionRegistry` (in load order);
     the persisted ``settings.extensions.config`` for each name is merged in so the
-    management surface can render and edit raw per-extension config. When no
-    extensions loaded (no registry), the list is empty.
+    management surface can render and edit per-extension config, and a loaded
+    extension's declared settings schema (with live secret state) is surfaced so
+    the WebUI can render a real form. When no extensions loaded (no registry),
+    the list is empty.
     """
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.list does not accept params")
@@ -26,7 +30,9 @@ def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
         registry = state.runtime.extensions
         config_map = _persisted_extension_config(state)
         records = registry.records() if registry is not None else []
-        return {"extensions": [_extension_response(record, config_map) for record in records]}
+        return {
+            "extensions": [_extension_response(record, config_map, state) for record in records]
+        }
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -41,6 +47,7 @@ def _persisted_extension_config(state: Any) -> dict[str, dict[str, Any]]:
 def _extension_response(
     record: ExtensionRecord,
     config_map: dict[str, dict[str, Any]],
+    state: Any,
 ) -> JsonObject:
     manifest = record.manifest
     return {
@@ -57,8 +64,49 @@ def _extension_response(
         "display_name": manifest.display_name if manifest is not None else None,
         "api_version": manifest.api_version if manifest is not None else None,
         "config": config_map.get(record.name, {}),
+        "settings_schema": _settings_schema_response(record, state),
         "capabilities": _extension_capabilities(record),
     }
+
+
+def _settings_schema_response(record: ExtensionRecord, state: Any) -> list[JsonObject] | None:
+    """Serialize a loaded extension's declared settings schema, or ``None``.
+
+    ``None`` when the record is not ``loaded`` or declared no schema. Each field
+    is ``{key, type, label, description, required, default}``; a secret field
+    additionally carries its declared ``env_key`` and a live ``set`` bool (never
+    the secret value). Never includes a secret's value anywhere.
+    """
+    if record.status != "loaded":
+        return None
+    schema = record.declarations.settings_schema
+    if not schema:
+        return None
+    return [_settings_field_response(field, state) for field in schema]
+
+
+def _settings_field_response(field: SettingsFieldDeclaration, state: Any) -> JsonObject:
+    response: JsonObject = {
+        "key": field.key,
+        "type": field.type,
+        "label": field.label,
+        "description": field.description,
+        "required": field.required,
+        "default": field.default,
+    }
+    if field.type == "secret":
+        env_key = field.env_key or ""
+        response["env_key"] = env_key
+        response["set"] = _credential_is_set(state, env_key)
+    return response
+
+
+def _credential_is_set(state: Any, env_key: str) -> bool:
+    """Resolve a secret's live set/unset state without exposing its value."""
+    if not env_key:
+        return False
+    resolved: str = state.runtime.resolve_environment_credential(env_key)
+    return resolved.strip() != ""
 
 
 def _extension_capabilities(record: ExtensionRecord) -> JsonObject:
@@ -75,9 +123,83 @@ def _extension_capabilities(record: ExtensionRecord) -> JsonObject:
     }
 
 
+def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
+    """Set or clear a schema'd extension's secret in the data-dir ``.env``.
+
+    ``key`` is the **schema field key**, never the env key — the server looks up
+    the declared ``env_key`` so a client can never choose where a secret lands.
+    An empty ``value`` clears the credential; a non-empty value sets it. Either
+    way, provider credentials are reloaded so live resolution sees the change
+    immediately. The secret value is never logged.
+    """
+    unsupported = sorted(set(params) - {"name", "key", "value"})
+    if unsupported:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported extensions.set_secret fields: {', '.join(unsupported)}",
+        )
+
+    name = _required_str(params, "name")
+    key = _required_str(params, "key")
+    value = params.get("value", "")
+    if not isinstance(value, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.set_secret value must be a string")
+
+    field = _resolve_secret_field(state, name, key)
+    env_key = field.env_key or ""
+
+    try:
+        runtime = state.runtime
+        if value == "":
+            runtime.storage.remove_data_dir_credential(env_key)
+            new_state = False
+        else:
+            runtime.storage.set_data_dir_credential(env_key, value)
+            new_state = True
+        runtime.reload_provider_credentials()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    _LOGGER.info("Extension %r secret %r %s", name, key, "set" if new_state else "cleared")
+    return {"name": name, "key": key, "set": new_state}
+
+
+def _resolve_secret_field(state: Any, name: str, key: str) -> SettingsFieldDeclaration:
+    """Find the loaded extension's declared secret field for *key*, or fail."""
+    registry = state.runtime.extensions
+    record = None
+    if registry is not None:
+        record = next((item for item in registry.records() if item.name == name), None)
+    if record is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown extension: {name!r}")
+    if record.status != "loaded":
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"extension {name!r} is not loaded")
+    schema = record.declarations.settings_schema
+    if not schema:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"extension {name!r} declares no settings schema")
+    field: SettingsFieldDeclaration | None = next(
+        (item for item in schema if item.key == key), None
+    )
+    if field is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown settings field {key!r} for {name!r}")
+    if field.type != "secret":
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"settings field {key!r} is not a secret")
+    return field
+
+
+def _required_str(params: JsonObject, key: str) -> str:
+    value = params.get(key)
+    if not isinstance(value, str) or not value:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, f"extensions.set_secret requires a '{key}' string"
+        )
+    return value
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
-    """Return extension visibility RPC handlers."""
+    """Return extension visibility and secret RPC handlers."""
 
     return {
         "extensions.list": _list_extensions,
+        "extensions.set_secret": _set_extension_secret,
     }

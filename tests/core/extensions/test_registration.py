@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from core.extensions import API_VERSION, ExtensionRegistry, HookContext
+from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 
 
 @pytest.fixture(autouse=True)
@@ -337,3 +338,111 @@ def test_disabled_extension_lifecycle_does_not_fire(tmp_path: Path) -> None:
     asyncio.run(registry.fire_shutdown())
 
     assert _marker_lines(marker) == []
+
+
+# --- Settings schema declaration + live reads --------------------------------
+
+
+_SETTINGS_SCHEMA_SOURCE = (
+    "def register(api):\n"
+    "    api.register_settings([\n"
+    "        {'key': 'url', 'type': 'text', 'label': 'URL'},\n"
+    "        {'key': 'token', 'type': 'secret', 'label': 'Token', 'env_key': 'HASS_TOKEN'},\n"
+    "    ])\n"
+)
+
+
+def test_register_settings_lands_on_record(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "schemed", _SETTINGS_SCHEMA_SOURCE)
+
+    registry = ExtensionRegistry.load(root)
+
+    record = _record(registry, "schemed")
+    assert record.status == "loaded"
+    schema = record.declarations.settings_schema
+    assert schema is not None
+    assert [field.key for field in schema] == ["url", "token"]
+    assert schema[1].env_key == "HASS_TOKEN"
+
+
+def test_register_settings_invalid_fields_fail_extension(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "bad_schema",
+        "def register(api):\n"
+        "    api.register_settings([{'key': 'Bad', 'type': 'text', 'label': 'X'}])\n",
+    )
+
+    registry = ExtensionRegistry.load(root)
+
+    record = _record(registry, "bad_schema")
+    assert record.status == "failed"
+    assert "Bad" in (record.error or "")
+
+
+def test_register_settings_twice_fails_extension(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "double_schema",
+        "def register(api):\n"
+        "    api.register_settings([{'key': 'a', 'type': 'text', 'label': 'A'}])\n"
+        "    api.register_settings([{'key': 'b', 'type': 'text', 'label': 'B'}])\n",
+    )
+
+    registry = ExtensionRegistry.load(root)
+
+    record = _record(registry, "double_schema")
+    assert record.status == "failed"
+    assert "already declared" in (record.error or "")
+
+
+def test_get_config_reads_live_provider_while_snapshot_is_frozen() -> None:
+    live: dict[str, object] = {"url": "http://one"}
+    api = ExtensionAPI(
+        "ext",
+        ExtensionDeclarations(),
+        config={"url": "http://snapshot"},
+        logger=None,
+        config_provider=lambda: dict(live),
+    )
+
+    assert api.get_config() == {"url": "http://one"}
+    live["url"] = "http://two"
+    assert api.get_config() == {"url": "http://two"}
+    # The register-time snapshot never changes.
+    assert api.config == {"url": "http://snapshot"}
+
+
+def test_get_config_falls_back_to_snapshot_without_provider() -> None:
+    api = ExtensionAPI(
+        "ext",
+        ExtensionDeclarations(),
+        config={"url": "http://snapshot"},
+        logger=None,
+    )
+
+    result = api.get_config()
+    assert result == {"url": "http://snapshot"}
+    # A fresh dict, not the snapshot object.
+    assert result is not api.config
+
+
+def test_resolve_credential_delegates_to_resolver() -> None:
+    api = ExtensionAPI(
+        "ext",
+        ExtensionDeclarations(),
+        config={},
+        logger=None,
+        credential_resolver=lambda key: f"value-for-{key}",
+    )
+
+    assert api.resolve_credential("HASS_TOKEN") == "value-for-HASS_TOKEN"
+
+
+def test_resolve_credential_empty_without_resolver() -> None:
+    api = ExtensionAPI("ext", ExtensionDeclarations(), config={}, logger=None)
+
+    assert api.resolve_credential("HASS_TOKEN") == ""

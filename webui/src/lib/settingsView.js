@@ -345,6 +345,7 @@ export function applyExtensionsPanelList(result) {
         extension.config && typeof extension.config === 'object'
           ? extension.config
           : {},
+      settingsSchema: normalizeSchemaFields(extension.settings_schema),
       capabilities: normalizeExtensionCapabilities(extension.capabilities),
     }));
 }
@@ -481,6 +482,129 @@ export function buildExtensionsUpdatePayload(extensions, override = {}) {
   }
 
   return { extensions: { disabled, config } };
+}
+
+// --- Extension settings schema (form helpers) ---------------------------------
+
+const SCHEMA_FIELD_TYPES = ['text', 'number', 'toggle', 'secret'];
+
+/**
+ * Normalize a raw ``settings_schema`` list into display-ready field descriptors,
+ * dropping malformed entries. Secret fields keep ``envKey``/``set``; others keep
+ * ``default``.
+ */
+export function normalizeSchemaFields(schema) {
+  if (!Array.isArray(schema)) {
+    return [];
+  }
+  return schema
+    .filter(
+      (field) =>
+        field &&
+        typeof field === 'object' &&
+        typeof field.key === 'string' &&
+        field.key.length > 0 &&
+        SCHEMA_FIELD_TYPES.includes(field.type),
+    )
+    .map((field) => ({
+      key: field.key,
+      type: field.type,
+      label: textOrFallback(field.label, field.key),
+      description: textOrEmpty(field.description),
+      required: field.required === true,
+      default: field.default === undefined ? null : field.default,
+      envKey: field.type === 'secret' ? textOrEmpty(field.env_key) : '',
+      set: field.type === 'secret' ? field.set === true : false,
+    }));
+}
+
+/**
+ * Build the editable form state (per non-secret field) from a schema and the
+ * persisted config. Text/number inputs are strings; toggles are booleans.
+ * Secrets are write-only and never seeded here.
+ */
+export function buildSchemaFormState(schema, config) {
+  const fields = normalizeSchemaFields(schema);
+  const source = config && typeof config === 'object' ? config : {};
+  const state = {};
+  for (const field of fields) {
+    if (field.type === 'secret') {
+      continue;
+    }
+    if (field.type === 'toggle') {
+      const value = source[field.key];
+      state[field.key] =
+        typeof value === 'boolean' ? value : field.default === true;
+      continue;
+    }
+    // text / number: keep as a string input value; empty when absent.
+    const value = source[field.key];
+    state[field.key] =
+      value === undefined || value === null ? '' : String(value);
+  }
+  return state;
+}
+
+/**
+ * Build the config object for the ``settings.update`` payload from the form
+ * state. Toggles are always explicit; text/number fields are omitted when the
+ * input is empty (so the default applies at read time). Numbers are parsed:
+ * integer text yields an int, otherwise a float; unparseable input produces a
+ * per-field error and ``ok: false``.
+ *
+ * @returns {{ ok: boolean, config: object, errors: Record<string, string> }}
+ */
+export function buildSchemaConfigFromForm(schema, formState) {
+  const fields = normalizeSchemaFields(schema);
+  const source = formState && typeof formState === 'object' ? formState : {};
+  const config = {};
+  const errors = {};
+
+  for (const field of fields) {
+    if (field.type === 'secret') {
+      continue;
+    }
+    if (field.type === 'toggle') {
+      config[field.key] = source[field.key] === true;
+      continue;
+    }
+    const raw = source[field.key];
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (text.length === 0) {
+      continue;
+    }
+    if (field.type === 'number') {
+      const parsed = parseSchemaNumber(text);
+      if (parsed === null) {
+        errors[field.key] = 'invalid-number';
+        continue;
+      }
+      config[field.key] = parsed;
+      continue;
+    }
+    config[field.key] = text;
+  }
+
+  return { ok: Object.keys(errors).length === 0, config, errors };
+}
+
+function parseSchemaNumber(text) {
+  // Integer text (no dot) parses to an int; anything else to a float. In JS
+  // both are ``number``; JSON then serializes ``8123`` vs ``80.5`` faithfully.
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(text)) {
+    return null;
+  }
+  const value = Number(text);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** Whether an extension list entry should render the schema form (vs raw JSON). */
+export function hasSettingsSchema(extension) {
+  return (
+    extension &&
+    Array.isArray(extension.settingsSchema) &&
+    extension.settingsSchema.length > 0
+  );
 }
 
 export function normalizeSubAgentSettings(rawSettings) {
