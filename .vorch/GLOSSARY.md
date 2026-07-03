@@ -200,3 +200,15 @@ Model data — name, typed capabilities (vision, tools, reasoning, …), context
 ## Connection screen
 **Definition:** The Desktop shell's own native, in-window server-selection/error screen (`desktop/connection.py`, rendered HTML — not a WebUI route). It lists remembered servers, takes a host/port to connect, and on any probe failure (unreachable / not-vBot / no-WebUI / invalid target) re-renders in place with the failed target prefilled and an inline error. It subsumes the retired static fallback page, so the Desktop never shows a dead-end.
 **Not:** A WebUI view or page. The Connection screen is shell-owned native HTML the controller swaps onto the same window via `Window.load_html`; the WebUI (loaded via `Window.load_url`) is the *other* thing that window shows once connected.
+
+## Bundled Extension
+**Definition:** An extension shipped in the install tree under `resources/extensions/`, always scanned as the last extension root and default-on (opt out via the `disabled` set). A same-name copy in the data dir or an extra scan root shadows it (recorded `overridden`), so customizing a shipped extension is a deliberate copy into the data dir. Home Assistant is the first bundled extension.
+**Not:** A data-dir extension (the user's own, in an earlier root), and not a separate mechanism — after loading it is a normal extension in every way (hooks, tools, config, enable/disable).
+
+## Readiness
+**Definition:** A per-tool, cheap, I/O-free predicate (`Tool.ready`, a zero-arg `Callable[[], bool] | None`) evaluated at every prompt/tool-definition build; filter order is registered → allowed → ready. A not-ready tool vanishes from the System Prompt, the provider tool definitions, and the pickers but stays registered (its persisted permissions survive); a direct dispatch returns a clean `tool_not_ready` envelope instead of running the handler. A predicate that raises counts as not-ready.
+**Not:** A permission — an allowlist answers "may this agent use it", readiness answers "can it run right now" (e.g. is the extension's token set). Not a stored extension state either: the Extensions tab's waiting status is a derived `ready_state`, not a third switch.
+
+## Extension Settings Schema
+**Definition:** The typed field list an extension declares via `api.register_settings(fields)` at register time (`text`/`number`/`toggle`/`secret`), driving the WebUI settings form and the server-side save validation. A `secret` field names an explicit `.env` key (`env_key`) and never carries a default or enters `settings.json`; non-secret values live in the extension's config and are read live per call.
+**Not:** The extension's config *values* themselves (those are what the schema validates and the form edits), and not a manifest section — the schema is declared in code at register time, so single-file extensions carry one too.

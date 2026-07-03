@@ -49,6 +49,17 @@ CANONICAL_BUILTIN_TOOLS = [
     "web_search",
     "write",
 ]
+# The four Home Assistant tools ship as a bundled extension and are always
+# registered (readiness only hides them from model-facing surfaces until the
+# token is set), so they are part of the registered inventory even without a
+# token — but absent from provider definitions, which filter on readiness.
+HOME_ASSISTANT_TOOLS = [
+    "ha_call_service",
+    "ha_get_state",
+    "ha_list_entities",
+    "ha_list_services",
+]
+CANONICAL_REGISTERED_TOOLS = sorted(CANONICAL_BUILTIN_TOOLS + HOME_ASSISTANT_TOOLS)
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
 
 
@@ -269,7 +280,7 @@ def test_start_registers_builtin_tools_once(config: Config):
     runtime.start()
 
     tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
-    assert tool_names == CANONICAL_BUILTIN_TOOLS
+    assert tool_names == CANONICAL_REGISTERED_TOOLS
 
 
 def test_runtime_selects_jsonl_recall_backend_by_default(config: Config) -> None:
@@ -330,14 +341,14 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(config:
 
 
 def test_runtime_start_exposes_canonical_builtin_tools(config: Config):
-    """Runtime startup exposes the canonical built-in tool set."""
+    """Runtime startup exposes the canonical built-in tool set plus bundled HA."""
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
 
     tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
-    assert tool_names == CANONICAL_BUILTIN_TOOLS
+    assert tool_names == CANONICAL_REGISTERED_TOOLS
 
 
 def test_phase_two_services_inaccessible_before_start(config: Config):
