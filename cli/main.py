@@ -47,6 +47,7 @@ from cli.extensions_management import (
     extensions_disable,
     extensions_enable,
     extensions_list,
+    extensions_reload,
     extensions_set,
     extensions_show,
 )
@@ -171,6 +172,7 @@ def run(
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
     list_skills_fn: Callable[[ServerInstance], CommandResult] = skill_list,
     list_extensions_fn: Callable[[ServerInstance], CommandResult] = extensions_list,
+    reload_extensions_fn: Callable[[ServerInstance], CommandResult] = extensions_reload,
     enable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_enable,
     disable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_disable,
     show_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_show,
@@ -325,6 +327,7 @@ def run(
             args,
             instance,
             list_extensions_fn=list_extensions_fn,
+            reload_extensions_fn=reload_extensions_fn,
             enable_extension_fn=enable_extension_fn,
             disable_extension_fn=disable_extension_fn,
             show_extension_fn=show_extension_fn,
@@ -744,6 +747,7 @@ def dispatch_extensions_command(
     instance: ServerInstance,
     *,
     list_extensions_fn: Callable[[ServerInstance], CommandResult],
+    reload_extensions_fn: Callable[[ServerInstance], CommandResult],
     enable_extension_fn: Callable[[ServerInstance, str], CommandResult],
     disable_extension_fn: Callable[[ServerInstance, str], CommandResult],
     show_extension_fn: Callable[[ServerInstance, str], CommandResult],
@@ -751,9 +755,9 @@ def dispatch_extensions_command(
 ) -> CommandResult:
     """Route one name-first extensions command against the server RPC client.
 
-    Grammar: ``list`` | ``enable|disable <name>`` | ``<name>`` (show settings) |
-    ``<name> set <field> <value>`` (write one setting). The selector is either a
-    reserved verb or an extension name; a name is inspected or configured.
+    Grammar: ``list`` | ``reload`` | ``enable|disable <name>`` | ``<name>`` (show
+    settings) | ``<name> set <field> <value>`` (write one setting). The selector is
+    either a reserved verb or an extension name; a name is inspected or configured.
     """
 
     selector = args.selector
@@ -763,6 +767,11 @@ def dispatch_extensions_command(
         if rest:
             return _extensions_usage(instance, "extensions list takes no arguments")
         return list_extensions_fn(instance)
+
+    if selector == "reload":
+        if rest:
+            return _extensions_usage(instance, "extensions reload takes no arguments")
+        return reload_extensions_fn(instance)
 
     if selector in ("enable", "disable"):
         if len(rest) != 1:
