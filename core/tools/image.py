@@ -16,7 +16,9 @@ from core.tools.tools import (
 
 IMAGE_GENERATION_TOOL_NAME = "image_generation"
 IMAGE_GENERATION_TOOL_DESCRIPTION = (
-    "Generate images from a text prompt using the configured image generation model."
+    "Generate images from a text prompt using the configured image generation "
+    "model. The result includes each image's file path and the Markdown that "
+    "displays it in the chat."
 )
 IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -35,18 +37,17 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
 def _image_display_message(artifacts: list[JsonObject]) -> str:
     """Tell the agent how to surface generated images in the chat.
 
-    The chat does not render image artifacts on its own; the agent shows an
-    image by embedding its artifact ``url`` as Markdown in its reply.
+    The chat renders an image only when the agent embeds its artifact ``url``
+    as Markdown in the reply; ``path`` is the file on disk for everything else.
     """
 
     markdown_snippets = "\n".join(
         f"![generated image]({artifact['url']})" for artifact in artifacts
     )
     return (
-        "Image generation complete. The chat does not display the image "
-        "automatically — to show it, embed each image in your reply as Markdown "
-        "using its 'url' field, e.g. ![short description](url). Markdown for the "
-        f"image(s) you just generated:\n{markdown_snippets}"
+        "Image generation complete. The chat displays an image only when you "
+        f"embed its Markdown in your reply:\n{markdown_snippets}\n"
+        "For file operations (copy, send, edit) use its 'path'."
     )
 
 
@@ -63,11 +64,18 @@ def make_image_generation_handler(image_service: Any):
         except ImageError as exc:
             return tool_failure("image_error", str(exc))
 
+        # The model-facing copies carry each image file's absolute path so the
+        # agent can use the file outside the chat; the UI-facing artifacts
+        # payload stays path-free — the WebUI renders from `url`.
         artifact_payloads = [a.to_dict() for a in artifacts]
+        image_payloads = [
+            {**payload, "path": str(artifact.file_path)}
+            for artifact, payload in zip(artifacts, artifact_payloads, strict=True)
+        ]
         return tool_success(
             {
-                "message": _image_display_message(artifact_payloads),
-                "images": artifact_payloads,
+                "message": _image_display_message(image_payloads),
+                "images": image_payloads,
             },
             artifacts=artifact_payloads,
         )
