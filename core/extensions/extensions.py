@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.extensions.settings_schema import SettingsFieldDeclaration, parse_settings_fields
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -190,6 +191,7 @@ class ExtensionDeclarations:
     tools: list[ToolDeclaration] = field(default_factory=list)
     recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
     prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
+    settings_schema: list[SettingsFieldDeclaration] | None = None
 
 
 @dataclass
@@ -228,8 +230,16 @@ class ExtensionAPI:
 
     Every call only *collects a declaration* onto the extension's record;
     nothing goes live until the loader's apply phase runs after all extensions
-    have registered. ``config`` is the per-extension settings object (empty dict
-    by default) and ``logger`` is a ``vbot.extensions.<name>`` logger.
+    have registered. ``config`` is the per-extension settings **snapshot** taken
+    at register time (empty dict by default) — for structural decisions inside
+    ``register()``. ``logger`` is a ``vbot.extensions.<name>`` logger.
+
+    ``config_provider`` and ``credential_resolver`` (both already bound to this
+    extension) back the **live** per-call reads :meth:`get_config` /
+    :meth:`resolve_credential`, so values and secrets set through the settings
+    UI take effect without a restart. Both default to ``None`` for standalone
+    construction (tests), in which case the live reads fall back to the snapshot
+    / an empty string.
     """
 
     def __init__(
@@ -239,11 +249,47 @@ class ExtensionAPI:
         *,
         config: dict[str, Any],
         logger: Any,
+        config_provider: Callable[[], dict[str, Any]] | None = None,
+        credential_resolver: Callable[[str], str] | None = None,
     ) -> None:
         self._extension_name = extension_name
         self._declarations = declarations
         self.config = config
         self.logger = logger
+        self._config_provider = config_provider
+        self._credential_resolver = credential_resolver
+
+    def register_settings(self, fields: list[Any]) -> None:
+        """Declare this extension's settings schema (see :mod:`settings_schema`).
+
+        Validates *fields* through :func:`parse_settings_fields` (a violation
+        raises ``ValueError`` naming the bad field, failing the extension) and
+        stores the parsed schema on the declarations. Calling it twice raises
+        ``ValueError`` — an extension declares exactly one schema.
+        """
+        if self._declarations.settings_schema is not None:
+            raise ValueError("settings schema already declared")
+        self._declarations.settings_schema = parse_settings_fields(fields)
+
+    def get_config(self) -> dict[str, Any]:
+        """Return the extension's config, read **live** per call (fresh dict).
+
+        Unlike :attr:`config` (the register-time snapshot), this reflects a
+        config change persisted through the settings UI without a restart. Falls
+        back to a copy of the snapshot when no live provider is wired.
+        """
+        if self._config_provider is None:
+            return dict(self.config)
+        return self._config_provider()
+
+    def resolve_credential(self, key: str) -> str:
+        """Resolve one credential **live** per call (process env, then ``.env``).
+
+        Returns ``""`` when no resolver is wired (standalone construction).
+        """
+        if self._credential_resolver is None:
+            return ""
+        return self._credential_resolver(key)
 
     def on(self, event: str, handler: HookHandler) -> None:
         """Declare a hook handler for *event*. Called as ``handler(ctx, **payload)``."""
@@ -345,6 +391,8 @@ class ExtensionRegistry:
         disabled: set[str] | None = None,
         config: dict[str, dict[str, Any]] | None = None,
         bundled_dir: Path | None = None,
+        config_provider: Callable[[str], dict[str, Any]] | None = None,
+        credential_resolver: Callable[[str], str] | None = None,
     ) -> ExtensionRegistry:
         """Discover, import, register, and apply extensions in two phases.
 
@@ -359,7 +407,11 @@ class ExtensionRegistry:
         never silently activate a different copy of it in a later root.
 
         Extensions named in *disabled* are recorded as ``disabled`` and never
-        imported. *config* maps extension name → its ``api.config`` object.
+        imported. *config* maps extension name → its ``api.config`` snapshot.
+        *config_provider* (``name -> live config dict``) and *credential_resolver*
+        (``key -> value``) back each extension's live per-call reads; both are
+        bound to the extension name when its ``ExtensionAPI`` is built, and a
+        ``None`` provider stays ``None`` on the API (the live reads then fall back).
         Async ``register()`` coroutines are awaited to completion before hook
         declarations are applied to the dispatch table.
         """
@@ -377,7 +429,14 @@ class ExtensionRegistry:
                 if winner is not None:
                     registry._records.append(_overridden_record(discovered, winner))
                     continue
-                record = _register_extension(discovered, disabled_names, config_map, pending)
+                record = _register_extension(
+                    discovered,
+                    disabled_names,
+                    config_map,
+                    pending,
+                    config_provider=config_provider,
+                    credential_resolver=credential_resolver,
+                )
                 registry._records.append(record)
                 claimed[discovered.name] = record
         _await_pending_registers(pending)
@@ -826,13 +885,18 @@ def _register_extension(
     disabled_names: set[str],
     config_map: dict[str, dict[str, Any]],
     pending: list[tuple[ExtensionRecord, Any]],
+    *,
+    config_provider: Callable[[str], dict[str, Any]] | None = None,
+    credential_resolver: Callable[[str], str] | None = None,
 ) -> ExtensionRecord:
     """Load one discovered extension into a record (collecting declarations).
 
     Disabled extensions are never imported. Manifest/import/``register()``
     failures produce a ``failed`` record with detail and never abort the others.
     Async ``register()`` coroutines are appended to *pending* for the loader to
-    await before applying declarations.
+    await before applying declarations. *config_provider* / *credential_resolver*
+    are bound to this extension's *name* when its ``ExtensionAPI`` is built, so
+    the extension's live reads see only its own config / all credentials.
     """
     name = discovered.name
     if name in disabled_names:
@@ -886,11 +950,14 @@ def _register_extension(
     if register_fn is None:
         return record
 
+    bound_config_provider = (lambda: config_provider(name)) if config_provider is not None else None
     api = ExtensionAPI(
         name,
         record.declarations,
         config=config_map.get(name, {}),
         logger=get_logger(f"extensions.{name}"),
+        config_provider=bound_config_provider,
+        credential_resolver=credential_resolver,
     )
     try:
         result = register_fn(api)

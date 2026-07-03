@@ -3,11 +3,17 @@ import { describe, expect, it } from 'vitest';
 import {
   applyExtensionsPanelList,
   buildExtensionsUpdatePayload,
+  buildSchemaConfigFromForm,
+  buildSchemaFormState,
   extensionStatusChipVariant,
   formatExtensionConfig,
+  hasSettingsSchema,
+  normalizeSchemaFields,
   parseExtensionConfigDraft,
   summarizeExtensionCapabilities,
 } from '../settingsView.js';
+
+import { englishCatalog } from '../i18n.js';
 
 const translate = (_key, fallback) => fallback;
 
@@ -188,5 +194,164 @@ describe('buildExtensionsUpdatePayload', () => {
     ).toEqual({
       extensions: { disabled: ['legacy'], config: {} },
     });
+  });
+});
+
+function schema() {
+  return [
+    { key: 'url', type: 'text', label: 'URL', default: 'http://localhost' },
+    { key: 'port', type: 'number', label: 'Port' },
+    { key: 'verbose', type: 'toggle', label: 'Verbose', default: true },
+    {
+      key: 'token',
+      type: 'secret',
+      label: 'Token',
+      env_key: 'HASS_TOKEN',
+      set: true,
+    },
+    { name: 'garbage' }, // malformed → dropped
+  ];
+}
+
+describe('normalizeSchemaFields', () => {
+  it('normalizes fields and drops malformed entries', () => {
+    const fields = normalizeSchemaFields(schema());
+
+    expect(fields.map((field) => field.key)).toEqual([
+      'url',
+      'port',
+      'verbose',
+      'token',
+    ]);
+    expect(fields[3]).toMatchObject({
+      key: 'token',
+      type: 'secret',
+      envKey: 'HASS_TOKEN',
+      set: true,
+    });
+  });
+
+  it('returns an empty list for a non-array', () => {
+    expect(normalizeSchemaFields(null)).toEqual([]);
+  });
+});
+
+describe('applyExtensionsPanelList carries the settings schema', () => {
+  it('exposes settingsSchema and hasSettingsSchema', () => {
+    const [extension] = applyExtensionsPanelList({
+      extensions: [{ name: 'ha', status: 'loaded', settings_schema: schema() }],
+    });
+
+    expect(extension.settingsSchema.map((field) => field.key)).toEqual([
+      'url',
+      'port',
+      'verbose',
+      'token',
+    ]);
+    expect(hasSettingsSchema(extension)).toBe(true);
+  });
+
+  it('hasSettingsSchema is false for a schema-less extension', () => {
+    const [extension] = applyExtensionsPanelList({
+      extensions: [{ name: 'plain', status: 'loaded' }],
+    });
+
+    expect(extension.settingsSchema).toEqual([]);
+    expect(hasSettingsSchema(extension)).toBe(false);
+  });
+});
+
+describe('buildSchemaFormState', () => {
+  it('seeds non-secret fields and excludes secrets', () => {
+    const state = buildSchemaFormState(schema(), {
+      url: 'http://host:8123',
+      port: 80,
+      verbose: false,
+    });
+
+    expect(state).toEqual({
+      url: 'http://host:8123',
+      port: '80',
+      verbose: false,
+    });
+    expect('token' in state).toBe(false);
+  });
+
+  it('uses the toggle default and empty text when config is absent', () => {
+    const state = buildSchemaFormState(schema(), {});
+
+    expect(state).toEqual({ url: '', port: '', verbose: true });
+  });
+});
+
+describe('buildSchemaConfigFromForm', () => {
+  it('omits empty text/number, keeps toggles explicit, and parses numbers', () => {
+    const built = buildSchemaConfigFromForm(schema(), {
+      url: '',
+      port: '8123',
+      verbose: false,
+    });
+
+    expect(built.ok).toBe(true);
+    expect(built.config).toEqual({ port: 8123, verbose: false });
+    // Integer text yields an int (serializes without a fractional part).
+    expect(Number.isInteger(built.config.port)).toBe(true);
+  });
+
+  it('parses a float and keeps a filled text field', () => {
+    const built = buildSchemaConfigFromForm(schema(), {
+      url: 'http://x',
+      port: '80.5',
+      verbose: true,
+    });
+
+    expect(built.config).toEqual({
+      url: 'http://x',
+      port: 80.5,
+      verbose: true,
+    });
+  });
+
+  it('blocks the save with a per-field error on unparseable numbers', () => {
+    const built = buildSchemaConfigFromForm(schema(), {
+      url: 'http://x',
+      port: 'not-a-number',
+      verbose: true,
+    });
+
+    expect(built.ok).toBe(false);
+    expect(built.errors.port).toBeTruthy();
+    expect('port' in built.config).toBe(false);
+  });
+
+  it('never emits a secret into the config', () => {
+    const built = buildSchemaConfigFromForm(schema(), {
+      url: 'http://x',
+      token: 'should-be-ignored',
+    });
+
+    expect('token' in built.config).toBe(false);
+  });
+});
+
+describe('extension schema i18n keys', () => {
+  it('registers the new form and secret labels', () => {
+    const requiredKeys = [
+      'settings.extensions.saveSettings',
+      'settings.extensions.fieldAria',
+      'settings.extensions.numberInvalid',
+      'settings.extensions.secretSet',
+      'settings.extensions.secretUnset',
+      'settings.extensions.secretSave',
+      'settings.extensions.secretClear',
+      'settings.extensions.secretPlaceholder',
+      'settings.extensions.secretAria',
+      'settings.extensions.secretSaved',
+      'settings.extensions.secretCleared',
+    ];
+
+    for (const key of requiredKeys) {
+      expect(englishCatalog[key], key).toBeTruthy();
+    }
   });
 });

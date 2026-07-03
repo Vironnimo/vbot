@@ -221,7 +221,7 @@ def test_data_dir_copy_shadows_bundled_same_name(tmp_path: Path) -> None:
     bundled = tmp_path / "bundled"
     marker = tmp_path / "marker.txt"
     _write_single_file(data_dir, "shared", marker)
-    bundled_entry = _write_raising_single_file(bundled, "shared")
+    _write_raising_single_file(bundled, "shared")
 
     registry = ExtensionRegistry.load(data_dir, bundled_dir=bundled)
     _fire_run_start(registry)
@@ -298,9 +298,7 @@ def test_bundled_dir_none_and_missing_behave_like_today(tmp_path: Path) -> None:
     assert [record.name for record in without_bundled.records()] == ["only_ext"]
 
     marker.unlink()
-    with_missing_bundled = ExtensionRegistry.load(
-        data_dir, bundled_dir=tmp_path / "does-not-exist"
-    )
+    with_missing_bundled = ExtensionRegistry.load(data_dir, bundled_dir=tmp_path / "does-not-exist")
     _fire_run_start(with_missing_bundled)
     assert _marker_names(marker) == ["only_ext"]
     assert [record.name for record in with_missing_bundled.records()] == ["only_ext"]

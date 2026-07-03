@@ -22,6 +22,7 @@ from core.extensions.extensions import (
     RecallBackendDeclaration,
     ToolDeclaration,
 )
+from core.extensions.settings_schema import parse_settings_fields
 from server.rpc.methods import dispatch_rpc
 from tests.server.test_rpc import StubAdapter, make_state
 
@@ -45,16 +46,40 @@ class _Registry:
 class _Storage:
     def __init__(self, config: dict[str, dict[str, Any]]) -> None:
         self._config = config
+        self.credentials: dict[str, str] = {}
+        self.removed: list[str] = []
 
     def load_extensions_settings(self) -> JsonObject:
         return {"disabled": [], "config": self._config}
+
+    def set_data_dir_credential(self, key: str, value: str) -> None:
+        self.credentials[key] = value
+
+    def remove_data_dir_credential(self, key: str) -> bool:
+        self.removed.append(key)
+        return self.credentials.pop(key, None) is not None
+
+
+class _Runtime(SimpleNamespace):
+    """Runtime stub exposing the credential seam the handlers touch."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.reloaded = 0
+
+    def resolve_environment_credential(self, key: str) -> str:
+        value: str = self.storage.credentials.get(key, "")
+        return value
+
+    def reload_provider_credentials(self) -> None:
+        self.reloaded += 1
 
 
 def _state_with_records(
     records: list[ExtensionRecord],
     config: dict[str, dict[str, Any]] | None = None,
 ) -> SimpleNamespace:
-    runtime = SimpleNamespace(extensions=_Registry(records), storage=_Storage(config or {}))
+    runtime = _Runtime(extensions=_Registry(records), storage=_Storage(config or {}))
     return SimpleNamespace(runtime=runtime)
 
 
@@ -123,6 +148,7 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
         "display_name": "Bash Guard",
         "api_version": 1,
         "config": {"deny": ["rm -rf"]},
+        "settings_schema": None,
         "capabilities": {
             "hooks": {"tool_call": 1, "run_end": 1},
             "tools": ["word_count"],
@@ -161,7 +187,7 @@ async def test_extensions_list_round_trips_overridden_record() -> None:
 
 @pytest.mark.asyncio
 async def test_extensions_list_empty_without_registry() -> None:
-    runtime = SimpleNamespace(extensions=None, storage=_Storage({}))
+    runtime = _Runtime(extensions=None, storage=_Storage({}))
     state = SimpleNamespace(runtime=runtime)
 
     result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
@@ -174,6 +200,199 @@ async def test_extensions_list_rejects_params() -> None:
     state = _state_with_records([])
 
     result = await dispatch_rpc(state, {"method": "extensions.list", "params": {"name": "x"}})
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_request"
+
+
+def _schemed_record(name: str = "homeassistant") -> ExtensionRecord:
+    declarations = ExtensionDeclarations()
+    declarations.settings_schema = parse_settings_fields(
+        [
+            {
+                "key": "url",
+                "type": "text",
+                "label": "URL",
+                "description": "Server URL",
+                "default": "http://homeassistant.local:8123",
+            },
+            {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
+        ]
+    )
+    return ExtensionRecord(
+        name=name,
+        root_path=Path(f"/bundled/{name}"),
+        entry_path=Path(f"/bundled/{name}/__init__.py"),
+        status="loaded",
+        declarations=declarations,
+    )
+
+
+@pytest.mark.asyncio
+async def test_extensions_list_carries_settings_schema_and_secret_state() -> None:
+    state = _state_with_records([_schemed_record()])
+    state.runtime.storage.credentials["HASS_TOKEN"] = "abc"
+
+    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
+
+    (item,) = result["result"]["extensions"]
+    schema = item["settings_schema"]
+    assert schema == [
+        {
+            "key": "url",
+            "type": "text",
+            "label": "URL",
+            "description": "Server URL",
+            "required": False,
+            "default": "http://homeassistant.local:8123",
+        },
+        {
+            "key": "token",
+            "type": "secret",
+            "label": "Token",
+            "description": None,
+            "required": False,
+            "default": None,
+            "env_key": "HASS_TOKEN",
+            "set": True,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_extensions_list_secret_set_flag_flips_with_resolver() -> None:
+    state = _state_with_records([_schemed_record()])
+
+    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
+    (item,) = result["result"]["extensions"]
+    secret_field = item["settings_schema"][1]
+    assert secret_field["set"] is False
+
+
+@pytest.mark.asyncio
+async def test_extensions_list_no_schema_for_unloaded_record() -> None:
+    record = _schemed_record()
+    record.status = "failed"
+    state = _state_with_records([record])
+
+    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
+    (item,) = result["result"]["extensions"]
+    assert item["settings_schema"] is None
+
+
+@pytest.mark.asyncio
+async def test_set_secret_writes_and_reloads() -> None:
+    state = _state_with_records([_schemed_record()])
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.set_secret",
+            "params": {"name": "homeassistant", "key": "token", "value": "s3cret"},
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["result"] == {"name": "homeassistant", "key": "token", "set": True}
+    assert state.runtime.storage.credentials["HASS_TOKEN"] == "s3cret"
+    assert state.runtime.reloaded == 1
+
+
+@pytest.mark.asyncio
+async def test_set_secret_empty_value_clears() -> None:
+    state = _state_with_records([_schemed_record()])
+    state.runtime.storage.credentials["HASS_TOKEN"] = "old"
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.set_secret",
+            "params": {"name": "homeassistant", "key": "token", "value": ""},
+        },
+    )
+
+    assert result["result"] == {"name": "homeassistant", "key": "token", "set": False}
+    assert "HASS_TOKEN" in state.runtime.storage.removed
+    assert "HASS_TOKEN" not in state.runtime.storage.credentials
+    assert state.runtime.reloaded == 1
+
+
+@pytest.mark.asyncio
+async def test_set_secret_does_not_log_the_value(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    state = _state_with_records([_schemed_record()])
+    caplog.set_level(logging.DEBUG)
+
+    await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.set_secret",
+            "params": {"name": "homeassistant", "key": "token", "value": "super-secret-value"},
+        },
+    )
+
+    assert all("super-secret-value" not in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "key", "value"),
+    [
+        ("nope", "token", "x"),  # unknown extension
+        ("homeassistant", "missing", "x"),  # unknown field
+        ("homeassistant", "url", "x"),  # field is not a secret
+    ],
+)
+async def test_set_secret_error_cases_return_invalid_request(
+    name: str, key: str, value: str
+) -> None:
+    state = _state_with_records([_schemed_record()])
+
+    result = await dispatch_rpc(
+        state,
+        {"method": "extensions.set_secret", "params": {"name": name, "key": key, "value": value}},
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_set_secret_not_loaded_returns_invalid_request() -> None:
+    record = _schemed_record()
+    record.status = "failed"
+    state = _state_with_records([record])
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.set_secret",
+            "params": {"name": "homeassistant", "key": "token", "value": "x"},
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_set_secret_no_schema_returns_invalid_request() -> None:
+    record = ExtensionRecord(
+        name="plain",
+        root_path=Path("/ext/plain.py"),
+        entry_path=Path("/ext/plain.py"),
+        status="loaded",
+    )
+    state = _state_with_records([record])
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.set_secret",
+            "params": {"name": "plain", "key": "token", "value": "x"},
+        },
+    )
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_request"
