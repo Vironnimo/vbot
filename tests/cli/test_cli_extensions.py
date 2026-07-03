@@ -204,7 +204,7 @@ def test_extensions_list_renders_waiting_row(
     assert "ha_call_service (waiting)" in lines[3]
 
 
-def test_extensions_disable_writes_settings_and_prints_restart_hint(
+def test_extensions_disable_writes_settings_and_applies_live(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -228,22 +228,100 @@ def test_extensions_disable_writes_settings_and_prints_restart_hint(
                 }
             },
         }
-        return httpx.Response(200, json={"ok": True, "result": {"restart_required": True}})
+        return httpx.Response(200, json={"ok": True, "result": {}})
 
     monkeypatch.setattr(extensions_management.httpx, "post", fake_post)
 
     result = extensions_management.extensions_disable(instance, "guard_bash")
 
+    # Disabling applies live and no longer mentions a restart.
     assert result == CommandResult(
         ok=True,
-        message="extension 'guard_bash' disabled\n"
-        "restart required: run 'vbot server restart' to apply",
+        message="extension 'guard_bash' disabled",
         instance=instance,
     )
+    assert "restart" not in result.message
     assert [call["method"] for call in posted] == ["extensions.list", "settings.update"]
 
 
-def test_extensions_enable_removes_from_disabled(
+def _enabled_payload() -> list[dict[str, Any]]:
+    """The extensions payload after 'legacy' has been enabled (now loaded)."""
+    payload = _extensions_payload()
+    for extension in payload:
+        if extension["name"] == "legacy":
+            extension["status"] = "loaded"
+            extension["disabled"] = False
+    return payload
+
+
+def test_extensions_enable_applies_live(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    posted: list[str] = []
+    list_payloads = [_extensions_payload(), _enabled_payload()]
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        posted.append(json["method"])
+        if json["method"] == "extensions.list":
+            payload = list_payloads.pop(0) if list_payloads else _enabled_payload()
+            return httpx.Response(200, json={"ok": True, "result": {"extensions": payload}})
+        assert json["params"]["extensions"]["disabled"] == []
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    monkeypatch.setattr(extensions_management.httpx, "post", fake_post)
+
+    result = extensions_management.extensions_enable(instance, "legacy")
+
+    assert result.ok is True
+    # Enable re-lists to confirm the freshly rebuilt extension loaded; happy path
+    # shows only the live-applied line, no restart, no warning.
+    assert result.message == "extension 'legacy' enabled (applied live)"
+    assert posted == ["extensions.list", "settings.update", "extensions.list"]
+
+
+def test_extensions_enable_warns_when_extension_fails_to_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def failed_payload() -> list[dict[str, Any]]:
+        payload = _extensions_payload()
+        for extension in payload:
+            if extension["name"] == "legacy":
+                extension["status"] = "failed"
+                extension["disabled"] = False
+                extension["error"] = "import failed: boom"
+        return payload
+
+    list_payloads = [_extensions_payload(), failed_payload()]
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        if json["method"] == "extensions.list":
+            payload = list_payloads.pop(0) if list_payloads else failed_payload()
+            return httpx.Response(200, json={"ok": True, "result": {"extensions": payload}})
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    monkeypatch.setattr(extensions_management.httpx, "post", fake_post)
+
+    result = extensions_management.extensions_enable(instance, "legacy")
+
+    # The toggle itself succeeded (ok=True) but the re-list surfaces the bad state.
+    assert result.ok is True
+    assert result.message.splitlines() == [
+        "extension 'legacy' enabled (applied live)",
+        "warning: 'legacy' is failed",
+        "  error: import failed: boom",
+    ]
+
+
+def test_extensions_reload_prints_summary_failures_and_hint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -252,19 +330,92 @@ def test_extensions_enable_removes_from_disabled(
     def fake_post(
         url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
     ) -> httpx.Response:
-        if json["method"] == "extensions.list":
-            return httpx.Response(
-                200, json={"ok": True, "result": {"extensions": _extensions_payload()}}
-            )
-        assert json["params"]["extensions"]["disabled"] == []
-        return httpx.Response(200, json={"ok": True, "result": {"restart_required": True}})
+        assert json == {"method": "extensions.reload", "params": {}}
+        return httpx.Response(
+            200, json={"ok": True, "result": {"extensions": _extensions_payload()}}
+        )
 
     monkeypatch.setattr(extensions_management.httpx, "post", fake_post)
 
-    result = extensions_management.extensions_enable(instance, "legacy")
+    result = extensions_management.extensions_reload(instance)
 
     assert result.ok is True
-    assert result.message.splitlines()[0] == "extension 'legacy' enabled"
+    assert result.message.splitlines() == [
+        "extensions reloaded: 1 loaded, 1 failed, 1 disabled, 0 overridden",
+        "  broken failed: import failed: boom",
+        "run 'vbot extensions list' for details",
+    ]
+
+
+def test_extensions_reload_clean_has_no_failure_lines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    clean = [ext for ext in _extensions_payload() if ext["status"] == "loaded"]
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"extensions": clean}})
+
+    monkeypatch.setattr(extensions_management.httpx, "post", fake_post)
+
+    result = extensions_management.extensions_reload(instance)
+
+    assert result.ok is True
+    assert result.message == "extensions reloaded: 1 loaded, 0 failed, 0 disabled, 0 overridden"
+
+
+def test_run_dispatches_extensions_reload(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[ServerInstance] = []
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    def fake_reload(resolved_instance: ServerInstance) -> CommandResult:
+        calls.append(resolved_instance)
+        return CommandResult(ok=True, message="extensions reloaded: 2 loaded", instance=instance)
+
+    exit_code = cli_main.run(
+        ["extensions", "reload"],
+        resolve=fake_resolve,
+        reload_extensions_fn=fake_reload,
+    )
+
+    assert exit_code == 0
+    assert calls == [instance]
+    assert capsys.readouterr().out.splitlines() == ["extensions reloaded: 2 loaded"]
+
+
+def test_run_extensions_reload_extra_arg_is_usage_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[ServerInstance] = []
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    def fake_reload(resolved_instance: ServerInstance) -> CommandResult:
+        calls.append(resolved_instance)
+        return CommandResult(ok=True, message="unexpected", instance=instance)
+
+    exit_code = cli_main.run(
+        ["extensions", "reload", "extra"],
+        resolve=fake_resolve,
+        reload_extensions_fn=fake_reload,
+    )
+
+    assert exit_code == 1
+    # The usage error short-circuits before the reload RPC runs.
+    assert calls == []
+    assert "extensions reload takes no arguments" in capsys.readouterr().out
 
 
 def test_extensions_disable_unknown_name_suggests_candidate(

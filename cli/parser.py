@@ -143,8 +143,9 @@ TOOL_HELP = {"list": "List public registered tools"}
 SKILL_HELP = {"list": "List skills and diagnostics"}
 EXTENSIONS_HELP = {
     "list": "List loaded, failed, and disabled extensions",
-    "enable": "Enable a disabled extension (restart-applied)",
-    "disable": "Disable an extension (restart-applied)",
+    "reload": "Reload all extensions from disk (applies code changes, applied live)",
+    "enable": "Enable a disabled extension (applied live)",
+    "disable": "Disable an extension (applied live)",
     "show": "Show one extension's settings (schema, current values, secret set-state)",
     "set": "Set one extension setting (secret -> .env, other fields -> live config)",
 }
@@ -589,6 +590,7 @@ def _add_extensions_parsers(
     # The extension name is dynamic, so this area is name-first with routing in
     # dispatch_extensions_command rather than a fixed sub-command set:
     #   extensions list
+    #   extensions reload
     #   extensions enable|disable <name>
     #   extensions <name>                    -> show that extension's settings
     #   extensions <name> set <field> <value>-> write one setting (schema-routed)
@@ -597,18 +599,19 @@ def _add_extensions_parsers(
         help=AREA_HELP["extensions"],
         description=(
             "Inspect and configure loaded extensions. "
-            "'extensions list' lists all; 'extensions <name>' shows one extension's "
-            "settings; 'extensions <name> set <field> <value>' writes one setting "
-            "(a secret field is stored in .env, other fields go to live config, both "
-            "applied without a restart); 'extensions enable|disable <name>' toggles an "
-            "extension (restart-applied)."
+            "'extensions list' lists all; 'extensions reload' rebuilds the whole "
+            "extension layer from disk (applies code changes live); 'extensions "
+            "<name>' shows one extension's settings; 'extensions <name> set <field> "
+            "<value>' writes one setting (a secret field is stored in .env, other "
+            "fields go to live config, both applied without a restart); 'extensions "
+            "enable|disable <name>' toggles an extension (applied live)."
         ),
     )
     _add_target_arguments(extensions_parser)
     extensions_parser.add_argument(
         "selector",
-        metavar="<list|enable|disable|extension-name>",
-        help="'list', 'enable', 'disable', or an extension name to inspect/configure",
+        metavar="<list|reload|enable|disable|extension-name>",
+        help="'list', 'reload', 'enable', 'disable', or an extension name to inspect/configure",
     )
     extensions_parser.add_argument(
         "rest",
