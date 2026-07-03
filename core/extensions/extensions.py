@@ -44,7 +44,7 @@ RegisteredHandler = tuple[str, HookHandler]
 # envelope or ``None`` when the candidate is rejected.
 ToolResultValidator = Callable[[str, dict[str, Any]], "dict[str, Any] | None"]
 
-ExtensionStatus = Literal["loaded", "failed", "disabled"]
+ExtensionStatus = Literal["loaded", "failed", "disabled", "overridden"]
 
 # Sentinel distinguishing "handler raised and was skipped" from a handler that
 # legitimately returned ``None``.
@@ -198,8 +198,10 @@ class ExtensionRecord:
 
     ``name`` is the identity (directory or file name). ``status`` is ``loaded``
     (importable and registered), ``failed`` (import/register/manifest error —
-    ``error`` carries the detail), or ``disabled`` (listed disabled, never
-    imported). ``declarations`` are only meaningful for ``loaded`` records.
+    ``error`` carries the detail), ``disabled`` (listed disabled, never
+    imported), or ``overridden`` (a later same-name copy an earlier root already
+    claimed, never imported — see :meth:`ExtensionRegistry.load`).
+    ``declarations`` are only meaningful for ``loaded`` records.
     """
 
     name: str
@@ -212,6 +214,9 @@ class ExtensionRecord:
     # Non-fatal per-capability diagnostics (e.g. a tool name collision skipped a
     # single tool). The extension still ``loaded``; only that capability dropped.
     capability_errors: list[str] = field(default_factory=list)
+    # The winning record's ``entry_path`` (as a string) when this record was
+    # shadowed (``status == "overridden"``); ``None`` for every other status.
+    overridden_by: str | None = None
 
 
 class _ManifestError(Exception):
@@ -339,12 +344,22 @@ class ExtensionRegistry:
         *,
         disabled: set[str] | None = None,
         config: dict[str, dict[str, Any]] | None = None,
+        bundled_dir: Path | None = None,
     ) -> ExtensionRegistry:
         """Discover, import, register, and apply extensions in two phases.
 
-        Scans immediate children of each root in order (``extensions_dir``
-        first). Extensions named in *disabled* are recorded as ``disabled`` and
-        never imported. *config* maps extension name → its ``api.config`` object.
+        Scans immediate children of each root in this order: the data-dir
+        ``extensions_dir`` first, then the user's *extra_dirs*, then the fixed
+        *bundled_dir* (the install tree's shipped extensions) **last**. A ``None``
+        *bundled_dir* is skipped. Identity is the filesystem name: the
+        first-discovered occurrence of a name wins and every later same-name
+        occurrence becomes an ``overridden`` record — never imported, its
+        ``overridden_by`` pointing at the winner's entry path. A ``disabled`` name
+        still **claims** its identity in the earlier root, so disabling a name can
+        never silently activate a different copy of it in a later root.
+
+        Extensions named in *disabled* are recorded as ``disabled`` and never
+        imported. *config* maps extension name → its ``api.config`` object.
         Async ``register()`` coroutines are awaited to completion before hook
         declarations are applied to the dispatch table.
         """
@@ -352,11 +367,19 @@ class ExtensionRegistry:
         disabled_names = set(disabled or ())
         config_map = dict(config or {})
         pending: list[tuple[ExtensionRecord, Any]] = []
-        scan_roots = [extensions_dir, *(extra_dirs or [])]
+        scan_roots = [extensions_dir, *(extra_dirs or []), bundled_dir]
+        claimed: dict[str, ExtensionRecord] = {}
         for root in scan_roots:
+            if root is None:
+                continue
             for discovered in _discover_extension_paths(root):
+                winner = claimed.get(discovered.name)
+                if winner is not None:
+                    registry._records.append(_overridden_record(discovered, winner))
+                    continue
                 record = _register_extension(discovered, disabled_names, config_map, pending)
                 registry._records.append(record)
+                claimed[discovered.name] = record
         _await_pending_registers(pending)
         registry._apply_declarations()
         return registry
@@ -895,6 +918,20 @@ def _failed_record(
         status="failed",
         error=error,
         manifest=manifest,
+    )
+
+
+def _overridden_record(
+    discovered: _DiscoveredExtension,
+    winner: ExtensionRecord,
+) -> ExtensionRecord:
+    """Record a same-name copy an earlier root already claimed (never imported)."""
+    return ExtensionRecord(
+        name=discovered.name,
+        root_path=discovered.root_path,
+        entry_path=discovered.entry_path,
+        status="overridden",
+        overridden_by=str(winner.entry_path),
     )
 
 

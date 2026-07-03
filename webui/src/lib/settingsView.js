@@ -335,6 +335,7 @@ export function applyExtensionsPanelList(result) {
       version: textOrEmpty(extension.version),
       description: textOrEmpty(extension.description),
       error: textOrEmpty(extension.error),
+      overriddenBy: textOrEmpty(extension.overridden_by),
       capabilityErrors: Array.isArray(extension.capability_errors)
         ? extension.capability_errors.filter(
             (entry) => typeof entry === 'string' && entry.length > 0,
@@ -380,6 +381,8 @@ export function extensionStatusChipVariant(status) {
   if (status === 'failed') {
     return 'error';
   }
+  // ``disabled`` and ``overridden`` share the same muted/neutral variant: both
+  // are inert records the user cannot act on directly.
   return 'warn';
 }
 
