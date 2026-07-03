@@ -33,10 +33,12 @@ Three entry-point shapes are accepted:
 | Package module | `<root>/<name>/__init__.py` | optional |
 | Directory fallback | `<root>/<name>/extension.py` | optional |
 
-Loading happens **at startup only**. Enable/disable and config changes are
-**restart-applied** — there is no hot reload (handlers may be mid-flight), and a
-disabled extension is never imported. The agent can run `vbot server restart` to
-apply changes.
+Everything applies **live** — no restart. Config-value and secret changes are read
+live per call; enabling, disabling, or editing an extension's code takes effect
+through the [extension reload](#reloading-extensions) (enabling and the explicit
+`extensions reload` both rebuild the whole layer from disk, disabling deactivates
+just that one extension). A disabled extension is never imported until it is
+enabled and the layer reloads.
 
 ## The entry point: `register(api)`
 
@@ -208,7 +210,7 @@ Any violation raises `ValueError` inside `register()`, so the extension loads as
 
 **Server-side validation on save:** for a loaded extension with a schema, the `settings.update` RPC validates the submitted config against the schema before persisting — unknown keys are rejected, a key naming a `secret` field is rejected (secrets live in `.env`, never in config), types must match, and a `required` non-secret field must be present and non-empty. An extension **without** a schema keeps the raw-JSON pass-through.
 
-**Live values.** A non-secret setting change (URL, a toggle, a number) is read **live** on the next tool call — no restart. Read your config through `api.get_config()` rather than the register-time `api.config` snapshot (see [Config and logging](#config-and-logging)). Only enabling/disabling a whole extension is restart-applied.
+**Live values.** A non-secret setting change (URL, a toggle, a number) is read **live** on the next tool call — no restart. Read your config through `api.get_config()` rather than the register-time `api.config` snapshot (see [Config and logging](#config-and-logging)). Enabling, disabling, or reloading a whole extension also applies live (see [Reloading extensions](#reloading-extensions)).
 
 ## Prompt blocks
 
@@ -262,6 +264,14 @@ live serving event loop, so they may schedule background tasks. Accessors that
 never serve (CLI local commands) do not fire startup. Both phases fail-open per
 handler.
 
+**Contract (a reload leans on this).** `import` and `register(api)` must be
+**side-effect-free** — they only *declare*. Acquire resources (connections, tasks,
+file handles) in a **startup** handler and release them in a **shutdown** handler,
+and make both **idempotent**. This matters because an [extension
+reload](#reloading-extensions) cycles **every** loaded extension through
+shutdown+startup, not just the one that changed: a startup handler that assumes it
+runs once, or a shutdown handler that leaks, will misbehave across reloads.
+
 ## Config and logging
 
 Per-extension config arrives as `api.config` — the object under
@@ -282,7 +292,7 @@ def register(api):
     api.logger.info("guard_bash loaded with %d patterns", len(deny))
 ```
 
-`api.config` is a **snapshot** taken at register time — use it for structural decisions inside `register()`. For values you read while running (in a hook or tool handler), use `api.get_config()` instead: it re-reads the persisted config **per call**, so a change a user makes in the settings form takes effect on the next call without a restart. Only enabling/disabling the whole extension is restart-applied.
+`api.config` is a **snapshot** taken at register time — use it for structural decisions inside `register()`. For values you read while running (in a hook or tool handler), use `api.get_config()` instead: it re-reads the persisted config **per call**, so a change a user makes in the settings form takes effect on the next call without a restart. Enabling, disabling, and reloading the whole extension also apply live (see [Reloading extensions](#reloading-extensions)).
 
 ```python
 def register(api):
@@ -340,28 +350,52 @@ Extensions surface through the normal management flow:
 - **CLI** (an accessor — everything goes through server RPC):
   ```bash
   vbot extensions list                 # loaded / failed / disabled + capabilities
-  vbot extensions disable guard_bash   # restart-applied; prints a restart hint
-  vbot extensions enable guard_bash
-  vbot server restart                  # apply the change
+  vbot extensions reload               # rebuild the whole layer from disk (live)
+  vbot extensions disable guard_bash   # applied live
+  vbot extensions enable guard_bash    # applied live (reloads the layer)
   ```
 - **WebUI**: Settings → **Extensions** lists every extension with its status,
-  version, capabilities, and failure reason, offers a per-extension
-  enable/disable toggle, and — for a schema'd extension — a real settings form
-  (raw-JSON editor as the fallback for schema-less ones). Secret fields are
-  write-only. A restart-required notice appears only after an enable/disable.
+  version, capabilities, and failure reason, offers a "Reload extensions" button
+  and a per-extension enable/disable toggle, and — for a schema'd extension — a
+  real settings form (raw-JSON editor as the fallback for schema-less ones).
+  Secret fields are write-only. Every change applies live; there is no restart
+  notice.
 - **RPC**: `extensions.list` returns the records (with any declared settings
-  schema and live secret state); `settings.update` accepts the `extensions`
-  section (config-value changes apply live; only a `disabled`-set change replies
-  `"restart_required": true`); `extensions.set_secret` writes/clears a secret.
+  schema and live secret state); `extensions.reload` rebuilds the layer and
+  returns the same shape; `settings.update` accepts the `extensions` section (all
+  changes apply live); `extensions.set_secret` writes/clears a secret.
 
 A failed extension never aborts the others — it loads as `failed` with an error
 detail you can read in any of the surfaces above.
+
+## Reloading extensions
+
+Everything an extension change touches applies **live** — you never restart the
+server to pick up an extension. There are two live paths:
+
+- **Config values and secrets** are read per call (`api.get_config()` /
+  `api.resolve_credential()`), so a settings-form save takes effect on the next
+  call with no further action.
+- **Code, structure, and enable/disable** go through the **extension reload** — a
+  full, restart-equivalent rebuild of the whole extension layer from disk in the
+  running process. Trigger it explicitly with `vbot extensions reload`, the
+  WebUI "Reload extensions" button, or the `extensions.reload` RPC. **Enabling**
+  an extension runs the same rebuild for you; **disabling** deactivates just that
+  one extension.
+
+A reload picks up edited code of loaded extensions (including submodules of
+package extensions), extensions you added to or deleted from a scan root,
+previously `failed` extensions whose code you fixed, and boot-disabled extensions
+you enabled — the end state is exactly what a fresh server start would produce.
+Because a reload cycles **every** extension through shutdown+startup, keep those
+handlers idempotent (see [Lifecycle](#lifecycle-startup-and-shutdown)). Edit a
+`.py` file, then run `vbot extensions reload` to apply it.
 
 ## Walkthrough: a tool extension from scratch
 
 1. Create `~/.vbot/extensions/word_count.py` with the `word_count` example
    above.
-2. Restart: `vbot server restart`.
+2. Load it: `vbot extensions reload`.
 3. Confirm it loaded: `vbot extensions list` shows
    `word_count  loaded  …  tools: word_count`.
 4. Allow the tool on an agent (`allowed_tools`) and ask it to count words — the
