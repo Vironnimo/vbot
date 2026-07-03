@@ -808,7 +808,7 @@ export const englishCatalog = Object.freeze({
   'settings.extensions.secretSaved': 'Secret saved.',
   'settings.extensions.secretCleared': 'Secret cleared.',
   'settings.extensions.restartRequired':
-    'Extension changes apply after a restart.',
+    'Enabling an extension applies after a restart. Disabling applies immediately.',
   'settings.appearance.title': 'Appearance',
   'settings.appearance.subtitle': 'Language and chat reading width.',
   'settings.appearance.language': 'Language',

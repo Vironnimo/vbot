@@ -655,6 +655,72 @@ class ExtensionRegistry:
                         record, f"recall backend {declaration.name!r} skipped: {exc}"
                     )
 
+    async def deactivate(self, name: str, tool_registry: ToolRegistry | None = None) -> bool:
+        """Stop a currently-loaded extension's effects live, without a restart.
+
+        The disable half of "values live, structure restart-bound": on disable we
+        mark the extension inactive and immediately stop all its effects, but keep
+        its code loaded (dormant) — reclaiming the code and *loading* code that was
+        disabled at boot both still need a restart (the enable case). Concretely,
+        for a currently ``loaded`` record this:
+
+        1. removes its hook handlers from the dispatch table (all five events stop
+           firing),
+        2. unregisters its applied tools from *tool_registry* — only the tools this
+           extension actually registered (matched by handler identity, so a
+           collision-skipped name owned by a built-in / another extension is left
+           alone),
+        3. fires its shutdown handlers (fail-open, resource cleanup), and
+        4. flips the record to ``disabled`` and clears its declarations, so every
+           status surface reports it exactly like a boot-disabled extension (no
+           schema, no capabilities, no pending restart) and the prompt/recall
+           refreshers (which key on ``loaded``) drop it on the next rebuild.
+
+        Persisted permissions and config are untouched — re-enabling later (a
+        restart) restores them. Returns ``True`` when it deactivated a live record;
+        a name that is unknown, already ``disabled``, ``failed``, or ``overridden``
+        is a clean no-op returning ``False`` (no crash, no double shutdown).
+        """
+        record = next((item for item in self._records if item.name == name), None)
+        if record is None or record.status != "loaded":
+            return False
+
+        declarations = record.declarations
+        self._remove_handlers(name)
+        if tool_registry is not None:
+            self._unregister_extension_tools(tool_registry, declarations.tools)
+        for handler in declarations.shutdown:
+            await self._invoke_lifecycle("shutdown", name, handler)
+
+        record.status = "disabled"
+        record.declarations = ExtensionDeclarations()
+        _LOGGER.info("Extension %r deactivated live (no restart)", name)
+        return True
+
+    def _remove_handlers(self, extension_name: str) -> None:
+        """Drop every hook handler registered under *extension_name* from dispatch."""
+        for event in list(self._handlers):
+            self._handlers[event] = [
+                pair for pair in self._handlers[event] if pair[0] != extension_name
+            ]
+
+    def _unregister_extension_tools(
+        self, tool_registry: ToolRegistry, tools: list[ToolDeclaration]
+    ) -> None:
+        """Unregister only the tools this extension actually applied.
+
+        A declared name is unregistered only when the live registry entry's handler
+        is this declaration's handler — so a name skipped on a collision (owned by a
+        built-in or another extension) is never yanked out from under its real owner.
+        """
+        for declaration in tools:
+            try:
+                registered = tool_registry.get(declaration.name)
+            except Exception:
+                continue
+            if registered.handler is declaration.handler:
+                tool_registry.unregister(declaration.name)
+
     def _diagnose_capability(self, record: ExtensionRecord, message: str) -> None:
         """Record a non-fatal capability diagnostic and log it at ``warning``."""
         record.capability_errors.append(message)
@@ -687,6 +753,22 @@ class ExtensionRegistry:
     def fire_shutdown_blocking(self) -> None:
         """Run :meth:`fire_shutdown` to completion from synchronous shutdown paths."""
         _run_coroutine_to_completion(self.fire_shutdown())
+
+    def deactivate_blocking(self, name: str, tool_registry: ToolRegistry | None = None) -> bool:
+        """Run :meth:`deactivate` to completion from a synchronous caller.
+
+        The live-disable path runs from the synchronous ``settings.update`` handler,
+        which may or may not have a running loop; this mirrors
+        :meth:`fire_shutdown_blocking`'s loop-agnostic driving of the shutdown
+        coroutine.
+        """
+        result: list[bool] = []
+
+        async def _run() -> None:
+            result.append(await self.deactivate(name, tool_registry))
+
+        _run_coroutine_to_completion(_run())
+        return result[0] if result else False
 
     async def _invoke_lifecycle(
         self, phase: str, extension_name: str, handler: LifecycleHandler

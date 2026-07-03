@@ -159,25 +159,80 @@ async def test_extensions_config_only_change_has_no_restart_flag(tmp_path: Path)
     assert "restart_required" not in result["result"]
 
 
+def _record_disabled_calls(state: SimpleNamespace) -> list[set[str]]:
+    """Wire a spy for the runtime's live-deactivation hook, returning its calls."""
+    calls: list[set[str]] = []
+
+    def _apply(newly_disabled: set[str]) -> None:
+        calls.append(set(newly_disabled))
+
+    state.runtime.apply_extension_disabled_change = _apply
+    return calls
+
+
 @pytest.mark.asyncio
-async def test_extensions_disabled_change_sets_restart_flag(tmp_path: Path) -> None:
+async def test_extensions_newly_disabled_applies_live_without_restart_flag(
+    tmp_path: Path,
+) -> None:
     state = _state_with_schema(tmp_path)
+    calls = _record_disabled_calls(state)
 
     result = await _update(state, {"disabled": ["homeassistant"], "config": {}})
 
     assert result["ok"] is True
-    assert result["result"]["restart_required"] is True
+    # Disabling is applied live: no restart flag, and the deactivation hook ran
+    # with exactly the newly-disabled name.
+    assert "restart_required" not in result["result"]
+    assert calls == [{"homeassistant"}]
 
 
 @pytest.mark.asyncio
-async def test_extensions_unchanged_disabled_set_has_no_restart_flag(tmp_path: Path) -> None:
+async def test_extensions_newly_enabled_sets_restart_flag(tmp_path: Path) -> None:
     state = _state_with_schema(tmp_path)
-    # Seed a persisted disabled set, then resend it unchanged.
+    calls = _record_disabled_calls(state)
+    # Seed a persisted disabled set, then re-enable (remove from disabled).
     await _update(state, {"disabled": ["homeassistant"], "config": {}})
+    calls.clear()
+
+    result = await _update(state, {"disabled": [], "config": {}})
+
+    assert result["ok"] is True
+    # Enabling loads code → restart-applied; the live deactivation hook is NOT run.
+    assert result["result"]["restart_required"] is True
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_extensions_mixed_enable_and_disable(tmp_path: Path) -> None:
+    state = _state_with_schema(tmp_path)
+    calls = _record_disabled_calls(state)
+    # Start with "one" disabled; then flip to "two" disabled: enables one, disables two.
+    await _update(state, {"disabled": ["one"], "config": {}})
+    calls.clear()
+
+    result = await _update(state, {"disabled": ["two"], "config": {}})
+
+    assert result["ok"] is True
+    # A newly-enabled name is present → restart flag; a newly-disabled name → live.
+    assert result["result"]["restart_required"] is True
+    assert calls == [{"two"}]
+
+
+@pytest.mark.asyncio
+async def test_extensions_unchanged_disabled_set_no_restart_no_deactivation(
+    tmp_path: Path,
+) -> None:
+    state = _state_with_schema(tmp_path)
+    calls = _record_disabled_calls(state)
+    # Seed a persisted disabled set, then resend it unchanged (config-only change).
+    await _update(state, {"disabled": ["homeassistant"], "config": {}})
+    calls.clear()
 
     result = await _update(
         state, {"disabled": ["homeassistant"], "config": {"homeassistant": {"url": "http://y"}}}
     )
 
     assert result["ok"] is True
+    # No disabled-set delta: no restart flag and no live deactivation.
     assert "restart_required" not in result["result"]
+    assert calls == []

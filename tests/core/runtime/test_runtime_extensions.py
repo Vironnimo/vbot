@@ -294,3 +294,89 @@ def test_extension_tool_and_recall_backend_wired_into_runtime(tmp_path: Path) ->
         assert runtime.recall_backend.__class__.__name__ == "ExtBackend"
     finally:
         runtime.stop()
+
+
+def test_apply_extension_disabled_change_deactivates_tool_and_prompt_block(
+    tmp_path: Path,
+) -> None:
+    # A live disable removes the extension's tool from the registry and drops its
+    # prompt block from the assembled system prompt — no restart.
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_extension(
+        data_dir,
+        "livext",
+        "from core.tools import tool_success\n"
+        "def _echo(context, arguments):\n"
+        "    return tool_success({})\n"
+        "def register(api):\n"
+        "    api.register_tool('livext_echo', 'desc', {'type': 'object'}, _echo)\n"
+        "    api.register_prompt_block('intro', default_text='Live extension intro.')\n",
+    )
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        agent = runtime.agents.get("main")
+        assert "livext_echo" in [tool.name for tool in runtime.tools.list_tools()]
+        assert "Live extension intro." in runtime.system_prompts.build_system_prompt(agent)
+
+        runtime.apply_extension_disabled_change({"livext"})
+
+        # Tool unregistered, prompt block gone, record marked disabled — all live.
+        assert "livext_echo" not in [tool.name for tool in runtime.tools.list_tools()]
+        assert "Live extension intro." not in runtime.system_prompts.build_system_prompt(agent)
+        assert runtime.extensions is not None
+        record = next(r for r in runtime.extensions.records() if r.name == "livext")
+        assert record.status == "disabled"
+    finally:
+        runtime.stop()
+
+
+def test_apply_extension_disabled_change_falls_recall_back_to_default(
+    tmp_path: Path,
+) -> None:
+    # Disabling the extension that provides the currently-active recall backend
+    # must not leave recall pointing at dead code: fall back to the built-in
+    # default, without rewriting the persisted selection.
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_extension(data_dir, "capabilities_ext", _CAPABILITY_EXT_SOURCE)
+    _write_settings(data_dir, {"recall": {"backend": "ext_recall"}})
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        assert runtime.recall_backend.__class__.__name__ == "ExtBackend"
+
+        runtime.apply_extension_disabled_change({"capabilities_ext"})
+
+        # Active backend fell back to the built-in default; the persisted
+        # selection is untouched (re-enabling on restart restores it).
+        assert runtime.recall_backend.__class__.__name__ != "ExtBackend"
+        assert runtime.storage.load_recall_settings()["backend"] == "ext_recall"
+        assert "ext_recall" not in runtime.available_recall_backends()
+    finally:
+        runtime.stop()
+
+
+def test_apply_extension_disabled_change_ignores_active_builtin_backend(
+    tmp_path: Path,
+) -> None:
+    # Disabling an extension that declares a recall backend which is NOT the
+    # active one leaves the active (built-in) backend alone.
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_extension(data_dir, "capabilities_ext", _CAPABILITY_EXT_SOURCE)
+    # Default backend (jsonl_scan) is active, not the extension's ext_recall.
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        active_before = runtime.recall_backend.__class__.__name__
+
+        runtime.apply_extension_disabled_change({"capabilities_ext"})
+
+        assert runtime.recall_backend.__class__.__name__ == active_before
+    finally:
+        runtime.stop()
