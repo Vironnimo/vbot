@@ -38,9 +38,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | Map file | Domain | What it covers |
 |---|---|---|
 | `.vorch/domain-maps/runtime.md` | `core/runtime/` | Bootstrap, service lifecycle, DI wiring |
-| `.vorch/domain-maps/providers.md` | `core/providers/` | Provider domain overview, per-connection `mode` / `models_endpoint` and per-model `connections` allowlist, index to provider-specific maps |
-| `.vorch/domain-maps/providers/openai.md` | OpenAI provider | Single provider with `api-key` (chat/completions) and `subscription` (codex/responses) connections, Codex OAuth, ChatGPT account header, model discovery |
-| `.vorch/domain-maps/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
+| `.vorch/domain-maps/providers.md` | `core/providers/` | Provider domain overview, per-connection `mode` / `models_endpoint` and per-model `connections` allowlist, index to provider-specific maps || `.vorch/domain-maps/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
 | `.vorch/domain-maps/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas; index to the task-execution child maps |
 | `.vorch/domain-maps/model_tasks/speech.md` | speech execution | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
 | `.vorch/domain-maps/model_tasks/image.md` | image execution | Image generation execution, artifacts, provider wire behavior |
@@ -63,9 +61,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |
 | `.vorch/domain-maps/skills.md` | `core/skills/` | Skill loading/validation, agent/project/global/bundled scopes, the validated authoring write core + write-scope boundary, origin-grouped session-pinned catalog |
 | `.vorch/domain-maps/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
-| `.vorch/domain-maps/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send |
-| `.vorch/domain-maps/channels/discord.md` | Discord channels | Gateway lifecycle, history backfill, thread routing, attachments, outbound behavior |
-| `.vorch/domain-maps/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
+| `.vorch/domain-maps/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send; index to channel-specific maps || `.vorch/domain-maps/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
 | `.vorch/domain-maps/cli.md` | `cli/` | Local server lifecycle + `desktop` GUI-launch commands, targeting rules, status/logging contract |
 | `.vorch/domain-maps/desktop.md` | `desktop/` | pywebview thin-client contract, in-window connection screen, remembered servers, native menu, per-user config, voice bridge |
 | `.vorch/domain-maps/webui.md` | `webui/` | Svelte app shell, API client, Chat/Agents views, queue behavior |
