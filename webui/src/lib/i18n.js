@@ -807,8 +807,8 @@ export const englishCatalog = Object.freeze({
   'settings.extensions.secretAria': 'Secret {label} for extension {name}',
   'settings.extensions.secretSaved': 'Secret saved.',
   'settings.extensions.secretCleared': 'Secret cleared.',
-  'settings.extensions.restartRequired':
-    'Enabling an extension applies after a restart. Disabling applies immediately.',
+  'settings.extensions.reload': 'Reload extensions',
+  'settings.extensions.reloadSuccess': 'Extensions reloaded.',
   'settings.appearance.title': 'Appearance',
   'settings.appearance.subtitle': 'Language and chat reading width.',
   'settings.appearance.language': 'Language',
