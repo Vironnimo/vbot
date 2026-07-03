@@ -29,7 +29,7 @@ The anchor holds **no run config** — only Sessions ownership and the local age
 <data_dir>/projects/<project-id>/
     project.json                 ← the entity above
     agents/<agent-id>/
-        sessions/                ← project-scoped session ownership (Phase 2 writes here)
+        sessions/                ← project-scoped session ownership
         workspace/               ← only for a rooted identity agent; config agents never have one
 ```
 
@@ -46,7 +46,7 @@ The anchor holds **no run config** — only Sessions ownership and the local age
 - `update(project_id, **changes)` → `Project`. `project_id` is immutable (passing it is an "unknown field" error). Changing `cwd` re-normalizes and re-checks the duplicate guard. Rebuilds through `build_project` so there is one validation path.
 - `delete(project_id)` → archive `Path`. Archives the subtree, does not hard-delete.
 - `set_model_override(project_id, agent_id, model)` / `clear_model_override(project_id, agent_id)` → `Project`. Atomic per-entry read-modify-write over `model_overrides` (get → copy map → set/del one key → rebuild through `build_project` preserving identity/timestamps → atomic write), leaving every other entry and field intact. `set` validates the id/model shape via `build_project` (the configured-ness check is the caller's gate, not enforced here); clearing an absent entry is a no-op success (project returned unchanged, no write). These are the single seam both the `/model` command and the Projects-tab `x` write through.
-- `sessions_dir(project_id, agent_id)` / `workspace_dir(project_id, agent_id)` → the per-agent anchor paths Phase 2 consumes.
+- `sessions_dir(project_id, agent_id)` / `workspace_dir(project_id, agent_id)` → the per-agent anchor paths for a project's sessions and rooted workspace.
 
 `paths.py` helpers (the cwd contract):
 

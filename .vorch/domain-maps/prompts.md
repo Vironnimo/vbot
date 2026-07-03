@@ -41,13 +41,13 @@ The five core text blocks read their **default text** from the editable fragment
 
 ### Producers (`{generated:NAME}`)
 
-A producer turns build-time inputs into the text a `{generated:NAME}` marker expands to. The manager builds them as closures over the registries it already holds: `tool_list`, `channel_list`, `skill_list` feed the core tools/channels/skills text blocks, and `memory_files` renders the pinned-memory `<file>` contents for the `memory:guidance` block (the file reading lives in `core/memory/read_memory_files`). An **unknown** marker renders to `""` with a warning — fail-soft, like a missing `{include:…}`, never a `PromptError`. `BlockRenderContext` carries **no conversation messages** — message-dependent content belongs to the `context` extension hook, not the System Prompt (D6 boundary).
+A producer turns build-time inputs into the text a `{generated:NAME}` marker expands to. The manager builds them as closures over the registries it already holds: `tool_list`, `channel_list`, `skill_list` feed the core tools/channels/skills text blocks, and `memory_files` renders the pinned-memory `<file>` contents for the `memory:guidance` block (the file reading lives in `core/memory/read_memory_files`). An **unknown** marker renders to `""` with a warning — fail-soft, like a missing `{include:…}`, never a `PromptError`. `BlockRenderContext` carries **no conversation messages** — message-dependent content belongs to the `context` extension hook, not the System Prompt.
 
 ### Runtime variables (replacements)
 
 `{host}`, `{app_version}`, `{os}`, `{model}`, `{agent_workspace}`, `{app_dir}`, `{data_root}`, `{thinking_effort}`, `{current_date}` are plain-text replacements applied to every text block at build (`apply_replacements`, per-key `str.replace`, never a format engine — an unrelated `{…}` is left untouched). Only the runtime block carries them today; `{current_date}` is the UTC ISO date only (the bundled prompt tells agents to use the `status` tool for current time).
 
-### Override cascade (D3)
+### Override cascade
 
 A static block's effective text resolves **agent override ← default-scope override ← owner default** (`definition.default_text`). The agent layer applies only on an agent scope. A dynamic block has no override path; it always renders from its `render`. The cascade is composed by the manager from the `BlockStore`'s two reads, not by the store.
 
@@ -69,8 +69,8 @@ A static block's effective text resolves **agent override ← default-scope over
 **Block-edit facade** (the `prompt.*` RPC surface; lives on the manager beside assembly so listing, override, layout, and create/remove all share one definition collection and scope resolution):
 
 - `list_scopes()` → `default` plus every Agent with `custom_system_prompt_enabled`.
-- `list_blocks(scope=None)` → per-block static metadata in layout order: `id`, `owner`, `kind`, `editable`, `enabled` (the scope's on/off), `rank`, `source`; editable text blocks also carry their effective `text` (cascade result) and `is_modified`; an agent scope adds the `inheritance` layer per block (`agent_override` / `default_override` / `owner_default`, the T5 badge input). Non-editable blocks carry only read-only metadata. "Owner currently active?" is deliberately **not** here — that is the preview's job.
-- `update_block(id, content, scope=None)` writes a text override (T6 autosave) — only an **editable** block accepts one; updating a data/dynamic block is a `PromptError`. `reset_block(id, scope=None)` drops the scope's override → the inherited/default text; a `user:` block has no default to reset (delete it instead).
+- `list_blocks(scope=None)` → per-block static metadata in layout order: `id`, `owner`, `kind`, `editable`, `enabled` (the scope's on/off), `rank`, `source`; editable text blocks also carry their effective `text` (cascade result) and `is_modified`; an agent scope adds the `inheritance` layer per block (`agent_override` / `default_override` / `owner_default`). Non-editable blocks carry only read-only metadata. "Owner currently active?" is deliberately **not** here — that is the preview's job.
+- `update_block(id, content, scope=None)` writes a text override (autosave) — only an **editable** block accepts one; updating a data/dynamic block is a `PromptError`. `reset_block(id, scope=None)` drops the scope's override → the inherited/default text; a `user:` block has no default to reset (delete it instead).
 - `set_layout(layout, scope=None)` persists order + on/off, **tolerating** a contributor-gone id (the store prunes any entry with no live definition on this write, so a reorder never errors on a vanished contributor). `reset_layout(scope=None)` overwrites the scope's `layout.json` with the bundled default (text overrides untouched).
 - `create_block(slug, content=None, scope=None, *, position=None)` creates a custom `user:<slug>` block (override file + layout entry; slug validated with the canonical agent-id rule; must not collide with an existing `user:` block). `remove_block(id, scope=None)` deletes a `user:` block (override file + layout entry) — only a `user:` block is removable; a core/tool/extension block is toggled off, never deleted.
 
