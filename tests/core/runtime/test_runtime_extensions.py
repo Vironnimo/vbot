@@ -407,6 +407,16 @@ def _tool_names(runtime: Runtime) -> list[str]:
     return [tool.name for tool in runtime.tools.list_tools()]
 
 
+def _extension_record(runtime: Runtime, name: str):
+    assert runtime.extensions is not None
+    return next(record for record in runtime.extensions.records() if record.name == name)
+
+
+def _extension_record_names(runtime: Runtime) -> list[str]:
+    assert runtime.extensions is not None
+    return [record.name for record in runtime.extensions.records()]
+
+
 def _versioned_tool_source(tool_name: str, version: str) -> str:
     return (
         "from core.tools import tool_success\n"
@@ -512,15 +522,13 @@ def test_reload_loads_extension_enabled_since_boot(tmp_path: Path) -> None:
     runtime.start()
     try:
         assert "toggler_echo" not in _tool_names(runtime)
-        record = next(r for r in runtime.extensions.records() if r.name == "toggler")
-        assert record.status == "disabled"
+        assert _extension_record(runtime, "toggler").status == "disabled"
 
         runtime.storage.update_settings_sections({"extensions": {"disabled": [], "config": {}}})
         asyncio.run(runtime.reload_extensions())
 
         assert "toggler_echo" in _tool_names(runtime)
-        record = next(r for r in runtime.extensions.records() if r.name == "toggler")
-        assert record.status == "loaded"
+        assert _extension_record(runtime, "toggler").status == "loaded"
     finally:
         runtime.stop()
 
@@ -534,14 +542,12 @@ def test_reload_recovers_failed_extension_after_fix(tmp_path: Path) -> None:
     runtime = Runtime(config)
     runtime.start()
     try:
-        record = next(r for r in runtime.extensions.records() if r.name == "fixme")
-        assert record.status == "failed"
+        assert _extension_record(runtime, "fixme").status == "failed"
 
         _rewrite_source(data_dir / "extensions" / "fixme.py", _tool_source("fixme_echo"))
         asyncio.run(runtime.reload_extensions())
 
-        record = next(r for r in runtime.extensions.records() if r.name == "fixme")
-        assert record.status == "loaded"
+        assert _extension_record(runtime, "fixme").status == "loaded"
         assert "fixme_echo" in _tool_names(runtime)
     finally:
         runtime.stop()
@@ -563,7 +569,7 @@ def test_reload_drops_extension_deleted_from_disk(tmp_path: Path) -> None:
         asyncio.run(runtime.reload_extensions())
 
         assert "gone_echo" not in _tool_names(runtime)
-        assert "gone" not in [r.name for r in runtime.extensions.records()]
+        assert "gone" not in _extension_record_names(runtime)
     finally:
         runtime.stop()
 
@@ -708,15 +714,12 @@ def test_reload_and_disable_never_interleave(tmp_path: Path) -> None:
             # Let the reload acquire the lock and park inside the slow shutdown await
             # before the disable is launched, so the disable is forced to queue.
             await asyncio.sleep(0.01)
-            disable_task = asyncio.create_task(
-                runtime.apply_extension_disabled_change({"target"})
-            )
+            disable_task = asyncio.create_task(runtime.apply_extension_disabled_change({"target"}))
             await asyncio.gather(reload_task, disable_task)
 
         asyncio.run(_race())
 
         assert "target_echo" not in _tool_names(runtime)
-        record = next(r for r in runtime.extensions.records() if r.name == "target")
-        assert record.status == "disabled"
+        assert _extension_record(runtime, "target").status == "disabled"
     finally:
         runtime.stop()
