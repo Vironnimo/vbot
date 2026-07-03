@@ -65,7 +65,8 @@ def _extension_response(
         "api_version": manifest.api_version if manifest is not None else None,
         "config": config_map.get(record.name, {}),
         "settings_schema": _settings_schema_response(record, state),
-        "capabilities": _extension_capabilities(record),
+        "capabilities": _extension_capabilities(record, state),
+        "ready_state": _extension_ready_state(record, state),
     }
 
 
@@ -109,18 +110,63 @@ def _credential_is_set(state: Any, env_key: str) -> bool:
     return resolved.strip() != ""
 
 
-def _extension_capabilities(record: ExtensionRecord) -> JsonObject:
-    """Summarize what a loaded extension contributed (empty for failed/disabled)."""
+def _extension_capabilities(record: ExtensionRecord, state: Any) -> JsonObject:
+    """Summarize what a loaded extension contributed (empty for failed/disabled).
+
+    Each declared tool becomes ``{"name", "ready"}``: the declared name is looked
+    up live in the runtime ``ToolRegistry`` and its readiness re-evaluated. A name
+    that never registered (e.g. skipped on a collision) reports ``ready: false`` —
+    it is not offered anywhere, which is exactly what an unready tool means here.
+    """
     declarations = record.declarations
     return {
         "hooks": {
             event: len(handlers) for event, handlers in declarations.hooks.items() if handlers
         },
-        "tools": [declaration.name for declaration in declarations.tools],
+        "tools": [
+            {"name": declaration.name, "ready": _tool_is_ready(state, declaration.name)}
+            for declaration in declarations.tools
+        ],
         "recall_backends": [declaration.name for declaration in declarations.recall_backends],
         "startup": bool(declarations.startup),
         "shutdown": bool(declarations.shutdown),
     }
+
+
+def _tool_is_ready(state: Any, tool_name: str) -> bool:
+    """Re-evaluate a declared tool's live readiness through the runtime registry.
+
+    An unregistered name (skipped on a collision, or no registry wired) is not
+    ready — it is offered nowhere.
+    """
+    from core.tools import tool_is_ready as tool_readiness
+
+    registry = getattr(state.runtime, "tools", None)
+    if registry is None:
+        return False
+    try:
+        tool = registry.get(tool_name)
+    except Exception:
+        return False
+    return tool_readiness(tool)
+
+
+def _extension_ready_state(record: ExtensionRecord, state: Any) -> str:
+    """Return the derived, display-only extension readiness state.
+
+    ``"waiting"`` when the record is ``loaded``, declares at least one tool, and
+    at least one declared tool is not ready (e.g. its credential is unset);
+    ``"ready"`` otherwise (including a loaded record with no tools). Not a stored
+    state — purely computed from per-tool readiness for the Extensions tab.
+    """
+    if record.status != "loaded":
+        return "ready"
+    tools = record.declarations.tools
+    if not tools:
+        return "ready"
+    if any(not _tool_is_ready(state, declaration.name) for declaration in tools):
+        return "waiting"
+    return "ready"
 
 
 def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:

@@ -23,6 +23,7 @@ from core.tools import (
     ToolRegistry,
     is_tool_result_envelope,
     tool_failure,
+    tool_is_ready,
     tool_success,
 )
 from core.tools.availability import effective_agent_allowed_tools, sanitize_configured_allowed_tools
@@ -615,6 +616,124 @@ class TestToolRegistryDefinitions:
 
         assert registry.provider_definitions([]) == []
         assert registry.prompt_definitions([]) == []
+
+
+class TestToolReadiness:
+    def test_tool_without_predicate_is_ready(self) -> None:
+        registry = ToolRegistry()
+        tool = register_read_file(registry)
+
+        assert tool.ready is None
+        assert tool_is_ready(tool) is True
+
+    def test_not_ready_tool_hidden_from_model_facing_surfaces_but_not_list_tools(self) -> None:
+        registry = ToolRegistry()
+        registry.register(
+            name="gated",
+            description="A gated tool.",
+            parameters={"type": "object"},
+            handler=read_file_handler,
+            ready=lambda: False,
+        )
+
+        # Registered and visible in a plain list, but filtered from the
+        # model-facing surfaces (which default to ready_only=True).
+        assert [tool.name for tool in registry.list_tools()] == ["gated"]
+        assert registry.list_tools(ready_only=True) == []
+        assert registry.provider_definitions(["gated"]) == []
+        assert registry.prompt_definitions(["gated"]) == []
+
+    def test_ready_predicate_true_keeps_tool_visible(self) -> None:
+        registry = ToolRegistry()
+        registry.register(
+            name="gated",
+            description="A gated tool.",
+            parameters={"type": "object"},
+            handler=read_file_handler,
+            ready=lambda: True,
+        )
+
+        assert [tool.name for tool in registry.list_tools(ready_only=True)] == ["gated"]
+        assert [definition["name"] for definition in registry.provider_definitions(["gated"])] == [
+            "gated"
+        ]
+
+    def test_raising_predicate_counts_as_not_ready_and_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = ToolRegistry()
+
+        def boom() -> bool:
+            raise RuntimeError("predicate exploded")
+
+        tool = registry.register(
+            name="gated",
+            description="A gated tool.",
+            parameters={"type": "object"},
+            handler=read_file_handler,
+            ready=boom,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            assert tool_is_ready(tool) is False
+
+        assert registry.list_tools(ready_only=True) == []
+        assert any("readiness predicate raised" in record.getMessage() for record in caplog.records)
+
+    def test_register_rejects_non_callable_ready(self) -> None:
+        registry = ToolRegistry()
+
+        with pytest.raises(ValueError, match="ready predicate must be callable"):
+            registry.register(
+                name="gated",
+                description="A gated tool.",
+                parameters={"type": "object"},
+                handler=read_file_handler,
+                ready="nope",  # type: ignore[arg-type]
+            )
+
+    def test_dispatch_of_not_ready_tool_returns_envelope_without_running_handler(self) -> None:
+        registry = ToolRegistry()
+        called: list[bool] = []
+
+        def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            called.append(True)
+            return tool_success({})
+
+        registry.register(
+            name="gated",
+            description="A gated tool.",
+            parameters={"type": "object"},
+            handler=handler,
+            ready=lambda: False,
+        )
+
+        result = asyncio.run(registry.dispatch(make_context("gated"), {}))
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "tool_not_ready"
+        assert result["error"]["retryable"] is False
+        assert called == []
+
+    def test_flipping_backing_state_makes_tool_reappear_without_reregistration(self) -> None:
+        registry = ToolRegistry()
+        token = {"value": ""}
+        registry.register(
+            name="gated",
+            description="A gated tool.",
+            parameters={"type": "object"},
+            handler=read_file_handler,
+            ready=lambda: bool(token["value"]),
+        )
+
+        assert registry.list_tools(ready_only=True) == []
+
+        token["value"] = "present"
+
+        assert [tool.name for tool in registry.list_tools(ready_only=True)] == ["gated"]
+        assert [definition["name"] for definition in registry.provider_definitions(["gated"])] == [
+            "gated"
+        ]
 
 
 class TestToolRegistryDispatch:

@@ -141,13 +141,17 @@ def test_unresolvable_agent_maps_to_rpc_error() -> None:
 
 
 class _ToolRegistry:
-    def __init__(self, names: list[str]) -> None:
-        self._names = names
+    """Minimal registry: ``ready_only`` drops any name in ``not_ready``."""
 
-    def list_tools(self, *_args: Any, **_kwargs: Any) -> list[Any]:
-        return [
-            SimpleNamespace(name=name, description=f"{name} description") for name in self._names
-        ]
+    def __init__(self, names: list[str], not_ready: set[str] | None = None) -> None:
+        self._names = names
+        self._not_ready = not_ready or set()
+
+    def list_tools(self, *_args: Any, ready_only: bool = False, **_kwargs: Any) -> list[Any]:
+        names = self._names
+        if ready_only:
+            names = [name for name in names if name not in self._not_ready]
+        return [SimpleNamespace(name=name, description=f"{name} description") for name in names]
 
 
 def test_tool_list_exposes_default_project_tools() -> None:
@@ -158,4 +162,17 @@ def test_tool_list_exposes_default_project_tools() -> None:
 
     assert [tool["name"] for tool in result["tools"]] == ["read", "edit"]
     # The base project Tool Whitelist rides along as the editor's reset target.
+    assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+
+
+def test_tool_list_hides_not_ready_tools_without_changing_default_project_tools() -> None:
+    runtime = SimpleNamespace(
+        tools=_ToolRegistry(["read", "edit", "ha_call_service"], not_ready={"ha_call_service"})
+    )
+    state = SimpleNamespace(runtime=runtime)
+
+    result = _list_tools(state, {})
+
+    # The not-ready tool is absent from the picker feed; the base whitelist is unchanged.
+    assert [tool["name"] for tool in result["tools"]] == ["read", "edit"]
     assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)

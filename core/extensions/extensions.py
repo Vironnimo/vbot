@@ -134,7 +134,10 @@ class ToolDeclaration:
     Collected during ``register`` and applied into the runtime ``ToolRegistry``
     after the last built-in tool is registered. ``display`` is forwarded
     untouched (a ``core.tools.ToolDisplay`` or ``None``) so the extensions
-    module needs no dependency on the tools domain.
+    module needs no dependency on the tools domain. ``ready`` is the optional
+    zero-arg readiness predicate forwarded the same way — a not-ready tool stays
+    registered but is hidden from the model-facing surfaces (see
+    ``core.tools.tool_is_ready``).
     """
 
     name: str
@@ -143,6 +146,7 @@ class ToolDeclaration:
     handler: Callable[..., Any]
     internal: bool = False
     display: Any = None
+    ready: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -304,6 +308,7 @@ class ExtensionAPI:
         *,
         internal: bool = False,
         display: Any = None,
+        ready: Callable[[], bool] | None = None,
     ) -> None:
         """Declare an agent tool, mirroring ``ToolRegistry.register``.
 
@@ -312,6 +317,12 @@ class ExtensionAPI:
         that collides with a built-in or another extension's tool is skipped
         and diagnosed on this extension's record — extensions never override
         an existing tool.
+
+        ``ready`` is an optional zero-arg readiness predicate (cheap, I/O-free):
+        a not-ready tool stays registered but is hidden from the System Prompt,
+        the provider tool definitions, and the tool picker until it is ready
+        (e.g. once the extension's credential is set). ``None`` means always
+        ready.
         """
         self._declarations.tools.append(
             ToolDeclaration(
@@ -321,6 +332,7 @@ class ExtensionAPI:
                 handler=handler,
                 internal=internal,
                 display=display,
+                ready=ready,
             )
         )
 
@@ -515,6 +527,7 @@ class ExtensionRegistry:
                 declaration.handler,
                 internal=declaration.internal,
                 display=declaration.display,
+                ready=declaration.ready,
             )
         except Exception as exc:
             self._diagnose_capability(record, f"tool {name!r} registration failed: {exc}")
