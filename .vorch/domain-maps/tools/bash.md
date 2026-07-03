@@ -15,7 +15,7 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 ## Conventions
 
 - Relative `workdir` resolves from `ToolContext.effective_cwd` (the working directory); absolute working directories are allowed.
-- Uses the platform-native shell: `pwsh` on Windows, `bash -c` elsewhere.
+- Uses the platform-native shell: `pwsh` on Windows, `bash -c` elsewhere. The tool description names the actual shell (built per host at import from the same platform check, plus PowerShell syntax pitfalls on Windows), so the model does not guess cmd/bash syntax from the tool name.
 - Non-zero exits are successful tool results with an exit code.
 
 ## Constraints & Gotchas
