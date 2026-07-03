@@ -148,8 +148,7 @@ describe('SettingsExtensionsPanel', () => {
   });
 
   it('disables an extension live without showing a restart notice', async () => {
-    // Disabling applies live: the server returns no restart_required, so the
-    // panel must not surface the restart notice.
+    // Disabling applies live, and the panel never surfaces a restart notice.
     rpcMock.mockImplementation((method) => {
       if (method === 'extensions.list') {
         return Promise.resolve(extensionsResult());
@@ -176,9 +175,9 @@ describe('SettingsExtensionsPanel', () => {
     expect(document.body.textContent).not.toContain('vbot server restart');
   });
 
-  it('enables an extension and shows the restart-required notice', async () => {
-    // Enabling loads code and stays restart-applied: the server returns
-    // restart_required and the panel surfaces the notice.
+  it('enables an extension live without a restart notice', async () => {
+    // Enabling now rebuilds the extension layer live: the panel writes the disabled
+    // set and never surfaces a restart notice.
     const disabledExtension = {
       ...extensionsResult().extensions[0],
       disabled: true,
@@ -188,7 +187,7 @@ describe('SettingsExtensionsPanel', () => {
       if (method === 'extensions.list') {
         return Promise.resolve({ extensions: [disabledExtension] });
       }
-      return Promise.resolve({ restart_required: true });
+      return Promise.resolve({});
     });
 
     mountedComponent = mount(SettingsExtensionsPanel, {
@@ -207,10 +206,40 @@ describe('SettingsExtensionsPanel', () => {
     expect(updateCall[1]).toEqual({
       extensions: { disabled: [], config: {} },
     });
-    expect(document.body.textContent).toContain(
-      'Enabling an extension applies after a restart',
+    expect(document.body.textContent).not.toContain('after a restart');
+    expect(document.body.textContent).not.toContain('vbot server restart');
+  });
+
+  it('reloads all extensions and re-lists', async () => {
+    rpcMock.mockImplementation((method) => {
+      if (method === 'extensions.list') {
+        return Promise.resolve(extensionsResult());
+      }
+      return Promise.resolve({});
+    });
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+
+    const listCallsBefore = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'extensions.list',
+    ).length;
+
+    buttonByText('Reload extensions').click();
+    await flushAsync();
+
+    const reloadCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'extensions.reload',
     );
-    expect(document.body.textContent).toContain('vbot server restart');
+    expect(reloadCall).toBeTruthy();
+    // The panel re-lists after a successful reload to show the rebuilt catalog.
+    const listCallsAfter = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'extensions.list',
+    ).length;
+    expect(listCallsAfter).toBeGreaterThan(listCallsBefore);
   });
 
   it('rejects invalid config JSON without calling settings.update', async () => {
