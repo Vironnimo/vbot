@@ -1161,6 +1161,8 @@ class StubRuntime:
         self.process_manager = StubProcessManager()
         self.trigger_service: Any = None
         self.recall_reload_count = 0
+        self.extension_reload_count = 0
+        self.extension_disabled_changes: list[set[str]] = []
         self.chat_loop = ChatLoop(cast(Any, self))
         self.streaming_chat_loop = ChatLoop(cast(Any, self), streaming=True)
         self.command_dispatcher = CommandDispatcher(
@@ -1286,6 +1288,12 @@ class StubRuntime:
 
     def reload_recall_backend(self) -> None:
         self.recall_reload_count += 1
+
+    async def reload_extensions(self) -> None:
+        self.extension_reload_count += 1
+
+    async def apply_extension_disabled_change(self, newly_disabled: set[str]) -> None:
+        self.extension_disabled_changes.append(set(newly_disabled))
 
     def reload_provider_credentials(self) -> None:
         return None

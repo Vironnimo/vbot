@@ -3,8 +3,10 @@
 Coverage:
 - ``extensions.list``: payload for loaded / failed / disabled records, capability
   summary, persisted-config merge, empty when no registry, rejects params.
-- ``settings.update`` ``extensions`` section: round-trip persistence plus the
-  restart-required signal (and its absence for other sections).
+- ``extensions.reload``: rejects params, drives the runtime rebuild, returns the
+  ``extensions.list`` shape.
+- ``settings.update`` ``extensions`` section: round-trip persistence plus the live
+  reload / live-disable routing of the disabled-set delta.
 """
 
 from __future__ import annotations
@@ -497,8 +499,9 @@ async def test_set_secret_no_schema_returns_invalid_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_settings_update_extensions_disable_persists_without_restart(tmp_path: Path) -> None:
-    # Disabling is applied live: the section persists but no restart flag is set.
+async def test_settings_update_extensions_disable_applies_live(tmp_path: Path) -> None:
+    # Disabling takes the surgical live-disable path: the section persists, the
+    # disabled name is applied live, and no full reload runs.
     state = make_state(tmp_path, StubAdapter())
 
     result = await dispatch_rpc(
@@ -515,7 +518,8 @@ async def test_settings_update_extensions_disable_persists_without_restart(tmp_p
     )
 
     assert result["ok"] is True
-    assert "restart_required" not in result["result"]
+    assert state.runtime.extension_disabled_changes == [{"legacy"}]
+    assert state.runtime.extension_reload_count == 0
     assert state.runtime.storage.load_extensions_settings() == {
         "disabled": ["legacy"],
         "config": {"guard_bash": {"deny": ["rm -rf"]}},
@@ -523,9 +527,9 @@ async def test_settings_update_extensions_disable_persists_without_restart(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_settings_update_extensions_enable_sets_restart_required(tmp_path: Path) -> None:
-    # Enabling (removing a name from the persisted disabled set) loads code and
-    # stays restart-applied.
+async def test_settings_update_extensions_enable_reloads_layer(tmp_path: Path) -> None:
+    # Enabling (removing a name from the persisted disabled set) rebuilds the whole
+    # extension layer live — no restart signal anymore.
     state = make_state(tmp_path, StubAdapter())
     state.runtime.storage.update_settings_sections(
         {"extensions": {"disabled": ["legacy"], "config": {}}}
@@ -537,12 +541,15 @@ async def test_settings_update_extensions_enable_sets_restart_required(tmp_path:
     )
 
     assert result["ok"] is True
-    assert result["result"]["restart_required"] is True
+    assert state.runtime.extension_reload_count == 1
+    assert state.runtime.extension_disabled_changes == []
     assert state.runtime.storage.load_extensions_settings() == {"disabled": [], "config": {}}
 
 
 @pytest.mark.asyncio
-async def test_settings_update_without_extensions_has_no_restart_flag(tmp_path: Path) -> None:
+async def test_settings_update_without_extensions_touches_no_extension_seam(
+    tmp_path: Path,
+) -> None:
     state = make_state(tmp_path, StubAdapter())
 
     result = await dispatch_rpc(
@@ -551,4 +558,32 @@ async def test_settings_update_without_extensions_has_no_restart_flag(tmp_path: 
     )
 
     assert result["ok"] is True
-    assert "restart_required" not in result["result"]
+    assert state.runtime.extension_reload_count == 0
+    assert state.runtime.extension_disabled_changes == []
+
+
+@pytest.mark.asyncio
+async def test_reload_extensions_rejects_params() -> None:
+    state = _state_with_records([_loaded_record()])
+
+    result = await dispatch_rpc(
+        state, {"method": "extensions.reload", "params": {"name": "guard_bash"}}
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_reload_extensions_drives_runtime_and_returns_list_shape(tmp_path: Path) -> None:
+    # The handler awaits the runtime rebuild, then returns the same payload shape as
+    # extensions.list (one entry per discovered record).
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.extensions = _Registry([_loaded_record()])
+
+    result = await dispatch_rpc(state, {"method": "extensions.reload", "params": {}})
+
+    assert result["ok"] is True
+    assert state.runtime.extension_reload_count == 1
+    names = [extension["name"] for extension in result["result"]["extensions"]]
+    assert names == ["guard_bash"]

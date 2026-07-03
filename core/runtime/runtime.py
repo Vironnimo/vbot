@@ -21,7 +21,7 @@ from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService, SummarizationStrategy
 from core.debug import DebugTraceStore, ProviderDebugRecorder
-from core.extensions import ExtensionRegistry
+from core.extensions import ExtensionRegistry, purge_extension_modules
 from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.models import Model, ModelRegistry
@@ -329,6 +329,11 @@ class Runtime:
         # agent ``skill_manage`` tool and (later) the skill-mutation RPCs.
         self._skill_authoring: SkillAuthoringService | None = None
         self._extensions: ExtensionRegistry | None = None
+        # Serializes every extension-layer mutation (full reload + live disable) so
+        # rapid WebUI toggles / concurrent CLI calls queue instead of interleaving
+        # rebuilds; each mutation then reads the then-current persisted settings, so
+        # the final state is the last write's state regardless of timing (AD3).
+        self._extension_reload_lock = asyncio.Lock()
         self._chat_sessions: ChatSessionManager | None = None
         self._projects: ProjectStore | None = None
         self._agent_resolver: AgentResolver | None = None
@@ -1175,32 +1180,117 @@ class Runtime:
             self._tools.unregister("session_search")
             register_session_search_tool(self._tools, self._recall_backend)
 
-    def apply_extension_disabled_change(self, newly_disabled: set[str]) -> None:
+    async def reload_extensions(self) -> None:
+        """Rebuild the whole extension layer from disk — restart-equivalent, live.
+
+        The explicit reload seam behind ``extensions.reload`` (RPC/CLI/WebUI) and
+        behind enabling an extension: it tears the current layer down and builds a
+        fresh one from the current persisted settings, so the end state equals
+        exactly what a restart from those settings would produce. It picks up edited
+        code of loaded extensions (including submodules of package extensions, via
+        the module-cache purge), extensions newly added to or deleted from a scan
+        root, previously ``failed`` extensions whose code was fixed, and
+        boot-disabled extensions that were enabled.
+
+        The rebuild is **async** on purpose: extension startup/shutdown handlers run
+        on the live serving loop (they may schedule background tasks there), so they
+        are awaited directly here — never driven through a blocking worker loop. The
+        whole body runs under ``_extension_reload_lock`` (AD3), so a rapid burst of
+        toggles / concurrent calls serialize and the last write wins.
+
+        Sequence (AD2): read fresh inputs; detach the old layer's tools and fire its
+        shutdown; purge the ``vbot_ext`` module cache; ``ExtensionRegistry.load`` a
+        new registry with the same arguments ``start()`` uses; swap it in; re-apply
+        tools, recall backends (via ``reload_recall_backend``), and prompt blocks;
+        then fire the new layer's startup. During the swap window a concurrent run
+        can still dispatch into an already-shut-down old extension for a moment; that
+        is accepted (per-handler fail-open isolation catches it, the same window
+        exists in live disable) — no drain.
+        """
+        async with self._extension_reload_lock:
+            self._ensure_started()
+            storage = self.storage
+            tool_registry = self.tools
+            settings = storage.load_settings()
+            resources_path = self._resolve_resources_path()
+            extension_dirs = self._extra_extension_directories(settings)
+            disabled, config = self._extension_load_options(settings)
+
+            old_registry = self._extensions
+            if old_registry is not None:
+                old_registry.remove_applied_tools(tool_registry)
+                await old_registry.fire_shutdown()
+
+            # An edited submodule of a package extension keeps its stale cached copy
+            # unless the whole vbot_ext namespace is dropped before the fresh load.
+            purge_extension_modules()
+
+            new_registry = ExtensionRegistry.load(
+                storage.data_dir / "extensions",
+                extra_dirs=extension_dirs,
+                disabled=disabled,
+                config=config,
+                bundled_dir=resources_path / "extensions",
+                config_provider=self._live_extension_config,
+                credential_resolver=self.resolve_environment_credential,
+            )
+            failed_extension_count = len(new_registry.diagnostics())
+            if failed_extension_count > 0 and self.logger is not None:
+                self.logger.warning(
+                    "Reloaded extensions with %s failed extensions; "
+                    "see vbot.extensions errors for details",
+                    failed_extension_count,
+                )
+
+            self._extensions = new_registry
+
+            new_registry.apply_tools(tool_registry)
+            self.reload_recall_backend()
+            self._refresh_prompt_block_definitions()
+
+            await new_registry.fire_startup()
+
+            if self.logger is not None:
+                records = new_registry.records()
+                self.logger.info(
+                    "Extension layer reloaded: %s loaded, %s failed, %s disabled, %s overridden",
+                    sum(1 for record in records if record.status == "loaded"),
+                    sum(1 for record in records if record.status == "failed"),
+                    sum(1 for record in records if record.status == "disabled"),
+                    sum(1 for record in records if record.status == "overridden"),
+                )
+
+    async def apply_extension_disabled_change(self, newly_disabled: set[str]) -> None:
         """Deactivate each newly-disabled extension live, without a restart.
 
         Called by ``settings.update`` after the new ``disabled`` set is persisted,
-        with the names that were **added** to it (enabling — removing from the set —
-        stays restart-applied, since it loads code that was never imported). For
-        each name it drives ``ExtensionRegistry.deactivate`` (hooks off, tools
-        unregistered, shutdown fired, record marked disabled), then refreshes the
-        prompt block definitions so any extension-owned block drops immediately, and
-        guards the recall edge (below). Names that are not currently ``loaded`` are
-        clean no-ops inside the registry.
+        with the names that were **added** to it (enabling routes through the full
+        ``reload_extensions`` instead). For each name it drives
+        ``ExtensionRegistry.deactivate`` (hooks off, tools unregistered, shutdown
+        fired, record marked disabled), then refreshes the prompt block definitions
+        so any extension-owned block drops immediately, and guards the recall edge
+        (below). Names that are not currently ``loaded`` are clean no-ops inside the
+        registry. The whole mutation runs under ``_extension_reload_lock`` (AD3), so
+        it can never interleave with a concurrent ``reload_extensions``.
         """
         self._ensure_started()
-        if self._extensions is None or not newly_disabled:
+        if not newly_disabled:
             return
 
-        # Capture each deactivating extension's declared recall backends before the
-        # registry clears its declarations, so we can detect whether one of them is
-        # the currently-active backend and fall back to the default (see below).
-        deactivating_backend_names = self._extension_recall_backend_names(newly_disabled)
+        async with self._extension_reload_lock:
+            if self._extensions is None:
+                return
 
-        for name in newly_disabled:
-            self._extensions.deactivate_blocking(name, self._tools)
+            # Capture each deactivating extension's declared recall backends before
+            # the registry clears its declarations, so we can detect whether one of
+            # them is the currently-active backend and fall back (see below).
+            deactivating_backend_names = self._extension_recall_backend_names(newly_disabled)
 
-        self._refresh_prompt_block_definitions()
-        self._recover_recall_backend_if_deactivated(deactivating_backend_names)
+            for name in newly_disabled:
+                await self._extensions.deactivate(name, self._tools)
+
+            self._refresh_prompt_block_definitions()
+            self._recover_recall_backend_if_deactivated(deactivating_backend_names)
 
     def _extension_recall_backend_names(self, names: set[str]) -> set[str]:
         """Return the recall-backend names declared by the given loaded extensions."""
