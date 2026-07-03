@@ -42,6 +42,18 @@ function rawExtensions() {
         capability_errors: [],
         capabilities: {},
       },
+      {
+        name: 'homeassistant',
+        status: 'overridden',
+        disabled: false,
+        version: null,
+        description: null,
+        error: null,
+        overridden_by: '/data/extensions/homeassistant/__init__.py',
+        config: {},
+        capability_errors: [],
+        capabilities: {},
+      },
       { name: '', status: 'loaded' },
       'not-an-object',
     ],
@@ -55,6 +67,7 @@ describe('applyExtensionsPanelList', () => {
     expect(result.map((extension) => extension.name)).toEqual([
       'guard_bash',
       'legacy',
+      'homeassistant',
     ]);
     expect(result[0]).toMatchObject({
       name: 'guard_bash',
@@ -72,6 +85,12 @@ describe('applyExtensionsPanelList', () => {
     expect(result[0].capabilities.tools).toEqual(['word_count']);
     expect(result[0].capabilities.startup).toBe(true);
     expect(result[1].disabled).toBe(true);
+    expect(result[2]).toMatchObject({
+      name: 'homeassistant',
+      status: 'overridden',
+      disabled: false,
+      overriddenBy: '/data/extensions/homeassistant/__init__.py',
+    });
   });
 
   it('returns an empty list for a malformed result', () => {
@@ -85,6 +104,7 @@ describe('extensionStatusChipVariant', () => {
     expect(extensionStatusChipVariant('loaded')).toBe('success');
     expect(extensionStatusChipVariant('failed')).toBe('error');
     expect(extensionStatusChipVariant('disabled')).toBe('warn');
+    expect(extensionStatusChipVariant('overridden')).toBe('warn');
   });
 });
 

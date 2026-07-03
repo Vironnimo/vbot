@@ -68,6 +68,9 @@
     if (status === 'disabled') {
       return t('settings.extensions.statusDisabled', 'Disabled');
     }
+    if (status === 'overridden') {
+      return t('settings.extensions.statusOverridden', 'Overridden');
+    }
     return status;
   }
 
@@ -196,6 +199,7 @@
   <div class="s-ext-list">
     {#each extensions as extension (extension.name)}
       {@const rowBusy = panelBusy}
+      {@const isOverridden = extension.status === 'overridden'}
       {@const capabilities = summarizeExtensionCapabilities(
         extension.capabilities,
         t,
@@ -222,6 +226,15 @@
                 {t('settings.extensions.error', 'Error')}: {extension.error}
               </div>
             {/if}
+            {#if isOverridden && extension.overriddenBy}
+              <div class="s-row-desc s-ext-overridden-text">
+                {t(
+                  'settings.extensions.overriddenBy',
+                  'Overridden by your copy at {path}',
+                  { path: extension.overriddenBy },
+                )}
+              </div>
+            {/if}
             {#if capabilities}
               <div class="s-row-desc s-ext-capabilities">{capabilities}</div>
             {/if}
@@ -232,66 +245,70 @@
             {/each}
           </div>
 
-          <div class="s-ext-controls">
-            <Button
-              variant="secondary"
-              disabled={rowBusy}
-              ariaLabel={extension.disabled
-                ? t(
-                    'settings.extensions.enableAria',
-                    'Enable extension {name}',
-                    {
-                      name: extension.name,
-                    },
-                  )
-                : t(
-                    'settings.extensions.disableAria',
-                    'Disable extension {name}',
-                    { name: extension.name },
-                  )}
-              onClick={() => toggleExtension(extension)}
-            >
-              {extension.disabled
-                ? t('settings.extensions.enable', 'Enable')
-                : t('settings.extensions.disable', 'Disable')}
-            </Button>
-          </div>
+          {#if !isOverridden}
+            <div class="s-ext-controls">
+              <Button
+                variant="secondary"
+                disabled={rowBusy}
+                ariaLabel={extension.disabled
+                  ? t(
+                      'settings.extensions.enableAria',
+                      'Enable extension {name}',
+                      {
+                        name: extension.name,
+                      },
+                    )
+                  : t(
+                      'settings.extensions.disableAria',
+                      'Disable extension {name}',
+                      { name: extension.name },
+                    )}
+                onClick={() => toggleExtension(extension)}
+              >
+                {extension.disabled
+                  ? t('settings.extensions.enable', 'Enable')
+                  : t('settings.extensions.disable', 'Disable')}
+              </Button>
+            </div>
+          {/if}
         </div>
 
-        <div class="s-field s-field--full s-ext-config">
-          <span class="s-field-label">
-            {t('settings.extensions.config', 'Config (JSON)')}
-          </span>
-          <textarea
-            class={`s-input s-textarea s-textarea--json${
-              configErrors[extension.name] ? ' s-textarea--invalid' : ''
-            }`}
-            spellcheck="false"
-            value={configDrafts[extension.name] ?? ''}
-            disabled={rowBusy}
-            aria-label={t(
-              'settings.extensions.configAria',
-              'Config for extension {name}',
-              { name: extension.name },
-            )}
-            oninput={(event) =>
-              setConfigDraft(extension.name, event.currentTarget.value)}
-          ></textarea>
-          {#if configErrors[extension.name]}
-            <span class="s-field-error">{configErrors[extension.name]}</span>
-          {/if}
-          <div class="s-ext-config-actions">
-            <Button
-              variant="primary"
+        {#if !isOverridden}
+          <div class="s-field s-field--full s-ext-config">
+            <span class="s-field-label">
+              {t('settings.extensions.config', 'Config (JSON)')}
+            </span>
+            <textarea
+              class={`s-input s-textarea s-textarea--json${
+                configErrors[extension.name] ? ' s-textarea--invalid' : ''
+              }`}
+              spellcheck="false"
+              value={configDrafts[extension.name] ?? ''}
               disabled={rowBusy}
-              onClick={() => saveExtensionConfig(extension)}
-            >
-              {savingConfigName === extension.name
-                ? t('common.saving', 'Saving…')
-                : t('settings.extensions.saveConfig', 'Save config')}
-            </Button>
+              aria-label={t(
+                'settings.extensions.configAria',
+                'Config for extension {name}',
+                { name: extension.name },
+              )}
+              oninput={(event) =>
+                setConfigDraft(extension.name, event.currentTarget.value)}
+            ></textarea>
+            {#if configErrors[extension.name]}
+              <span class="s-field-error">{configErrors[extension.name]}</span>
+            {/if}
+            <div class="s-ext-config-actions">
+              <Button
+                variant="primary"
+                disabled={rowBusy}
+                onClick={() => saveExtensionConfig(extension)}
+              >
+                {savingConfigName === extension.name
+                  ? t('common.saving', 'Saving…')
+                  : t('settings.extensions.saveConfig', 'Save config')}
+              </Button>
+            </div>
           </div>
-        </div>
+        {/if}
       </div>
     {/each}
   </div>
