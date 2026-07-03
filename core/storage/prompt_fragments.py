@@ -27,6 +27,8 @@ PROMPT_FRAGMENT_NAMES = frozenset(
         "channels.md",
         "skills.md",
         "compaction.md",
+        "handoff.md",
+        "learn.md",
     }
 )
 AGENT_PROMPT_FRAGMENT_NAMES = frozenset(
