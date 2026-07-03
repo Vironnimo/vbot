@@ -154,15 +154,7 @@ ANTHROPIC_API_KEY=...
 
 ### 3b. Home Assistant (optional)
 
-Add to `~/.vbot/.env`:
-
-```env
-HASS_TOKEN=...          # Long-Lived Access Token from your HA profile
-HASS_URL=http://homeassistant.local:8123  # optional, this is the default
-```
-
-With a valid token, vBot registers 4 LLM-callable tools: `ha_list_entities`,
-`ha_get_state`, `ha_list_services`, and `ha_call_service`.
+Home Assistant ships as a bundled extension — configure it in Settings → Extensions: enter your server URL and paste a Long-Lived Access Token (from your HA profile) into the write-only token field. The token is stored in `~/.vbot/.env` under `HASS_TOKEN`, so an existing `.env` entry keeps working. Once the token is set, vBot exposes 4 LLM-callable tools: `ha_list_entities`, `ha_get_state`, `ha_list_services`, and `ha_call_service`. Without a token they stay hidden everywhere.
 
 ### 4. Start the server
 

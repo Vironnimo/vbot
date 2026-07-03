@@ -1,8 +1,12 @@
-"""Home Assistant integration — 4 LLM-callable REST-API tools.
+"""Home Assistant bundled extension — 4 LLM-callable REST-API tools.
 
 Thin HTTP wrappers around the built-in Home Assistant REST API
-(``{HASS_URL}/api/``). Tools are only registered when ``HASS_TOKEN``
-is configured.
+(``{url}/api/``). The tools are always registered; a readiness predicate on
+each keeps them invisible in the prompt, the provider definitions, and the tool
+pickers until ``HASS_TOKEN`` resolves to a non-empty string. The token
+(``.env`` key ``HASS_TOKEN``) and the server URL (extension config field
+``url``) are read **live** on every call, so setting either through Settings →
+Extensions takes effect without a restart.
 """
 
 from __future__ import annotations
@@ -10,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -19,14 +22,10 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
-    ToolRegistry,
     tool_failure,
     tool_success,
 )
 from core.utils.http_status import HttpRequestFailure, is_retryable_status
-from core.utils.logging import get_logger
-
-_LOGGER = get_logger("tools.homeassistant")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -208,6 +207,7 @@ async def _ha_request(
     method: str,
     url: str,
     token: str,
+    logger: Any,
     json_body: JsonObject | None = None,
 ) -> tuple[JsonObject | None, HttpRequestFailure | None]:
     """Make an HTTP request to the Home Assistant REST API with retries.
@@ -216,6 +216,7 @@ async def _ha_request(
         method: HTTP method (GET, POST).
         url: Full URL to the HA API endpoint.
         token: HA Long-Lived Access Token.
+        logger: The extension's logger; the token is never logged.
         json_body: Optional JSON body for POST requests.
 
     Returns:
@@ -239,7 +240,7 @@ async def _ha_request(
                     return None, HttpRequestFailure(f"unsupported HTTP method: {method}")
             except httpx.RequestError as error:
                 if attempt >= _RETRY_MAX_RETRIES:
-                    _LOGGER.warning("Home Assistant request failed: %s", error)
+                    logger.warning("Home Assistant request failed: %s", error)
                     return None, HttpRequestFailure(
                         f"request failed: {error}",
                         retryable=True,
@@ -257,7 +258,7 @@ async def _ha_request(
                     await _sleep_for_retry(attempt)
                     continue
                 detail = _extract_error_detail(response)
-                _LOGGER.warning(
+                logger.warning(
                     "Home Assistant request failed: HTTP %s: %s",
                     response.status_code,
                     detail,
@@ -290,13 +291,14 @@ async def _handle_list_entities(
     arguments: JsonObject,
     hass_url: str,
     token: str,
+    logger: Any,
 ) -> JsonObject:
     del context
 
     domain = _normalize_text(arguments.get("domain", "")).lower()
     area = _normalize_text(arguments.get("area", "")).lower()
 
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/states", token)
+    payload, failure = await _ha_request("GET", f"{hass_url}/api/states", token, logger)
     if failure is not None:
         return _ha_failure_envelope(failure)
     if payload is None:
@@ -353,6 +355,7 @@ async def _handle_get_state(
     arguments: JsonObject,
     hass_url: str,
     token: str,
+    logger: Any,
 ) -> JsonObject:
     del context
 
@@ -362,7 +365,7 @@ async def _handle_get_state(
     if not _ENTITY_ID_RE.match(entity_id):
         return _invalid_entity_id_failure(entity_id)
 
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/states/{entity_id}", token)
+    payload, failure = await _ha_request("GET", f"{hass_url}/api/states/{entity_id}", token, logger)
     if failure is not None:
         return _ha_failure_envelope(failure)
     if payload is None:
@@ -394,12 +397,13 @@ async def _handle_list_services(
     arguments: JsonObject,
     hass_url: str,
     token: str,
+    logger: Any,
 ) -> JsonObject:
     del context
 
     domain_filter = _normalize_text(arguments.get("domain", "")).lower()
 
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/services", token)
+    payload, failure = await _ha_request("GET", f"{hass_url}/api/services", token, logger)
     if failure is not None:
         return _ha_failure_envelope(failure)
     if payload is None:
@@ -451,6 +455,7 @@ async def _handle_call_service(
     arguments: JsonObject,
     hass_url: str,
     token: str,
+    logger: Any,
 ) -> JsonObject:
     del context
 
@@ -491,6 +496,7 @@ async def _handle_call_service(
         "POST",
         f"{hass_url}/api/services/{domain}/{service}",
         token,
+        logger,
         json_body=body,
     )
     if failure is not None:
@@ -507,90 +513,123 @@ async def _handle_call_service(
 # Registration
 # ---------------------------------------------------------------------------
 
+_HASS_TOKEN_ENV_KEY = "HASS_TOKEN"
+_URL_CONFIG_KEY = "url"
 
-def register_homeassistant_tools(
-    registry: ToolRegistry,
-    credential_resolver: Callable[[str], str],
-) -> None:
-    """Register Home Assistant tools if HASS_TOKEN is configured.
 
-    Args:
-        registry: The tool registry to register with.
-        credential_resolver: A callable that resolves credential names
-            from the process environment and data-dir ``.env``.
+def _resolve_token(api: Any) -> str:
+    """Resolve the HA token live (process env, then data-dir ``.env``)."""
+    return str(api.resolve_credential(_HASS_TOKEN_ENV_KEY)).strip()
+
+
+def _resolve_url(api: Any) -> str:
+    """Resolve the HA server URL live from extension config, default otherwise.
+
+    The trailing slash is stripped because the URL is user-typed in the settings
+    form; the endpoint paths are always joined with a leading ``/``.
     """
-    token = credential_resolver("HASS_TOKEN").strip()
-    if not token:
-        return
+    configured = str(api.get_config().get(_URL_CONFIG_KEY) or "").strip()
+    return (configured or _DEFAULT_HASS_URL).rstrip("/")
 
-    hass_url = credential_resolver("HASS_URL").strip()
-    if not hass_url:
-        hass_url = _DEFAULT_HASS_URL
+
+def _missing_token_failure() -> JsonObject:
+    """Defense-in-depth failure for an empty token at call time."""
+    return tool_failure("home_assistant_error", "HASS_TOKEN is not configured", retryable=False)
+
+
+def register(api: Any) -> None:
+    """Register the Home Assistant tools and their settings schema.
+
+    All four tools are always registered; a shared readiness predicate on the
+    token keeps them out of the model-facing surfaces until it is set. Token and
+    URL are resolved live on every call so a settings change applies without a
+    restart.
+    """
+    api.register_settings(
+        [
+            {
+                "key": "url",
+                "type": "text",
+                "label": "Server URL",
+                "description": "Base URL of your Home Assistant instance.",
+                "default": _DEFAULT_HASS_URL,
+            },
+            {
+                "key": "token",
+                "type": "secret",
+                "label": "Access token",
+                "description": "Home Assistant long-lived access token.",
+                "env_key": _HASS_TOKEN_ENV_KEY,
+            },
+        ]
+    )
+
+    def _is_ready() -> bool:
+        return bool(api.resolve_credential(_HASS_TOKEN_ENV_KEY).strip())
 
     async def list_entities_handler(
         context: ToolContext,
         arguments: JsonObject,
     ) -> JsonObject:
-        return await _handle_list_entities(context, arguments, hass_url, token)
+        token = _resolve_token(api)
+        if not token:
+            return _missing_token_failure()
+        return await _handle_list_entities(context, arguments, _resolve_url(api), token, api.logger)
 
     async def get_state_handler(
         context: ToolContext,
         arguments: JsonObject,
     ) -> JsonObject:
-        return await _handle_get_state(context, arguments, hass_url, token)
+        token = _resolve_token(api)
+        if not token:
+            return _missing_token_failure()
+        return await _handle_get_state(context, arguments, _resolve_url(api), token, api.logger)
 
     async def list_services_handler(
         context: ToolContext,
         arguments: JsonObject,
     ) -> JsonObject:
-        return await _handle_list_services(context, arguments, hass_url, token)
+        token = _resolve_token(api)
+        if not token:
+            return _missing_token_failure()
+        return await _handle_list_services(context, arguments, _resolve_url(api), token, api.logger)
 
     async def call_service_handler(
         context: ToolContext,
         arguments: JsonObject,
     ) -> JsonObject:
-        return await _handle_call_service(context, arguments, hass_url, token)
+        token = _resolve_token(api)
+        if not token:
+            return _missing_token_failure()
+        return await _handle_call_service(context, arguments, _resolve_url(api), token, api.logger)
 
-    registry.register(
+    api.register_tool(
         HA_LIST_ENTITIES_NAME,
         HA_LIST_ENTITIES_DESCRIPTION,
         HA_LIST_ENTITIES_PARAMETERS,
         list_entities_handler,
+        ready=_is_ready,
     )
-    registry.register(
+    api.register_tool(
         HA_GET_STATE_NAME,
         HA_GET_STATE_DESCRIPTION,
         HA_GET_STATE_PARAMETERS,
         get_state_handler,
         display=ToolDisplay(summary_fields=("entity_id",)),
+        ready=_is_ready,
     )
-    registry.register(
+    api.register_tool(
         HA_LIST_SERVICES_NAME,
         HA_LIST_SERVICES_DESCRIPTION,
         HA_LIST_SERVICES_PARAMETERS,
         list_services_handler,
+        ready=_is_ready,
     )
-    registry.register(
+    api.register_tool(
         HA_CALL_SERVICE_NAME,
         HA_CALL_SERVICE_DESCRIPTION,
         HA_CALL_SERVICE_PARAMETERS,
         call_service_handler,
         display=ToolDisplay(summary_fields=("domain", "service", "entity_id")),
+        ready=_is_ready,
     )
-
-
-__all__ = [
-    "HA_CALL_SERVICE_DESCRIPTION",
-    "HA_CALL_SERVICE_NAME",
-    "HA_CALL_SERVICE_PARAMETERS",
-    "HA_GET_STATE_DESCRIPTION",
-    "HA_GET_STATE_NAME",
-    "HA_GET_STATE_PARAMETERS",
-    "HA_LIST_ENTITIES_DESCRIPTION",
-    "HA_LIST_ENTITIES_NAME",
-    "HA_LIST_ENTITIES_PARAMETERS",
-    "HA_LIST_SERVICES_DESCRIPTION",
-    "HA_LIST_SERVICES_NAME",
-    "HA_LIST_SERVICES_PARAMETERS",
-    "register_homeassistant_tools",
-]

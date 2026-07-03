@@ -54,6 +54,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/prompts.md` | `core/prompts/` | System Prompt assembly, editable fragments, prompt variables |
 | `.vorch/domain-maps/attachments.md` | `core/attachments/` | Blob storage, MIME sniffing, attachment metadata, text extraction |
 | `.vorch/domain-maps/extensions.md` | `core/extensions/` | Extension hook loading, handler registration, runtime/chat event contracts |
+| `.vorch/domain-maps/extensions/homeassistant.md` | Home Assistant extension | Bundled Home Assistant extension: the four HA tools, settings schema, live token/URL reads, readiness, security constraints |
 | `.vorch/domain-maps/agent.md` | `core/agents/` | Agent schema, persistence, workspace lifecycle, archive-on-delete |
 | `.vorch/domain-maps/projects.md` | `core/projects/` | Project entity, `project.json` schema, data-dir anchor lifecycle, cwd normalization/duplicate key, archive-on-remove |
 | `.vorch/domain-maps/subagents.md` | `core/subagents/` | Sub-agent coordinator, in-memory batch tracking, parent-child run linkage |
