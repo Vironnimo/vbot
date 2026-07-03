@@ -13,6 +13,10 @@ Loading is **two-phase**:
 
 The module then **dispatches every hook event** through typed per-event methods on `ExtensionRegistry`. `core/chat/` constructs the `HookContext`, chooses the fire-points, supplies each event's payload, and applies the returned results — it never iterates handlers itself. Extensions run in-process on the normal asyncio event loop when one exists. Trust boundary is the kernel's: extension modules run arbitrary in-process Python.
 
+## Bundled extensions
+
+Home Assistant is the **first shipped bundled extension** (`resources/extensions/homeassistant/`) — it exercises the whole surface: external I/O, a secret + a live URL via the settings schema, per-tool readiness. Its behavior and contracts have their own child map: `.vorch/domain-maps/extensions/homeassistant.md`.
+
 ## Cross-root name shadowing
 
 Identity is the filesystem name, and a name resolves across roots **first-wins** in scan order (data dir → extras → bundled). The first-discovered occurrence of a name claims that identity and loads normally; every later same-name occurrence in a subsequent root becomes an `overridden` record — **never imported**, no manifest read, no `register()`, no hooks/tools installed — that stays visible in `records()` / `extensions.list` with `overridden_by` pointing at the winner's `entry_path`. This replaces older behavior where two same-name copies both loaded and collided capability-by-capability (double-firing hooks included). A `disabled` name still **claims** its identity: a disabled data-dir copy shadows a bundled same-name copy (recorded `disabled` + `overridden`, neither imported), so disabling a name can never silently activate a different copy of it. Customizing a bundled extension is therefore a deliberate copy into the data dir, which then shadows the shipped version. (Within a single root, two same-name entries are impossible on a filesystem.)

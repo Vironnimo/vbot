@@ -806,12 +806,19 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
     """Runtime.start() loads Phase 2 services alongside registries."""
     assert runtime.storage.data_dir.exists()
     assert runtime.agents.data_dir == runtime.storage.data_dir
+    # The Home Assistant tools ship as a bundled extension; they are always
+    # registered (readiness only hides them from model-facing surfaces until a
+    # token is set), so they appear in the registered inventory here.
     assert [tool.name for tool in runtime.tools.list_tools()] == [
         "bash",
         "cron",
         "edit",
         "glob",
         "grep",
+        "ha_call_service",
+        "ha_get_state",
+        "ha_list_entities",
+        "ha_list_services",
         "image_generation",
         "memory",
         "process",
