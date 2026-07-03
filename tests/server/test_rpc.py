@@ -546,6 +546,8 @@ class StubStorage:
             "tools.md": "# Tools\nDefault tools list.",
             "channels.md": "# Channels\nDefault channels list.",
             "skills.md": "# Skills\nDefault skills list.",
+            "handoff.md": "Write a handoff for the next agent.",
+            "learn.md": "Author a reusable skill from the source.",
         }
         self._agent_prompt_fragments: dict[tuple[str, str], str] = {}
         self._block_layouts: dict[str | None, list[LayoutEntry]] = {}
@@ -6554,13 +6556,18 @@ async def test_chat_methods_handle_handoff_command_with_agent_and_instruction(
 
 
 def test_build_handoff_prompt_weaves_instruction_and_preserves_base() -> None:
-    from server.rpc.chat_methods import HANDOFF_INSTRUCTION, _build_handoff_prompt
+    from server.rpc.chat_methods import _build_handoff_prompt
 
-    assert _build_handoff_prompt(None) == HANDOFF_INSTRUCTION
-    assert _build_handoff_prompt("   ") == HANDOFF_INSTRUCTION
+    base = "Write a handoff for the next agent."
 
-    woven = _build_handoff_prompt("keep the deployment notes")
-    assert woven.startswith(HANDOFF_INSTRUCTION)
+    # No instruction returns the base verbatim; the fragment's surrounding
+    # whitespace is normalized away so a trailing newline never leaks through.
+    assert _build_handoff_prompt(base, None) == base
+    assert _build_handoff_prompt(base, "   ") == base
+    assert _build_handoff_prompt(f"{base}\n", None) == base
+
+    woven = _build_handoff_prompt(base, "keep the deployment notes")
+    assert woven.startswith(base)
     assert "keep the deployment notes" in woven
 
 
