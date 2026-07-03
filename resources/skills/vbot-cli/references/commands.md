@@ -294,15 +294,31 @@ Use this to inspect public registered tools. Internal system-managed tools are o
 
 ```bash
 vbot extensions list
-vbot extensions enable <extension-name>
-vbot extensions disable <extension-name>
+vbot extensions <name>                       # show one extension's settings
+vbot extensions <name> set <field> <value>   # write one setting
+vbot extensions <name> set <field> --stdin   # read the value from stdin (secrets)
+vbot extensions enable <name>
+vbot extensions disable <name>
 ```
 
-`list` shows loaded, failed (with the error), and disabled extensions plus each one's
-contributed capabilities (hooks, tools, recall backends, startup/shutdown). `enable` and
-`disable` edit the `extensions` settings section and are **restart-applied** — extensions
-are never hot-reloaded, so the command prints a restart hint and you must run
-`vbot server restart` for the change to take effect.
+`list` shows loaded, failed (with the error), overridden, and disabled extensions plus each one's contributed capabilities (hooks, tools, recall backends, startup/shutdown) and, for an extension still waiting on configuration, what it is waiting for.
+
+`vbot extensions <name>` (a bare name, no verb) shows that extension's settings: every declared field with its type, the current value, and — for a secret field — only whether it is `set` or `not set` (never the secret value itself). A schema-less extension shows its raw config instead.
+
+`vbot extensions <name> set <field> <value>` writes a single setting, routed by the field's declared type. **The `<field>` is the schema field key, not an environment-variable name** — inspect it first with `vbot extensions <name>`. Two kinds of field:
+
+- A **secret** field (e.g. Home Assistant's `token`) is stored in the data-dir `.env` under the key the extension declares, and applied **live** — no restart. The extension decides which `.env` key it lands in; you only name the field. Pass the value inline, or use `--stdin` to keep it out of shell history, or set an empty value to clear it.
+- Any **non-secret** field (text/number/toggle, e.g. Home Assistant's `url`) is written to the extension's live config and also applied **without a restart**; the value is validated against the declared type.
+
+Typical setup flow — inspect, then configure (Home Assistant example):
+
+```bash
+vbot extensions homeassistant                                   # see it needs a token
+vbot extensions homeassistant set url http://homeassistant.local:8123
+vbot extensions homeassistant set token <long-lived-token>      # or: ... set token --stdin
+```
+
+`enable` and `disable` edit the `disabled` set and are the only **restart-applied** extension change — extensions are never hot-reloaded, so the command prints a restart hint and you must run `vbot server restart` for it to take effect. Setting field values (secret or not) never needs a restart.
 
 ## Prompts
 
