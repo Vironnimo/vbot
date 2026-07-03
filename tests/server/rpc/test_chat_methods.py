@@ -164,6 +164,20 @@ class _FakeResolver:
         return SimpleNamespace(id=agent_id)
 
 
+def _fragment_storage() -> SimpleNamespace:
+    """Storage stub answering the prompt fragments the briefs are now read from.
+
+    ``/handoff`` and ``/learn`` seed their internal run from ``handoff.md`` /
+    ``learn.md`` via ``read_prompt_fragment``; the learn brief must mention
+    ``skill_manage`` so the authoring assertion still holds.
+    """
+    fragments = {
+        "handoff.md": "Write a handoff for the next agent.",
+        "learn.md": 'Author a reusable skill via the `skill_manage` tool with operation "create".',
+    }
+    return SimpleNamespace(read_prompt_fragment=lambda name: fragments[name])
+
+
 def _make_handoff_state(loop: _HandoffLoop, resolver: _FakeResolver) -> SimpleNamespace:
     created_sessions: list[str] = []
 
@@ -184,6 +198,7 @@ def _make_handoff_state(loop: _HandoffLoop, resolver: _FakeResolver) -> SimpleNa
         chat_sessions=chat_sessions,
         agents=SimpleNamespace(update=lambda *a, **k: None),
         trigger_service=SimpleNamespace(trigger_run=trigger_run),
+        storage=_fragment_storage(),
     )
     state = SimpleNamespace(
         chat_loop=loop,
@@ -269,7 +284,10 @@ def _make_learn_state(captured: list[dict[str, Any]], *, active: bool = False) -
         captured.append({"agent_id": agent_id, "message": message, **kwargs})
         return _FakeRun()
 
-    runtime = SimpleNamespace(trigger_service=SimpleNamespace(trigger_run=trigger_run))
+    runtime = SimpleNamespace(
+        trigger_service=SimpleNamespace(trigger_run=trigger_run),
+        storage=_fragment_storage(),
+    )
     active_run = _FakeRun() if active else None
     return SimpleNamespace(
         chat_loop=SimpleNamespace(),
