@@ -145,6 +145,8 @@ EXTENSIONS_HELP = {
     "list": "List loaded, failed, and disabled extensions",
     "enable": "Enable a disabled extension (restart-applied)",
     "disable": "Disable an extension (restart-applied)",
+    "show": "Show one extension's settings (schema, current values, secret set-state)",
+    "set": "Set one extension setting (secret -> .env, other fields -> live config)",
 }
 
 
@@ -584,26 +586,41 @@ def _add_tool_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
 def _add_extensions_parsers(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
+    # The extension name is dynamic, so this area is name-first with routing in
+    # dispatch_extensions_command rather than a fixed sub-command set:
+    #   extensions list
+    #   extensions enable|disable <name>
+    #   extensions <name>                    -> show that extension's settings
+    #   extensions <name> set <field> <value>-> write one setting (schema-routed)
     extensions_parser = subparsers.add_parser(
         "extensions",
         help=AREA_HELP["extensions"],
-        description=AREA_HELP["extensions"],
+        description=(
+            "Inspect and configure loaded extensions. "
+            "'extensions list' lists all; 'extensions <name>' shows one extension's "
+            "settings; 'extensions <name> set <field> <value>' writes one setting "
+            "(a secret field is stored in .env, other fields go to live config, both "
+            "applied without a restart); 'extensions enable|disable <name>' toggles an "
+            "extension (restart-applied)."
+        ),
     )
-    extensions_subparsers = extensions_parser.add_subparsers(dest="command", required=True)
-    _add_command_parser(
-        extensions_subparsers, "list", EXTENSIONS_HELP["list"], example="extensions list"
+    _add_target_arguments(extensions_parser)
+    extensions_parser.add_argument(
+        "selector",
+        metavar="<list|enable|disable|extension-name>",
+        help="'list', 'enable', 'disable', or an extension name to inspect/configure",
     )
-
-    for command in ("enable", "disable"):
-        command_parser = _add_command_parser(
-            extensions_subparsers,
-            command,
-            EXTENSIONS_HELP[command],
-            example=f"extensions {command} guard_bash",
-        )
-        command_parser.add_argument(
-            "name", metavar="<extension-name>", help=f"Extension name to {command}"
-        )
+    extensions_parser.add_argument(
+        "rest",
+        nargs="*",
+        metavar="args",
+        help="'<name>' for enable/disable, or 'set <field> <value>' for a name selector",
+    )
+    extensions_parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="read the value for 'set <field>' from stdin (keeps a secret out of shell history)",
+    )
 
 
 def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

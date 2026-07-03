@@ -8,6 +8,8 @@ restart-applied (extensions are never hot-reloaded), so the output points at
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Sequence
 from difflib import get_close_matches
 from typing import Any
@@ -17,6 +19,7 @@ from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
 RESTART_HINT = "restart required: run 'vbot server restart' to apply"
+_INTEGER_RE = re.compile(r"[+-]?\d+")
 
 
 def extensions_list(instance: ServerInstance) -> CommandResult:
@@ -93,6 +96,221 @@ def _set_disabled(instance: ServerInstance, name: str, *, disable: bool) -> Comm
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
+def extensions_show(instance: ServerInstance, name: str) -> CommandResult:
+    """Show one extension's settings: schema fields, current values, secret state.
+
+    This is the read half of the settings surface (``vbot extensions <name>``): for
+    a schema'd extension it renders each field with its live value (a secret shows
+    only ``set``/``not set``, never the value); a schema-less extension falls back to
+    its raw persisted config.
+    """
+
+    extensions = _load_extensions(instance)
+    if isinstance(extensions, CommandResult):
+        return extensions
+
+    record = _find_extension(extensions, name)
+    if record is None:
+        return CommandResult(
+            ok=False,
+            message=_format_unknown_extension(name, _known_names(extensions)),
+            instance=instance,
+        )
+    return CommandResult(ok=True, message=_format_extension_settings(record), instance=instance)
+
+
+def extensions_set(instance: ServerInstance, name: str, field: str, value: str) -> CommandResult:
+    """Write one extension setting, routed by the field's declared schema type.
+
+    A ``secret`` field goes to ``.env`` via ``extensions.set_secret`` (the server maps
+    the field key to its declared env key — the caller never names the env key). Every
+    other field type is coerced to its declared type and written to the extension's
+    live config via ``settings.update``. Both take effect without a restart.
+    """
+
+    extensions = _load_extensions(instance)
+    if isinstance(extensions, CommandResult):
+        return extensions
+
+    record = _find_extension(extensions, name)
+    if record is None:
+        return CommandResult(
+            ok=False,
+            message=_format_unknown_extension(name, _known_names(extensions)),
+            instance=instance,
+        )
+    if record.get("status") != "loaded":
+        return CommandResult(
+            ok=False,
+            message=f"extension '{name}' is not loaded, so its settings cannot be set",
+            instance=instance,
+        )
+
+    schema = record.get("settings_schema")
+    if not isinstance(schema, list) or not schema:
+        return CommandResult(
+            ok=False,
+            message=f"extension '{name}' declares no settings schema, so it has no settable fields",
+            instance=instance,
+        )
+
+    field_declaration = _find_field(schema, field)
+    if field_declaration is None:
+        return CommandResult(
+            ok=False,
+            message=_format_unknown_field(name, field, schema),
+            instance=instance,
+        )
+
+    if field_declaration.get("type") == "secret":
+        return _set_secret(instance, name, field, value)
+
+    coerced, error = _coerce_value(str(field_declaration.get("type")), value)
+    if error is not None:
+        return CommandResult(ok=False, message=f"{field}: {error}", instance=instance)
+    return _set_config_value(instance, extensions, name, field, coerced)
+
+
+def _set_secret(instance: ServerInstance, name: str, field: str, value: str) -> CommandResult:
+    result = _rpc_call(
+        instance, "extensions.set_secret", {"name": name, "key": field, "value": value}
+    )
+    if not result.ok:
+        return result.to_command_result()
+    if result.data.get("set"):
+        message = f"secret '{field}' set for '{name}' (stored in .env, applied live)"
+    else:
+        message = f"secret '{field}' cleared for '{name}'"
+    return CommandResult(ok=True, message=message, instance=instance)
+
+
+def _set_config_value(
+    instance: ServerInstance,
+    extensions: Sequence[Any],
+    name: str,
+    field: str,
+    value: Any,
+) -> CommandResult:
+    disabled = [ext["name"] for ext in extensions if isinstance(ext, dict) and ext.get("disabled")]
+    config = {
+        ext["name"]: dict(ext["config"])
+        for ext in extensions
+        if isinstance(ext, dict) and isinstance(ext.get("config"), dict) and ext["config"]
+    }
+    config.setdefault(name, {})[field] = value
+
+    update = _rpc_call(
+        instance, "settings.update", {"extensions": {"disabled": disabled, "config": config}}
+    )
+    if not update.ok:
+        return update.to_command_result()
+
+    lines = [f"set '{name}.{field}' = {json.dumps(value)} (applied live)"]
+    if update.data.get("restart_required"):
+        lines.append(RESTART_HINT)
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def _coerce_value(field_type: str, value: str) -> tuple[Any, str | None]:
+    """Coerce a CLI string to the field's declared type, or return an error message."""
+
+    if field_type == "number":
+        text = value.strip()
+        try:
+            return (int(text) if _INTEGER_RE.fullmatch(text) else float(text)), None
+        except ValueError:
+            return None, f"'{value}' is not a number"
+    if field_type == "toggle":
+        low = value.strip().lower()
+        if low in ("true", "1", "yes", "on"):
+            return True, None
+        if low in ("false", "0", "no", "off"):
+            return False, None
+        return None, f"'{value}' is not a boolean (use true or false)"
+    return value, None
+
+
+def _find_extension(extensions: Sequence[Any], name: str) -> dict[str, Any] | None:
+    for extension in extensions:
+        if isinstance(extension, dict) and extension.get("name") == name:
+            return extension
+    return None
+
+
+def _find_field(schema: Sequence[Any], field: str) -> dict[str, Any] | None:
+    for declaration in schema:
+        if isinstance(declaration, dict) and declaration.get("key") == field:
+            return declaration
+    return None
+
+
+def _known_names(extensions: Sequence[Any]) -> list[str]:
+    return [
+        ext["name"]
+        for ext in extensions
+        if isinstance(ext, dict) and isinstance(ext.get("name"), str)
+    ]
+
+
+def _format_extension_settings(record: dict[str, Any]) -> str:
+    name = _string_or_default(record.get("name"), "?")
+    status = _string_or_default(record.get("status"), "?")
+    lines = [f"{name}  {status}"]
+
+    schema = record.get("settings_schema")
+    raw_config = record.get("config")
+    config: dict[str, Any] = raw_config if isinstance(raw_config, dict) else {}
+
+    if not isinstance(schema, list):
+        if status == "loaded":
+            lines.append("  no settings schema")
+            if config:
+                lines.append(f"  raw config: {json.dumps(config)}")
+        return "\n".join(lines)
+    if not schema:
+        lines.append("  no settings")
+        return "\n".join(lines)
+
+    lines.append("settings:")
+    for declaration in schema:
+        if isinstance(declaration, dict):
+            lines.append(_format_settings_field(declaration, config))
+    lines.append(f"set with: vbot extensions {name} set <field> <value>")
+    return "\n".join(lines)
+
+
+def _format_settings_field(declaration: dict[str, Any], config: dict[str, Any]) -> str:
+    key = _string_or_default(declaration.get("key"), "?")
+    field_type = _string_or_default(declaration.get("type"), "?")
+    label = declaration.get("label")
+    suffix = f"   {label}" if isinstance(label, str) and label else ""
+
+    if field_type == "secret":
+        state = "set" if declaration.get("set") else "not set"
+        return f"  {key} (secret): {state}{suffix}"
+    if key in config:
+        return f"  {key} ({field_type}): {json.dumps(config[key])}{suffix}"
+    default = declaration.get("default")
+    if default is not None:
+        return f"  {key} ({field_type}): (default {json.dumps(default)}){suffix}"
+    return f"  {key} ({field_type}): (unset){suffix}"
+
+
+def _format_unknown_field(name: str, field: str, schema: Sequence[Any]) -> str:
+    available = [
+        str(declaration.get("key"))
+        for declaration in schema
+        if isinstance(declaration, dict) and declaration.get("key")
+    ]
+    lines = [f"extension '{name}' has no setting '{field}'"]
+    if available:
+        lines.append(f"available settings: {', '.join(available)}")
+        suggestions = get_close_matches(field, available, n=1)
+        if suggestions:
+            lines.append(f"did you mean: {suggestions[0]}")
+    return "\n".join(lines)
+
+
 def _load_extensions(instance: ServerInstance) -> list[Any] | CommandResult:
     payload = _rpc_call(instance, "extensions.list", {})
     if not payload.ok:
@@ -161,9 +379,11 @@ def _format_waiting(extension: dict[str, object]) -> str:
         return ""
     not_ready = _not_ready_tool_names(extension.get("capabilities"))
     suffix = f" ({', '.join(not_ready)})" if not_ready else ""
+    name = _string_or_default(extension.get("name"), "<name>")
     return (
         f"waiting for configuration{suffix}: "
-        "configure it in Settings > Extensions (or via extensions.set_secret)"
+        f"run 'vbot extensions {name}' to see its settings, then "
+        f"'vbot extensions {name} set <field> <value>' (or Settings > Extensions)"
     )
 
 

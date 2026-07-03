@@ -337,3 +337,356 @@ def test_run_dispatches_extensions_disable(
     assert exit_code == 0
     assert calls == [(instance, "guard_bash")]
     assert capsys.readouterr().out.splitlines() == ["extension 'guard_bash' disabled"]
+
+
+def _schema_payload() -> list[dict[str, Any]]:
+    """One loaded, schema'd extension (Home-Assistant-shaped) plus a schema-less one."""
+    return [
+        {
+            "name": "homeassistant",
+            "status": "loaded",
+            "disabled": False,
+            "version": "1.0.0",
+            "description": "Control a Home Assistant instance.",
+            "error": None,
+            "config": {"url": "http://homeassistant.local:8123"},
+            "capability_errors": [],
+            "ready_state": "waiting",
+            "settings_schema": [
+                {
+                    "key": "url",
+                    "type": "text",
+                    "label": "Server URL",
+                    "description": "Base URL.",
+                    "required": False,
+                    "default": "http://homeassistant.local:8123",
+                },
+                {
+                    "key": "token",
+                    "type": "secret",
+                    "label": "Access token",
+                    "description": "Long-lived token.",
+                    "required": False,
+                    "env_key": "HASS_TOKEN",
+                    "set": False,
+                },
+            ],
+            "capabilities": {
+                "hooks": {},
+                "tools": [{"name": "ha_get_state", "ready": False}],
+                "recall_backends": [],
+                "startup": False,
+                "shutdown": False,
+            },
+        }
+    ]
+
+
+def _post_returning(
+    payload: list[dict[str, Any]], captured: list[dict[str, Any]], result_by_method: dict[str, Any]
+) -> Any:
+    """Build a fake httpx.post that serves extensions.list and captures writes."""
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        captured.append(json)
+        if json["method"] == "extensions.list":
+            return httpx.Response(200, json={"ok": True, "result": {"extensions": payload}})
+        result = result_by_method.get(json["method"], {})
+        return httpx.Response(200, json={"ok": True, "result": result})
+
+    return fake_post
+
+
+def test_extensions_show_renders_schema_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    monkeypatch.setattr(
+        extensions_management.httpx, "post", _post_returning(_schema_payload(), [], {})
+    )
+
+    result = extensions_management.extensions_show(instance, "homeassistant")
+
+    assert result.ok is True
+    lines = result.message.splitlines()
+    assert lines[0] == "homeassistant  loaded"
+    assert "settings:" in lines
+    assert '  url (text): "http://homeassistant.local:8123"   Server URL' in lines
+    # A secret shows only its set-state, never a value.
+    assert "  token (secret): not set   Access token" in lines
+    assert "set with: vbot extensions homeassistant set <field> <value>" in lines
+
+
+def test_extensions_show_unknown_name_suggests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    monkeypatch.setattr(
+        extensions_management.httpx, "post", _post_returning(_schema_payload(), [], {})
+    )
+
+    result = extensions_management.extensions_show(instance, "homeassistan")
+
+    assert result.ok is False
+    assert "not found" in result.message
+    assert "did you mean: homeassistant" in result.message
+
+
+def test_extensions_set_secret_routes_to_set_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        extensions_management.httpx,
+        "post",
+        _post_returning(
+            _schema_payload(),
+            captured,
+            {"extensions.set_secret": {"name": "homeassistant", "key": "token", "set": True}},
+        ),
+    )
+
+    result = extensions_management.extensions_set(instance, "homeassistant", "token", "secret-xyz")
+
+    assert result.ok is True
+    assert "secret 'token' set for 'homeassistant'" in result.message
+    secret_calls = [call for call in captured if call["method"] == "extensions.set_secret"]
+    # The field key is sent, never the env key — the server maps it to HASS_TOKEN.
+    assert secret_calls == [
+        {
+            "method": "extensions.set_secret",
+            "params": {"name": "homeassistant", "key": "token", "value": "secret-xyz"},
+        }
+    ]
+
+
+def test_extensions_set_secret_empty_value_clears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    monkeypatch.setattr(
+        extensions_management.httpx,
+        "post",
+        _post_returning(
+            _schema_payload(),
+            [],
+            {"extensions.set_secret": {"name": "homeassistant", "key": "token", "set": False}},
+        ),
+    )
+
+    result = extensions_management.extensions_set(instance, "homeassistant", "token", "")
+
+    assert result.ok is True
+    assert result.message == "secret 'token' cleared for 'homeassistant'"
+
+
+def test_extensions_set_text_writes_merged_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        extensions_management.httpx,
+        "post",
+        _post_returning(_schema_payload(), captured, {"settings.update": {}}),
+    )
+
+    result = extensions_management.extensions_set(
+        instance, "homeassistant", "url", "http://pi.local:8123"
+    )
+
+    assert result.ok is True
+    assert "set 'homeassistant.url' = \"http://pi.local:8123\" (applied live)" in result.message
+    update = next(call for call in captured if call["method"] == "settings.update")
+    assert update["params"] == {
+        "extensions": {
+            "disabled": [],
+            "config": {"homeassistant": {"url": "http://pi.local:8123"}},
+        }
+    }
+
+
+def test_extensions_set_toggle_and_number_coercion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    payload = _schema_payload()
+    payload[0]["settings_schema"].extend(
+        [
+            {"key": "verbose", "type": "toggle", "label": "Verbose", "required": False},
+            {"key": "timeout", "type": "number", "label": "Timeout", "required": False},
+        ]
+    )
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        extensions_management.httpx,
+        "post",
+        _post_returning(payload, captured, {"settings.update": {}}),
+    )
+
+    toggle = extensions_management.extensions_set(instance, "homeassistant", "verbose", "true")
+    number = extensions_management.extensions_set(instance, "homeassistant", "timeout", "30")
+
+    assert toggle.ok is True and number.ok is True
+    updates = [
+        call["params"]["extensions"]["config"]
+        for call in captured
+        if call["method"] == "settings.update"
+    ]
+    assert updates[0]["homeassistant"]["verbose"] is True
+    assert updates[1]["homeassistant"]["timeout"] == 30
+
+
+def test_extensions_set_number_invalid_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    payload = _schema_payload()
+    payload[0]["settings_schema"].append(
+        {"key": "timeout", "type": "number", "label": "Timeout", "required": False}
+    )
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(extensions_management.httpx, "post", _post_returning(payload, captured, {}))
+
+    result = extensions_management.extensions_set(instance, "homeassistant", "timeout", "soon")
+
+    assert result.ok is False
+    assert "not a number" in result.message
+    # Nothing is written when coercion fails.
+    assert [call["method"] for call in captured] == ["extensions.list"]
+
+
+def test_extensions_set_unknown_field_lists_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    monkeypatch.setattr(
+        extensions_management.httpx, "post", _post_returning(_schema_payload(), [], {})
+    )
+
+    result = extensions_management.extensions_set(instance, "homeassistant", "hostname", "x")
+
+    assert result.ok is False
+    assert "has no setting 'hostname'" in result.message
+    assert "available settings: url, token" in result.message
+
+
+def test_extensions_set_unknown_extension_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    monkeypatch.setattr(
+        extensions_management.httpx, "post", _post_returning(_schema_payload(), [], {})
+    )
+
+    result = extensions_management.extensions_set(instance, "nope", "url", "x")
+
+    assert result.ok is False
+    assert "extension 'nope' not found" in result.message
+
+
+def test_run_dispatches_extensions_show(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[tuple[ServerInstance, str]] = []
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    def fake_show(resolved_instance: ServerInstance, name: str) -> CommandResult:
+        calls.append((resolved_instance, name))
+        return CommandResult(ok=True, message="homeassistant  loaded", instance=instance)
+
+    exit_code = cli_main.run(
+        ["extensions", "homeassistant"],
+        resolve=fake_resolve,
+        show_extension_fn=fake_show,
+    )
+
+    assert exit_code == 0
+    assert calls == [(instance, "homeassistant")]
+
+
+def test_run_dispatches_extensions_set(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[tuple[Any, ...]] = []
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    def fake_set(
+        resolved_instance: ServerInstance, name: str, field: str, value: str
+    ) -> CommandResult:
+        calls.append((resolved_instance, name, field, value))
+        return CommandResult(ok=True, message="ok", instance=instance)
+
+    exit_code = cli_main.run(
+        ["extensions", "homeassistant", "set", "url", "http://pi.local:8123"],
+        resolve=fake_resolve,
+        set_extension_fn=fake_set,
+    )
+
+    assert exit_code == 0
+    assert calls == [(instance, "homeassistant", "url", "http://pi.local:8123")]
+
+
+def test_run_extensions_set_reads_value_from_stdin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+
+    instance = make_instance(tmp_path)
+    calls: list[tuple[Any, ...]] = []
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    def fake_set(
+        resolved_instance: ServerInstance, name: str, field: str, value: str
+    ) -> CommandResult:
+        calls.append((name, field, value))
+        return CommandResult(ok=True, message="ok", instance=instance)
+
+    monkeypatch.setattr(cli_main.sys, "stdin", io.StringIO("token-from-stdin\n"))
+
+    exit_code = cli_main.run(
+        ["extensions", "homeassistant", "set", "token", "--stdin"],
+        resolve=fake_resolve,
+        set_extension_fn=fake_set,
+    )
+
+    assert exit_code == 0
+    assert calls == [("homeassistant", "token", "token-from-stdin")]
+
+
+def test_run_extensions_unknown_subcommand_is_usage_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    exit_code = cli_main.run(["extensions", "homeassistant", "bogus"], resolve=fake_resolve)
+
+    assert exit_code == 1
+    assert "unknown command 'extensions homeassistant bogus'" in capsys.readouterr().out

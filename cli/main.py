@@ -43,7 +43,13 @@ from cli.debug_management import (
     debug_trace_show,
 )
 from cli.doctor_management import doctor_config, doctor_settings
-from cli.extensions_management import extensions_disable, extensions_enable, extensions_list
+from cli.extensions_management import (
+    extensions_disable,
+    extensions_enable,
+    extensions_list,
+    extensions_set,
+    extensions_show,
+)
 from cli.log_management import log_list, log_read
 from cli.model_management import model_list, model_refresh
 from cli.parser import parse_args
@@ -167,6 +173,8 @@ def run(
     list_extensions_fn: Callable[[ServerInstance], CommandResult] = extensions_list,
     enable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_enable,
     disable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_disable,
+    show_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_show,
+    set_extension_fn: Callable[[ServerInstance, str, str, str], CommandResult] = extensions_set,
     show_config_fn: Callable[[ServerInstance], CommandResult] = config_show,
     get_config_fn: Callable[[ServerInstance, str], CommandResult] = config_get,
     set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] = config_set,
@@ -319,6 +327,8 @@ def run(
             list_extensions_fn=list_extensions_fn,
             enable_extension_fn=enable_extension_fn,
             disable_extension_fn=disable_extension_fn,
+            show_extension_fn=show_extension_fn,
+            set_extension_fn=set_extension_fn,
         )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
@@ -736,16 +746,69 @@ def dispatch_extensions_command(
     list_extensions_fn: Callable[[ServerInstance], CommandResult],
     enable_extension_fn: Callable[[ServerInstance, str], CommandResult],
     disable_extension_fn: Callable[[ServerInstance, str], CommandResult],
+    show_extension_fn: Callable[[ServerInstance, str], CommandResult],
+    set_extension_fn: Callable[[ServerInstance, str, str, str], CommandResult],
 ) -> CommandResult:
-    """Dispatch one parsed extensions command against the server RPC client."""
+    """Route one name-first extensions command against the server RPC client.
 
-    if args.command == "list":
+    Grammar: ``list`` | ``enable|disable <name>`` | ``<name>`` (show settings) |
+    ``<name> set <field> <value>`` (write one setting). The selector is either a
+    reserved verb or an extension name; a name is inspected or configured.
+    """
+
+    selector = args.selector
+    rest = list(args.rest)
+
+    if selector == "list":
+        if rest:
+            return _extensions_usage(instance, "extensions list takes no arguments")
         return list_extensions_fn(instance)
-    if args.command == "enable":
-        return enable_extension_fn(instance, args.name)
-    if args.command == "disable":
-        return disable_extension_fn(instance, args.name)
-    raise ValueError(f"Unsupported extensions command: {args.command}")
+
+    if selector in ("enable", "disable"):
+        if len(rest) != 1:
+            return _extensions_usage(instance, f"usage: extensions {selector} <name>")
+        toggle = enable_extension_fn if selector == "enable" else disable_extension_fn
+        return toggle(instance, rest[0])
+
+    # Otherwise the selector is an extension name: inspect or configure it.
+    name = selector
+    if not rest:
+        return show_extension_fn(instance, name)
+    if rest[0] == "set":
+        return _dispatch_extensions_set(args, instance, name, rest, set_extension_fn)
+    return _extensions_usage(
+        instance,
+        f"unknown command 'extensions {name} {rest[0]}'; "
+        f"use 'extensions {name}' or 'extensions {name} set <field> <value>'",
+    )
+
+
+def _dispatch_extensions_set(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    name: str,
+    rest: list[str],
+    set_extension_fn: Callable[[ServerInstance, str, str, str], CommandResult],
+) -> CommandResult:
+    """Parse ``<name> set <field> <value>`` (or ``--stdin``) and delegate."""
+
+    if args.stdin:
+        if len(rest) != 2:
+            return _extensions_usage(instance, f"usage: extensions {name} set <field> --stdin")
+        field = rest[1]
+        value = sys.stdin.read().rstrip("\n")
+    else:
+        if len(rest) != 3:
+            return _extensions_usage(
+                instance, f"usage: extensions {name} set <field> <value>  (or --stdin)"
+            )
+        field = rest[1]
+        value = rest[2]
+    return set_extension_fn(instance, name, field, value)
+
+
+def _extensions_usage(instance: ServerInstance, message: str) -> CommandResult:
+    return CommandResult(ok=False, message=message, instance=instance)
 
 
 def dispatch_cron_command(
