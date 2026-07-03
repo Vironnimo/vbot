@@ -218,15 +218,3 @@ def test_deactivate_leaves_colliding_tool_with_its_real_owner(tmp_path: Path) ->
 
     # The built-in "read" survives, still owned by the built-in handler.
     assert tool_registry.get("read").handler is _builtin_read
-
-
-def test_deactivate_blocking_matches_async(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "shutdown.txt"
-    _write_single_file(root, "closer", _shutdown_extension_source(marker))
-
-    registry = ExtensionRegistry.load(root)
-
-    assert registry.deactivate_blocking("closer") is True
-    assert marker.read_text(encoding="utf-8").split() == ["shutdown"]
-    assert _record(registry, "closer").status == "disabled"

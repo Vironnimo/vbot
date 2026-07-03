@@ -77,7 +77,7 @@ def _get_settings(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
-def _update_settings(state: Any, params: JsonObject) -> JsonObject:
+async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     try:
         settings_update = parse_settings_update(params)
     except SettingsValidationError as exc:
@@ -96,9 +96,10 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     newly_disabled: set[str] = set()
     if "extensions" in settings_update:
         _validate_extension_configs(state.runtime, settings_update["extensions"])
-        # Disable is applied live (deactivation gate); only enable — loading code
-        # that was never imported — stays restart-bound. Config-value changes are
-        # read live via ExtensionAPI.get_config() and never touch either set.
+        # Enabling routes through the full extension reload (it reads the freshly
+        # persisted state, so it also applies any name disabled in the same save);
+        # a disable-only change takes the surgical live-disable path. Config-value
+        # changes are read live via ExtensionAPI.get_config() and touch neither set.
         previous = storage.load_extensions_settings()
         old_disabled = set(previous.get("disabled", []))
         new_disabled = set(settings_update["extensions"].get("disabled", []))
@@ -115,20 +116,34 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             reload_recall_backend = getattr(state.runtime, "reload_recall_backend", None)
             if callable(reload_recall_backend):
                 reload_recall_backend()
-        if newly_disabled:
-            # Persist first, then apply the disable live so runtime state matches
-            # what a restart would rebuild from the freshly-written disabled set.
-            apply_disabled = getattr(state.runtime, "apply_extension_disabled_change", None)
-            if callable(apply_disabled):
-                apply_disabled(newly_disabled)
-        response = _settings_response(state)
-        if newly_enabled:
-            # Enabling an extension loads code and only takes effect at the next
-            # Runtime.start(). Signal the caller so accessors can offer restart.
-            response["restart_required"] = True
-        return response
+        await _apply_extension_delta(state.runtime, newly_enabled, newly_disabled)
+        return _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+
+
+async def _apply_extension_delta(
+    runtime: Any, newly_enabled: set[str], newly_disabled: set[str]
+) -> None:
+    """Apply the extensions disabled-set delta live after the write is persisted.
+
+    Enabling any name rebuilds the whole extension layer (``reload_extensions``),
+    which reads the freshly persisted state and therefore also applies any names
+    disabled in the same save — so a mixed save reloads and does nothing else. A
+    disable-only save takes the surgical live-disable path, leaving other
+    extensions untouched; a config-value-only change does neither (live reads
+    cover it). The defensive ``getattr``/``callable`` guards keep the handler
+    working against runtime test stubs that omit these seams.
+    """
+    if newly_enabled:
+        reload_extensions = getattr(runtime, "reload_extensions", None)
+        if callable(reload_extensions):
+            await reload_extensions()
+        return
+    if newly_disabled:
+        apply_disabled = getattr(runtime, "apply_extension_disabled_change", None)
+        if callable(apply_disabled):
+            await apply_disabled(newly_disabled)
 
 
 def _validate_extension_configs(runtime: Any, extensions_update: JsonObject) -> None:

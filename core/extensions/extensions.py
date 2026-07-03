@@ -697,6 +697,22 @@ class ExtensionRegistry:
         _LOGGER.info("Extension %r deactivated live (no restart)", name)
         return True
 
+    def remove_applied_tools(self, tool_registry: ToolRegistry) -> None:
+        """Unregister every loaded extension's applied tools from *tool_registry*.
+
+        The teardown counterpart to :meth:`apply_tools`, used by
+        ``Runtime.reload_extensions`` to detach the old layer's tools before the
+        fresh registry re-applies. For each ``loaded`` record it runs the same
+        handler-identity match as live disable (:meth:`_unregister_extension_tools`),
+        so a name skipped on a collision — owned by a built-in or another
+        extension — is never yanked from its real owner. Record statuses are left
+        untouched: the whole registry object is discarded right after the swap.
+        """
+        for record in self._records:
+            if record.status != "loaded":
+                continue
+            self._unregister_extension_tools(tool_registry, record.declarations.tools)
+
     def _remove_handlers(self, extension_name: str) -> None:
         """Drop every hook handler registered under *extension_name* from dispatch."""
         for event in list(self._handlers):
@@ -753,22 +769,6 @@ class ExtensionRegistry:
     def fire_shutdown_blocking(self) -> None:
         """Run :meth:`fire_shutdown` to completion from synchronous shutdown paths."""
         _run_coroutine_to_completion(self.fire_shutdown())
-
-    def deactivate_blocking(self, name: str, tool_registry: ToolRegistry | None = None) -> bool:
-        """Run :meth:`deactivate` to completion from a synchronous caller.
-
-        The live-disable path runs from the synchronous ``settings.update`` handler,
-        which may or may not have a running loop; this mirrors
-        :meth:`fire_shutdown_blocking`'s loop-agnostic driving of the shutdown
-        coroutine.
-        """
-        result: list[bool] = []
-
-        async def _run() -> None:
-            result.append(await self.deactivate(name, tool_registry))
-
-        _run_coroutine_to_completion(_run())
-        return result[0] if result else False
 
     async def _invoke_lifecycle(
         self, phase: str, extension_name: str, handler: LifecycleHandler
@@ -1189,6 +1189,28 @@ def _ensure_extension_parent_package() -> None:
         parent_module.__path__ = []
 
 
+def purge_extension_modules() -> None:
+    """Drop the synthetic ``vbot_ext`` namespace and every extension module.
+
+    Removes from ``sys.modules`` the parent package ``vbot_ext`` plus every
+    ``vbot_ext.<name>`` entry point **and** ``vbot_ext.<name>.<sub>`` submodule.
+    ``Runtime.reload_extensions`` calls this between tearing the old layer down and
+    building the new one. Without it, a fresh :meth:`ExtensionRegistry.load`
+    replaces only an extension's **entry-point** module, so an edited **submodule**
+    of a package extension would silently keep its stale cached version — a
+    relative ``import`` inside the reloaded entry point resolves through
+    ``sys.modules`` first and finds the old submodule. Purging is safe for a
+    still-referenced old registry: its handlers hold direct function references
+    that never go back through ``sys.modules``, and
+    :func:`_ensure_extension_parent_package` recreates the parent namespace on the
+    next load.
+    """
+    prefix = f"{_EXTENSION_PARENT_PACKAGE}."
+    for module_name in list(sys.modules):
+        if module_name == _EXTENSION_PARENT_PACKAGE or module_name.startswith(prefix):
+            del sys.modules[module_name]
+
+
 def _extension_spec(module_name: str, entry_path: Path) -> Any:
     if entry_path.name == "__init__.py":
         return importlib.util.spec_from_file_location(
@@ -1239,4 +1261,5 @@ __all__ = [
     "Replace",
     "ToolCallDecision",
     "ToolResultValidator",
+    "purge_extension_modules",
 ]

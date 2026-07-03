@@ -148,7 +148,7 @@ async def test_extensions_update_passes_schemaless_config(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_extensions_config_only_change_has_no_restart_flag(tmp_path: Path) -> None:
+async def test_extensions_config_only_change_touches_neither_seam(tmp_path: Path) -> None:
     state = _state_with_schema(tmp_path)
 
     result = await _update(
@@ -156,83 +156,75 @@ async def test_extensions_config_only_change_has_no_restart_flag(tmp_path: Path)
     )
 
     assert result["ok"] is True
-    assert "restart_required" not in result["result"]
+    # A config-value-only save applies live via ExtensionAPI.get_config(): it
+    # neither reloads the layer nor runs the live-disable path.
+    assert state.runtime.extension_reload_count == 0
+    assert state.runtime.extension_disabled_changes == []
 
 
-def _record_disabled_calls(state: SimpleNamespace) -> list[set[str]]:
-    """Wire a spy for the runtime's live-deactivation hook, returning its calls."""
-    calls: list[set[str]] = []
-
-    def _apply(newly_disabled: set[str]) -> None:
-        calls.append(set(newly_disabled))
-
-    state.runtime.apply_extension_disabled_change = _apply
-    return calls
+def _reset_extension_spies(state: SimpleNamespace) -> None:
+    """Reset the StubRuntime's reload / live-disable call counters between saves."""
+    state.runtime.extension_reload_count = 0
+    state.runtime.extension_disabled_changes.clear()
 
 
 @pytest.mark.asyncio
-async def test_extensions_newly_disabled_applies_live_without_restart_flag(
-    tmp_path: Path,
-) -> None:
+async def test_extensions_newly_disabled_applies_live(tmp_path: Path) -> None:
     state = _state_with_schema(tmp_path)
-    calls = _record_disabled_calls(state)
 
     result = await _update(state, {"disabled": ["homeassistant"], "config": {}})
 
     assert result["ok"] is True
-    # Disabling is applied live: no restart flag, and the deactivation hook ran
-    # with exactly the newly-disabled name.
-    assert "restart_required" not in result["result"]
-    assert calls == [{"homeassistant"}]
+    # A disable-only save takes the surgical live-disable path (no full reload).
+    assert state.runtime.extension_disabled_changes == [{"homeassistant"}]
+    assert state.runtime.extension_reload_count == 0
 
 
 @pytest.mark.asyncio
-async def test_extensions_newly_enabled_sets_restart_flag(tmp_path: Path) -> None:
+async def test_extensions_newly_enabled_reloads_layer(tmp_path: Path) -> None:
     state = _state_with_schema(tmp_path)
-    calls = _record_disabled_calls(state)
     # Seed a persisted disabled set, then re-enable (remove from disabled).
     await _update(state, {"disabled": ["homeassistant"], "config": {}})
-    calls.clear()
+    _reset_extension_spies(state)
 
     result = await _update(state, {"disabled": [], "config": {}})
 
     assert result["ok"] is True
-    # Enabling loads code → restart-applied; the live deactivation hook is NOT run.
-    assert result["result"]["restart_required"] is True
-    assert calls == []
+    # Enabling rebuilds the whole layer; the surgical live-disable path is NOT run.
+    assert state.runtime.extension_reload_count == 1
+    assert state.runtime.extension_disabled_changes == []
 
 
 @pytest.mark.asyncio
-async def test_extensions_mixed_enable_and_disable(tmp_path: Path) -> None:
+async def test_extensions_mixed_enable_and_disable_reloads_only(tmp_path: Path) -> None:
     state = _state_with_schema(tmp_path)
-    calls = _record_disabled_calls(state)
     # Start with "one" disabled; then flip to "two" disabled: enables one, disables two.
     await _update(state, {"disabled": ["one"], "config": {}})
-    calls.clear()
+    _reset_extension_spies(state)
 
     result = await _update(state, {"disabled": ["two"], "config": {}})
 
     assert result["ok"] is True
-    # A newly-enabled name is present → restart flag; a newly-disabled name → live.
-    assert result["result"]["restart_required"] is True
-    assert calls == [{"two"}]
+    # A save that enables any name reloads the whole layer and does nothing else —
+    # the reload reads the freshly persisted state, so it also applies the disable.
+    assert state.runtime.extension_reload_count == 1
+    assert state.runtime.extension_disabled_changes == []
 
 
 @pytest.mark.asyncio
-async def test_extensions_unchanged_disabled_set_no_restart_no_deactivation(
+async def test_extensions_unchanged_disabled_set_touches_neither_seam(
     tmp_path: Path,
 ) -> None:
     state = _state_with_schema(tmp_path)
-    calls = _record_disabled_calls(state)
     # Seed a persisted disabled set, then resend it unchanged (config-only change).
     await _update(state, {"disabled": ["homeassistant"], "config": {}})
-    calls.clear()
+    _reset_extension_spies(state)
 
     result = await _update(
         state, {"disabled": ["homeassistant"], "config": {"homeassistant": {"url": "http://y"}}}
     )
 
     assert result["ok"] is True
-    # No disabled-set delta: no restart flag and no live deactivation.
-    assert "restart_required" not in result["result"]
-    assert calls == []
+    # No disabled-set delta: neither the reload nor the live-disable path runs.
+    assert state.runtime.extension_reload_count == 0
+    assert state.runtime.extension_disabled_changes == []
