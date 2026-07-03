@@ -136,6 +136,9 @@ def _format_extension_row(extension: object) -> list[str]:
     overridden_by = extension.get("overridden_by")
     if isinstance(overridden_by, str) and overridden_by:
         rows.append(f"    overridden by {overridden_by}")
+    waiting_row = _format_waiting(extension)
+    if waiting_row:
+        rows.append(f"    {waiting_row}")
     capabilities = _format_capabilities(extension.get("capabilities"))
     if capabilities:
         rows.append(f"    {capabilities}")
@@ -145,6 +148,38 @@ def _format_extension_row(extension: object) -> list[str]:
             if isinstance(capability_error, str) and capability_error:
                 rows.append(f"    warning: {capability_error}")
     return rows
+
+
+def _format_waiting(extension: dict[str, object]) -> str:
+    """Render the derived waiting state, naming the not-ready tools.
+
+    Only a ``loaded`` extension whose derived ``ready_state`` is ``"waiting"``
+    prints this line. It names the not-ready tools and points at how to fix it, so
+    an agent reading the output knows the next step is to configure the extension.
+    """
+    if extension.get("ready_state") != "waiting":
+        return ""
+    not_ready = _not_ready_tool_names(extension.get("capabilities"))
+    suffix = f" ({', '.join(not_ready)})" if not_ready else ""
+    return (
+        f"waiting for configuration{suffix}: "
+        "configure it in Settings > Extensions (or via extensions.set_secret)"
+    )
+
+
+def _not_ready_tool_names(capabilities: object) -> list[str]:
+    if not isinstance(capabilities, dict):
+        return []
+    tools = capabilities.get("tools")
+    if not isinstance(tools, list):
+        return []
+    return [
+        tool["name"]
+        for tool in tools
+        if isinstance(tool, dict)
+        and isinstance(tool.get("name"), str)
+        and tool.get("ready") is False
+    ]
 
 
 def _format_capabilities(capabilities: object) -> str:
@@ -158,7 +193,7 @@ def _format_capabilities(capabilities: object) -> str:
         parts.append(f"hooks: {hook_summary}")
     tools = capabilities.get("tools")
     if isinstance(tools, list) and tools:
-        parts.append(f"tools: {', '.join(str(tool) for tool in tools)}")
+        parts.append(f"tools: {', '.join(_format_tool_entry(tool) for tool in tools)}")
     backends = capabilities.get("recall_backends")
     if isinstance(backends, list) and backends:
         parts.append(f"recall_backends: {', '.join(str(backend) for backend in backends)}")
@@ -167,6 +202,20 @@ def _format_capabilities(capabilities: object) -> str:
     if capabilities.get("shutdown"):
         parts.append("shutdown")
     return "; ".join(parts)
+
+
+def _format_tool_entry(tool: object) -> str:
+    """Render one capability tool as ``name`` (or ``name (waiting)`` if not ready).
+
+    Each tool is a ``{"name", "ready"}`` object; a not-ready tool is marked inline
+    so the tool list itself shows what the extension is waiting on.
+    """
+    if not isinstance(tool, dict):
+        return str(tool)
+    name = tool.get("name")
+    if not isinstance(name, str) or not name:
+        return str(tool)
+    return name if tool.get("ready") is not False else f"{name} (waiting)"
 
 
 def _format_unknown_extension(name: str, candidates: list[str]) -> str:

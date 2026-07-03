@@ -60,6 +60,26 @@ class _Storage:
         return self.credentials.pop(key, None) is not None
 
 
+class _ToolRegistry:
+    """Minimal ``ToolRegistry`` stand-in with per-name readiness predicates.
+
+    ``ready`` maps a tool name to its predicate; a name absent from ``ready`` is
+    always ready. A name never added at all raises on ``get`` — the "declared but
+    unregistered" case.
+    """
+
+    def __init__(self, ready: dict[str, Any] | None = None) -> None:
+        self._ready = ready or {}
+
+    def add(self, name: str, *, ready: Any = None) -> None:
+        self._ready[name] = ready
+
+    def get(self, name: str) -> Any:
+        if name not in self._ready:
+            raise KeyError(name)
+        return SimpleNamespace(name=name, ready=self._ready[name])
+
+
 class _Runtime(SimpleNamespace):
     """Runtime stub exposing the credential seam the handlers touch."""
 
@@ -78,8 +98,13 @@ class _Runtime(SimpleNamespace):
 def _state_with_records(
     records: list[ExtensionRecord],
     config: dict[str, dict[str, Any]] | None = None,
+    tools: _ToolRegistry | None = None,
 ) -> SimpleNamespace:
-    runtime = _Runtime(extensions=_Registry(records), storage=_Storage(config or {}))
+    runtime = _Runtime(
+        extensions=_Registry(records),
+        storage=_Storage(config or {}),
+        tools=tools if tools is not None else _ToolRegistry(),
+    )
     return SimpleNamespace(runtime=runtime)
 
 
@@ -122,9 +147,12 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
         entry_path=Path("/ext/off.py"),
         status="disabled",
     )
+    tools = _ToolRegistry()
+    tools.add("word_count")  # registered and ready (no predicate)
     state = _state_with_records(
         [_loaded_record(), failed, disabled],
         config={"guard_bash": {"deny": ["rm -rf"]}},
+        tools=tools,
     )
 
     result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
@@ -149,9 +177,10 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
         "api_version": 1,
         "config": {"deny": ["rm -rf"]},
         "settings_schema": None,
+        "ready_state": "ready",
         "capabilities": {
             "hooks": {"tool_call": 1, "run_end": 1},
-            "tools": ["word_count"],
+            "tools": [{"name": "word_count", "ready": True}],
             "recall_backends": ["my_backend"],
             "startup": True,
             "shutdown": False,
@@ -183,6 +212,75 @@ async def test_extensions_list_round_trips_overridden_record() -> None:
     assert item["status"] == "overridden"
     assert item["disabled"] is False
     assert item["overridden_by"] == str(Path("/data/extensions/homeassistant/__init__.py"))
+
+
+def _tooled_record(name: str = "homeassistant") -> ExtensionRecord:
+    declarations = ExtensionDeclarations()
+    declarations.tools.append(
+        ToolDeclaration("ha_call_service", "Call a service", {"type": "object"}, _noop_handler)
+    )
+    return ExtensionRecord(
+        name=name,
+        root_path=Path(f"/bundled/{name}"),
+        entry_path=Path(f"/bundled/{name}/__init__.py"),
+        status="loaded",
+        declarations=declarations,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ready_state_waiting_when_a_declared_tool_is_not_ready() -> None:
+    tools = _ToolRegistry()
+    tools.add("ha_call_service", ready=lambda: False)
+    state = _state_with_records([_tooled_record()], tools=tools)
+
+    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
+
+    (item,) = result["result"]["extensions"]
+    assert item["ready_state"] == "waiting"
+    assert item["capabilities"]["tools"] == [{"name": "ha_call_service", "ready": False}]
+
+
+@pytest.mark.asyncio
+async def test_ready_state_ready_when_all_declared_tools_are_ready() -> None:
+    tools = _ToolRegistry()
+    tools.add("ha_call_service", ready=lambda: True)
+    state = _state_with_records([_tooled_record()], tools=tools)
+
+    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
+
+    (item,) = result["result"]["extensions"]
+    assert item["ready_state"] == "ready"
+    assert item["capabilities"]["tools"] == [{"name": "ha_call_service", "ready": True}]
+
+
+@pytest.mark.asyncio
+async def test_ready_state_waiting_when_a_declared_tool_is_unregistered() -> None:
+    # An empty registry: the declared name never registered (e.g. a collision
+    # skipped it) → reported not ready → the extension is waiting.
+    state = _state_with_records([_tooled_record()], tools=_ToolRegistry())
+
+    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
+
+    (item,) = result["result"]["extensions"]
+    assert item["ready_state"] == "waiting"
+    assert item["capabilities"]["tools"] == [{"name": "ha_call_service", "ready": False}]
+
+
+@pytest.mark.asyncio
+async def test_ready_state_ready_for_a_loaded_extension_with_no_tools() -> None:
+    record = ExtensionRecord(
+        name="hooks_only",
+        root_path=Path("/ext/hooks_only.py"),
+        entry_path=Path("/ext/hooks_only.py"),
+        status="loaded",
+    )
+    state = _state_with_records([record])
+
+    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
+
+    (item,) = result["result"]["extensions"]
+    assert item["ready_state"] == "ready"
 
 
 @pytest.mark.asyncio

@@ -132,10 +132,12 @@ from core.tools.tools import (
     ToolNoteHook,
     ToolNotFoundError,
     ToolPromptBlockRegistry,
+    ToolReadinessPredicate,
     ToolRegistry,
     ToolSkillActivationHook,
     is_tool_result_envelope,
     tool_failure,
+    tool_is_ready,
     tool_success,
 )
 from core.tools.web_fetch import (
@@ -244,6 +246,7 @@ __all__ = [
     "ToolNotAllowedError",
     "ToolNotFoundError",
     "ToolPromptBlockRegistry",
+    "ToolReadinessPredicate",
     "ToolRegistry",
     "ToolSkillActivationHook",
     "WEB_FETCH_TOOL_DESCRIPTION",
@@ -292,6 +295,7 @@ __all__ = [
     "session_search_handler",
     "stale_failure_text",
     "tool_failure",
+    "tool_is_ready",
     "tool_success",
     "web_fetch_handler",
     "web_search_handler",
