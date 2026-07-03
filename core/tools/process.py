@@ -143,6 +143,7 @@ def _handle_list(process_manager: ProcessManager, context: ToolContext) -> JsonO
             "exit_code": session.exit_code,
             "started_at": _format_timestamp(session.started_at),
             "finished_at": _format_timestamp(session.finished_at),
+            "log_file": str(session.log_file) if session.log_file is not None else None,
         }
         for session in process_manager.list_sessions(context.agent_id)
     ]

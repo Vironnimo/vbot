@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -708,3 +710,98 @@ def test_windows_process_tree_kill_falls_back_when_taskkill_times_out(
     ProcessManager._kill_process_tree(FakeProcess())  # type: ignore[arg-type]
 
     assert fallback_kills == 1
+
+
+@pytest.mark.asyncio
+async def test_log_file_holds_complete_output_beyond_buffer_cap(tmp_path: Path) -> None:
+    # The in-memory buffer keeps only the newest bytes; the spool file must
+    # still hold everything the process ever printed.
+    manager = ProcessManager(
+        buffer_cap_bytes=64,
+        sweep_interval_seconds=3600,
+        spool_dir=tmp_path / "processes",
+    )
+    try:
+        session_id = await manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            [sys.executable, "-c", "print('start-marker'); print('x' * 500)"],
+            env=None,
+            cwd=None,
+        )
+        await poll_until_terminal(manager, session_id)
+
+        session = manager.get_session(session_id, AGENT_A)
+        assert session.truncated is True
+        assert session.log_file is not None
+        assert session.log_file.parent == tmp_path / "processes"
+
+        content = session.log_file.read_text(encoding="utf-8")
+        assert "start-marker" in content
+        assert "x" * 500 in content
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_no_spool_dir_means_no_log_file(manager: ProcessManager) -> None:
+    session_id = await manager.spawn(
+        SCOPE_A, AGENT_A, [sys.executable, "-c", "print('hi')"], env=None, cwd=None
+    )
+    await poll_until_terminal(manager, session_id)
+
+    assert manager.get_session(session_id, AGENT_A).log_file is None
+
+
+@pytest.mark.asyncio
+async def test_log_file_is_stripped_of_ansi_escape_sequences(tmp_path: Path) -> None:
+    manager = ProcessManager(sweep_interval_seconds=3600, spool_dir=tmp_path / "processes")
+    try:
+        script = "import sys; esc = chr(27); sys.stdout.write(f'{esc}[31mred{esc}[0m done\n')"
+        session_id = await manager.spawn(
+            SCOPE_A, AGENT_A, [sys.executable, "-c", script], env=None, cwd=None
+        )
+        await poll_until_terminal(manager, session_id)
+
+        session = manager.get_session(session_id, AGENT_A)
+        assert session.log_file is not None
+        content = session.log_file.read_text(encoding="utf-8")
+        assert "red" in content and "done" in content
+        assert "\x1b" not in content
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_log_file_sweep_removes_expired_files_but_spares_running(tmp_path: Path) -> None:
+    spool_dir = tmp_path / "processes"
+    manager = ProcessManager(
+        sweep_interval_seconds=3600,
+        spool_dir=spool_dir,
+        log_file_ttl=timedelta(seconds=1),
+    )
+    try:
+        spool_dir.mkdir(parents=True, exist_ok=True)
+        stale_file = spool_dir / "stale-session.log"
+        stale_file.write_text("old output", encoding="utf-8")
+        expired_epoch = time.time() - 3600
+        os.utime(stale_file, (expired_epoch, expired_epoch))
+
+        session_id = await manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            env=None,
+            cwd=None,
+        )
+        running_file = spool_dir / f"{session_id}.log"
+        os.utime(running_file, (expired_epoch, expired_epoch))
+
+        await manager.sweep_finished()
+
+        assert not stale_file.exists()
+        assert running_file.exists(), "an active session's log file must survive the sweep"
+
+        await manager.kill(session_id, AGENT_A)
+    finally:
+        await manager.aclose()
