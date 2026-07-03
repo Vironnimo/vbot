@@ -53,9 +53,10 @@ def _shell_syntax_notes() -> str:
 BASH_TOOL_DESCRIPTION = (
     "Run a shell command on the host system. Short commands complete in the foreground; "
     "commands still running after yield_after seconds (default 30) are moved to the "
-    "background and return a session_id for the process tool. Result output keeps only "
-    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, the result "
-    "names the log file holding the complete output — search that file with grep/read."
+    "background and return a session_id for the process tool plus a log_file path that "
+    "receives the output live — read the file's tail to check progress. Result output "
+    f"keeps only the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, "
+    "the result names the log file holding the complete output — search it with grep/read."
     + _shell_syntax_notes()
 )
 BASH_TOOL_PARAMETERS: JsonObject = {
