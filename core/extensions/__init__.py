@@ -14,6 +14,11 @@ from core.extensions.extensions import (
     ToolCallDecision,
     ToolResultValidator,
 )
+from core.extensions.settings_schema import (
+    SettingsFieldDeclaration,
+    parse_settings_fields,
+    validate_extension_config,
+)
 
 __all__ = [
     "API_VERSION",
@@ -26,6 +31,9 @@ __all__ = [
     "Modify",
     "PromptBlockDeclaration",
     "Replace",
+    "SettingsFieldDeclaration",
     "ToolCallDecision",
     "ToolResultValidator",
+    "parse_settings_fields",
+    "validate_extension_config",
 ]

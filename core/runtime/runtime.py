@@ -481,6 +481,8 @@ class Runtime:
             disabled=disabled_extensions,
             config=extension_config,
             bundled_dir=resources_path / "extensions",
+            config_provider=self._live_extension_config,
+            credential_resolver=self.resolve_environment_credential,
         )
         failed_extension_count = len(self._extensions.diagnostics())
         if failed_extension_count > 0:
@@ -837,6 +839,23 @@ class Runtime:
             )
 
         return disabled, config
+
+    def _live_extension_config(self, name: str) -> dict[str, Any]:
+        """Read one extension's persisted config **live** from ``settings.json``.
+
+        Backs ``ExtensionAPI.get_config()``: ``settings.update`` writes the
+        ``extensions.config`` section, and the next call here sees it without a
+        restart. Defensive shape checks mirror ``_extension_load_options`` — a
+        malformed section yields ``{}`` rather than raising into extension code.
+        """
+        if self._storage is None:
+            return {}
+        extensions_settings = self._storage.load_extensions_settings()
+        config = extensions_settings.get("config", {})
+        if not isinstance(config, dict):
+            return {}
+        value = config.get(name, {})
+        return value if isinstance(value, dict) else {}
 
     def _start_process_manager(self) -> None:
         if self._process_manager is None:

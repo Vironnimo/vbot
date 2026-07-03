@@ -92,6 +92,54 @@ def test_runtime_passes_bundled_extensions_root(
         runtime.stop()
 
 
+def test_runtime_passes_live_config_and_credential_callables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The runtime hands its live-config reader and credential resolver to load().
+    config = Config(data_dir=tmp_path / "data")
+    captured: dict[str, object] = {}
+    original_load = ExtensionRegistry.load
+
+    def _capturing_load(*args: object, **kwargs: object) -> ExtensionRegistry:
+        captured["config_provider"] = kwargs.get("config_provider")
+        captured["credential_resolver"] = kwargs.get("credential_resolver")
+        return original_load(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runtime_module.ExtensionRegistry, "load", _capturing_load)
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        assert captured["config_provider"] == runtime._live_extension_config
+        assert captured["credential_resolver"] == runtime.resolve_environment_credential
+    finally:
+        runtime.stop()
+
+
+def test_live_extension_config_reads_through_storage(tmp_path: Path) -> None:
+    # _live_extension_config reflects a persisted config change without restart.
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_settings(
+        data_dir,
+        {"extensions": {"config": {"homeassistant": {"url": "http://one:8123"}}}},
+    )
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        assert runtime._live_extension_config("homeassistant") == {"url": "http://one:8123"}
+        assert runtime._live_extension_config("absent") == {}
+
+        # A persisted change is seen on the next read (live), no restart.
+        runtime.storage.update_settings_sections(
+            {"extensions": {"disabled": [], "config": {"homeassistant": {"url": "http://two"}}}}
+        )
+        assert runtime._live_extension_config("homeassistant") == {"url": "http://two"}
+    finally:
+        runtime.stop()
+
+
 def test_disabled_extension_is_never_imported(tmp_path: Path) -> None:
     config = Config(data_dir=tmp_path / "data")
     data_dir = config.data_dir

@@ -62,8 +62,11 @@ The `api` object (`ExtensionAPI`) offers:
 | `api.register_tool(name, description, parameters, handler, *, internal=False, display=None)` | an agent tool |
 | `api.register_recall_backend(name, factory)` | a session-recall backend |
 | `api.register_prompt_block(slug, *, default_text=None, render=None)` | a System Prompt block |
+| `api.register_settings(fields)` | a settings schema (see [Settings schema](#settings-schema)) |
 | `api.on_startup(handler)` / `api.on_shutdown(handler)` | a lifecycle callback (sync or async, no args) |
-| `api.config` | your config object from `settings.extensions.config.<name>` (default `{}`) |
+| `api.config` | your config **snapshot** from `settings.extensions.config.<name>`, taken at register time (default `{}`) |
+| `api.get_config()` | your config read **live** per call — reflects a UI change without a restart |
+| `api.resolve_credential(key)` | resolve a credential **live** per call (process env, then the data-dir `.env`) |
 | `api.logger` | a ready-made `vbot.extensions.<name>` logger |
 
 ## Hooks
@@ -173,6 +176,40 @@ backend becomes selectable via `settings.recall.backend` (Settings → Recall).
 See [`.vorch/domain-maps/recall.md`](../.vorch/domain-maps/recall.md) for the backend
 protocol.
 
+## Settings schema
+
+An extension can declare a **settings schema** so the WebUI renders a real form for it (Settings → Extensions), instead of the raw-JSON editor. Declare it at register time — the same declaration pattern as hooks, tools, and recall backends — so single-file extensions (which carry no manifest) can use it too:
+
+```python
+def register(api):
+    api.register_settings([
+        {"key": "url", "type": "text", "label": "Server URL",
+         "default": "http://homeassistant.local:8123"},
+        {"key": "verbose", "type": "toggle", "label": "Verbose logging", "default": False},
+        {"key": "token", "type": "secret", "label": "Access token", "env_key": "HASS_TOKEN"},
+    ])
+```
+
+Each field is one dict. The v1 types are `text`, `number`, `toggle`, and `secret`:
+
+| Key | Rule |
+|---|---|
+| `key` | required, `^[a-z][a-z0-9_]*$`, unique within the schema |
+| `type` | required, one of `text` / `number` / `toggle` / `secret` |
+| `label` | required, non-empty string |
+| `description` | optional string (shown as a hint under the field) |
+| `default` | optional; **forbidden** for `secret`; must match the type (`text`→str, `number`→int/float, `toggle`→bool) |
+| `required` | optional bool, default `False` |
+| `env_key` | **required** for `secret` (`^[A-Z][A-Z0-9_]*$`); **forbidden** on any other type |
+
+Any violation raises `ValueError` inside `register()`, so the extension loads as `failed` with a message naming the bad field (the same policy as an invalid prompt block). Calling `api.register_settings` twice also raises — declare exactly one schema.
+
+**What the WebUI renders:** a `text` field is a text input (its `default` is shown as the placeholder), `number` a number input, `toggle` a checkbox, and `secret` a write-only password input with a Set/Not-set indicator and Save/Clear actions. Non-secret fields save together through a single "Save settings" button; a secret saves on its own (see [Secrets](#secrets-in-env)).
+
+**Server-side validation on save:** for a loaded extension with a schema, the `settings.update` RPC validates the submitted config against the schema before persisting — unknown keys are rejected, a key naming a `secret` field is rejected (secrets live in `.env`, never in config), types must match, and a `required` non-secret field must be present and non-empty. An extension **without** a schema keeps the raw-JSON pass-through.
+
+**Live values.** A non-secret setting change (URL, a toggle, a number) is read **live** on the next tool call — no restart. Read your config through `api.get_config()` rather than the register-time `api.config` snapshot (see [Config and logging](#config-and-logging)). Only enabling/disabling a whole extension is restart-applied.
+
 ## Prompt blocks
 
 To add standing content to the **System Prompt**, declare a block with
@@ -245,8 +282,38 @@ def register(api):
     api.logger.info("guard_bash loaded with %d patterns", len(deny))
 ```
 
-`api.logger` is a `vbot.extensions.<name>` logger through the normal logging
-pipeline (no `print`). Both `disabled` and `config` are **restart-applied**.
+`api.config` is a **snapshot** taken at register time — use it for structural decisions inside `register()`. For values you read while running (in a hook or tool handler), use `api.get_config()` instead: it re-reads the persisted config **per call**, so a change a user makes in the settings form takes effect on the next call without a restart. Only enabling/disabling the whole extension is restart-applied.
+
+```python
+def register(api):
+    def call_home(context, arguments):
+        url = api.get_config().get("url", "http://homeassistant.local:8123")  # live
+        ...
+    api.register_tool("ha_ping", "Ping Home Assistant.", PARAMS, call_home)
+```
+
+`api.logger` is a `vbot.extensions.<name>` logger through the normal logging pipeline (no `print`). Never log a secret value.
+
+### Secrets (in `.env`) {#secrets-in-env}
+
+A `secret` field's value is stored in the data directory's `.env` (`~/.vbot/.env`) under the `env_key` you declared — **never** in `settings.json`. Read it live per call with `api.resolve_credential(env_key)`:
+
+```python
+def register(api):
+    api.register_settings([
+        {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
+    ])
+
+    def call_home(context, arguments):
+        token = api.resolve_credential("HASS_TOKEN")  # process env, then .env
+        if not token:
+            return tool_failure("not_configured", "Set the token in Settings → Extensions.")
+        ...
+```
+
+- **Write-only in the UI.** The form shows only whether the secret is set; the stored value is never displayed. Saving or clearing it writes `.env` and refreshes the resolver immediately (no restart).
+- **You choose the `.env` key explicitly.** There is no derived naming — established keys keep their names (`HASS_TOKEN` stays `HASS_TOKEN`). To avoid clashing with another extension or an app credential, **prefix new keys** with your extension name (e.g. `MYEXT_API_KEY`).
+- **Process-env precedence.** A key present in the process environment **wins** over the `.env` value the UI writes. So if the same key is exported in the environment that launched vBot, that stale value overrides what a user sets in the form — worth knowing when a secret "won't change".
 
 ## Manifest (optional): `extension.json`
 
@@ -279,10 +346,13 @@ Extensions surface through the normal management flow:
   ```
 - **WebUI**: Settings → **Extensions** lists every extension with its status,
   version, capabilities, and failure reason, offers a per-extension
-  enable/disable toggle and a raw-JSON config editor, and shows a
-  restart-required notice after a change.
-- **RPC**: `extensions.list` returns the records; `settings.update` accepts the
-  `extensions` section and replies with `"restart_required": true`.
+  enable/disable toggle, and — for a schema'd extension — a real settings form
+  (raw-JSON editor as the fallback for schema-less ones). Secret fields are
+  write-only. A restart-required notice appears only after an enable/disable.
+- **RPC**: `extensions.list` returns the records (with any declared settings
+  schema and live secret state); `settings.update` accepts the `extensions`
+  section (config-value changes apply live; only a `disabled`-set change replies
+  `"restart_required": true`); `extensions.set_secret` writes/clears a secret.
 
 A failed extension never aborts the others — it loads as `failed` with an error
 detail you can read in any of the surfaces above.

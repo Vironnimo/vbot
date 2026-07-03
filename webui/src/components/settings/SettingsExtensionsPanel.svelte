@@ -3,13 +3,17 @@
 
   import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
+  import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     applyExtensionsPanelList,
     buildExtensionsUpdatePayload,
+    buildSchemaConfigFromForm,
+    buildSchemaFormState,
     extensionStatusChipVariant,
     formatExtensionConfig,
+    hasSettingsSchema,
     parseExtensionConfigDraft,
     summarizeExtensionCapabilities,
   } from '$lib/settingsView.js';
@@ -27,9 +31,16 @@
   let savingConfigName = $state('');
   let configDrafts = $state({});
   let configErrors = $state({});
+  let formStates = $state({});
+  let formFieldErrors = $state({});
+  let secretDrafts = $state({});
+  let savingSecret = $state('');
 
   let panelBusy = $derived(
-    loading || actionName.length > 0 || savingConfigName.length > 0,
+    loading ||
+      actionName.length > 0 ||
+      savingConfigName.length > 0 ||
+      savingSecret.length > 0,
   );
 
   onMount(() => {
@@ -50,11 +61,111 @@
           formatExtensionConfig(extension.config),
         ]),
       );
+      formStates = Object.fromEntries(
+        extensions
+          .filter((extension) => hasSettingsSchema(extension))
+          .map((extension) => [
+            extension.name,
+            buildSchemaFormState(extension.settingsSchema, extension.config),
+          ]),
+      );
       configErrors = {};
+      formFieldErrors = {};
+      secretDrafts = {};
     } catch (error) {
       loadError = `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`;
     } finally {
       loading = false;
+    }
+  }
+
+  function setFormValue(name, key, value) {
+    formStates = {
+      ...formStates,
+      [name]: { ...(formStates[name] ?? {}), [key]: value },
+    };
+    if (formFieldErrors[name]?.[key]) {
+      const nextForExtension = { ...formFieldErrors[name] };
+      delete nextForExtension[key];
+      formFieldErrors = { ...formFieldErrors, [name]: nextForExtension };
+    }
+  }
+
+  function setSecretDraft(name, key, value) {
+    secretDrafts = {
+      ...secretDrafts,
+      [name]: { ...(secretDrafts[name] ?? {}), [key]: value },
+    };
+  }
+
+  async function saveSchemaConfig(extension) {
+    if (panelBusy) {
+      return;
+    }
+
+    const built = buildSchemaConfigFromForm(
+      extension.settingsSchema,
+      formStates[extension.name] ?? {},
+    );
+    if (!built.ok) {
+      formFieldErrors = { ...formFieldErrors, [extension.name]: built.errors };
+      return;
+    }
+
+    savingConfigName = extension.name;
+    actionError = '';
+
+    const payload = buildExtensionsUpdatePayload(extensions, {
+      name: extension.name,
+      config: built.config,
+    });
+
+    try {
+      const response = await rpc('settings.update', payload);
+      if (response?.restart_required) {
+        restartRequired = true;
+      }
+      onToast({
+        title: t(
+          'settings.extensions.configSaveSuccess',
+          'Extension config saved.',
+        ),
+        variant: 'success',
+      });
+      await loadExtensions();
+    } catch (error) {
+      actionError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      savingConfigName = '';
+    }
+  }
+
+  async function saveSecret(extension, field, value) {
+    if (panelBusy) {
+      return;
+    }
+
+    savingSecret = `${extension.name}:${field.key}`;
+    actionError = '';
+
+    try {
+      await rpc('extensions.set_secret', {
+        name: extension.name,
+        key: field.key,
+        value,
+      });
+      onToast({
+        title:
+          value === ''
+            ? t('settings.extensions.secretCleared', 'Secret cleared.')
+            : t('settings.extensions.secretSaved', 'Secret saved.'),
+        variant: 'success',
+      });
+      await loadExtensions();
+    } catch (error) {
+      actionError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      savingSecret = '';
     }
   }
 
@@ -273,7 +384,123 @@
           {/if}
         </div>
 
-        {#if !isOverridden}
+        {#if !isOverridden && hasSettingsSchema(extension)}
+          <div class="s-ext-schema">
+            {#each extension.settingsSchema as field (field.key)}
+              {@const secretSaving =
+                savingSecret === `${extension.name}:${field.key}`}
+              <div class="s-field s-field--full s-ext-schema-field">
+                <span class="s-field-label">{field.label}</span>
+                {#if field.description}
+                  <span class="s-field-hint">{field.description}</span>
+                {/if}
+                {#if field.type === 'toggle'}
+                  <label class="s-ext-toggle">
+                    <input
+                      type="checkbox"
+                      checked={formStates[extension.name]?.[field.key] === true}
+                      disabled={rowBusy}
+                      onchange={(event) =>
+                        setFormValue(
+                          extension.name,
+                          field.key,
+                          event.currentTarget.checked,
+                        )}
+                    />
+                  </label>
+                {:else if field.type === 'secret'}
+                  <div class="s-ext-secret">
+                    <StatusChip variant={field.set ? 'success' : 'warn'}>
+                      {field.set
+                        ? t('settings.extensions.secretSet', 'Set')
+                        : t('settings.extensions.secretUnset', 'Not set')}
+                    </StatusChip>
+                    <TextField
+                      type="password"
+                      autocomplete="off"
+                      value={secretDrafts[extension.name]?.[field.key] ?? ''}
+                      disabled={rowBusy}
+                      placeholder={t(
+                        'settings.extensions.secretPlaceholder',
+                        'Enter a new value',
+                      )}
+                      ariaLabel={t(
+                        'settings.extensions.secretAria',
+                        'Secret {label} for extension {name}',
+                        { label: field.label, name: extension.name },
+                      )}
+                      onInput={(next) =>
+                        setSecretDraft(extension.name, field.key, next)}
+                    />
+                    <div class="s-ext-secret-actions">
+                      <Button
+                        variant="primary"
+                        disabled={rowBusy ||
+                          !(secretDrafts[extension.name]?.[field.key] ?? '')}
+                        onClick={() =>
+                          saveSecret(
+                            extension,
+                            field,
+                            secretDrafts[extension.name]?.[field.key] ?? '',
+                          )}
+                      >
+                        {secretSaving
+                          ? t('common.saving', 'Saving…')
+                          : t('settings.extensions.secretSave', 'Save')}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={rowBusy || !field.set}
+                        onClick={() => saveSecret(extension, field, '')}
+                      >
+                        {t('settings.extensions.secretClear', 'Clear')}
+                      </Button>
+                    </div>
+                  </div>
+                {:else}
+                  <TextField
+                    type={field.type === 'number' ? 'number' : 'text'}
+                    value={formStates[extension.name]?.[field.key] ?? ''}
+                    disabled={rowBusy}
+                    invalid={Boolean(
+                      formFieldErrors[extension.name]?.[field.key],
+                    )}
+                    placeholder={field.default === null ||
+                    field.default === undefined
+                      ? ''
+                      : String(field.default)}
+                    ariaLabel={t(
+                      'settings.extensions.fieldAria',
+                      '{label} for extension {name}',
+                      { label: field.label, name: extension.name },
+                    )}
+                    onInput={(next) =>
+                      setFormValue(extension.name, field.key, next)}
+                  />
+                  {#if formFieldErrors[extension.name]?.[field.key]}
+                    <span class="s-field-error">
+                      {t(
+                        'settings.extensions.numberInvalid',
+                        'Enter a valid number.',
+                      )}
+                    </span>
+                  {/if}
+                {/if}
+              </div>
+            {/each}
+            <div class="s-ext-config-actions">
+              <Button
+                variant="primary"
+                disabled={rowBusy}
+                onClick={() => saveSchemaConfig(extension)}
+              >
+                {savingConfigName === extension.name
+                  ? t('common.saving', 'Saving…')
+                  : t('settings.extensions.saveSettings', 'Save settings')}
+              </Button>
+            </div>
+          </div>
+        {:else if !isOverridden}
           <div class="s-field s-field--full s-ext-config">
             <span class="s-field-label">
               {t('settings.extensions.config', 'Config (JSON)')}

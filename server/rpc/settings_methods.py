@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.debug.store import DebugTraceStore
+from core.extensions import validate_extension_config
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
 from core.settings import SettingsValidationError, parse_settings_update, validate_settings_data
@@ -91,6 +92,16 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
 
     _validate_model_connections(state.runtime.models, settings_update)
 
+    extensions_restart_required = False
+    if "extensions" in settings_update:
+        _validate_extension_configs(state.runtime, settings_update["extensions"])
+        # Only a change to the disabled set (code load/unload) is restart-bound;
+        # config-value changes are read live via ExtensionAPI.get_config().
+        previous = storage.load_extensions_settings()
+        old_disabled = set(previous.get("disabled", []))
+        new_disabled = set(settings_update["extensions"].get("disabled", []))
+        extensions_restart_required = old_disabled != new_disabled
+
     try:
         storage.update_settings_sections(settings_update)
         if should_reload_skills:
@@ -102,14 +113,52 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             if callable(reload_recall_backend):
                 reload_recall_backend()
         response = _settings_response(state)
-        if "extensions" in settings_update:
-            # Extensions are restart-applied (decision #9): the new disabled set
-            # and config only take effect at the next Runtime.start(). Signal the
-            # caller so accessors can offer `vbot server restart`.
+        if extensions_restart_required:
+            # Enabling/disabling an extension only takes effect at the next
+            # Runtime.start(). Signal the caller so accessors can offer restart.
             response["restart_required"] = True
         return response
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+
+
+def _validate_extension_configs(runtime: Any, extensions_update: JsonObject) -> None:
+    """Reject a schema'd extension's config that violates its declared schema.
+
+    Schema validation lives here (not in ``core/settings/``) because this is the
+    layer where the loaded registry — and thus the schemas — is available
+    (design decision #2). No-schema and not-loaded names pass through unchanged.
+    """
+    config = extensions_update.get("config", {})
+    if not isinstance(config, dict):
+        return
+    schemas = _loaded_extension_schemas(runtime)
+    for name, extension_config in config.items():
+        schema = schemas.get(name)
+        if schema is None or not isinstance(extension_config, dict):
+            continue
+        errors = validate_extension_config(schema, extension_config)
+        if errors:
+            joined = "; ".join(errors)
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"invalid extension config for {name!r}: {joined}",
+            )
+
+
+def _loaded_extension_schemas(runtime: Any) -> dict[str, Any]:
+    """Map each loaded extension's name → its declared settings schema (if any)."""
+    registry = getattr(runtime, "extensions", None)
+    if registry is None:
+        return {}
+    schemas: dict[str, Any] = {}
+    for record in registry.records():
+        if record.status != "loaded":
+            continue
+        schema = record.declarations.settings_schema
+        if schema:
+            schemas[record.name] = schema
+    return schemas
 
 
 def _available_recall_backends(runtime: Any) -> list[str]:
