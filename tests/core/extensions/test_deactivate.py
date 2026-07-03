@@ -1,6 +1,6 @@
 """Tests for live extension deactivation (disable applied without a restart).
 
-Covers ``ExtensionRegistry.deactivate`` / ``deactivate_blocking``: a currently
+Covers ``ExtensionRegistry.deactivate``: a currently
 ``loaded`` extension's hooks stop firing, its applied tools are unregistered
 (and vanish from the model-facing provider definitions), its shutdown handlers
 fire once, and its record flips to ``disabled`` with cleared declarations — while
