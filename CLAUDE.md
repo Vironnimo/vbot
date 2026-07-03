@@ -41,7 +41,7 @@ There's no orchestrator here to keep these current — that's on you. When a cha
 - `.vorch/domain-maps/<domain>.md` — a domain's interface, boundary, invariant, or contract changes, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
 - `.vorch/DESIGN.md` — design-system changes (colors, typography, spacing, components)
 - `.vorch/GLOSSARY.md` — new or changed project-specific terms
-- `.vorch/FLAGGED.md` — append deferred concerns (append-only, don't reorganize)
+- `.vorch/FLAGGED.md` — git-ignored, never commit it; append a deferred concern at the bottom so you needn't read the whole file, or fold it into a related existing entry when you already know one fits.
 
 **⛔ HARD GATE — read the workflow before ANY domain-map work, no exceptions.** Before you create, edit, or audit *anything* under `.vorch/domain-maps/`, you MUST first read `.vorch/workflows/domain-map-workflow.md` in full — every single time, right before the work (not from memory, not "I read it earlier this session"), with no exception for a one-line fix or a change that "looks trivial". If you are about to write to a domain map or start a map audit and you have not *just* read that workflow, stop and read it first — that read is the first action of the task, before any Edit, Write, or plan. It defines what belongs in a domain map (factual working notes, every claim backed by source/tests, no exhaustive API/field dumps) and the rules for creating, maintaining, and indexing them.
 
