@@ -27,14 +27,35 @@ def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.list does not accept params")
     try:
-        registry = state.runtime.extensions
-        config_map = _persisted_extension_config(state)
-        records = registry.records() if registry is not None else []
-        return {
-            "extensions": [_extension_response(record, config_map, state) for record in records]
-        }
+        return _extensions_payload(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+
+
+async def _reload_extensions(state: Any, params: JsonObject) -> JsonObject:
+    """Rebuild the whole extension layer live, then return the ``extensions.list`` shape.
+
+    The explicit reload trigger: it drives ``Runtime.reload_extensions`` (a full,
+    restart-equivalent rebuild from disk under the runtime's serialization lock),
+    then returns the freshly rebuilt catalog in the same shape as
+    :func:`_list_extensions`, so the caller sees the new state without a second
+    round-trip. Rejects params like ``extensions.list``.
+    """
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.reload does not accept params")
+    try:
+        await state.runtime.reload_extensions()
+        return _extensions_payload(state)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _extensions_payload(state: Any) -> JsonObject:
+    """Build the shared ``extensions.list`` / ``extensions.reload`` catalog payload."""
+    registry = state.runtime.extensions
+    config_map = _persisted_extension_config(state)
+    records = registry.records() if registry is not None else []
+    return {"extensions": [_extension_response(record, config_map, state) for record in records]}
 
 
 def _persisted_extension_config(state: Any) -> dict[str, dict[str, Any]]:
@@ -247,5 +268,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "extensions.list": _list_extensions,
+        "extensions.reload": _reload_extensions,
         "extensions.set_secret": _set_extension_secret,
     }

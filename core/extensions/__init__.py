@@ -13,6 +13,7 @@ from core.extensions.extensions import (
     Replace,
     ToolCallDecision,
     ToolResultValidator,
+    purge_extension_modules,
 )
 from core.extensions.settings_schema import (
     SettingsFieldDeclaration,
@@ -35,5 +36,6 @@ __all__ = [
     "ToolCallDecision",
     "ToolResultValidator",
     "parse_settings_fields",
+    "purge_extension_modules",
     "validate_extension_config",
 ]
