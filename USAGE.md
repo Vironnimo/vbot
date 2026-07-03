@@ -574,7 +574,9 @@ python scripts/quality-frontend.py
 ## 13. Home Assistant Integration
 
 vBot can talk to your local Home Assistant instance through four LLM-callable
-tools. They wrap HA's built-in REST API — no custom addons needed.
+tools. They wrap HA's built-in REST API — no custom addons needed. Home
+Assistant ships as a **bundled extension**, active out of the box and configured
+in the UI.
 
 ### Prerequisites
 
@@ -584,15 +586,17 @@ HA → your profile (bottom left) → Security → Long-Lived Access Tokens → 
 
 ### Configuration
 
-Add to `~/.vbot/.env`:
+Open **Settings → Extensions → Home Assistant** and fill in two fields:
 
-```env
-HASS_TOKEN=eyJhbGciOi...   # your long-lived access token
-HASS_URL=http://homeassistant.local:8123  # optional, this is the default
-```
+- **Server URL** — the base URL of your Home Assistant instance (defaults to
+  `http://homeassistant.local:8123`).
+- **Access token** — paste your long-lived access token. This is a write-only
+  secret field: it is stored in `~/.vbot/.env` under `HASS_TOKEN` and never
+  shown back. An existing `HASS_TOKEN` in `.env` keeps working unchanged.
 
-Without `HASS_TOKEN` the tools are **not registered** — they won't appear in
-any agent's allowlist. Set the token and restart the server to activate them.
+Both values take effect immediately — no restart. Until a token is set, the four
+tools stay hidden everywhere (prompt, provider tools, and every tool picker),
+and the Extensions tab shows Home Assistant as loaded and waiting for a token.
 
 ### The Four Tools
 
@@ -635,12 +639,13 @@ against Home Assistant's own format rules before any request is sent.
 
 ### Troubleshooting
 
-- **Tools not showing up:** Make sure `HASS_TOKEN` is set and the server was
-  restarted after adding it.
-- **Connection refused:** Check that `HASS_URL` points to your HA instance and
-  that HA is running.
+- **Tools not showing up:** Make sure the access token is set in Settings →
+  Extensions → Home Assistant. Without it the tools stay hidden; the Extensions
+  tab shows the extension waiting for a token.
+- **Connection refused:** Check that the Server URL in Settings → Extensions
+  points to your HA instance and that HA is running.
 - **401 Unauthorized:** The token is invalid or has been revoked. Create a new
-  one in your HA profile.
+  one in your HA profile and paste it into the token field.
 
 ## 14. Notes and Limitations
 
