@@ -116,6 +116,7 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
         "root": str(Path("/ext/guard_bash")),
         "entry": str(Path("/ext/guard_bash/__init__.py")),
         "error": None,
+        "overridden_by": None,
         "capability_errors": [],
         "version": "1.2.0",
         "description": "Guards dangerous bash",
@@ -136,6 +137,26 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
     assert failed_item["capabilities"]["tools"] == []
     assert disabled_item["status"] == "disabled"
     assert disabled_item["disabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_extensions_list_round_trips_overridden_record() -> None:
+    overridden = ExtensionRecord(
+        name="homeassistant",
+        root_path=Path("/bundled/homeassistant"),
+        entry_path=Path("/bundled/homeassistant/__init__.py"),
+        status="overridden",
+        overridden_by=str(Path("/data/extensions/homeassistant/__init__.py")),
+    )
+    state = _state_with_records([overridden])
+
+    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
+
+    assert result["ok"] is True
+    (item,) = result["result"]["extensions"]
+    assert item["status"] == "overridden"
+    assert item["disabled"] is False
+    assert item["overridden_by"] == str(Path("/data/extensions/homeassistant/__init__.py"))
 
 
 @pytest.mark.asyncio

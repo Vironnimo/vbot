@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from core.extensions.extensions import ExtensionRegistry
+from core.runtime import runtime as runtime_module
 from core.runtime.runtime import Runtime
 from core.tools import ToolContext
 from core.utils.config import Config
@@ -64,6 +66,30 @@ def _marker_lines(marker: Path) -> list[str]:
     if not marker.exists():
         return []
     return marker.read_text(encoding="utf-8").split()
+
+
+def test_runtime_passes_bundled_extensions_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The runtime hands the bundled root <resources>/extensions as bundled_dir.
+    # Wrap the real load so the rest of start() still gets a real registry.
+    config = Config(data_dir=tmp_path / "data")
+    captured: dict[str, object] = {}
+    original_load = ExtensionRegistry.load
+
+    def _capturing_load(*args: object, **kwargs: object) -> ExtensionRegistry:
+        captured["bundled_dir"] = kwargs.get("bundled_dir")
+        return original_load(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runtime_module.ExtensionRegistry, "load", _capturing_load)
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        expected = runtime._resolve_resources_path() / "extensions"
+        assert captured["bundled_dir"] == expected
+    finally:
+        runtime.stop()
 
 
 def test_disabled_extension_is_never_imported(tmp_path: Path) -> None:

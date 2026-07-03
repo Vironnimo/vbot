@@ -50,6 +50,7 @@ def _extension_response(
         "root": str(record.root_path),
         "entry": str(record.entry_path),
         "error": record.error,
+        "overridden_by": record.overridden_by,
         "capability_errors": list(record.capability_errors),
         "version": manifest.version if manifest is not None else None,
         "description": manifest.description if manifest is not None else None,

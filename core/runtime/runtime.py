@@ -480,6 +480,7 @@ class Runtime:
             extra_dirs=extension_dirs,
             disabled=disabled_extensions,
             config=extension_config,
+            bundled_dir=resources_path / "extensions",
         )
         failed_extension_count = len(self._extensions.diagnostics())
         if failed_extension_count > 0:

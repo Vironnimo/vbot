@@ -133,6 +133,9 @@ def _format_extension_row(extension: object) -> list[str]:
     error = extension.get("error")
     if isinstance(error, str) and error:
         rows.append(f"    error: {error}")
+    overridden_by = extension.get("overridden_by")
+    if isinstance(overridden_by, str) and overridden_by:
+        rows.append(f"    overridden by {overridden_by}")
     capabilities = _format_capabilities(extension.get("capabilities"))
     if capabilities:
         rows.append(f"    {capabilities}")
