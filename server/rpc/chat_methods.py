@@ -65,52 +65,13 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 MAX_CHAT_HISTORY_LIMIT = 500
 
-# Instruction sent to the current agent to write the handoff. Plain text, not
-# i18n: it is delivered as an internal note to the model and never shown to the
-# user. The wording is deliberate — do not paraphrase.
-HANDOFF_INSTRUCTION = (
-    "You are handing off this conversation to another agent who will continue it in a "
-    "fresh session with none of its context. Write a handoff so they can carry on "
-    "seamlessly, as if they had been here the whole time.\n"
-    "\n"
-    "Capture whatever actually matters in this conversation so far — what it has been "
-    "about, what has been said, established, or decided, and where things currently "
-    "stand. What that includes depends entirely on the conversation: it might be a "
-    "task in progress, a discussion, a decision being worked through, or anything "
-    "else. Include only what is genuinely relevant here and leave out the rest; do not "
-    "force it into a fixed structure or invent things that are not there.\n"
-    "\n"
-    "Write it entirely from this conversation — do not use tools or go check anything. "
-    "Write it as a briefing to the next agent, in the language of this conversation, "
-    "and output only the handoff itself, with no preamble and no sign-off, because "
-    "your reply becomes their first message."
-)
-
-# The /learn authoring brief seeded into the internal run. Kept as a constant
-# (like HANDOFF_INSTRUCTION) rather than a resource file so the command needs no
-# RPC-time file I/O. It embeds the skill authoring standards and instructs the
-# agent to author exactly one skill into its own home via the skill_manage tool.
-LEARN_INSTRUCTION = (
-    "Author a reusable skill for yourself from the source described below. A skill is a "
-    "SKILL.md playbook that teaches you how to handle a specific task or domain.\n"
-    "\n"
-    'Use the `skill_manage` tool with operation "create" to write exactly one well-formed '
-    "skill into your own skill home. Give it a short, descriptive, hyphenated name; the "
-    "SKILL.md needs YAML front matter with `name` (matching the skill's directory) and a "
-    "`description` of at most 60 characters that says when to use the skill. Structure the "
-    "body with clear sections in a fixed order: Overview (what it is for and when to use "
-    "it), Steps (the procedure), then Notes (edge cases and gotchas). Keep it concise and "
-    "actionable.\n"
-    "\n"
-    "Frame any tool usage in terms of vBot's actual tools — `read`, `write`, `edit`, "
-    "`glob`, `grep`, `bash`, `web_fetch`, `web_search`, `process`, `status` — and do not "
-    "invent tools, commands, or facts that are not in the source. If the source is a folder "
-    "or URL, read it first with your file/web tools; if it is the recent conversation or "
-    "pasted text, work from that. Capture only what is genuinely there.\n"
-    "\n"
-    "After creating the skill, tell the user in one or two sentences what skill you created "
-    "and when it will help. Do not paste the full SKILL.md back."
-)
+# Backend-load prompt fragments seeded into the internal `/handoff` and `/learn`
+# runs. They live as bundled resource files (`resources/prompts/`) read through
+# Storage — like `compaction.md`, and user-overridable via a `<data_dir>/prompts/`
+# copy — not as constants. Both are plain, model-facing English delivered as an
+# internal note, never shown to the user; the wording is deliberate.
+HANDOFF_FRAGMENT_NAME = "handoff.md"
+LEARN_FRAGMENT_NAME = "learn.md"
 
 # Sidecar marker on a channel-bound session; such sessions are excluded from
 # ``/agent`` moves so the channel pointer is never left dangling.
@@ -475,18 +436,19 @@ def _ensure_model_usable(state: Any, model: str) -> None:
     _ensure_model_connection_supported(state.runtime.models, "model", model)
 
 
-def _build_handoff_prompt(instruction: str | None) -> str:
+def _build_handoff_prompt(base_instruction: str, instruction: str | None) -> str:
     """Weave an optional user instruction into the base handoff prompt.
 
     Mirrors the `/compact <instruction>` pattern: the bare handoff prompt is
     unchanged when no instruction is given, so the no-argument path is identical
-    to before.
+    to the ``handoff.md`` fragment (trailing whitespace normalized away).
     """
+    base = base_instruction.strip()
     cleaned = (instruction or "").strip()
     if not cleaned:
-        return HANDOFF_INSTRUCTION
+        return base
     return (
-        f"{HANDOFF_INSTRUCTION}\n"
+        f"{base}\n"
         "\n"
         "The user added a specific instruction for this handoff. Follow it while "
         "writing, without dropping anything else that genuinely matters:\n"
@@ -494,23 +456,24 @@ def _build_handoff_prompt(instruction: str | None) -> str:
     )
 
 
-def _build_learn_prompt(source: str | None) -> str:
+def _build_learn_prompt(base_instruction: str, source: str | None) -> str:
     """Weave the optional ``/learn`` source into the base authoring brief.
 
     With a source (a folder, URL, description, or pasted text) the agent authors from
     it; with no argument it asks the user what to learn or, when the recent
     conversation clearly shows a reusable procedure, authors a skill from that.
     """
+    base = base_instruction.strip()
     cleaned = (source or "").strip()
     if not cleaned:
         return (
-            f"{LEARN_INSTRUCTION}\n"
+            f"{base}\n"
             "\n"
             "No source was given. Ask the user what they want captured into a skill, or, "
             "if the recent conversation clearly demonstrates a reusable procedure, author "
             "a skill from that."
         )
-    return f"{LEARN_INSTRUCTION}\n\nThe source to learn from:\n{cleaned}"
+    return f"{base}\n\nThe source to learn from:\n{cleaned}"
 
 
 async def _start_command_run(
@@ -568,7 +531,9 @@ async def _handle_learn_command(
         learn_run = await _start_command_run(
             state,
             agent_id,
-            _build_learn_prompt(argument),
+            _build_learn_prompt(
+                state.runtime.storage.read_prompt_fragment(LEARN_FRAGMENT_NAME), argument
+            ),
             session_id=session_id,
             project_id=project_id,
             internal=True,
@@ -623,7 +588,10 @@ async def _handle_handoff_command(
         handoff_run = await _start_command_run(
             state,
             agent_id,
-            _build_handoff_prompt(parsed.instruction),
+            _build_handoff_prompt(
+                state.runtime.storage.read_prompt_fragment(HANDOFF_FRAGMENT_NAME),
+                parsed.instruction,
+            ),
             session_id=session_id,
             project_id=project_id,
             internal=True,
