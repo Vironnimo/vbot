@@ -1,5 +1,5 @@
 <script>
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
 
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
@@ -15,6 +15,10 @@
     placeholder = t('dropdown.placeholder', 'Select an option'),
     searchPlaceholder = t('dropdown.searchPlaceholder', 'Filter options…'),
     emptyLabel = t('dropdown.empty', 'No options match'),
+    // Default filter the search box carries: the panel opens with this term
+    // already applied and returns to it on close. Empty for every caller that
+    // does not pass it, so the historical "opens unfiltered" behavior is kept.
+    searchText = '',
     disabled = false,
     ariaLabel = '',
     triggerClass = '',
@@ -28,7 +32,9 @@
   let panelElement = $state();
   let searchInputElement = $state();
   let isOpen = $state(false);
-  let searchQuery = $state('');
+  // Seeded from the prop at creation (the dropdown is recreated per use); the
+  // close() reset re-applies the current default filter reactively.
+  let searchQuery = $state(untrack(() => searchText));
   let panelStyle = $state('');
   let panelPlacement = $state('bottom');
 
@@ -94,7 +100,7 @@
     }
 
     isOpen = false;
-    searchQuery = '';
+    searchQuery = searchText;
     panelStyle = '';
     panelPlacement = 'bottom';
     onOpenChange(false);

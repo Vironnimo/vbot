@@ -652,6 +652,54 @@ describe('App', () => {
     expect(mountedComponent).toBe(currentMount);
   });
 
+  it('renders the first-run onboarding wizard on a fresh, unconnected install', async () => {
+    rpcMock.mockImplementation(createOnboardingRpcMock({ connected: false }));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(document.querySelector('.onboarding-view')).toBeTruthy();
+    });
+    // The wizard takes over the content area (no normal view rendered).
+    expect(document.querySelector('.chat-view')).toBeFalsy();
+  });
+
+  it('renders the normal shell when a provider is already connected', async () => {
+    rpcMock.mockImplementation(createOnboardingRpcMock({ connected: true }));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(document.querySelector('.chat-view')).toBeTruthy();
+    });
+    expect(document.querySelector('.onboarding-view')).toBeFalsy();
+  });
+
+  it('keeps the wizard hidden when dismissed and offers a Finish setup re-entry', async () => {
+    localStorage.setItem('vbot.onboardingDismissed', '1');
+    rpcMock.mockImplementation(createOnboardingRpcMock({ connected: false }));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(document.querySelector('.app-finish-setup')).toBeTruthy();
+    });
+    expect(document.querySelector('.onboarding-view')).toBeFalsy();
+
+    const finishButton = Array.from(
+      document.querySelectorAll('.app-finish-setup button'),
+    ).find((button) => button.textContent.trim() === 'Finish setup');
+    finishButton?.click();
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(document.querySelector('.onboarding-view')).toBeTruthy();
+    });
+  });
+
   it('routes the connection_ready hello frame into connectionSnapshot and skips the run-server-events path', async () => {
     const agents = [
       {
@@ -1183,6 +1231,86 @@ async function waitForCondition(assertion, options = {}) {
       flushSync();
     }
   }
+}
+
+function onboardingSettings(connected) {
+  return {
+    general: {
+      server: { listen_host: '127.0.0.1', listen_port: 8420 },
+      data_directory: 'C:/data',
+    },
+    appearance: { language: 'en', available_languages: ['en'] },
+    providers: {
+      items: [
+        {
+          id: 'openrouter',
+          name: 'OpenRouter',
+          connections: [
+            {
+              id: 'openrouter:api-key',
+              type: 'api_key',
+              label: 'API Key',
+              configured: connected,
+              credential_key: 'OPENROUTER_API_KEY',
+              accounts: connected
+                ? [{ id: 'default', usable: true, source: 'data_dir' }]
+                : [],
+            },
+          ],
+        },
+      ],
+      custom_endpoints: { supported: false, items: [] },
+    },
+    defaults: { agent: {} },
+    debug: { enabled: false, trace_limit: 50 },
+  };
+}
+
+function createOnboardingRpcMock({ connected = false } = {}) {
+  return async (method) => {
+    if (method === 'agent.list') {
+      return {
+        agents: [
+          {
+            id: 'main',
+            name: 'Main',
+            model: connected ? 'openrouter/anthropic/claude-sonnet-4' : '',
+            fallback_model: '',
+            workspace: '/data/workspace-main',
+            temperature: null,
+            thinking_effort: '',
+            memory_prompt_mode: 'agent_user',
+            allowed_tools: ['*'],
+            allowed_skills: ['*'],
+            custom_system_prompt_enabled: false,
+            current_session_id: '',
+          },
+        ],
+      };
+    }
+    if (method === 'chat.commands') {
+      return { items: [] };
+    }
+    if (method === 'chat.history') {
+      return { messages: [] };
+    }
+    if (method === 'chat.queue_list') {
+      return { items: [] };
+    }
+    if (method === 'skill.list') {
+      return { skills: [], invalid_skills: [] };
+    }
+    if (method === 'settings.get') {
+      return onboardingSettings(connected);
+    }
+    if (method === 'model.list') {
+      return { models: [] };
+    }
+    if (method === 'connection.list') {
+      return { connections: [] };
+    }
+    throw new Error(`Unexpected RPC method: ${method}`);
+  };
 }
 
 function createSettingsRpcMock(options = {}) {

@@ -61,7 +61,9 @@
   import SettingsView from './components/SettingsView.svelte';
   import StatisticsView from './components/StatisticsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
+  import OnboardingView from './components/OnboardingView.svelte';
   import ToastStack from './components/ToastStack.svelte';
+  import Button from './components/ui/Button.svelte';
   import {
     createConnectionState,
     connect,
@@ -82,6 +84,7 @@
     viewIdFromLocationHash,
   } from '$lib/navigationHistory.js';
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
+  import { isOperational } from '$lib/onboarding.js';
   import {
     RESOURCE_TOKEN_AGENTS,
     RESOURCE_TOKEN_CLIENTS,
@@ -106,6 +109,10 @@
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
   const SELECTED_PROJECT_KEY = 'vbot.selectedProjectId';
   const SELECTED_PROJECT_AGENT_KEY = 'vbot.selectedProjectAgentId';
+  // Accessor-local UI state only: whether the user set the first-run wizard
+  // aside this browser. The real trigger stays the live operational state — a
+  // credential removal clears this flag and brings the wizard back on its own.
+  const ONBOARDING_DISMISSED_KEY = 'vbot.onboardingDismissed';
   const TOAST_AUTO_DISMISS_MS = 3200;
   const MAX_RUN_SERVER_EVENTS = 500;
   const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
@@ -159,6 +166,32 @@
     }
   };
 
+  const readOnboardingDismissed = () => {
+    try {
+      if (typeof localStorage === 'undefined') {
+        return false;
+      }
+      return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  };
+
+  const writeOnboardingDismissed = (dismissed) => {
+    try {
+      if (typeof localStorage === 'undefined') {
+        return;
+      }
+      if (dismissed) {
+        localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
+      } else {
+        localStorage.removeItem(ONBOARDING_DISMISSED_KEY);
+      }
+    } catch {
+      // localStorage unavailable (private browsing, storage quota)
+    }
+  };
+
   const knownViewIds = navigationItems.map((item) => item.id);
 
   const initialViewId = () => {
@@ -203,6 +236,14 @@
   let clientsRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
   let toastState = $state(createToastState());
+  // Application settings, fetched on mount and re-fetched on a provider/model
+  // change. Drives the first-run onboarding decision. Null until first loaded.
+  let settings = $state(null);
+  let onboardingDismissed = $state(readOnboardingDismissed());
+  // Sticky once shown: the wizard stays until completed/dismissed, so the
+  // connect flip (operational → true) never yanks it before the model step.
+  let onboardingActive = $state(false);
+  let lastSettingsModelsToken = null;
   let pendingSessionNavigation = $state(null);
   let providerAuthEvent = $state(null);
   let runServerEvents = $state([]);
@@ -265,6 +306,95 @@
       // localStorage unavailable (private browsing, storage quota)
     }
   });
+
+  let operational = $derived(isOperational(settings));
+  // Slim re-entry banner: shown only once the wizard was set aside while the
+  // system is still not operational. It disappears the instant a provider is
+  // connected (operational flips true).
+  let showFinishSetup = $derived(
+    settings !== null &&
+      !operational &&
+      onboardingDismissed &&
+      !onboardingActive,
+  );
+
+  // Fetch application settings and seed the app-wide appearance from them. Also
+  // the source of the operational state that drives onboarding.
+  const loadAppSettings = async () => {
+    try {
+      const result = await rpc('settings.get');
+      settings = result;
+      setChatWidth(result?.appearance?.chat_width);
+      const language = result?.appearance?.language;
+      if (typeof language === 'string' && language.length > 0) {
+        init(language);
+      }
+      maybeStartOnboarding();
+    } catch {
+      // settings RPC unavailable — keep the comfortable defaults and leave the
+      // onboarding decision untriggered (settings stays null).
+    }
+  };
+
+  // The guided setup shows once, on the first successful settings load, when
+  // vBot is not operational and the user has neither dismissed it nor already
+  // navigated elsewhere. It is a one-shot decision (not a reactive latch), so a
+  // late settings response never pops the wizard over a view the user opened in
+  // the meantime; re-entry afterwards is explicit (the "Finish setup" banner).
+  let onboardingEvaluated = false;
+  function maybeStartOnboarding() {
+    if (onboardingEvaluated || settings === null) {
+      return;
+    }
+    onboardingEvaluated = true;
+    if (!operational && !onboardingDismissed) {
+      onboardingActive = true;
+    }
+  }
+
+  // A live operational state clears a stale dismiss, so removing credentials
+  // later re-triggers the wizard on its own.
+  $effect(() => {
+    if (operational && onboardingDismissed) {
+      onboardingDismissed = false;
+      writeOnboardingDismissed(false);
+    }
+  });
+
+  // Re-fetch settings on a provider/model change (the same signal that bumps
+  // `modelsRefreshToken`) so the operational state stays live.
+  $effect(() => {
+    if (lastSettingsModelsToken === null) {
+      lastSettingsModelsToken = modelsRefreshToken;
+      return;
+    }
+    if (modelsRefreshToken !== lastSettingsModelsToken) {
+      lastSettingsModelsToken = modelsRefreshToken;
+      void loadAppSettings();
+    }
+  });
+
+  const completeOnboarding = () => {
+    onboardingActive = false;
+    onboardingDismissed = false;
+    writeOnboardingDismissed(false);
+    selectView('chat');
+    void loadAppSettings();
+  };
+
+  const dismissOnboarding = () => {
+    onboardingActive = false;
+    onboardingDismissed = true;
+    writeOnboardingDismissed(true);
+  };
+
+  const reopenOnboarding = () => {
+    onboardingActive = true;
+  };
+
+  const navigateToAgentModel = () => {
+    selectView('agents');
+  };
 
   // ChatView reflects the project dropdown choice back here so the persisted
   // mirror stays current.
@@ -331,6 +461,15 @@
   };
 
   const selectView = (viewId) => {
+    // Navigating away while vBot is not operational sets the guided setup aside
+    // (the rest of the app stays reachable), leaving the "Finish setup" banner
+    // as the re-entry. This also blocks a late settings response from popping
+    // the wizard over the view the user just opened.
+    if (viewId !== activeViewId && !operational) {
+      onboardingActive = false;
+      onboardingDismissed = true;
+      writeOnboardingDismissed(true);
+    }
     if (viewId === activeViewId) {
       return;
     }
@@ -708,23 +847,11 @@
         // debug RPC unavailable — keep debug navigation hidden
       });
 
-    // Seed app-wide appearance preferences once. `chat_width` drives the chat
-    // reading-column width app-wide (passed down to ChatView); the language
-    // seed is free here and closes the startup-language gap.
-    rpc('settings.get')
-      .then((settings) => {
-        if (cancelled) {
-          return;
-        }
-        setChatWidth(settings?.appearance?.chat_width);
-        const language = settings?.appearance?.language;
-        if (typeof language === 'string' && language.length > 0) {
-          init(language);
-        }
-      })
-      .catch(() => {
-        // settings RPC unavailable — keep the comfortable default.
-      });
+    // Seed app-wide appearance preferences and the operational state that
+    // drives first-run onboarding. `chat_width` drives the chat reading-column
+    // width app-wide (passed to ChatView); the language seed closes the
+    // startup-language gap.
+    void loadAppSettings();
 
     return () => {
       cancelled = true;
@@ -745,7 +872,29 @@
   onSelectView={selectView}
   connectionStatus={connectionState.status}
 >
-  {#if activeViewId === 'chat'}
+  {#if showFinishSetup}
+    <div class="app-finish-setup">
+      <span class="app-finish-setup__text">
+        {t(
+          'onboarding.finishSetupHint',
+          'Connect an AI service to start chatting.',
+        )}
+      </span>
+      <Button variant="secondary" onClick={reopenOnboarding}>
+        {t('onboarding.finishSetup', 'Finish setup')}
+      </Button>
+    </div>
+  {/if}
+  {#if onboardingActive}
+    <OnboardingView
+      {providerAuthEvent}
+      {modelsRefreshToken}
+      targetAgentId={selectedAgentId || 'main'}
+      onComplete={completeOnboarding}
+      onDismiss={dismissOnboarding}
+      onToast={showToast}
+    />
+  {:else if activeViewId === 'chat'}
     <ChatView
       sharedAgents={agents}
       sharedSelectedAgentId={selectedAgentId}
@@ -769,6 +918,7 @@
       {wakewordStatus}
       {desktopCapabilities}
       onNavigateToVoiceSettings={navigateToVoiceSettings}
+      onPickModel={navigateToAgentModel}
     />
   {:else if activeViewId === 'agents'}
     <AgentsView
@@ -805,3 +955,32 @@
   {/if}
   <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />
 </AppShell>
+
+<style>
+  /* Slim re-entry banner for a dismissed-but-incomplete first-run setup. Sits
+     above the active view inside the content column and disappears the instant
+     a provider is connected. */
+  .app-finish-setup {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+  }
+
+  .app-finish-setup__text {
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+  }
+
+  @media (max-width: 640px) {
+    .app-finish-setup {
+      padding: 8px 14px;
+    }
+  }
+</style>

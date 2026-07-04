@@ -4881,6 +4881,48 @@ describe('ChatView', () => {
     expect(document.querySelector('textarea')?.disabled).toBe(false);
     expect(document.body.textContent).toContain('Hello');
   });
+
+  it('shows an actionable notice when the current agent has no model', async () => {
+    const onPickModel = vi.fn();
+    rpcMock.mockImplementation(
+      createChatRpcMock({ agents: [createAgent({ model: '' })] }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent({ model: '' })],
+        sharedSelectedAgentId: 'alpha',
+        onPickModel,
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelector('.chat-view__no-model-notice') !== null,
+      100,
+    );
+    expect(document.body.textContent).toContain('Pick a model to start');
+
+    findButtonByText('Choose a model')?.click();
+    flushSync();
+    expect(onPickModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the no-model notice when the current agent has a model', () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelector('.chat-view__no-model-notice')).toBeNull();
+  });
 });
 function createChatRpcMock({
   usage,

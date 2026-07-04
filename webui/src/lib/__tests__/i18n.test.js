@@ -150,6 +150,57 @@ describe('i18n t()', () => {
     expect(t('chat.takenOverGeneric')).toBe('Session taken over');
   });
 
+  it('contains first-run onboarding labels', () => {
+    const requiredKeys = [
+      'onboarding.title',
+      'onboarding.dismiss',
+      'onboarding.finishSetup',
+      'onboarding.finishSetupHint',
+      'onboarding.step.service.kicker',
+      'onboarding.step.service.title',
+      'onboarding.step.service.subtitle',
+      'onboarding.hero.badge',
+      'onboarding.hero.title',
+      'onboarding.hero.description',
+      'onboarding.hero.action',
+      'onboarding.subscription.title',
+      'onboarding.subscription.description',
+      'onboarding.subscription.action',
+      'onboarding.more.toggle',
+      'onboarding.more.description',
+      'onboarding.more.action',
+      'onboarding.step.model.kicker',
+      'onboarding.step.model.title',
+      'onboarding.step.model.subtitle',
+      'onboarding.model.label',
+      'onboarding.model.placeholder',
+      'onboarding.model.searchPlaceholder',
+      'onboarding.model.searchEmpty',
+      'onboarding.model.loading',
+      'onboarding.model.loadError',
+      'onboarding.model.empty',
+      'onboarding.model.retry',
+      'onboarding.model.start',
+      'onboarding.model.assignError',
+      'onboarding.model.back',
+      'onboarding.provider.tip.openrouter',
+      'chat.noModel.title',
+      'chat.noModel.hint',
+      'chat.noModel.action',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(
+      t('onboarding.subscription.action', undefined, { provider: 'ChatGPT' }),
+    ).toBe('Sign in with ChatGPT');
+    expect(
+      t('onboarding.more.action', undefined, { provider: 'Anthropic' }),
+    ).toBe('Connect Anthropic');
+    expect(t('onboarding.provider.tip.openrouter').toLowerCase()).toContain(
+      'free',
+    );
+  });
+
   it('contains Toasted design labels for Agents placeholders', () => {
     const requiredKeys = [
       'agents.detail.identity',

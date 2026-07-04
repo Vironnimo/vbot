@@ -79,6 +79,10 @@ export const englishCatalog = Object.freeze({
   'chat.skillsLoadError': 'Skill suggestions could not be loaded.',
   'chat.cancelError': 'Run could not be cancelled.',
   'chat.sessionCreateError': 'New session could not be created.',
+  'chat.noModel.title': 'Pick a model to start',
+  'chat.noModel.hint':
+    'This agent has no model yet. Choose one to send messages.',
+  'chat.noModel.action': 'Choose a model',
   'chat.role.user': 'You',
   'chat.role.assistant': 'Assistant',
   'chat.role.system': 'System',
@@ -1083,6 +1087,46 @@ export const englishCatalog = Object.freeze({
   'statistics.limits.unavailable': 'Usage unavailable',
   'statistics.limits.usedPercent': '{percent}% used',
   'statistics.limits.resetsIn': 'Resets in {duration}',
+
+  // First-run onboarding wizard.
+  'onboarding.title': 'Set up vBot',
+  'onboarding.dismiss': 'Skip for now',
+  'onboarding.finishSetup': 'Finish setup',
+  'onboarding.finishSetupHint': 'Connect an AI service to start chatting.',
+  'onboarding.step.service.kicker': 'Step 1 of 3',
+  'onboarding.step.service.title': 'Choose an AI service',
+  'onboarding.step.service.subtitle':
+    'vBot reaches AI models through a service. Pick one to connect — you can add more later in Settings.',
+  'onboarding.hero.badge': 'Recommended to start',
+  'onboarding.hero.title': 'OpenRouter',
+  'onboarding.hero.description':
+    'One account unlocks many models, including free ones — so you can reach a working chat at no cost, without an existing subscription.',
+  'onboarding.hero.action': 'Connect OpenRouter',
+  'onboarding.subscription.title': 'Already subscribed?',
+  'onboarding.subscription.description':
+    'Sign in with an existing subscription — no API key needed.',
+  'onboarding.subscription.action': 'Sign in with {provider}',
+  'onboarding.more.toggle': 'More services',
+  'onboarding.more.description': 'Connect another provider with an API key.',
+  'onboarding.more.action': 'Connect {provider}',
+  'onboarding.step.model.kicker': 'Step 3 of 3',
+  'onboarding.step.model.title': 'Choose a model',
+  'onboarding.step.model.subtitle':
+    'Pick the model this agent will use. You can change it anytime in Agents.',
+  'onboarding.model.label': 'Model',
+  'onboarding.model.placeholder': 'Select a model',
+  'onboarding.model.searchPlaceholder': 'Filter models…',
+  'onboarding.model.searchEmpty': 'No models match',
+  'onboarding.model.loading': 'Loading models…',
+  'onboarding.model.loadError': 'Models could not be loaded.',
+  'onboarding.model.empty':
+    'No models are available yet. Retry once the model list finishes updating.',
+  'onboarding.model.retry': 'Retry',
+  'onboarding.model.start': 'Start chatting',
+  'onboarding.model.assignError': 'The model could not be assigned.',
+  'onboarding.model.back': 'Choose a different service',
+  'onboarding.provider.tip.openrouter':
+    'Type free in the model search to list models you can use at no cost.',
 });
 
 const catalogs = Object.freeze({
