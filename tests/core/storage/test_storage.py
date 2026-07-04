@@ -17,7 +17,14 @@ from core.storage import (
 def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = True) -> None:
     prompts_dir = resources_dir / "prompts"
     prompts_dir.mkdir(parents=True)
-    prompt_names = ["runtime.md", "tools.md", "tools_list.md", "channels.md", "skills.md"]
+    prompt_names = [
+        "runtime.md",
+        "tools.md",
+        "tools_list.md",
+        "channels.md",
+        "skills.md",
+        "skill_maintenance.md",
+    ]
     if include_compaction:
         prompt_names.append("compaction.md")
 
@@ -904,6 +911,14 @@ def test_read_prompt_fragment_falls_back_to_bundled_resource(tmp_path: Path) -> 
     assert storage.read_prompt_fragment("skills.md") == "skills.md bundled"
 
 
+def test_read_prompt_fragment_skill_maintenance_resolves_bundled_resource(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    create_prompt_resources(resources_dir)
+    storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
+
+    assert storage.read_prompt_fragment("skill_maintenance.md") == "skill_maintenance.md bundled"
+
+
 def test_read_prompt_fragment_compaction_name_passes_allowlist_check(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     create_prompt_resources(resources_dir, include_compaction=False)
@@ -941,6 +956,7 @@ def test_copy_agent_prompt_fragments_seeds_editable_defaults_only(tmp_path: Path
     assert sorted(path.name for path in written_paths) == [
         "channels.md",
         "runtime.md",
+        "skill_maintenance.md",
         "skills.md",
         "tools.md",
         "tools_list.md",

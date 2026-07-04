@@ -203,6 +203,7 @@ def test_list_returns_blocks_in_layout_order_with_scopes(tmp_path: Path) -> None
         "core:tools_list",
         "core:channels",
         "core:skills",
+        "core:skill_maintenance",
         "core:agent_body",
         "core:project_files",
     ]
