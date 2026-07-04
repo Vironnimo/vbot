@@ -9,7 +9,12 @@ from uuid import UUID
 import pytest
 
 from core.chat import ChatMessage, ToolCall
-from core.sessions import ChatSession, ChatSessionError, ChatSessionManager
+from core.sessions import (
+    FORK_SOURCE_META_KEY,
+    ChatSession,
+    ChatSessionError,
+    ChatSessionManager,
+)
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 
@@ -920,3 +925,106 @@ class TestChatSessionManagerMove:
         assert manager.exists("alpha", "sess") is True
         assert source.sidecar_path.exists()
         assert [message.role for message in source.load()] == ["user", "assistant"]
+
+
+class TestChatSessionManagerFork:
+    """1:1 copy of a session into a fresh id with recorded provenance."""
+
+    @staticmethod
+    def _populate(manager, agent_id, session_id, *, project_id=None):
+        session = manager.create(agent_id, session_id=session_id, project_id=project_id)
+        session.append(ChatMessage.user("hello", timestamp=FIXED_TIMESTAMP))
+        session.append(
+            ChatMessage.assistant(
+                model="openai/gpt-4.1", content="hi there", timestamp=FIXED_TIMESTAMP
+            )
+        )
+        return session
+
+    def test_fork_copies_transcript_verbatim_into_fresh_id(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess")
+
+        fork = asyncio.run(manager.fork("alpha", "sess"))
+
+        # Fresh, valid id distinct from the source; transcript copied byte-for-byte.
+        assert fork.id != "sess"
+        assert UUID(fork.id).version == 4
+        assert fork.path.read_bytes() == source.path.read_bytes()
+        assert [message.to_dict() for message in fork.load()] == [
+            message.to_dict() for message in source.load()
+        ]
+
+    def test_fork_leaves_source_untouched(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess")
+        manager.set_metadata("alpha", "sess", {"platform": "telegram"})
+        source_bytes = source.path.read_bytes()
+        source_sidecar = source.sidecar_path.read_bytes()
+
+        asyncio.run(manager.fork("alpha", "sess"))
+
+        assert source.path.read_bytes() == source_bytes
+        assert source.sidecar_path.read_bytes() == source_sidecar
+
+    def test_fork_records_provenance(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        self._populate(manager, "alpha", "sess", project_id="acme")
+
+        fork = asyncio.run(
+            manager.fork("alpha", "sess", source_project_id="acme", target_project_id="acme")
+        )
+
+        provenance = manager.get_metadata("alpha", fork.id, "acme")[FORK_SOURCE_META_KEY]
+        assert provenance["agent_id"] == "alpha"
+        assert provenance["session_id"] == "sess"
+        assert provenance["project_id"] == "acme"
+        assert provenance["message_count"] == 2
+        assert isinstance(provenance["forked_at"], str) and provenance["forked_at"]
+
+    def test_fork_strips_requested_meta_keys_but_keeps_others(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        self._populate(manager, "alpha", "sess")
+        manager.set_metadata(
+            "alpha",
+            "sess",
+            {"pinned_skill_catalog": {"text": "cached"}, "title": "Keep me"},
+        )
+
+        fork = asyncio.run(
+            manager.fork(
+                "alpha",
+                "sess",
+                strip_meta_keys=frozenset({"pinned_skill_catalog"}),
+            )
+        )
+
+        metadata = manager.get_metadata("alpha", fork.id)
+        assert "pinned_skill_catalog" not in metadata
+        assert metadata["title"] == "Keep me"
+        assert FORK_SOURCE_META_KEY in metadata
+
+    def test_fork_to_other_agent_lands_under_target(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        self._populate(manager, "alpha", "sess")
+
+        fork = asyncio.run(manager.fork("alpha", "sess", target_agent_id="beta"))
+
+        assert fork.path.parent == manager.sessions_dir("beta")
+        assert manager.exists("beta", fork.id) is True
+        assert manager.get_metadata("beta", fork.id)[FORK_SOURCE_META_KEY]["agent_id"] == "alpha"
+
+    def test_fork_without_sidecar_writes_fork_source_only(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess")
+        assert not source.sidecar_path.exists()
+
+        fork = asyncio.run(manager.fork("alpha", "sess"))
+
+        assert list(manager.get_metadata("alpha", fork.id)) == [FORK_SOURCE_META_KEY]
+
+    def test_fork_of_unknown_session_raises(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        with pytest.raises(ChatSessionError, match="session does not exist"):
+            asyncio.run(manager.fork("alpha", "missing"))

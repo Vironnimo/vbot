@@ -112,6 +112,7 @@ def test_commands_are_always_present() -> None:
         "learn",
         "model",
         "new",
+        "reflect",
         "rename",
         "retry",
         "status",

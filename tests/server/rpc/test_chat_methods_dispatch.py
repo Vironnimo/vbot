@@ -352,6 +352,15 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "output": "action",
                 },
                 {
+                    "name": "reflect",
+                    "description": (
+                        "Review this session in a fork and save durable memory and skill updates."
+                    ),
+                    "type": "command",
+                    "argument": "optional",
+                    "output": "action",
+                },
+                {
                     "name": "rename",
                     "description": "Rename this session; no argument clears the name.",
                     "type": "command",

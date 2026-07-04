@@ -43,6 +43,7 @@ CommandActionName = Literal[
     "learn",
     "move_session",
     "new_session",
+    "reflect",
     "rename_session",
     "retry_last_turn",
     "set_model",
@@ -232,6 +233,12 @@ class CommandDispatcher:
             argument="none",
             output="action",
         ),
+        "reflect": CommandSpec(
+            "reflect",
+            "Review this session in a fork and save durable memory and skill updates.",
+            argument="optional",
+            output="action",
+        ),
         "rename": CommandSpec(
             "rename",
             "Rename this session; no argument clears the name.",
@@ -285,6 +292,7 @@ class CommandDispatcher:
             "learn": self._handle_learn,
             "model": self._handle_model,
             "new": self._handle_new,
+            "reflect": self._handle_reflect,
             "rename": self._handle_rename,
             "retry": self._handle_retry,
             "status": self._handle_status,
@@ -356,6 +364,11 @@ class CommandDispatcher:
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandAction:
         return CommandAction(name="learn", argument=argument)
+
+    def _handle_reflect(
+        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
+    ) -> CommandAction:
+        return CommandAction(name="reflect", argument=argument)
 
     def _handle_agent(
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None

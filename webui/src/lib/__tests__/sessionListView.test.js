@@ -85,6 +85,37 @@ describe('sessionListView helpers', () => {
     });
   });
 
+  it('maps a fork_source object to is_fork and preserves it', () => {
+    const forkSource = {
+      agent_id: 'coder',
+      session_id: 'source-session',
+      project_id: null,
+      forked_at: '2026-07-04T00:00:00+00:00',
+      message_count: 12,
+    };
+    const next = applySessionList(createSessionListState(), [
+      { id: 'fork-session', fork_source: forkSource },
+    ]);
+
+    expect(next.sessions[0]).toMatchObject({
+      id: 'fork-session',
+      is_fork: true,
+      fork_source: forkSource,
+    });
+  });
+
+  it('treats absent or non-object fork_source as not a fork', () => {
+    const next = applySessionList(createSessionListState(), [
+      { id: 'plain-session' },
+      { id: 'bad-session', fork_source: 'nope' },
+    ]);
+
+    for (const session of next.sessions) {
+      expect(session.is_fork).toBe(false);
+      expect(session.fork_source).toBeNull();
+    }
+  });
+
   it('clears selected session when the session list no longer contains it', () => {
     const state = {
       ...createSessionListState(),

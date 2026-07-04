@@ -297,6 +297,7 @@ async def _dispatch_tool_calls(
     project_cwd: Path | None = None,
     project_id: str | None = None,
     skill_project_id: str | None = None,
+    tool_restriction: Sequence[str] | None = None,
 ) -> tuple[list[ChatMessage], list[JsonObject]]:
     run.raise_if_cancelled()
     emitting_registry = _EmittingToolRegistry(
@@ -330,7 +331,7 @@ async def _dispatch_tool_calls(
             # The run's effective skill project (rooted-aware) so the skill tool
             # resolves the same pool the run's catalog advertises.
             skill_project_id=skill_project_id,
-            allowed_tools=_runtime_allowed_tools(agent, runtime.tools),
+            allowed_tools=_dispatch_allowed_tools(agent, runtime.tools, tool_restriction),
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
             emit_hook=lambda event_type, payload: _emit_tool_context_event(
                 run,
@@ -554,6 +555,34 @@ def _runtime_allowed_tools(agent: Any, tool_registry: ToolRegistry) -> Sequence[
         registered_tool_names=[tool.name for tool in tool_registry.list_tools()],
         workspace=getattr(agent, "workspace", "") or "",
     )
+
+
+def _dispatch_allowed_tools(
+    agent: Any,
+    tool_registry: ToolRegistry,
+    tool_restriction: Sequence[str] | None,
+) -> Sequence[str] | None:
+    """Return the dispatch allowlist, narrowed by an optional per-run restriction.
+
+    Without a restriction this is exactly ``_runtime_allowed_tools`` (today's
+    behavior, byte-identical). With one, the run may dispatch only tools present
+    in **both** the effective allowlist and the restriction — an intersection, so
+    a tool named in the restriction but not effectively allowed stays denied. A
+    ``None``/``["*"]`` effective allowlist is expanded to every registered normal
+    tool name (exactly how ``ToolRegistry.list_tools`` reads it) before the
+    intersection, so the restriction narrows a wildcard agent too.
+
+    This is enforcement-only: it feeds ``ToolExecutionConfig.allowed_tools`` (the
+    dispatch gate) and never the provider tool definitions or the system prompt,
+    so a restricted run keeps a byte-identical prompt prefix (the prompt-cache
+    invariant). A restricted-out call fails through the existing
+    ``ToolNotAllowedError`` → ``tool_not_allowed`` path — no new denial code.
+    """
+    effective = _runtime_allowed_tools(agent, tool_registry)
+    if tool_restriction is None:
+        return effective
+    restriction = set(tool_restriction)
+    return [tool.name for tool in tool_registry.list_tools(effective) if tool.name in restriction]
 
 
 def _agent_workspace(agent: Any, data_root: Path) -> Path:

@@ -1,6 +1,7 @@
 """Phase 2 chat validation tests."""
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -519,6 +520,79 @@ async def test_unresolvable_project_agent_raises_clear_error(tmp_path: Path) -> 
 
     with pytest.raises(AgentResolutionError, match="not on project 'acme' team"):
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one", project_id="acme")
+
+
+@pytest.mark.asyncio
+async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
+    tmp_path: Path,
+) -> None:
+    # A restricted run may only dispatch the restricted tools; every other call
+    # fails through the tool_not_allowed path. The provider tool definitions
+    # offered on the wire stay byte-identical to an unrestricted run — the
+    # restriction is dispatch-only, so the prompt/tool-definition cache is intact.
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+
+    def make_recording_tool(ran: list[str], label: str):
+        async def handler(_context: ToolContext, _arguments: dict) -> dict:
+            ran.append(label)
+            return tool_success({"tool": label})
+
+        return handler
+
+    def build(ran: list[str], session_id: str) -> tuple[Any, StubAdapter]:
+        tools = ToolRegistry()
+        tools.register(
+            "memory", "Memory stub.", {"type": "object"}, make_recording_tool(ran, "memory")
+        )
+        tools.register(
+            "weather", "Weather stub.", {"type": "object"}, make_recording_tool(ran, "weather")
+        )
+        agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+        adapter = StubAdapter(
+            [
+                {
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_mem", "name": "memory", "arguments": {}},
+                        {"id": "call_weather", "name": "weather", "arguments": {}},
+                    ],
+                },
+                {"content": "done", "tool_calls": []},
+            ]
+        )
+        runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+        runtime.chat_sessions.create("coder", session_id=session_id)
+        return runtime, adapter
+
+    # Restricted run: only ``memory`` may dispatch; ``weather`` is denied.
+    restricted_ran: list[str] = []
+    restricted_runtime, restricted_adapter = build(restricted_ran, "restricted")
+    run = await ChatLoop(restricted_runtime).start_run(
+        "coder",
+        "Go",
+        session_id="restricted",
+        tool_restriction=("memory", "skill", "skill_manage"),
+    )
+    await run.wait()
+
+    persisted = restricted_runtime.chat_sessions.get("coder", "restricted").load()
+    results = {m.tool_call_id: json.loads(m.content) for m in persisted if m.role == "tool"}
+    assert restricted_ran == ["memory"]
+    assert results["call_mem"]["ok"] is True
+    assert results["call_weather"]["ok"] is False
+    assert results["call_weather"]["error"]["code"] == "tool_not_allowed"
+
+    # Unrestricted run: both tools dispatch, and the offered definitions match.
+    unrestricted_ran: list[str] = []
+    unrestricted_runtime, unrestricted_adapter = build(unrestricted_ran, "unrestricted")
+    run = await ChatLoop(unrestricted_runtime).start_run("coder", "Go", session_id="unrestricted")
+    await run.wait()
+
+    assert sorted(unrestricted_ran) == ["memory", "weather"]
+    assert (
+        restricted_adapter.requests[0]["kwargs"]["tools"]
+        == unrestricted_adapter.requests[0]["kwargs"]["tools"]
+    )
 
 
 def persisted_roles_of(messages: list[ChatMessage]) -> list[str]:
