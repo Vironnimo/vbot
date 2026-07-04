@@ -326,10 +326,11 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
 
 
 def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:
-    # The bug fix (D5): the guidance is the block's own text and the owner gate is
-    # "memory tool enabled" — so the block appears whenever memory_prompt_mode != off,
-    # even with empty/absent MEMORY.md/USER.md (the agent needs the guidance most
-    # precisely before the first entry).
+    # The guidance is the block's own text and the owner gate is "memory tool enabled",
+    # so the block appears whenever memory_prompt_mode != off. With lazy file ownership,
+    # not-yet-created files render their default "no entries" content (identical to an
+    # empty on-disk file), so the framing is present from the first turn — and rendering
+    # never creates the files.
     empty_workspace = tmp_path / "empty-ws"
     empty_workspace.mkdir()
     manager = _manager(tmp_path)
@@ -339,7 +340,11 @@ def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:
 
     assert "<memory>" in prompt
     assert "declarative facts" in prompt  # the guidance prose
-    assert "<file name=" not in prompt  # no memory files to embed
+    assert '<file name="MEMORY.md">' in prompt
+    assert '<file name="USER.md">' in prompt
+    assert "No tool-managed memory entries are recorded yet." in prompt
+    assert not (empty_workspace / "MEMORY.md").exists()
+    assert not (empty_workspace / "USER.md").exists()
 
 
 def test_memory_block_absent_when_memory_off(workspace: Path, tmp_path: Path) -> None:
