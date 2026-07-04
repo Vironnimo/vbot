@@ -53,14 +53,19 @@ _MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000}
 # and the block is gated on "memory tool enabled" (not "memory files non-empty"),
 # it now appears whenever ``memory_prompt_mode != off`` — including before the first
 # entry, when the agent needs it most (this is the empty-memory fix from D5).
-# Complements the memory tool's WHEN/SKIP description with the one writing-quality
-# rule that is not obvious: declarative facts round-trip safely, imperative
-# self-instructions do not.
+# Complements the memory tool's WHEN/SKIP description with the writing-quality half:
+# what makes an entry worth its permanent prompt cost (it spares the user future
+# steering) and the one non-obvious rule (declarative facts round-trip safely,
+# imperative self-instructions do not). Two examples — a user fact and a project
+# fact — cover both scopes.
 _MEMORY_GUIDANCE = (
-    "Write durable, declarative facts here, not instructions to yourself: "
-    '"User prefers concise answers" (good), not "Always answer concisely" (bad) — '
-    "imperative notes get re-read as standing directives in later sessions and can "
-    "override the user's current request."
+    "This memory is injected into every future session, so keep it to durable, high-signal "
+    "facts — the most valuable entry is one that stops the user from having to steer, "
+    "correct, or repeat themselves again. Write them as declarative facts, not instructions "
+    'to yourself: "User prefers concise answers" (good), not "Always answer concisely" (bad); '
+    '"Project uses pytest with xdist" (good), not "Run tests with pytest -n 4" (bad). '
+    "Imperative notes get re-read as standing directives in later sessions and can override "
+    "the user's current request."
 )
 # The ``memory:guidance`` block id and owner. The owner ``memory`` is gate 2's
 # input: the block renders only when the memory tool is enabled for the agent
