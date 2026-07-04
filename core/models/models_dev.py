@@ -314,7 +314,7 @@ def seed_canonical_overrides_structure(models_dir: Path) -> Path | None:
             "or there is no lab provider). Add entries keyed by canonical id "
             "lab/model with a 'capabilities.reasoning' block, e.g. "
             '{"capabilities": {"reasoning": {"supported": true, "control": "levels", '
-            '"levels": ["low", "high"]}}}. See .vorch/FLAGGED.md for the unseeded list.'
+            '"levels": ["low", "high"]}}}.'
         ),
         "models": {},
     }
@@ -371,7 +371,7 @@ def _ladder_lift_counts(catalog: ModelsDevCatalog) -> tuple[int, int]:
     Returns ``(lifted, hand_path_reasoning)``: how many reasoning-capable
     canonical models lifted a control block from their lab provider, and how
     many reasoning-capable ones did NOT (the hand-path candidates the orchestrator
-    report and FLAGGED.md call out).
+    report calls out).
     """
 
     lifted = 0
