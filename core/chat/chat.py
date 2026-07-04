@@ -334,11 +334,18 @@ class ChatLoop:
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
         project_id: str | None = None,
+        tool_restriction: Sequence[str] | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
 
         ``project_id=None`` keeps today's identity behavior; a set ``project_id``
         opens the session under the project anchor and keys the run to it.
+
+        ``tool_restriction`` limits which tools this run may actually *dispatch*
+        (an intersection with the agent's effective allowlist); it deliberately
+        does not touch the provider tool definitions or the system prompt, so a
+        restricted run keeps a byte-identical prompt prefix (the prompt-cache
+        invariant). ``None`` is the unrestricted default.
         """
         return await self._start_run(
             agent_id,
@@ -349,6 +356,7 @@ class ChatLoop:
             input_origin=input_origin,
             sender=sender,
             project_id=project_id,
+            tool_restriction=tool_restriction,
         )
 
     async def queue_run(
@@ -509,6 +517,7 @@ class ChatLoop:
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
         project_id: str | None = None,
+        tool_restriction: Sequence[str] | None = None,
     ) -> Run:
         agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
@@ -526,6 +535,7 @@ class ChatLoop:
                 internal=internal,
                 input_origin=input_origin,
                 sender=sender,
+                tool_restriction=tool_restriction,
             ),
             project_id=project_id,
         )
@@ -539,6 +549,7 @@ class ChatLoop:
         retry: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        tool_restriction: Sequence[str] | None = None,
     ) -> ChatMessage:
         # The run's project anchor lives on the Run (``run.project_id``), set by
         # the run manager at creation, not on a closure: the session anchor, tool
@@ -660,6 +671,7 @@ class ChatLoop:
                     project_id=project_id,
                     project_cwd=project_cwd,
                     rooted_project_id=rooted_project_id,
+                    tool_restriction=tool_restriction,
                 )
             except ProviderError as primary_exc:
                 if _is_model_fallback_trigger(primary_exc):
@@ -703,6 +715,7 @@ class ChatLoop:
                                 project_id=project_id,
                                 project_cwd=project_cwd,
                                 rooted_project_id=rooted_project_id,
+                                tool_restriction=tool_restriction,
                             )
                         except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
                             _run_succeeded = False
@@ -1100,6 +1113,7 @@ class ChatLoop:
         project_id: str | None = None,
         project_cwd: Path | None = None,
         rooted_project_id: str | None = None,
+        tool_restriction: Sequence[str] | None = None,
     ) -> ChatMessage:
         replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
         wire_media_types = _resolve_wire_media_support(adapter, model_id)
@@ -1227,6 +1241,7 @@ class ChatLoop:
                         project_cwd=project_cwd,
                         project_id=project_id,
                         skill_project_id=skill_project_id,
+                        tool_restriction=tool_restriction,
                     )
                     for tool_message in tool_messages:
                         session.append(tool_message)

@@ -804,3 +804,99 @@ class TestSyncSkillContextMessages:
         _sync_skill_context_messages(messages, session)
 
         assert len(messages) == 2
+
+
+class TestDispatchToolRestriction:
+    """A per-run tool restriction narrows *dispatch* only (prompt-cache invariant)."""
+
+    @staticmethod
+    def _register_recording_tool(tools: ToolRegistry, name: str, ran: list[str]) -> None:
+        def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            ran.append(name)
+            return tool_success({"tool": name})
+
+        tools.register(name, f"Recording stub for {name}.", {"type": "object"}, handler)
+
+    @pytest.mark.asyncio
+    async def test_restricted_out_tool_is_denied_and_never_runs(self, tmp_path: Path) -> None:
+        # Wildcard agent: the restriction alone must gate dispatch.
+        ran: list[str] = []
+        tools = ToolRegistry()
+        self._register_recording_tool(tools, "memory", ran)
+        self._register_recording_tool(tools, "read_file", ran)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+        messages, _ = await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [
+                ToolCall(id="call-mem", name="memory", arguments={}),
+                ToolCall(id="call-read", name="read_file", arguments={}),
+            ],
+            session,
+            run,
+            nesting_depth=0,
+            tool_restriction=("memory", "skill", "skill_manage"),
+        )
+
+        results = {
+            message.tool_call_id: _decode_tool_result(message.content) for message in messages
+        }
+        # Only the allowed-and-restricted tool ran; the restricted-out one was denied.
+        assert ran == ["memory"]
+        assert results["call-mem"] == tool_success({"tool": "memory"})
+        assert results["call-read"]["ok"] is False
+        assert results["call-read"]["error"]["code"] == "tool_not_allowed"
+
+    @pytest.mark.asyncio
+    async def test_restriction_is_intersection_not_union(self, tmp_path: Path) -> None:
+        # ``skill`` is in the restriction but NOT in the agent's effective allowlist
+        # (a concrete list without it), so the intersection still denies it.
+        ran: list[str] = []
+        tools = ToolRegistry()
+        self._register_recording_tool(tools, "skill", ran)
+        self._register_recording_tool(tools, "read_file", ran)
+        workspace = tmp_path / "workspace"
+        workspace.mkdir(exist_ok=True)
+        agent = _StubAgent(id="coder", workspace=workspace, allowed_tools=["read_file"])
+        runtime: Any = _StubRuntime(tools, tmp_path)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+        messages, _ = await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [ToolCall(id="call-skill", name="skill", arguments={})],
+            session,
+            run,
+            nesting_depth=0,
+            tool_restriction=("memory", "skill", "skill_manage"),
+        )
+
+        assert ran == []
+        assert _decode_tool_result(messages[0].content)["error"]["code"] == "tool_not_allowed"
+
+    @pytest.mark.asyncio
+    async def test_no_restriction_leaves_dispatch_unchanged(self, tmp_path: Path) -> None:
+        # ``tool_restriction=None`` is byte-identical to today: every allowed tool runs.
+        ran: list[str] = []
+        tools = ToolRegistry()
+        self._register_recording_tool(tools, "read_file", ran)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+        messages, _ = await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [ToolCall(id="call-read", name="read_file", arguments={})],
+            session,
+            run,
+            nesting_depth=0,
+            tool_restriction=None,
+        )
+
+        assert ran == ["read_file"]
+        assert _decode_tool_result(messages[0].content) == tool_success({"tool": "read_file"})

@@ -3,6 +3,7 @@
 from core.chat.errors import ChatSessionError
 from core.sessions.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
+    FORK_SOURCE_META_KEY,
     PARTIAL_THINKING_NOTE_PREFIX,
     SESSION_FILE_EXTENSION,
     SKILL_AVAILABLE_NOTE_PREFIX,
@@ -16,6 +17,7 @@ from core.sessions.sessions import (
 
 __all__ = [
     "CHANNEL_MESSAGE_NOTE_PREFIX",
+    "FORK_SOURCE_META_KEY",
     "PARTIAL_THINKING_NOTE_PREFIX",
     "SESSION_FILE_EXTENSION",
     "SKILL_AVAILABLE_NOTE_PREFIX",

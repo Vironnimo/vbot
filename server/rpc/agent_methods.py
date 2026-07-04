@@ -5,8 +5,15 @@ from __future__ import annotations
 from typing import Any, cast
 
 from core.channels import ChannelConfigError, channel_system_reminder
+from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY, SEEN_SKILLS_META_KEY
 from core.memory import MEMORY_PROMPT_MODES
+from core.projects import (
+    InvalidAgentAddressError,
+    format_agent_address,
+    parse_agent_address,
+)
 from core.prompts import load_bundled_default_layout
+from core.sessions import FORK_SOURCE_META_KEY
 from core.settings import (
     ALLOWED_THINKING_EFFORTS,
     MAX_TEMPERATURE,
@@ -14,6 +21,10 @@ from core.settings import (
     SettingsValidationError,
     validate_temperature,
     validate_thinking_effort,
+)
+from core.subagents.subagents import (
+    SUBAGENT_PARENT_METADATA_KEY,
+    SUBAGENT_SESSION_METADATA_FLAG,
 )
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_SESSIONS
 from server.rpc.agent_refs import _agent_reference_ids, _agent_reference_lock
@@ -42,6 +53,33 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 
 __all__ = ["ALLOWED_THINKING_EFFORTS", "MAX_TEMPERATURE", "MIN_TEMPERATURE"]
+
+# Session-fork strip policy, server-owned so the sessions domain imports no
+# chat/channel constant (it takes the set as a parameter). A fork must never
+# inherit a channel binding or a sub-agent parent linkage — the copy is a plain,
+# unbound session — so those keys are always stripped. The channel keys are
+# literals: the channels engine writes them as bare strings (see
+# ``core/channels/engine.py`` ~514-516, ``877-879``), there is no exported
+# constant; the sub-agent keys come from their domain constants. Shared with the
+# ``/reflect`` fork orchestrator in ``chat_methods.py``.
+SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
+    {
+        "source_channel_id",
+        "platform",
+        "platform_conv_id",
+        "last_reply_target",
+        SUBAGENT_SESSION_METADATA_FLAG,
+        SUBAGENT_PARENT_METADATA_KEY,
+    }
+)
+# Additionally stripped when a fork re-homes to a *different* agent: the pinned
+# skill catalog and its seen-skills set belong to the source agent's skill pool,
+# so a different agent must re-pin its own catalog on the fork's first run. A
+# same-agent fork (e.g. ``/reflect``) deliberately keeps them, so the fork stays
+# prompt-cache-warm against the source.
+SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS = frozenset(
+    {PINNED_SKILL_CATALOG_META_KEY, SEEN_SKILLS_META_KEY}
+)
 
 
 def _list_agents(state: Any) -> JsonObject:
@@ -278,6 +316,84 @@ def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     return {"sessions": sessions}
 
 
+async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
+    """Copy a session 1:1 into a fresh id, optionally re-homed to another agent.
+
+    A general capability: the fork is a normal, visible session that records its
+    provenance (``fork_source``). Channel- and sub-agent bindings are always
+    stripped so the copy is unbound; a cross-agent fork additionally drops the
+    pinned skill catalog so the target re-pins its own. The strip policy lives in
+    the server (``SESSION_FORK_*`` constants) so the sessions domain imports no
+    chat/channel constant.
+    """
+    supported_fields = {"agent_id", "session_id", "target_agent_id"}
+    unsupported_fields = sorted(set(params) - supported_fields)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported session.fork fields: {', '.join(unsupported_fields)}",
+        )
+
+    source_agent_id, source_project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    target_agent_id, target_project_id = _optional_fork_target(
+        params, source_agent_id, source_project_id
+    )
+
+    strip_meta_keys = SESSION_FORK_ALWAYS_STRIP_META_KEYS
+    re_homed = (target_agent_id, target_project_id) != (source_agent_id, source_project_id)
+    if re_homed:
+        strip_meta_keys = strip_meta_keys | SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
+
+    try:
+        # Resolve both endpoints through the one seam so an unknown source or
+        # target agent fails before any file work (mirrors session.create/delete).
+        state.runtime.agent_resolver.resolve_agent(source_project_id, source_agent_id)
+        if re_homed:
+            state.runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
+        fork = await state.runtime.chat_sessions.fork(
+            source_agent_id,
+            session_id,
+            target_agent_id=target_agent_id,
+            source_project_id=source_project_id,
+            target_project_id=target_project_id,
+            strip_meta_keys=strip_meta_keys,
+        )
+        fork_source = state.runtime.chat_sessions.get_metadata(
+            target_agent_id, fork.id, target_project_id
+        ).get(FORK_SOURCE_META_KEY)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    # Same emit point as session.create: other windows on the *target* agent
+    # refresh their session list so the fork shows immediately.
+    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": target_agent_id})
+    return {
+        "session": {
+            "id": fork.id,
+            "agent_id": format_agent_address(target_agent_id, target_project_id),
+            "fork_source": fork_source,
+        }
+    }
+
+
+def _optional_fork_target(
+    params: JsonObject, source_agent_id: str, source_project_id: str | None
+) -> tuple[str, str | None]:
+    """Parse the optional ``target_agent_id`` fork destination, defaulting to source.
+
+    Absent → fork within the source's own (agent, project). A malformed address is
+    a client error surfaced as ``invalid_request`` (mirrors ``_required_agent_address``).
+    """
+    raw = _optional_string(params, "target_agent_id")
+    if raw is None:
+        return source_agent_id, source_project_id
+    try:
+        return parse_agent_address(raw)
+    except InvalidAgentAddressError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+
 async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"agent_id", "session_id", "channel_id", "platform_conv_id"}
     unsupported_fields = sorted(set(params) - supported_fields)
@@ -492,6 +608,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent.delete": _delete_agent,
         "session.create": _create_session,
         "session.list": _list_sessions,
+        "session.fork": _fork_session,
         "session.delete": _delete_session,
         "session.rename": _rename_session,
         "session.link_channel": _link_session_to_channel,
