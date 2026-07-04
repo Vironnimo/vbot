@@ -7,9 +7,12 @@ all core services and manages the application lifecycle.
 import asyncio
 import os
 import sqlite3
+import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _installed_package_version
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -112,11 +115,36 @@ from core.utils.logging import LogManager
 # Three directories up from this file (core/runtime/runtime.py) → project root.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_RESOURCES_DIR = _PROJECT_ROOT / "resources"
-_DEFAULT_APP_VERSION = "0.1.0"
+_PACKAGE_NAME = "vbot"
+_UNKNOWN_APP_VERSION = "0.0.0+unknown"
 _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES = 20_971_520
 _DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 20_971_520
 _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
+
+
+def _detect_app_version() -> str:
+    """Resolve the running app version from its single source of truth.
+
+    The version lives once, in ``pyproject.toml`` → ``project.version``. Read
+    that file directly when it sits next to the running code (the dev and
+    clone-based deployments vBot actually ships as): it is the *live* value, so a
+    version bump — or a ``vbot update`` git pull — flows through without a
+    reinstall. Installed package metadata is only a fallback for a pure wheel
+    install where the source tree is absent; it is a snapshot frozen at install
+    time and would otherwise drift behind an edited ``pyproject.toml``.
+    """
+    try:
+        with (_PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+            version = tomllib.load(handle)["project"]["version"]
+        if isinstance(version, str) and version:
+            return version
+    except (OSError, KeyError, tomllib.TOMLDecodeError):
+        pass
+    try:
+        return _installed_package_version(_PACKAGE_NAME)
+    except PackageNotFoundError:
+        return _UNKNOWN_APP_VERSION
 
 
 @dataclass(frozen=True)
@@ -584,7 +612,7 @@ class Runtime:
             self._tools,
             cast(SkillPromptRegistry, self._skills),
             channel_registry=cast(ChannelService, self._channel_service),
-            app_version=str(self._config.get("APP_VERSION", _DEFAULT_APP_VERSION)),
+            app_version=str(self._config.get("APP_VERSION") or _detect_app_version()),
             app_dir=_PROJECT_ROOT,
             data_root=self._storage.data_dir,
             memory_provider=self._memory_service,
