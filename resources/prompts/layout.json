@@ -6,6 +6,7 @@
   { "id": "core:tools_list", "enabled": false, "source": "core" },
   { "id": "core:channels", "enabled": true, "source": "core" },
   { "id": "core:skills", "enabled": true, "source": "core" },
+  { "id": "core:skill_maintenance", "enabled": true, "source": "core" },
   { "id": "core:agent_body", "enabled": true, "source": "core" },
   { "id": "core:project_files", "enabled": true, "source": "core" }
 ]

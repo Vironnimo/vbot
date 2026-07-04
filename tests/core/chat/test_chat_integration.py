@@ -734,6 +734,7 @@ def _write_prompt_resources(resources: Path) -> None:
     (prompts_dir / "tools_list.md").write_text("Tool list\n{generated:tool_list}", encoding="utf-8")
     (prompts_dir / "channels.md").write_text("Channels\n{generated:channel_list}", encoding="utf-8")
     (prompts_dir / "skills.md").write_text("Skills\n{generated:skill_list}", encoding="utf-8")
+    (prompts_dir / "skill_maintenance.md").write_text("Skill maintenance", encoding="utf-8")
     (prompts_dir / "compaction.md").write_text("Summarize the conversation.", encoding="utf-8")
 
 

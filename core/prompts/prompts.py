@@ -45,7 +45,12 @@ from core.skills.skills import (
     SKILL_ORIGIN_PROJECT_PREFIX,
     skill_origin_sort_key,
 )
-from core.tools.availability import IDENTITY_ONLY_TOOLS, MEMORY_TOOL_NAME, memory_tool_enabled
+from core.tools.availability import (
+    IDENTITY_ONLY_TOOLS,
+    MEMORY_TOOL_NAME,
+    SKILL_MANAGE_TOOL_NAME,
+    memory_tool_enabled,
+)
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -66,11 +71,20 @@ CORE_TOOLS_BLOCK_ID = "core:tools"
 CORE_TOOLS_LIST_BLOCK_ID = "core:tools_list"
 CORE_CHANNELS_BLOCK_ID = "core:channels"
 CORE_SKILLS_BLOCK_ID = "core:skills"
+# Owner-gated on the ``skill_manage`` tool (owner ``tool:skill_manage``): it renders
+# only for identity agents that may author skills, so a config/project agent — which
+# has no private skill home and gets ``skill_manage`` stripped by IDENTITY_ONLY_TOOLS —
+# never sees it, even under a wildcard allow-list.
+CORE_SKILL_MAINTENANCE_BLOCK_ID = "core:skill_maintenance"
 CORE_SOUL_BLOCK_ID = "core:soul"
 CORE_PROJECT_FILES_BLOCK_ID = "core:project_files"
 CORE_AGENT_BODY_BLOCK_ID = "core:agent_body"
 BLOCK_OWNER_ALWAYS = "always"
 BLOCK_OWNER_CHANNEL = "channel"
+# Owner for a block gated on one tool being in the agent's effective allow-list
+# (gate 2 parses the ``tool:<name>`` form in ``_is_owner_active``). The skill
+# maintenance block uses ``tool:skill_manage``.
+BLOCK_OWNER_SKILL_MANAGE = f"tool:{SKILL_MANAGE_TOOL_NAME}"
 # A custom user block (T1): id ``user:<slug>``, owner ``always``, a static text
 # block with no default text (its override file IS its content). The source prefix
 # ``user`` doubles as the only removable namespace through ``remove_block``.
@@ -679,6 +693,13 @@ class SystemPromptManager:
                 owner=BLOCK_OWNER_ALWAYS,
                 default_text=self._read_prompt_fragment(prompt_scope, agent_id, "skills.md"),
             ),
+            BlockDefinition(
+                id=CORE_SKILL_MAINTENANCE_BLOCK_ID,
+                owner=BLOCK_OWNER_SKILL_MANAGE,
+                default_text=self._read_prompt_fragment(
+                    prompt_scope, agent_id, "skill_maintenance.md"
+                ),
+            ),
         ]
 
     def _data_listing_definitions(self) -> list[BlockDefinition]:
@@ -967,7 +988,7 @@ class SystemPromptManager:
         agent: PromptAgent,
         prompt_scope: PromptScope,
     ) -> list[BlockDefinition]:
-        """Return the core ``always``/``channel`` text blocks for the active scope.
+        """Return the core ``always``/``channel``/``tool`` text blocks for the scope.
 
         Each block's default text is the scope-aware prompt fragment (the bundled
         resource for the default scope, the agent copy for an agent scope — with no
@@ -978,7 +999,9 @@ class SystemPromptManager:
         tool definitions already carry every description, so the prompt copy is an
         opt-in booster for models that attend poorly to tool schemas. The channels
         block is owner ``channel`` so it drops entirely when no channel is active
-        (no more ``- None``).
+        (no more ``- None``). The skill-maintenance block is owner
+        ``tool:skill_manage``, so it renders only for an agent whose effective tools
+        include ``skill_manage`` (identity agents that may author their own skills).
         """
         return [
             BlockDefinition(
@@ -1006,6 +1029,13 @@ class SystemPromptManager:
                 id=CORE_SKILLS_BLOCK_ID,
                 owner=BLOCK_OWNER_ALWAYS,
                 default_text=self._read_prompt_fragment(prompt_scope, agent.id, "skills.md"),
+            ),
+            BlockDefinition(
+                id=CORE_SKILL_MAINTENANCE_BLOCK_ID,
+                owner=BLOCK_OWNER_SKILL_MANAGE,
+                default_text=self._read_prompt_fragment(
+                    prompt_scope, agent.id, "skill_maintenance.md"
+                ),
             ),
         ]
 

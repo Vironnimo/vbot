@@ -40,7 +40,14 @@ from core.prompts.prompts import (
 
 _RESOURCES_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "resources" / "prompts"
 # The core text-block fragment files whose contents are the blocks' default texts.
-_CORE_FRAGMENT_NAMES = ("runtime.md", "tools.md", "tools_list.md", "channels.md", "skills.md")
+_CORE_FRAGMENT_NAMES = (
+    "runtime.md",
+    "tools.md",
+    "tools_list.md",
+    "channels.md",
+    "skills.md",
+    "skill_maintenance.md",
+)
 
 
 @dataclass(frozen=True)
@@ -102,10 +109,16 @@ class StubTools:
     ) -> list[dict[str, Any]]:
         self.prompt_allowlist = list(allowed_tools) if allowed_tools is not None else None
         self.prompt_allowlist_calls.append(self.prompt_allowlist)
+        # skill / skill_manage are ordinary registered tools, so the real registry
+        # lists them in the prompt surface too (both prompt and provider definitions
+        # build from one ``list_tools``). Gate 2 for a ``tool:<name>``-owned block
+        # reads through this surface, so it must carry them for parity.
         tools = [
             {"name": "read_file", "description": "Read a workspace file"},
             {"name": "shell", "description": "Run a shell command"},
             {"name": "memory", "description": "Manage pinned memory"},
+            {"name": "skill", "description": "Load a skill"},
+            {"name": "skill_manage", "description": "Author a skill"},
         ]
         return _filter_by_allowlist(tools, allowed_tools)
 
@@ -571,6 +584,67 @@ def test_provider_tool_definitions_omit_skill_manage_for_config_agent(tmp_path: 
     assert "skill_manage" not in names
 
 
+# --- Skill maintenance block (owner tool:skill_manage) ------------------------
+
+
+def test_skill_maintenance_block_renders_for_identity_agent_with_skill_manage(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # An identity agent whose effective tools include skill_manage sees the block,
+    # rendering its bundled fragment text (owner tool:skill_manage passes gate 2).
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, allowed_tools=["skill_manage"])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Skill Maintenance" in prompt
+    assert "keep them alive with the `skill_manage` tool" in prompt
+
+
+def test_skill_maintenance_block_absent_without_skill_manage_tool(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # An identity agent whose allow-list excludes skill_manage does not see it:
+    # gate 2 (tool:skill_manage) fails when the tool is not effectively allowed.
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, allowed_tools=["read_file"])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Skill Maintenance" not in prompt
+
+
+def test_skill_maintenance_block_absent_for_config_agent_even_with_wildcard(
+    tmp_path: Path,
+) -> None:
+    # A config/project agent (empty workspace) has no private skill home, so the
+    # IDENTITY_ONLY_TOOLS strip removes skill_manage from its effective tools even
+    # under a wildcard allow-list — the block gates out through gate 2.
+    manager = _manager(tmp_path)
+    agent = _agent("", allowed_tools=["*"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent, agent_body="You are the orchestrator.")
+
+    assert "## Skill Maintenance" not in prompt
+
+
+def test_list_blocks_shows_skill_maintenance_as_editable_tool_owned_block(
+    tmp_path: Path,
+) -> None:
+    # The listing surface exposes the block as an editable text block owned by
+    # tool:skill_manage (source core), directly after the skills block.
+    manager = _facade_manager(tmp_path)
+
+    blocks = {block["id"]: block for block in manager.list_blocks()}
+
+    maintenance = blocks["core:skill_maintenance"]
+    assert maintenance["kind"] == "text"
+    assert maintenance["editable"] is True
+    assert maintenance["source"] == "core"
+    assert maintenance["owner"] == "tool:skill_manage"
+    assert maintenance["enabled"] is True
+
+
 # --- Contributed tool/extension blocks via the manager ------------------------
 
 
@@ -1009,6 +1083,7 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
         "core:tools_list",
         "core:channels",
         "core:skills",
+        "core:skill_maintenance",
         "core:agent_body",
         "core:project_files",
     ]
@@ -1237,6 +1312,7 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
         "core:tools_list",
         "core:channels",
         "core:skills",
+        "core:skill_maintenance",
         "core:agent_body",
         "core:project_files",
     ]
