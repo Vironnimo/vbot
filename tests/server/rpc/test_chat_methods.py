@@ -327,7 +327,7 @@ async def test_learn_without_argument_still_starts_run(monkeypatch: pytest.Monke
     await _send_chat(state, {"agent_id": "builder", "session_id": "s1", "content": "/learn"})
 
     assert len(captured) == 1
-    assert "No source was given" in captured[0]["message"]
+    assert "No request was given" in captured[0]["message"]
 
 
 @pytest.mark.asyncio
