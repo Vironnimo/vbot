@@ -456,24 +456,25 @@ def _build_handoff_prompt(base_instruction: str, instruction: str | None) -> str
     )
 
 
-def _build_learn_prompt(base_instruction: str, source: str | None) -> str:
-    """Weave the optional ``/learn`` source into the base authoring brief.
+def _build_learn_prompt(base_instruction: str, argument: str | None) -> str:
+    """Weave the optional ``/learn`` argument into the base authoring brief.
 
-    With a source (a folder, URL, description, or pasted text) the agent authors from
-    it; with no argument it asks the user what to learn or, when the recent
+    The argument is a free-form request that may mix sources (a folder, URL, pasted
+    text) with requirements shaping the skill — the brief instructs the agent to
+    honor both. With no argument it asks the user what to learn or, when the recent
     conversation clearly shows a reusable procedure, authors a skill from that.
     """
     base = base_instruction.strip()
-    cleaned = (source or "").strip()
+    cleaned = (argument or "").strip()
     if not cleaned:
         return (
             f"{base}\n"
             "\n"
-            "No source was given. Ask the user what they want captured into a skill, or, "
+            "No request was given. Ask the user what they want captured into a skill, or, "
             "if the recent conversation clearly demonstrates a reusable procedure, author "
             "a skill from that."
         )
-    return f"{base}\n\nThe source to learn from:\n{cleaned}"
+    return f"{base}\n\nThe request to learn from:\n{cleaned}"
 
 
 async def _start_command_run(
