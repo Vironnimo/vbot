@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,7 +20,7 @@ from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.recall import JsonlSessionRecallBackend, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, RunCancelledError
-from core.runtime.runtime import Runtime
+from core.runtime.runtime import _PROJECT_ROOT, Runtime, _detect_app_version
 from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
@@ -113,6 +114,28 @@ def _expected_startup_inventory_message(runtime: Runtime) -> str:
 @pytest.fixture
 def config(tmp_path: Path) -> Config:
     return Config(data_dir=tmp_path / "data")
+
+
+def test_detect_app_version_matches_pyproject_single_source() -> None:
+    """The reported app version tracks the one source of truth in pyproject.toml.
+
+    Regression guard for the split where the System Prompt showed a hardcoded
+    default instead of the real release version.
+    """
+    with (_PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+        expected = tomllib.load(handle)["project"]["version"]
+
+    assert _detect_app_version() == expected
+
+
+def test_runtime_feeds_detected_version_into_system_prompt(config: Config) -> None:
+    """Runtime wires the detected app version into the System Prompt manager."""
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert runtime.system_prompts._app_version == _detect_app_version()
 
 
 def test_runtime_start_no_error(tmp_path: Path):
