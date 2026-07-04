@@ -18,10 +18,14 @@ from typing import Any
 import pytest
 
 from core.chat import ChatSessionError
+from core.sessions import FORK_SOURCE_META_KEY
 from server.events import ServerEventBus
 from server.rpc.agent_methods import (
+    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+    SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
     _create_session,
     _delete_session,
+    _fork_session,
     _list_sessions,
     _rename_session,
 )
@@ -44,11 +48,17 @@ class _FakeSessions:
         self.renamed: list[tuple[str, str, str, str | None]] = []
         self.archived: list[tuple[str, str, str | None]] = []
         self.got: list[tuple[str, str, str | None]] = []
+        self.forked: list[dict[str, Any]] = []
         # Rows returned by list_with_metadata; default keeps the existing
         # listing tests byte-identical. Delete tests override it.
         self.metadata_rows: list[dict[str, Any]] = [{"id": "s1"}]
-        # Session ids that ``get`` should treat as nonexistent.
+        # Sidecar the source carries; ``fork`` strips the requested keys off it so
+        # fork tests can assert what the fork retains. Fork tests override it.
+        self.source_metadata: dict[str, Any] = {}
+        # Session ids that ``get``/``fork`` should treat as nonexistent.
         self.missing: set[str] = set()
+        # Fork metadata keyed by (agent_id, session_id, project_id) for get_metadata.
+        self._fork_metadata: dict[tuple[str, str, str | None], dict[str, Any]] = {}
 
     def create(self, agent_id: str, *, session_id: Any = None, project_id: Any = None) -> Any:
         self.created.append(
@@ -69,6 +79,47 @@ class _FakeSessions:
     def list_with_metadata(self, agent_id: str, project_id: str | None = None) -> list[Any]:
         self.listed.append((agent_id, project_id))
         return self.metadata_rows
+
+    async def fork(
+        self,
+        source_agent_id: str,
+        session_id: str,
+        *,
+        target_agent_id: str | None = None,
+        source_project_id: str | None = None,
+        target_project_id: str | None = None,
+        strip_meta_keys: Any = frozenset(),
+    ) -> Any:
+        self.forked.append(
+            {
+                "source_agent_id": source_agent_id,
+                "session_id": session_id,
+                "target_agent_id": target_agent_id,
+                "source_project_id": source_project_id,
+                "target_project_id": target_project_id,
+                "strip_meta_keys": frozenset(strip_meta_keys),
+            }
+        )
+        if session_id in self.missing:
+            raise ChatSessionError(f"session does not exist: {session_id}")
+        retained = {
+            key: value for key, value in self.source_metadata.items() if key not in strip_meta_keys
+        }
+        retained[FORK_SOURCE_META_KEY] = {
+            "agent_id": source_agent_id,
+            "session_id": session_id,
+            "project_id": source_project_id,
+            "forked_at": "2026-07-04T00:00:00+00:00",
+            "message_count": 2,
+        }
+        destination_agent_id = target_agent_id or source_agent_id
+        self._fork_metadata[(destination_agent_id, "fork-1", target_project_id)] = retained
+        return SimpleNamespace(id="fork-1")
+
+    def get_metadata(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> dict[str, Any]:
+        return self._fork_metadata.get((agent_id, session_id, project_id), {})
 
     def set_title(
         self, agent_id: str, session_id: str, title: str, project_id: str | None = None
@@ -372,3 +423,83 @@ async def test_delete_rejects_unsupported_field() -> None:
 
     assert exc_info.value.code == "invalid_request"
     assert sessions.archived == []
+
+
+@pytest.mark.asyncio
+async def test_fork_same_agent_returns_new_id_with_provenance() -> None:
+    state, resolver, sessions = _make_state()
+    sessions.source_metadata = {"title": "Keep"}
+
+    result = await _fork_session(state, {"agent_id": "builder", "session_id": "s1"})
+
+    assert result["session"]["id"] == "fork-1"
+    assert result["session"]["agent_id"] == "builder"
+    assert result["session"]["fork_source"]["session_id"] == "s1"
+    # Same agent, so only the always-strip policy applies (catalog keys kept).
+    assert sessions.forked[0]["strip_meta_keys"] == SESSION_FORK_ALWAYS_STRIP_META_KEYS
+    assert resolver.resolved == [(None, "builder")]
+
+
+@pytest.mark.asyncio
+async def test_fork_strips_channel_and_subagent_bindings_but_keeps_title() -> None:
+    state, _resolver, sessions = _make_state()
+    sessions.source_metadata = {
+        "title": "Keep",
+        "source_channel_id": "chan",
+        "platform": "telegram",
+        "is_subagent_session": True,
+    }
+
+    result = await _fork_session(state, {"agent_id": "builder", "session_id": "s1"})
+
+    metadata = sessions.get_metadata("builder", result["session"]["id"])
+    assert metadata["title"] == "Keep"
+    assert "source_channel_id" not in metadata
+    assert "platform" not in metadata
+    assert "is_subagent_session" not in metadata
+
+
+@pytest.mark.asyncio
+async def test_fork_to_other_agent_strips_catalog_and_lands_under_target() -> None:
+    state, resolver, sessions = _make_state()
+
+    result = await _fork_session(
+        state,
+        {"agent_id": "builder", "session_id": "s1", "target_agent_id": "reviewer"},
+    )
+
+    assert result["session"]["agent_id"] == "reviewer"
+    assert sessions.forked[0]["target_agent_id"] == "reviewer"
+    # A cross-agent fork additionally strips the pinned-catalog keys.
+    assert (
+        sessions.forked[0]["strip_meta_keys"]
+        == SESSION_FORK_ALWAYS_STRIP_META_KEYS | SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
+    )
+    # Both endpoints are resolved before any file work.
+    assert resolver.resolved == [(None, "builder"), (None, "reviewer")]
+    # The refresh event is scoped to the target agent.
+    assert _sessions_resource_events(state) == [
+        {"kind": "sessions", "scope": {"agent_id": "reviewer"}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fork_unknown_session_is_domain_error() -> None:
+    state, _resolver, sessions = _make_state()
+    sessions.missing = {"gone"}
+
+    with pytest.raises(RpcError) as exc_info:
+        await _fork_session(state, {"agent_id": "builder", "session_id": "gone"})
+
+    assert exc_info.value.code == "domain_error"
+
+
+@pytest.mark.asyncio
+async def test_fork_rejects_unsupported_field() -> None:
+    state, _resolver, sessions = _make_state()
+
+    with pytest.raises(RpcError) as exc_info:
+        await _fork_session(state, {"agent_id": "builder", "session_id": "s1", "bogus": 1})
+
+    assert exc_info.value.code == "invalid_request"
+    assert sessions.forked == []

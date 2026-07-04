@@ -5040,6 +5040,7 @@ async def test_chat_commands_returns_normalized_built_in_command_names(
         "learn",
         "model",
         "new",
+        "reflect",
         "rename",
         "retry",
         "status",

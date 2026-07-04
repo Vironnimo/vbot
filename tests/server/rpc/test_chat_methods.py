@@ -167,13 +167,15 @@ class _FakeResolver:
 def _fragment_storage() -> SimpleNamespace:
     """Storage stub answering the prompt fragments the briefs are now read from.
 
-    ``/handoff`` and ``/learn`` seed their internal run from ``handoff.md`` /
-    ``learn.md`` via ``read_prompt_fragment``; the learn brief must mention
-    ``skill_manage`` so the authoring assertion still holds.
+    ``/handoff``, ``/learn``, and ``/reflect`` seed their internal run from
+    ``handoff.md`` / ``learn.md`` / ``reflect.md`` via ``read_prompt_fragment``;
+    the learn brief must mention ``skill_manage`` so the authoring assertion still
+    holds, and the reflect brief carries a stable marker phrase.
     """
     fragments = {
         "handoff.md": "Write a handoff for the next agent.",
         "learn.md": 'Author a reusable skill via the `skill_manage` tool with operation "create".',
+        "reflect.md": "Review this session and update your memory and skill library.",
     }
     return SimpleNamespace(read_prompt_fragment=lambda name: fragments[name])
 
@@ -342,6 +344,136 @@ async def test_learn_refused_while_run_active(monkeypatch: pytest.MonkeyPatch) -
 
     assert response["command_handled"] is True
     assert "after the current run finishes" in response["reply"]
+    assert captured == []
+
+
+# ---------------------------------------------------------------------------
+# /reflect: fork the session and run a restricted review run in the fork.
+# ---------------------------------------------------------------------------
+
+
+class _ReflectDispatcher:
+    def dispatch(
+        self, agent_id: str, session_id: str, text: str, project_id: str | None = None
+    ) -> CommandAction:
+        argument = text[len("/reflect") :].strip() or None
+        return CommandAction(name="reflect", argument=argument)
+
+
+def _make_reflect_state(
+    captured: list[dict[str, Any]],
+    forked: list[dict[str, Any]],
+    *,
+    workspace: str = "/home/agent",
+    active: bool = False,
+) -> SimpleNamespace:
+    async def start_run(agent_id: str, content: Any, **kwargs: Any) -> _FakeRun:
+        captured.append({"agent_id": agent_id, "message": content, **kwargs})
+        return _FakeRun()
+
+    async def fork(source_agent_id: str, session_id: str, **kwargs: Any) -> Any:
+        forked.append({"source_agent_id": source_agent_id, "session_id": session_id, **kwargs})
+        return SimpleNamespace(id="fork-1")
+
+    runtime = SimpleNamespace(
+        agent_resolver=SimpleNamespace(
+            resolve_agent=lambda project_id, agent_id: SimpleNamespace(
+                id=agent_id, workspace=workspace
+            )
+        ),
+        chat_sessions=SimpleNamespace(fork=fork),
+        storage=_fragment_storage(),
+    )
+    active_run = _FakeRun() if active else None
+    return SimpleNamespace(
+        chat_loop=SimpleNamespace(start_run=start_run),
+        streaming_chat_loop=SimpleNamespace(start_run=start_run),
+        runtime=runtime,
+        chat_runs=SimpleNamespace(active_run=lambda **k: active_run),
+        command_dispatcher=_ReflectDispatcher(),
+        event_bus=SimpleNamespace(publish=lambda *a, **k: None),
+    )
+
+
+@pytest.mark.asyncio
+async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, Any]] = []
+    forked: list[dict[str, Any]] = []
+    state = _make_reflect_state(captured, forked)
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    response = await _send_chat(
+        state,
+        {"agent_id": "builder", "session_id": "s1", "content": "/reflect focus on the memory side"},
+    )
+
+    # The source session is forked once; the review run targets the NEW fork id.
+    assert forked[0]["source_agent_id"] == "builder"
+    assert forked[0]["session_id"] == "s1"
+    assert len(captured) == 1
+    assert captured[0]["session_id"] == "fork-1"
+    assert captured[0]["session_id"] != "s1"
+    assert captured[0]["internal"] is True
+    assert captured[0]["tool_restriction"] == ("memory", "skill", "skill_manage")
+    # The brief carries the fragment marker plus the focus text.
+    assert "Review this session" in captured[0]["message"]
+    assert "focus on the memory side" in captured[0]["message"]
+    # The reply is the run's final message, and the fork id rides in ``data``.
+    assert response["command_handled"] is True
+    assert response["reply"] == "handoff text"
+    assert response["data"] == {
+        "command": "reflect",
+        "session_id": "fork-1",
+        "agent_id": "builder",
+    }
+
+
+@pytest.mark.asyncio
+async def test_reflect_without_focus_uses_bare_brief(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, Any]] = []
+    forked: list[dict[str, Any]] = []
+    state = _make_reflect_state(captured, forked)
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    await _send_chat(state, {"agent_id": "builder", "session_id": "s1", "content": "/reflect"})
+
+    assert len(captured) == 1
+    assert captured[0]["message"] == "Review this session and update your memory and skill library."
+
+
+@pytest.mark.asyncio
+async def test_reflect_refused_while_run_active(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, Any]] = []
+    forked: list[dict[str, Any]] = []
+    state = _make_reflect_state(captured, forked, active=True)
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    response = await _send_chat(
+        state, {"agent_id": "builder", "session_id": "s1", "content": "/reflect"}
+    )
+
+    assert "after the current run finishes" in response["reply"]
+    # Refused before any fork or run.
+    assert forked == []
+    assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_reflect_refused_for_config_agent_without_forking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, Any]] = []
+    forked: list[dict[str, Any]] = []
+    state = _make_reflect_state(captured, forked, workspace="")
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    response = await _send_chat(
+        state, {"agent_id": "builder", "session_id": "s1", "content": "/reflect"}
+    )
+
+    assert "identity agent" in response["reply"]
+    # An empty-workspace agent never forks and never runs.
+    assert forked == []
     assert captured == []
 
 

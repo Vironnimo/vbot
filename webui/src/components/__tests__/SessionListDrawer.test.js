@@ -324,6 +324,42 @@ describe('SessionListDrawer', () => {
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(confirmSpy.mock.calls[0][0]).toContain('channel');
   });
+
+  it('renders the Fork badge only for forked sessions', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'plain-session',
+          created_at: '2026-05-09T00:00:00+00:00',
+        },
+        {
+          id: 'fork-session',
+          created_at: '2026-05-10T00:00:00+00:00',
+          fork_source: {
+            agent_id: 'alpha',
+            session_id: 'plain-session',
+            message_count: 4,
+          },
+        },
+      ],
+    });
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'fork-session',
+        agentCurrentSessionId: 'fork-session',
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 2,
+    );
+
+    const forkBadges = document.querySelectorAll('.session-row__badge--fork');
+    expect(forkBadges.length).toBe(1);
+    expect(forkBadges[0].textContent.trim()).toBe('Fork');
+  });
 });
 
 async function waitForCondition(check, attempts = 50) {
