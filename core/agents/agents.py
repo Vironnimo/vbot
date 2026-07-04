@@ -33,7 +33,10 @@ DEFAULT_TEMPERATURE: float | None = None
 DEFAULT_THINKING_EFFORT: str | None = None
 DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
 DEFAULT_ALLOWED_ITEMS = ("*",)
-WORKSPACE_TEMPLATE_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
+# Only SOUL.md is identity the agent domain owns and seeds. USER.md/MEMORY.md belong
+# to the memory system and are created lazily on the first memory write, so a
+# memory-off agent never gets them and deleting them does not resurrect them.
+WORKSPACE_TEMPLATE_FILES = ("SOUL.md",)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"

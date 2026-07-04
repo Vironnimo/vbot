@@ -21,7 +21,9 @@ from core.agents import agents as agents_module
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager
 
-TEMPLATE_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
+# The agent domain seeds only SOUL.md; USER.md/MEMORY.md are the memory system's and
+# are created lazily on first write, never by workspace seeding.
+TEMPLATE_FILES = ("SOUL.md",)
 EARLY_TIMESTAMP = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 LATE_TIMESTAMP = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
@@ -671,4 +673,6 @@ def test_workspace_seeding_does_not_overwrite_existing_custom_workspace_file(
     store.create("coder", "Coder Agent", workspace=custom_workspace)
 
     assert (custom_workspace / "SOUL.md").read_text(encoding="utf-8") == "custom soul"
-    assert (custom_workspace / "USER.md").exists()
+    # Memory files belong to the memory system and are never seeded by the workspace.
+    assert not (custom_workspace / "USER.md").exists()
+    assert not (custom_workspace / "MEMORY.md").exists()
