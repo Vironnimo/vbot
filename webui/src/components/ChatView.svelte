@@ -24,6 +24,7 @@
     subAgentResultTextFromMessages,
   } from '$lib/chatTimelinePresentation.js';
 
+  import { agentNeedsModel } from '$lib/onboarding.js';
   import { parseAgentAddress } from '$lib/agentAddress.js';
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
@@ -106,6 +107,9 @@
     wakewordStatus = { enabled: false, state: 'off' },
     desktopCapabilities = null,
     onNavigateToVoiceSettings = () => {},
+    // Invoked from the "no model" notice so the user can assign a model to the
+    // current agent (App routes to the Agents tab).
+    onPickModel = () => {},
   } = $props();
 
   const chatState = $state(createChatState());
@@ -274,6 +278,16 @@
   let sessionOverrideActive = $derived(Boolean(viewingSessionId));
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(!activeAgent || loadingHistory);
+  // A model-less identity agent on its current session cannot run; surface an
+  // actionable notice instead of failing the send at the provider. Scoped to
+  // the identity current path — a project config agent resolves a model through
+  // project defaults, and an override stand-in carries no model field.
+  let agentModelMissing = $derived(
+    Boolean(activeAgent) &&
+      !projectAgentActive &&
+      !sessionOverrideActive &&
+      agentNeedsModel(activeAgent),
+  );
   // The composer's per-session draft is keyed by the full displayed-session key;
   // its per-agent input history is keyed by the agent part alone (bare id for an
   // identity agent, `agent@projekt` for a project agent), so sessions of the
@@ -2315,6 +2329,28 @@
               </Button>
             </div>
           {/if}
+          {#if agentModelMissing}
+            <div class="chat-view__no-model-notice" aria-live="polite">
+              <div class="chat-view__no-model-copy">
+                <p class="chat-view__no-model-title">
+                  {t('chat.noModel.title', 'Pick a model to start')}
+                </p>
+                <p class="chat-view__no-model-hint">
+                  {t(
+                    'chat.noModel.hint',
+                    'This agent has no model yet. Choose one to send messages.',
+                  )}
+                </p>
+              </div>
+              <Button
+                variant="primary"
+                class="chat-view__no-model-action"
+                onClick={onPickModel}
+              >
+                {t('chat.noModel.action', 'Choose a model')}
+              </Button>
+            </div>
+          {/if}
           <div class="chat-view__measure">
             <QueuedMessages
               queuedMessages={activeSessionState?.queue ?? []}
@@ -2597,6 +2633,53 @@
     flex-shrink: 0;
   }
 
+  .chat-view__no-model-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-shrink: 0;
+    width: 100%;
+    max-width: var(--chat-measure);
+    margin-inline: auto;
+    border-left: 3px solid var(--accent);
+    padding: 9px 20px 9px 12px;
+    border-top: 1px solid var(--border);
+    background: linear-gradient(
+      90deg,
+      rgba(232, 135, 10, 0.08),
+      transparent 72%
+    );
+  }
+
+  .chat-view__no-model-copy {
+    min-width: 0;
+  }
+
+  .chat-view__no-model-title,
+  .chat-view__no-model-hint {
+    margin: 0;
+  }
+
+  .chat-view__no-model-title {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .chat-view__no-model-hint {
+    margin-top: 4px;
+    color: var(--text-med);
+    font-size: 12.5px;
+  }
+
+  :global(.chat-view__no-model-action) {
+    flex-shrink: 0;
+  }
+
   @media (max-width: 640px) {
     .chat-view__notice-stack {
       padding: 10px 14px;
@@ -2606,7 +2689,8 @@
       flex-direction: column;
     }
 
-    .chat-view__subagent-session-notice {
+    .chat-view__subagent-session-notice,
+    .chat-view__no-model-notice {
       align-items: flex-start;
       flex-direction: column;
     }

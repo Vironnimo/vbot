@@ -1,0 +1,299 @@
+/* First-run onboarding wizard. Occupies the content area while vBot is not yet
+   operational. Warm charcoal-brown surfaces; the amber accent is reserved for
+   the hero and the single primary action, per the Toasted design system. */
+
+.onboarding-view {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.onboarding-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-xl) var(--space-lg);
+}
+
+/* Capped, centered reading column so the wizard never stretches edge-to-edge. */
+.onboarding-column {
+  width: 100%;
+  max-width: 560px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.onboarding-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.onboarding-title {
+  margin: 0;
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.onboarding-kicker {
+  margin: 0;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.onboarding-step-title {
+  margin: 0;
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.onboarding-step-subtitle {
+  margin: 0;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* Hero card — the only large surface allowed a faint accent wash + accent
+   border, marking it as the recommended path. */
+.onboarding-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 18px;
+  border: 1px solid rgba(232, 135, 10, 0.3);
+  border-radius: var(--r-lg);
+  background: var(--accent-dim);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
+}
+
+.onboarding-hero:hover,
+.onboarding-hero:focus-visible {
+  border-color: rgba(232, 135, 10, 0.5);
+  background: rgba(232, 135, 10, 0.14);
+  outline: none;
+}
+
+.onboarding-hero-badge {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.onboarding-hero-title {
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.onboarding-hero-desc {
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.onboarding-hero-action {
+  margin-top: 8px;
+  align-self: flex-start;
+  padding: 6px 14px;
+  border: 1px solid rgba(232, 135, 10, 0.38);
+  border-radius: var(--r-md);
+  background: rgba(232, 135, 10, 0.18);
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Equal-weight card — subscription sign-in. Neutral surface, no accent. */
+.onboarding-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+}
+
+.onboarding-card-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.onboarding-card-title {
+  margin: 0;
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.onboarding-card-desc {
+  margin: 0;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.onboarding-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Collapsible "More services". */
+.onboarding-more {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.onboarding-more-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 150ms ease;
+}
+
+.onboarding-more-toggle:hover,
+.onboarding-more-toggle:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+.onboarding-more-chevron {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  transition: transform 150ms ease;
+}
+
+.onboarding-more-chevron--open {
+  transform: rotate(180deg);
+}
+
+.onboarding-more-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.onboarding-more-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Model-step recommendation tip — a quiet, mono-token-friendly hint line. */
+.onboarding-tip {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-2);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.onboarding-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.onboarding-field-label {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.onboarding-notice {
+  margin: 0;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+.onboarding-error {
+  margin: 0;
+  color: var(--red);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.onboarding-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+@media (max-width: 640px) {
+  .onboarding-scroll {
+    padding: 20px 14px;
+  }
+
+  .onboarding-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+}
