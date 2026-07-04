@@ -838,6 +838,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "coding-agents",
         "teach",
         "vbot-cli",
+        "weather",
     ]
     assert runtime.skills.invalid_diagnostics() == []
     assert runtime.chat_sessions.sessions_dir("coder") == (
