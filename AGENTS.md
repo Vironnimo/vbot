@@ -38,9 +38,10 @@ When a technical decision involves a trade-off, do not give much weight to devel
 
 **Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget: the system must stay small enough to hold in your head.
 
-- Default to extending an existing module. A new module, layer, or abstraction needs explicit justification.
+- Default to extending an existing module. Before adding a new module, layer, or abstraction, name the existing module that could own the capability and why it can't — "no existing owner fits" is a valid answer, "didn't look" is not. An unjustified new module is a defect, not a style nit.
 - Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around.
 - Expose what callers need, hide everything else.
+- A module is too shallow when its interface is nearly as large as its implementation, when it's mostly pass-through, when it wraps something without adding an abstraction, or when callers must know its internals — fold it back or deepen it.
 
 ## Code Quality
 
