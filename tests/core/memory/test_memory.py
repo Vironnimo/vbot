@@ -133,7 +133,10 @@ def test_read_prompt_files_returns_only_file_contents(tmp_path: Path) -> None:
     assert disabled == ""
 
 
-def test_read_prompt_files_omits_missing_files(tmp_path: Path) -> None:
+def test_read_prompt_files_renders_default_for_missing_file(tmp_path: Path) -> None:
+    # Lazy ownership: a not-yet-created file is not omitted — it renders the same
+    # "no entries recorded" content an empty on-disk file would, so the model always
+    # sees the memory framing, and reading never creates the file.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
@@ -142,17 +145,45 @@ def test_read_prompt_files_omits_missing_files(tmp_path: Path) -> None:
     files = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
 
     assert "Agent memory" in files
-    assert "USER.md" not in files
+    assert '<file name="USER.md">' in files
+    assert "No tool-managed memory entries are recorded yet." in files
+    assert not (workspace / "USER.md").exists()
 
 
-def test_read_prompt_files_empty_when_no_files(tmp_path: Path) -> None:
-    # The empty-memory case the D5 fix relies on: no memory files → the embedded
-    # producer renders "", so the surrounding memory block keeps only its guidance.
+def test_read_prompt_files_renders_defaults_when_no_files_exist(tmp_path: Path) -> None:
+    # With no memory files on disk, an enabled mode still renders both selected files
+    # via their default "no entries" content; only off reads nothing. Rendering never
+    # creates a file as a side effect.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     service = MemoryService()
 
-    assert read_memory_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER, provider=service) == ""
+    rendered = read_memory_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER, provider=service)
+
+    assert '<file name="MEMORY.md">' in rendered
+    assert '<file name="USER.md">' in rendered
+    assert "No tool-managed memory entries are recorded yet." in rendered
+    assert read_memory_files(workspace, MEMORY_PROMPT_MODE_OFF, provider=service) == ""
+    assert not (workspace / "MEMORY.md").exists()
+    assert not (workspace / "USER.md").exists()
+
+
+def test_read_prompt_files_missing_matches_empty_on_disk_file(tmp_path: Path) -> None:
+    # The lazy-ownership guarantee: the prompt is identical whether a memory file
+    # exists but is empty or has not been created yet.
+    virtual_workspace = tmp_path / "virtual"
+    virtual_workspace.mkdir()
+    real_workspace = tmp_path / "real"
+    real_workspace.mkdir()
+    service = MemoryService()
+    entry = service.add_entry(real_workspace, "agent", "temporary")
+    service.remove_entry(real_workspace, "agent", entry.id)
+    assert (real_workspace / "MEMORY.md").exists()
+
+    virtual = service.read_prompt_files(virtual_workspace, MEMORY_PROMPT_MODE_AGENT)
+    real = service.read_prompt_files(real_workspace, MEMORY_PROMPT_MODE_AGENT)
+
+    assert virtual == real
 
 
 def test_memory_block_definition_declares_guidance_and_embedded_marker() -> None:

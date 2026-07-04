@@ -73,9 +73,10 @@ MEMORY_BLOCK_OWNER = "memory"
 # memory domain.
 MEMORY_FILES_PRODUCER_NAME = "memory_files"
 # The block's default text: the guidance prose, then the embedded files marker, all
-# inside the ``<memory>`` wrapper — one sortable unit (D2). The marker renders ""
-# when the files are empty/absent, and normalization trims the gap, so an empty
-# memory still shows the guidance inside a clean ``<memory>`` wrapper.
+# inside the ``<memory>`` wrapper — one sortable unit (D2). Whenever the block renders
+# (memory tool on), the marker renders the selected files, showing an explicit "no
+# entries recorded" for a file not written (and thus not created) yet — so the framing
+# is identical before and after the lazily-created file exists.
 _MEMORY_BLOCK_TEMPLATE = "<memory>\n{guidance}\n\n{{generated:{producer}}}\n</memory>"
 
 
@@ -172,23 +173,22 @@ class FilePinnedMemoryBackend:
             return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
 
     def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
-        """Return the ``<file>``-wrapped pinned-memory file contents, ``""`` if empty.
+        """Return the ``<file>``-wrapped pinned-memory file contents for a mode.
 
         The data half of the memory block — only the file contents, with no
-        ``<memory>`` wrapper and no guidance, and **no** empty-suppression of any
-        surrounding block (the guidance lives in the block's own text now). The
-        ``memory_files`` producer calls this so the file reading stays in the
-        memory domain. ``off`` mode reads nothing; a missing file is skipped, an
-        unreadable file raises :class:`MemoryError` (unchanged ``_read_prompt_file``
-        behavior).
+        ``<memory>`` wrapper and no guidance (the guidance lives in the block's own
+        text now). The ``memory_files`` producer calls this so the file reading stays
+        in the memory domain. ``off`` mode reads nothing (``""``); every file the mode
+        selects is always rendered, a not-yet-created one via its default "no entries"
+        content (see :func:`_read_prompt_file`), and an unreadable file raises
+        :class:`MemoryError`.
         """
         validated_mode = validate_memory_prompt_mode(mode)
         blocks = [
             _read_prompt_file(Path(workspace) / filename)
             for filename in MEMORY_PROMPT_FILES[validated_mode]
         ]
-        visible_blocks = [block for block in blocks if block]
-        return "\n\n".join(visible_blocks)
+        return "\n\n".join(blocks)
 
     def _path(self, workspace: Path, scope: MemoryScope) -> Path:
         workspace_path = Path(workspace)
@@ -238,10 +238,11 @@ def read_memory_files(
 
     The single file-reading entry point the ``memory_files`` producer wraps: only
     the ``<file>``-wrapped pinned-memory contents (no guidance, no ``<memory>``
-    wrapper), ``""`` when empty/absent or when the mode is ``off``. Kept in the
-    memory domain so the producer the manager registers stays a thin closure;
-    *provider* is the manager's memory provider (a :class:`MemoryService` or any
-    stub exposing ``read_prompt_files``).
+    wrapper), ``""`` only when the mode is ``off`` — a mode that selects files always
+    renders them, a not-yet-created file via its default "no entries" content. Kept in
+    the memory domain so the producer the manager registers stays a thin closure;
+    *provider* is the manager's memory provider (a :class:`MemoryService` or any stub
+    exposing ``read_prompt_files``).
     """
     return provider.read_prompt_files(Path(workspace), mode)
 
@@ -299,10 +300,25 @@ def _read_prompt_file(path: Path) -> str:
     try:
         content = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return ""
+        # Lazy file ownership: the memory files are created only on the first tool
+        # write, so a not-yet-created file renders the exact content an empty on-disk
+        # file would hold. The prompt is then identical whether or not the file exists
+        # yet, and the model always sees an explicit "no entries recorded" instead of
+        # the file silently missing.
+        content = _default_file_content(path.name)
     except OSError as exc:
         raise MemoryError(f"failed to read memory prompt file {path}: {exc}") from exc
     return f'<file name="{path.name}">\n{content}\n</file>'
+
+
+def _default_file_content(filename: str) -> str:
+    """Return the prompt content a not-yet-created memory file renders as.
+
+    Identical to an empty on-disk file (default preamble + an empty ``## Entries``
+    section), so a lazily-created file is indistinguishable in the prompt before and
+    after it physically exists.
+    """
+    return _render_memory_text(_default_preamble(filename), [], "")
 
 
 def _read_memory_parts(path: Path) -> tuple[str, list[str], str]:
