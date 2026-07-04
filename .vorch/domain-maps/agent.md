@@ -52,7 +52,7 @@ Run paths no longer call `runtime.agents.get(...)` directly. They go through one
 
 - Agent IDs must be conservative filesystem-safe slugs: start with a letter or number, then use only letters, numbers, hyphen, or underscore, max 64 characters.
 - Writes to `agent.json` use a same-directory temp file plus atomic replace.
-- Workspace templates are `SOUL.md`, `USER.md`, and `MEMORY.md` in `resources/workspace-templates/`. `SOUL.md` is seeded with a generic vBot-agent identity/persona starter. `USER.md` is seeded as a user-profile starter for durable user facts such as preferences, communication style, expectations, and workflow habits. `MEMORY.md` is seeded as agent/workflow memory for concise durable notes managed by the `memory` tool.
+- The only workspace template is `SOUL.md` in `resources/workspace-templates/`, seeded with a generic vBot-agent identity/persona starter — the one file the workspace layer seeds. `USER.md` and `MEMORY.md` are **not** workspace templates and are **not** seeded here: they belong to the memory system and are created lazily on the first `memory` tool write (see `memory.md`). So a memory-off agent has neither, and deleting them does not resurrect them.
 - Prompt bodies are file-backed and assembled through `core/prompts/`, not hardcoded in Agent code.
 
 ## Constraints & Gotchas

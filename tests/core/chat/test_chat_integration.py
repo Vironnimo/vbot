@@ -586,7 +586,10 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
 
         assert "Soul template for integration" in prompt
         assert "Version test-version" in prompt
-        assert "User template for integration" in prompt
+        # Memory files are lazy: with nothing written yet, the block embeds USER.md's
+        # default "no entries" content rather than a seeded template.
+        assert '<file name="USER.md">' in prompt
+        assert "No tool-managed memory entries are recorded yet." in prompt
         assert "- read_file: Read a workspace file." in prompt
         assert "shell" not in prompt
         assert "<name>agent-cli</name>" in prompt
@@ -741,15 +744,11 @@ def _write_prompt_resources(resources: Path) -> None:
 
 
 def _write_workspace_templates(resources: Path) -> None:
+    # Only SOUL.md is a workspace template now; USER.md/MEMORY.md belong to the memory
+    # system and are created lazily on first write, never seeded.
     templates_dir = resources / "workspace-templates"
     templates_dir.mkdir(parents=True)
-    templates = {
-        "SOUL.md": "Soul template for integration",
-        "MEMORY.md": "Memory template for integration",
-        "USER.md": "User template for integration",
-    }
-    for filename, content in templates.items():
-        (templates_dir / filename).write_text(content, encoding="utf-8")
+    (templates_dir / "SOUL.md").write_text("Soul template for integration", encoding="utf-8")
 
 
 def _write_skill(data_dir: Path, name: str, description: str) -> None:
