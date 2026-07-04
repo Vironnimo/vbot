@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from collections import OrderedDict
 
 from core.memory import MemoryEntry, MemoryError, MemoryScope, MemoryService
 from core.tools.arguments import required_int
@@ -17,13 +19,21 @@ from core.tools.tools import (
 )
 
 MEMORY_TOOL_DESCRIPTION = (
-    "List or edit pinned memory in USER.md ('user' scope: who the user is — preferences, "
-    "role, style) and MEMORY.md ('agent' scope: your own environment, conventions, and "
-    "tool quirks). Entries are injected into every future turn, so keep them compact.\n\n"
+    "List or edit pinned memory: USER.md ('user' scope — who the user is: preferences, "
+    "role, communication style) and MEMORY.md ('agent' scope — your own environment, "
+    "conventions, and tool quirks). Entries are injected into every future turn, so keep "
+    "them compact and high-signal.\n\n"
     "WHEN: save proactively when the user states a preference, correction, or personal "
-    "detail, or you learn a stable fact about their environment or workflow.\n\n"
+    "detail, or you learn a stable fact about their environment or workflow. Priority order "
+    "when you save: user preferences and corrections first, then environment facts, then "
+    "reusable procedures.\n\n"
     "SKIP: trivial or easily re-discovered facts, raw data, task progress, completed-work "
-    "logs, and anything stale within a week (PR numbers, commit hashes, 'phase N done').\n\n"
+    "logs, and temporary TODO state (recall those from past sessions with session_search, if "
+    "that tool is available). Also skip anything stale within a week: PR/issue numbers, "
+    "commit hashes, 'fixed bug X', 'phase N done', file counts. A reusable workflow belongs "
+    "in a skill rather than memory (capture it with the skill_manage tool, if you have it).\n\n"
+    "IF FULL: an add is rejected once a scope is at its budget. Call action='list', then "
+    "remove or shorten stale entries to make room, and re-add.\n\n"
     "For replace/remove, call action='list' first — 1-based ids shift after a remove."
 )
 MEMORY_ACTIONS = ("list", "add", "replace", "remove")
@@ -56,12 +66,57 @@ MEMORY_TOOL_PARAMETERS: JsonObject = {
 
 _ALLOWED_ARGUMENTS = set(MEMORY_TOOL_PARAMETERS["properties"])
 
+# Actions that mutate a scope. Only these feed the thrash guard: a failed mutation
+# invites the model to consolidate and retry, so a model that keeps failing them is
+# the loop we cap; list is a pure read and never counts.
+_MEMORY_MUTATION_ACTIONS = ("add", "replace", "remove")
+# Consecutive failed mutations tolerated per run before the tool cuts the loop off.
+# Recovery from a full scope is normally a single failure (add rejected → remove
+# succeeds → re-add), so a legitimate flow never approaches this; the cap only bites
+# a model that keeps re-issuing failing writes and would otherwise loop the turn to
+# budget exhaustion, re-sending the whole context each round and starving the reply.
+_MAX_MEMORY_FAILURES_PER_RUN = 3
+
+
+class _MemoryThrashTracker:
+    """Per-run counter of consecutive failed memory mutations (thrash guard).
+
+    Keyed by run id and reset on the first successful mutation of that run. Bounded
+    so a long-lived process never accumulates state: a success drops the run's entry,
+    and the map evicts oldest-first past a fixed cap. Mutation handlers run in worker
+    threads and calls within one turn run concurrently, so the counter is guarded by a
+    lock — a lost update would only miscount by one, but the lock keeps it exact.
+    """
+
+    _MAX_TRACKED_RUNS = 512
+
+    def __init__(self) -> None:
+        self._counts: OrderedDict[str, int] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def record_failure(self, run_id: str) -> int:
+        """Increment and return the run's consecutive-failure count."""
+        with self._lock:
+            count = self._counts.get(run_id, 0) + 1
+            self._counts[run_id] = count
+            self._counts.move_to_end(run_id)
+            while len(self._counts) > self._MAX_TRACKED_RUNS:
+                self._counts.popitem(last=False)
+            return count
+
+    def record_success(self, run_id: str) -> None:
+        """Reset the run's failure count after a successful mutation."""
+        with self._lock:
+            self._counts.pop(run_id, None)
+
 
 def make_memory_handler(memory_service: MemoryService):
     """Create a memory tool handler bound to a memory service."""
 
+    tracker = _MemoryThrashTracker()
+
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await asyncio.to_thread(memory_handler, context, arguments, memory_service)
+        return await asyncio.to_thread(memory_handler, context, arguments, memory_service, tracker)
 
     return handler
 
@@ -70,8 +125,13 @@ def memory_handler(
     context: ToolContext,
     arguments: JsonObject,
     memory_service: MemoryService,
+    tracker: _MemoryThrashTracker | None = None,
 ) -> JsonObject:
-    """Handle a memory tool call and return a stable vBot result envelope."""
+    """Handle a memory tool call and return a stable vBot result envelope.
+
+    ``tracker`` is the per-run thrash guard the runtime handler supplies; when it is
+    absent (direct callers, tests) the guard is simply inert and behavior is unchanged.
+    """
     unknown_arguments = set(arguments) - _ALLOWED_ARGUMENTS
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -80,13 +140,47 @@ def memory_handler(
     try:
         action = _required_enum(arguments.get("action"), field_name="action", values=MEMORY_ACTIONS)
         scope = _required_enum(arguments.get("scope"), field_name="scope", values=MEMORY_SCOPES)
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
+
+    is_mutation = action in _MEMORY_MUTATION_ACTIONS
+    try:
         data = _dispatch_memory_action(context, arguments, memory_service, action, scope)
     except MemoryError as error:
+        if is_mutation:
+            return _mutation_failure(tracker, context.run_id, error)
         return tool_failure("memory_error", str(error))
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
 
+    if is_mutation and tracker is not None:
+        tracker.record_success(context.run_id)
     return tool_success(data)
+
+
+def _mutation_failure(
+    tracker: _MemoryThrashTracker | None, run_id: str, error: MemoryError
+) -> JsonObject:
+    """Return the failure envelope for a rejected mutation, applying the thrash guard.
+
+    Below the per-run cap the model gets the underlying recoverable error and a
+    ``retryable`` signal so it can consolidate and try again. At the cap the message
+    flips terminal (``retryable`` false): a memory side effect must never loop the
+    turn and suppress the user's reply — the fact can be saved in a later turn.
+    """
+    if tracker is None:
+        return tool_failure("memory_error", str(error), retryable=True)
+    failures = tracker.record_failure(run_id)
+    if failures > _MAX_MEMORY_FAILURES_PER_RUN:
+        return tool_failure(
+            "memory_error",
+            f"Memory update failed {failures} times this run. Stop retrying memory calls — "
+            "leave memory unchanged for now and continue with your reply to the user. The "
+            "fact can be saved in a later turn.",
+            retryable=False,
+            attempts_made=failures,
+        )
+    return tool_failure("memory_error", str(error), retryable=True)
 
 
 def _dispatch_memory_action(
