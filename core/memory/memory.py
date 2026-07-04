@@ -61,8 +61,9 @@ _MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000}
 _MEMORY_GUIDANCE = (
     "This memory is injected into every future session, so keep it to durable, high-signal "
     "facts — the most valuable entry is one that stops the user from having to steer, "
-    "correct, or repeat themselves again. Write them as declarative facts, not instructions "
-    'to yourself: "User prefers concise answers" (good), not "Always answer concisely" (bad); '
+    "correct, or repeat themselves again. Save such facts as they surface, rather than "
+    "waiting to be asked. Write them as declarative facts, not instructions to yourself: "
+    '"User prefers concise answers" (good), not "Always answer concisely" (bad); '
     '"Project uses pytest with xdist" (good), not "Run tests with pytest -n 4" (bad). '
     "Imperative notes get re-read as standing directives in later sessions and can override "
     "the user's current request."
