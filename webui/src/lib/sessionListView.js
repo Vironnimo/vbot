@@ -84,6 +84,9 @@ function normalizeSession(session) {
   const subagentParent = normalizeSubagentParent(session?.subagent_parent);
   const isSubagentSession =
     session?.is_subagent_session === true || subagentParent !== null;
+  const forkSource = isPlainObject(session?.fork_source)
+    ? session.fork_source
+    : null;
 
   const normalizedSession = {
     id,
@@ -96,6 +99,8 @@ function normalizeSession(session) {
     is_channel_session: platform !== null && platformConvId !== null,
     is_subagent_session: isSubagentSession,
     subagent_parent: subagentParent,
+    fork_source: forkSource,
+    is_fork: forkSource !== null,
   };
 
   normalizedSession.display_name = sessionDisplayName(normalizedSession);

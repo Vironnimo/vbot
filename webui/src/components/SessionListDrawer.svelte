@@ -409,6 +409,11 @@
                     {t('chat.subagent.label', 'Sub-agent')}
                   </span>
                 {/if}
+                {#if session.is_fork}
+                  <span class="session-row__badge session-row__badge--fork">
+                    {t('sessions.fork', 'Fork')}
+                  </span>
+                {/if}
               </div>
               <p class="session-row__meta">
                 {t('sessions.last_active', 'Last active')}:
@@ -735,6 +740,12 @@
     border-color: rgba(91, 141, 239, 0.32);
     background: rgba(91, 141, 239, 0.14);
     color: #8fb4ff;
+  }
+
+  .session-row__badge--fork {
+    border-color: rgba(167, 139, 250, 0.34);
+    background: rgba(167, 139, 250, 0.14);
+    color: #c4b5fd;
   }
 
   .session-row__badge svg {

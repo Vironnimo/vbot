@@ -36,6 +36,10 @@ SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 # input, it is not a meaningful length limit.
 SESSION_TITLE_KEY = "title"
 SESSION_TITLE_MAX_LENGTH = 200
+# Sidecar key recording a forked session's provenance: which source session it was
+# copied from and the fork point. Written on every fork (even when the source had no
+# sidecar) so a fork is self-describing.
+FORK_SOURCE_META_KEY = "fork_source"
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 PARTIAL_THINKING_NOTE_PREFIX = "[partial-thinking] "
 CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
@@ -535,6 +539,69 @@ class ChatSessionManager:
                 source_sidecar.unlink(missing_ok=True)
 
             return ChatSession(destination_path)
+
+    async def fork(
+        self,
+        source_agent_id: str,
+        session_id: str,
+        *,
+        target_agent_id: str | None = None,
+        source_project_id: str | None = None,
+        target_project_id: str | None = None,
+        strip_meta_keys: frozenset[str] = frozenset(),
+    ) -> ChatSession:
+        """Copy a session 1:1 into a fresh id, stamping fork provenance.
+
+        Unlike :meth:`move`, the source is left completely untouched — no
+        ``os.replace``, no sidecar deletion — so a fork is a pure read of the
+        source plus two writes at the destination. The source ``write_lock`` is
+        held for the whole copy, so the snapshot lands on a message boundary: a
+        Run holds that lock across its tool cycle, so the copy blocks until an
+        open cycle completes instead of capturing it half-written — the fork
+        needs no separate run-quiescence precondition (see the class note).
+
+        ``target_agent_id=None`` forks within the source's own agent. The fork
+        receives a fresh session id generated exactly like
+        :meth:`ChatSession.create` (a v4 UUID). Its metadata starts from the
+        source sidecar (empty when the source had none), drops
+        ``strip_meta_keys`` (caller-owned policy, so the sessions domain imports
+        no chat/channel constant, same reasoning as :meth:`move`), and always
+        gains the ``fork_source`` provenance key recording the source
+        ``(agent, session, project)``, the fork timestamp, and the copied
+        message count — so a fork is self-describing even when the source
+        carried no sidecar.
+        """
+        _validate_session_id(session_id)
+        destination_agent_id = target_agent_id or source_agent_id
+        async with self.write_lock(source_agent_id, session_id, source_project_id):
+            source = self.get(source_agent_id, session_id, source_project_id)
+            destination_dir = self.sessions_dir(destination_agent_id, target_project_id)
+            fork_session = ChatSession.create(destination_dir)
+
+            try:
+                transcript_bytes = source.path.read_bytes()
+                fork_session.path.write_bytes(transcript_bytes)
+            except OSError as exc:
+                fork_session.delete()
+                raise ChatSessionError(f"failed to copy session transcript: {session_id}") from exc
+            message_count = transcript_bytes.count(SESSION_LINE_ENDING_BYTES)
+
+            forked_metadata = {
+                key: value
+                for key, value in self._load_sidecar(source).items()
+                if key not in strip_meta_keys
+            }
+            forked_metadata[FORK_SOURCE_META_KEY] = {
+                "agent_id": source_agent_id,
+                "session_id": session_id,
+                "project_id": source_project_id,
+                "forked_at": _format_timestamp(datetime.now(UTC)),
+                "message_count": message_count,
+            }
+            self.set_metadata(
+                destination_agent_id, fork_session.id, forked_metadata, target_project_id
+            )
+            return fork_session
 
     def list(self, agent_id: str, project_id: str | None = None) -> list[ChatSession]:
         """List session handles for an agent sorted by filename."""

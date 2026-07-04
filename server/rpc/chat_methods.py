@@ -25,8 +25,12 @@ from core.subagents.subagents import (
     SUBAGENT_PARENT_METADATA_KEY,
     SUBAGENT_SESSION_METADATA_FLAG,
 )
-from server.events import RESOURCE_KIND_QUEUE
-from server.rpc.agent_methods import _create_session, _rename_session
+from server.events import RESOURCE_KIND_QUEUE, RESOURCE_KIND_SESSIONS
+from server.rpc.agent_methods import (
+    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+    _create_session,
+    _rename_session,
+)
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -72,6 +76,7 @@ MAX_CHAT_HISTORY_LIMIT = 500
 # internal note, never shown to the user; the wording is deliberate.
 HANDOFF_FRAGMENT_NAME = "handoff.md"
 LEARN_FRAGMENT_NAME = "learn.md"
+REFLECT_FRAGMENT_NAME = "reflect.md"
 
 # Sidecar marker on a channel-bound session; such sessions are excluded from
 # ``/agent`` moves so the channel pointer is never left dangling.
@@ -273,6 +278,10 @@ async def _handle_command_action(
             )
         case "learn":
             return await _handle_learn_command(
+                state, agent_id, session_id, command_action.argument, project_id=project_id
+            )
+        case "reflect":
+            return await _handle_reflect_command(
                 state, agent_id, session_id, command_action.argument, project_id=project_id
             )
         case "move_session":
@@ -545,6 +554,89 @@ async def _handle_learn_command(
 
     summary = _extract_handoff_text(learn_message.content)
     return _command_handled_response(summary or "Skill authoring run completed.")
+
+
+def _build_reflect_prompt(base_instruction: str, focus: str | None) -> str:
+    """Weave the optional ``/reflect`` focus into the base reflection brief.
+
+    With no focus the bare brief is used unchanged (trailing whitespace
+    normalized away), so the no-argument path is identical to the ``reflect.md``
+    fragment. A focus argument steers which dimension the reflection concentrates
+    on, without dropping the rest of the brief.
+    """
+    base = base_instruction.strip()
+    cleaned = (focus or "").strip()
+    if not cleaned:
+        return base
+    return f"{base}\n\nThe user asked you to focus this reflection on:\n{cleaned}"
+
+
+async def _handle_reflect_command(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    argument: str | None,
+    *,
+    project_id: str | None = None,
+) -> JsonObject:
+    """Review this session in a fork and save durable memory/skill updates.
+
+    Forks the current session (cache-warm: same agent, so the pinned catalog is
+    kept), then runs the reflection brief as an internal run *in the fork* with
+    only the ``memory``/``skill``/``skill_manage`` tools dispatchable — the
+    restriction is enforced at dispatch, not by changing the tool definitions, so
+    the fork's prompt prefix stays byte-identical to the source. The original
+    session is never touched. Identity-agents-only (a config/project agent has no
+    private memory/skill home); refused while a run is active on the source.
+    """
+    active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+    if active_run is not None:
+        return _command_handled_response("A reflection can run after the current run finishes.")
+
+    try:
+        agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if not getattr(agent, "workspace", ""):
+        return _command_handled_response(
+            "Reflection needs an identity agent with its own memory and skill home."
+        )
+
+    try:
+        fork = await state.runtime.chat_sessions.fork(
+            agent_id,
+            session_id,
+            source_project_id=project_id,
+            target_project_id=project_id,
+            strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+        )
+        # The drawer shows the fork immediately (scoped to this agent).
+        publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+        # The fork is fresh and never busy, so start the review run directly on the
+        # chat loop (no trigger-service queue needed). The tool restriction is
+        # dispatch-only — the fork's prompt/tool definitions stay byte-identical.
+        reflect_run = await state.chat_loop.start_run(
+            agent_id,
+            _build_reflect_prompt(
+                state.runtime.storage.read_prompt_fragment(REFLECT_FRAGMENT_NAME), argument
+            ),
+            session_id=fork.id,
+            internal=True,
+            project_id=project_id,
+            tool_restriction=("memory", "skill", "skill_manage"),
+        )
+        reflect_message = await reflect_run.wait()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    summary = _extract_handoff_text(reflect_message.content)
+    return _command_handled_response(
+        CommandHandled(
+            reply=summary or "Reflection completed.",
+            # The fork session id rides in ``data`` so an accessor can link to it.
+            data={"command": "reflect", "session_id": fork.id, "agent_id": agent_id},
+        )
+    )
 
 
 async def _handle_handoff_command(

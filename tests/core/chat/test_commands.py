@@ -264,6 +264,7 @@ def test_built_in_commands_include_current_catalog() -> None:
         "learn",
         "model",
         "new",
+        "reflect",
         "rename",
         "retry",
         "status",
@@ -284,6 +285,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "learn": "optional",
         "model": "optional",
         "new": "none",
+        "reflect": "optional",
         "rename": "optional",
         "retry": "none",
         "status": "none",
@@ -297,6 +299,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "learn": "action",
         "model": "action",
         "new": "action",
+        "reflect": "action",
         "rename": "toast",
         "retry": "action",
         "status": "transient",
@@ -353,6 +356,22 @@ def test_dispatch_learn_takes_full_remainder_as_argument() -> None:
     result = dispatcher.dispatch("coder", "session-one", "/learn the deploy steps we just did")
 
     assert result == CommandAction(name="learn", argument="the deploy steps we just did")
+
+
+def test_dispatch_reflect_without_argument_returns_action() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/reflect")
+
+    assert result == CommandAction(name="reflect", argument=None)
+
+
+def test_dispatch_reflect_takes_full_remainder_as_argument() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/reflect focus on the memory side")
+
+    assert result == CommandAction(name="reflect", argument="focus on the memory side")
 
 
 def test_dispatch_handoff_with_agent_id_returns_action() -> None:

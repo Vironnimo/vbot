@@ -164,6 +164,7 @@ export const englishCatalog = Object.freeze({
   'sessions.loading': 'Loading sessions…',
   'sessions.no_sessions': 'No sessions found for this agent.',
   'sessions.current': 'Current',
+  'sessions.fork': 'Fork',
   'sessions.last_active': 'Last active',
   'sessions.link_channel_id': 'Channel ID',
   'sessions.platform_telegram': 'Telegram',
