@@ -5,9 +5,11 @@ from typing import Any
 
 from core.memory import MemoryService
 from core.tools.memory import (
+    _MAX_MEMORY_FAILURES_PER_RUN,
     MEMORY_TOOL_DESCRIPTION,
     MEMORY_TOOL_NAME,
     MEMORY_TOOL_PARAMETERS,
+    _MemoryThrashTracker,
     memory_handler,
     register_memory_tool,
 )
@@ -140,3 +142,77 @@ def test_memory_tool_returns_memory_errors(tmp_path: Path) -> None:
 
     error = assert_failure(result, "memory_error")
     assert "entry_id" in error["message"]
+
+
+def test_thrash_guard_cuts_off_repeated_mutation_failures(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    service = MemoryService()
+    tracker = _MemoryThrashTracker()
+    failing_remove = {"action": "remove", "scope": "agent", "entry_id": 1}
+
+    # Below the cap: the underlying recoverable error, flagged retryable.
+    for _ in range(_MAX_MEMORY_FAILURES_PER_RUN):
+        error = assert_failure(
+            memory_handler(context, failing_remove, service, tracker), "memory_error"
+        )
+        assert "entry_id" in error["message"]
+        assert error["retryable"] is True
+
+    # At the cap the failure flips terminal: stop-retrying message, non-retryable.
+    error = assert_failure(
+        memory_handler(context, failing_remove, service, tracker), "memory_error"
+    )
+    assert error["retryable"] is False
+    assert "Stop retrying" in error["message"]
+    assert error["attempts_made"] == _MAX_MEMORY_FAILURES_PER_RUN + 1
+
+
+def test_thrash_guard_resets_on_successful_mutation(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    service = MemoryService()
+    tracker = _MemoryThrashTracker()
+    failing_remove = {"action": "remove", "scope": "agent", "entry_id": 1}
+
+    for _ in range(_MAX_MEMORY_FAILURES_PER_RUN):
+        assert_failure(memory_handler(context, failing_remove, service, tracker), "memory_error")
+
+    # A successful mutation clears the run's streak, so the guard starts over.
+    assert_success(
+        memory_handler(
+            context, {"action": "add", "scope": "agent", "content": "x"}, service, tracker
+        )
+    )
+
+    # An out-of-range id fails whether or not the scope holds entries, so the streak
+    # restarts from a plain recoverable failure rather than the terminal cutoff.
+    out_of_range = {"action": "remove", "scope": "agent", "entry_id": 99}
+    error = assert_failure(memory_handler(context, out_of_range, service, tracker), "memory_error")
+    assert error["retryable"] is True
+    assert "entry_id" in error["message"]
+
+
+def test_thrash_guard_is_scoped_per_run(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    service = MemoryService()
+    tracker = _MemoryThrashTracker()
+    failing_remove = {"action": "remove", "scope": "agent", "entry_id": 1}
+
+    for _ in range(_MAX_MEMORY_FAILURES_PER_RUN + 1):
+        memory_handler(context, failing_remove, service, tracker)
+
+    # A different run keeps its own streak: the first failure there is still recoverable.
+    other_run = ToolContext(
+        agent_id="main",
+        session_id="session-1",
+        run_id="run-2",
+        tool_call_id="call-1",
+        tool_name=MEMORY_TOOL_NAME,
+        tool_call_index=0,
+        workspace=context.workspace,
+        app_root=context.app_root,
+        data_root=context.data_root,
+    )
+    error = assert_failure(
+        memory_handler(other_run, failing_remove, service, tracker), "memory_error"
+    )
+    assert error["retryable"] is True
