@@ -15,6 +15,8 @@ from core.attachments import AttachmentStore
 from core.channels.adapter import (
     ChannelAdapter,
     ConversationFacts,
+    DeniedChatFacts,
+    DeniedChatLog,
     FileData,
     RouteFacts,
     content_blocks_for_attachment,
@@ -96,6 +98,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._application: Any | None = None
         self._stop_event = asyncio.Event()
         self._allowed_chat_ids = frozenset(config.allowed_chat_ids)
+        self._denied_chat_log = DeniedChatLog()
         self._bot_id: int | None = None
         self._bot_username: str | None = None
         self._bot_mention_pattern: re.Pattern[str] | None = None
@@ -575,6 +578,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         if not self._is_chat_allowed(conversation.chat_id):
+            self._record_denied_inbound(conversation, update)
             return
 
         message_text = _extract_message_text(update)
@@ -615,6 +619,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         if not self._is_chat_allowed(conversation.chat_id):
+            self._record_denied_inbound(conversation, update)
             return
 
         message = getattr(update, "effective_message", None)
@@ -635,6 +640,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         if not self._is_chat_allowed(conversation.chat_id):
+            self._record_denied_inbound(conversation, update)
             return
 
         message = getattr(update, "effective_message", None)
@@ -733,6 +739,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         if not self._is_chat_allowed(conversation.chat_id):
+            self._record_denied_inbound(conversation, update)
             return
 
         # Unaddressed group messages are dropped, so an unsupported-type reply would be
@@ -916,6 +923,44 @@ class TelegramChannelAdapter(ChannelAdapter):
     def _is_chat_allowed(self, chat_id: str) -> bool:
         # D8: empty allowed_chat_ids means deny all inbound chats.
         return chat_id in self._allowed_chat_ids
+
+    def denied_chats(self) -> list[DeniedChatFacts]:
+        return self._denied_chat_log.entries()
+
+    def _record_denied_inbound(self, conversation: ConversationFacts, update: Any) -> None:
+        """Record an allowlist-denied inbound message for status/discovery surfaces.
+
+        The first denial per chat logs at info so operators can find the chat id
+        without any tooling; repeats stay at debug to keep a chatty denied chat
+        from flooding the log.
+        """
+        display_name = self._denied_chat_display_name(conversation, update)
+        is_new_chat = self._denied_chat_log.record(
+            chat_id=conversation.chat_id,
+            kind=conversation.kind,
+            display_name=display_name,
+        )
+        log = _LOGGER.info if is_new_chat else _LOGGER.debug
+        log(
+            "Inbound Telegram message from chat not in allowlist "
+            "(channel=%s chat=%s kind=%s name=%s); chat id recorded in channel status",
+            self._config.id,
+            conversation.chat_id,
+            conversation.kind,
+            display_name or "unknown",
+        )
+
+    def _denied_chat_display_name(
+        self,
+        conversation: ConversationFacts,
+        update: Any,
+    ) -> str | None:
+        if conversation.kind == "group":
+            title = getattr(getattr(update, "effective_chat", None), "title", None)
+            if isinstance(title, str) and title.strip():
+                return title.strip()
+            return None
+        return conversation.user_display_name
 
     # -- Typing indicator -----------------------------------------------------------------
 

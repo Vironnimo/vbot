@@ -13,6 +13,8 @@ from core.attachments import AttachmentStore
 from core.channels.adapter import (
     ChannelAdapter,
     ConversationFacts,
+    DeniedChatFacts,
+    DeniedChatLog,
     FileData,
     RouteFacts,
     content_blocks_for_attachment,
@@ -71,6 +73,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         self._client: Any | None = None
         self._bot_id: str | None = None
         self._allowed_chat_ids = frozenset(config.allowed_chat_ids)
+        self._denied_chat_log = DeniedChatLog()
         self._message_locks: dict[str, asyncio.Lock] = {}
         self._backfilled_message_ids: dict[str, set[str]] = {}
         self._known_conversations: dict[str, ConversationFacts] = {}
@@ -222,7 +225,10 @@ class DiscordChannelAdapter(ChannelAdapter):
             return
 
         conversation = self._conversation_facts(message)
-        if conversation is None or not self._is_message_allowed(message, conversation):
+        if conversation is None:
+            return
+        if not self._is_message_allowed(message, conversation):
+            self._record_denied_inbound(conversation, message)
             return
 
         content = _message_content(message)
@@ -358,6 +364,49 @@ class DiscordChannelAdapter(ChannelAdapter):
             return True
         parent_id = _snowflake_string(getattr(getattr(message, "channel", None), "parent_id", None))
         return parent_id is not None and parent_id in self._allowed_chat_ids
+
+    def denied_chats(self) -> list[DeniedChatFacts]:
+        return self._denied_chat_log.entries()
+
+    def _record_denied_inbound(self, conversation: ConversationFacts, message: Any) -> None:
+        """Record an allowlist-denied inbound message for status/discovery surfaces.
+
+        The first denial per chat logs at info so operators can find the channel id
+        without any tooling; repeats stay at debug to keep a chatty denied channel
+        from flooding the log.
+        """
+        display_name = self._denied_chat_display_name(conversation, message)
+        is_new_chat = self._denied_chat_log.record(
+            chat_id=conversation.chat_id,
+            kind=conversation.kind,
+            display_name=display_name,
+        )
+        log = _LOGGER.info if is_new_chat else _LOGGER.debug
+        log(
+            "Inbound Discord message from channel not in allowlist "
+            "(channel=%s chat=%s kind=%s name=%s); chat id recorded in channel status",
+            self._config.id,
+            conversation.chat_id,
+            conversation.kind,
+            display_name or "unknown",
+        )
+
+    def _denied_chat_display_name(
+        self,
+        conversation: ConversationFacts,
+        message: Any,
+    ) -> str | None:
+        if conversation.kind == "group":
+            channel = getattr(message, "channel", None)
+            channel_name = getattr(channel, "name", None)
+            guild_name = getattr(getattr(message, "guild", None), "name", None)
+            parts = [
+                part.strip()
+                for part in (guild_name, channel_name)
+                if isinstance(part, str) and part.strip()
+            ]
+            return " / ".join(parts) if parts else None
+        return conversation.user_display_name
 
     def _mentions_bot(self, message: Any) -> bool:
         bot_id = self._effective_bot_id()

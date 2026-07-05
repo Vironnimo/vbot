@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock, TextBlock
 
 if TYPE_CHECKING:
     from core.attachments import AttachmentRecord
+
+# Denied inbound chats are kept for operator visibility only; the bound keeps the
+# in-memory log small under spam while still covering every realistic setup flow.
+DENIED_CHAT_LOG_LIMIT = 20
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,83 @@ class ConversationFacts:
     # Addressing facts supplied by the adapter; the engine owns the gating decision.
     mentioned_bot: bool = False
     is_reply_to_bot: bool = False
+
+
+@dataclass(frozen=True)
+class DeniedChatFacts:
+    """One inbound chat that was rejected by a channel's allowlist.
+
+    Recorded so operators can discover a chat's platform id without third-party
+    tooling: message the bot once, read the id from channel status, allow it.
+    """
+
+    chat_id: str
+    kind: Literal["direct", "group"]
+    display_name: str | None
+    last_seen_at: str
+    count: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "chat_id": self.chat_id,
+            "kind": self.kind,
+            "display_name": self.display_name,
+            "last_seen_at": self.last_seen_at,
+            "count": self.count,
+        }
+
+
+class DeniedChatLog:
+    """Bounded in-memory record of inbound chats rejected by the allowlist.
+
+    Purely observational: recording a denial never changes gating. The log lives
+    with the adapter instance, so allowing a chat (which restarts the adapter)
+    naturally clears its entry.
+    """
+
+    def __init__(self, limit: int = DENIED_CHAT_LOG_LIMIT) -> None:
+        self._limit = limit
+        # Dict insertion order doubles as recency order: recording an existing chat
+        # re-inserts it at the end. Timestamps are display data only — ordering by
+        # them would be ambiguous when the clock resolution makes two ties.
+        self._entries: dict[str, DeniedChatFacts] = {}
+
+    def record(
+        self,
+        *,
+        chat_id: str,
+        kind: Literal["direct", "group"],
+        display_name: str | None,
+    ) -> bool:
+        """Record one denied inbound message; return True when the chat is new."""
+        now = datetime.now(UTC).isoformat()
+        existing = self._entries.pop(chat_id, None)
+        if existing is not None:
+            self._entries[chat_id] = replace(
+                existing,
+                # A denied chat can gain a usable name later (e.g. first denial
+                # came from a payload without one); never regress to None.
+                display_name=display_name or existing.display_name,
+                last_seen_at=now,
+                count=existing.count + 1,
+            )
+            return False
+
+        if len(self._entries) >= self._limit:
+            oldest_chat_id = next(iter(self._entries))
+            del self._entries[oldest_chat_id]
+        self._entries[chat_id] = DeniedChatFacts(
+            chat_id=chat_id,
+            kind=kind,
+            display_name=display_name,
+            last_seen_at=now,
+            count=1,
+        )
+        return True
+
+    def entries(self) -> list[DeniedChatFacts]:
+        """Return denied chats, most recently seen first."""
+        return list(reversed(self._entries.values()))
 
 
 @dataclass(frozen=True)
@@ -125,6 +207,15 @@ class ChannelAdapter(ABC):
     """Base class for platform-specific channel adapters."""
 
     platform: str
+
+    def denied_chats(self) -> list[DeniedChatFacts]:
+        """Return recently denied inbound chats for status/discovery surfaces.
+
+        Adapters that gate inbound messages by allowlist override this with their
+        ``DeniedChatLog`` entries; the default keeps adapters without inbound
+        gating valid.
+        """
+        return []
 
     @abstractmethod
     async def start(self) -> None:

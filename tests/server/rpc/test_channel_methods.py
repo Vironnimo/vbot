@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from core.channels import ChannelConfig, ChannelConfigError
+from core.channels import ChannelConfig, ChannelConfigError, DeniedChatFacts
 from server.rpc.methods import dispatch_rpc
 
 
@@ -192,6 +192,7 @@ async def test_channel_status_happy_path_returns_enabled_and_running() -> None:
     channel_service.is_running = Mock(return_value=True)
     channel_service.is_failed = Mock(return_value=False)
     channel_service.failure_reason = Mock(return_value=None)
+    channel_service.denied_chats = Mock(return_value=[])
     state = _state(channel_service=channel_service)
 
     response = await dispatch_rpc(
@@ -212,6 +213,7 @@ async def test_channel_status_happy_path_returns_enabled_and_running() -> None:
             "running": True,
             "failed": False,
             "failure_reason": None,
+            "denied_chats": [],
         },
     }
 
@@ -224,6 +226,7 @@ async def test_channel_status_returns_failure_reason() -> None:
     channel_service.is_running = Mock(return_value=False)
     channel_service.is_failed = Mock(return_value=True)
     channel_service.failure_reason = Mock(return_value="Unknown agent_id: missing-agent")
+    channel_service.denied_chats = Mock(return_value=[])
     state = _state(channel_service=channel_service)
 
     response = await dispatch_rpc(
@@ -244,8 +247,53 @@ async def test_channel_status_returns_failure_reason() -> None:
             "running": False,
             "failed": True,
             "failure_reason": "Unknown agent_id: missing-agent",
+            "denied_chats": [],
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_channel_status_returns_denied_chats() -> None:
+    config = _channel_config(enabled=True)
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [config]
+    channel_service.is_running = Mock(return_value=True)
+    channel_service.is_failed = Mock(return_value=False)
+    channel_service.failure_reason = Mock(return_value=None)
+    channel_service.denied_chats = Mock(
+        return_value=[
+            DeniedChatFacts(
+                chat_id="99999",
+                kind="direct",
+                display_name="Julian B.",
+                last_seen_at="2026-07-05T12:00:00+00:00",
+                count=3,
+            )
+        ]
+    )
+    state = _state(channel_service=channel_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.status",
+            "params": {
+                "id": "tg-assistant",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["denied_chats"] == [
+        {
+            "chat_id": "99999",
+            "kind": "direct",
+            "display_name": "Julian B.",
+            "last_seen_at": "2026-07-05T12:00:00+00:00",
+            "count": 3,
+        }
+    ]
+    channel_service.denied_chats.assert_called_once_with("tg-assistant")
 
 
 @pytest.mark.asyncio

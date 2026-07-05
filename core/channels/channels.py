@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from core.attachments import AttachmentStore
-from core.channels.adapter import ChannelAdapter, FileData, RouteFacts
+from core.channels.adapter import ChannelAdapter, DeniedChatFacts, FileData, RouteFacts
 from core.settings import SettingsValidationError, load_validated_channel_json
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -659,6 +659,18 @@ class ChannelService:
         """Return the latest failure reason for one failed channel, if any."""
         normalized_id = _normalize_channel_id(channel_id)
         return self._failure_reasons.get(normalized_id)
+
+    def denied_chats(self, channel_id: str) -> list[DeniedChatFacts]:
+        """Return one channel's recently allowlist-denied inbound chats.
+
+        Empty when the channel is not running: the log lives on the adapter
+        instance, so there is nothing to report without an active adapter.
+        """
+        normalized_id = _normalize_channel_id(channel_id)
+        adapter = self._adapters.get(normalized_id)
+        if adapter is None:
+            return []
+        return adapter.denied_chats()
 
     def _notify_tool_registration_changed(self) -> None:
         try:

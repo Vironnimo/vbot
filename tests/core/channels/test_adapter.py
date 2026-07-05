@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.attachments import AttachmentRecord
-from core.channels.adapter import content_blocks_for_attachment
+from core.channels.adapter import DeniedChatLog, content_blocks_for_attachment
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 
 
@@ -78,3 +78,65 @@ def test_other_types_stay_generic_file_block() -> None:
             media_type="application/pdf",
         )
     ]
+
+
+class TestDeniedChatLog:
+    def test_first_record_is_new_and_listed(self) -> None:
+        log = DeniedChatLog()
+
+        is_new = log.record(chat_id="123", kind="direct", display_name="Julian")
+
+        assert is_new is True
+        entries = log.entries()
+        assert len(entries) == 1
+        assert entries[0].chat_id == "123"
+        assert entries[0].kind == "direct"
+        assert entries[0].display_name == "Julian"
+        assert entries[0].count == 1
+        assert entries[0].last_seen_at
+
+    def test_repeat_record_updates_count_and_is_not_new(self) -> None:
+        log = DeniedChatLog()
+        log.record(chat_id="123", kind="direct", display_name="Julian")
+
+        is_new = log.record(chat_id="123", kind="direct", display_name="Julian")
+
+        assert is_new is False
+        entries = log.entries()
+        assert len(entries) == 1
+        assert entries[0].count == 2
+
+    def test_display_name_never_regresses_to_none(self) -> None:
+        log = DeniedChatLog()
+        log.record(chat_id="123", kind="group", display_name="Team Chat")
+
+        log.record(chat_id="123", kind="group", display_name=None)
+
+        assert log.entries()[0].display_name == "Team Chat"
+
+    def test_missing_display_name_is_backfilled_later(self) -> None:
+        log = DeniedChatLog()
+        log.record(chat_id="123", kind="group", display_name=None)
+
+        log.record(chat_id="123", kind="group", display_name="Team Chat")
+
+        assert log.entries()[0].display_name == "Team Chat"
+
+    def test_limit_evicts_oldest_entry(self) -> None:
+        log = DeniedChatLog(limit=2)
+        log.record(chat_id="first", kind="direct", display_name=None)
+        log.record(chat_id="second", kind="direct", display_name=None)
+
+        log.record(chat_id="third", kind="direct", display_name=None)
+
+        chat_ids = {entry.chat_id for entry in log.entries()}
+        assert chat_ids == {"second", "third"}
+
+    def test_entries_are_most_recent_first(self) -> None:
+        log = DeniedChatLog()
+        log.record(chat_id="older", kind="direct", display_name=None)
+        log.record(chat_id="newer", kind="direct", display_name=None)
+
+        log.record(chat_id="older", kind="direct", display_name=None)
+
+        assert [entry.chat_id for entry in log.entries()] == ["older", "newer"]

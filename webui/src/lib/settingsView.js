@@ -272,10 +272,18 @@ export function mergeChannelStatuses(channels, statusResults) {
     const enabled =
       typeof status.enabled === 'boolean' ? status.enabled : channel.enabled;
 
+    const deniedChats = Array.isArray(status.denied_chats)
+      ? status.denied_chats.filter(
+          (entry) =>
+            typeof entry?.chat_id === 'string' && entry.chat_id.length > 0,
+        )
+      : [];
+
     return {
       ...channel,
       running,
       enabled,
+      denied_chats: deniedChats,
     };
   });
 }
