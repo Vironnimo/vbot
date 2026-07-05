@@ -331,7 +331,7 @@
     <div class="s-row-desc">
       {t(
         'settings.compaction.summaryModelDescription',
-        'Model used for summarization. Leave blank to use the active agent model.',
+        'Model used for summarization. Leave blank to use the active agent model. This binding is independent of agent and project defaults.',
       )}
     </div>
   </div>
