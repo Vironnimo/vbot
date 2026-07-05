@@ -201,7 +201,6 @@
   let settings = $state(null);
   let loading = $state(true);
   let loadError = $state('');
-  let saveError = $state('');
   let providersPanel = $state(null);
   let providerHeaderAction = $state(null);
   let handledTargetPanelRequestId = -1;
@@ -230,7 +229,23 @@
 
   function selectPanel(panelId) {
     activePanelId = panelId;
-    saveError = '';
+  }
+
+  // The single settings error seam: a panel's `onError` funnels here. A
+  // non-empty message becomes a sticky error toast (a transport/server failure
+  // the user must acknowledge); the empty-string "clear" calls panels make on a
+  // fresh attempt are simply ignored, since a toast is dismissed by the user,
+  // not by the next keystroke. Panels already build a full sentence, so it is
+  // the toast body under a generic error title.
+  function reportSettingsError(message) {
+    if (!message) {
+      return;
+    }
+    onToast({
+      title: t('errors.appError', 'Error'),
+      message,
+      variant: 'error',
+    });
   }
 
   function applySettings(nextSettings) {
@@ -319,10 +334,6 @@
           </Button>
         </div>
       {:else}
-        {#if saveError}
-          <div class="s-feedback s-feedback--error">{saveError}</div>
-        {/if}
-
         <SettingsProvidersPanel
           bind:this={providersPanel}
           {settings}
@@ -332,7 +343,7 @@
           {disconnectProvider}
           onCommit={commitSettings}
           {onToast}
-          onError={(message) => (saveError = message)}
+          onError={(message) => reportSettingsError(message)}
           onReloadSettings={loadSettings}
           onHeaderActionChange={updateProviderHeaderAction}
           {modelsRefreshToken}
@@ -345,7 +356,7 @@
             {settings}
             onCommit={commitSettings}
             {onToast}
-            onError={(message) => (saveError = message)}
+            onError={(message) => reportSettingsError(message)}
             {modelsRefreshToken}
           />
         {:else if activePanelId === 'skills'}
@@ -353,21 +364,21 @@
             {settings}
             onCommit={commitSettings}
             {onToast}
-            onError={(message) => (saveError = message)}
+            onError={(message) => reportSettingsError(message)}
           />
         {:else if activePanelId === 'subagents'}
           <SettingsSubAgentsPanel
             {settings}
             onCommit={commitSettings}
             {onToast}
-            onError={(message) => (saveError = message)}
+            onError={(message) => reportSettingsError(message)}
           />
         {:else if activePanelId === 'compaction'}
           <SettingsCompactionPanel
             {settings}
             onCommit={commitSettings}
             {onToast}
-            onError={(message) => (saveError = message)}
+            onError={(message) => reportSettingsError(message)}
             {modelsRefreshToken}
           />
         {:else if activePanelId === 'recall'}
@@ -375,21 +386,21 @@
             {settings}
             onCommit={commitSettings}
             {onToast}
-            onError={(message) => (saveError = message)}
+            onError={(message) => reportSettingsError(message)}
           />
         {:else if activePanelId === 'web_search'}
           <SettingsWebSearchPanel
             {settings}
             onCommit={commitSettings}
             {onToast}
-            onError={(message) => (saveError = message)}
+            onError={(message) => reportSettingsError(message)}
           />
         {:else if activePanelId === 'debug'}
           <SettingsDebugPanel
             {settings}
             onCommit={commitSettings}
             {onToast}
-            onError={(message) => (saveError = message)}
+            onError={(message) => reportSettingsError(message)}
             {onDebugEnabledChange}
           />
         {:else if activePanelId === 'specialized_models'}
@@ -397,13 +408,19 @@
             {settings}
             onCommit={commitSettings}
             {onToast}
-            onError={(message) => (saveError = message)}
+            onError={(message) => reportSettingsError(message)}
             {modelsRefreshToken}
           />
         {:else if activePanelId === 'channels'}
-          <SettingsChannelsPanel />
+          <SettingsChannelsPanel
+            {onToast}
+            onError={(message) => reportSettingsError(message)}
+          />
         {:else if activePanelId === 'extensions'}
-          <SettingsExtensionsPanel {onToast} />
+          <SettingsExtensionsPanel
+            {onToast}
+            onError={(message) => reportSettingsError(message)}
+          />
         {:else if activePanelId === 'voice'}
           <WakewordVoiceSettings {agents} {onToast} />
         {:else if activePanelId === 'appearance'}
@@ -411,7 +428,7 @@
             {settings}
             onCommit={commitSettings}
             {onToast}
-            onError={(message) => (saveError = message)}
+            onError={(message) => reportSettingsError(message)}
           />
         {/if}
       {/if}

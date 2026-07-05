@@ -135,18 +135,6 @@
   border-color: rgba(252, 129, 129, 0.18);
 }
 
-.s-feedback--success {
-  color: var(--green);
-  background: rgba(74, 222, 128, 0.08);
-  border-color: rgba(74, 222, 128, 0.2);
-}
-
-.s-feedback--warning {
-  color: var(--amber);
-  background: rgba(245, 158, 11, 0.08);
-  border-color: rgba(245, 158, 11, 0.2);
-}
-
 .s-row {
   display: flex;
   align-items: center;
@@ -704,6 +692,33 @@
 .s-row-actions--channel-header {
   justify-content: flex-end;
   width: 100%;
+}
+
+/* Disambiguation help for the two similarly-named Extensions header actions
+   (Refresh vs Reload extensions). Each term is paired with its one-line
+   explanation so the difference is legible without hovering. */
+.s-ext-actions-help {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin-top: 8px;
+}
+
+.s-ext-actions-help-item {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.s-ext-actions-help dt {
+  flex-shrink: 0;
+  color: var(--text-med);
+  font-weight: 500;
+}
+
+.s-ext-actions-help dd {
+  margin: 0;
+  min-width: 0;
 }
 
 .s-channel-form {

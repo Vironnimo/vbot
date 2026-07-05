@@ -1,5 +1,6 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
 
   import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
@@ -20,13 +21,13 @@
   } from '$lib/settingsView.js';
 
   const noop = () => {};
+  const AUTO_SAVE_DEBOUNCE_MS = 800;
 
-  let { onToast = noop } = $props();
+  let { onToast = noop, onError = noop } = $props();
 
   let extensions = $state([]);
   let loading = $state(true);
   let loadError = $state('');
-  let actionError = $state('');
   let reloading = $state(false);
   let actionName = $state('');
   let savingConfigName = $state('');
@@ -36,6 +37,11 @@
   let formFieldErrors = $state({});
   let secretDrafts = $state({});
   let savingSecret = $state('');
+  // Per-extension non-secret-config autosave timers, keyed by extension name.
+  // Non-secret config joins the standard settings autosave regime (secrets never
+  // do); each extension's editable form debounces independently. (SvelteMap per
+  // the project's reactivity-safe collection convention, as in App.svelte.)
+  const autoSaveTimers = new SvelteMap();
 
   let panelBusy = $derived(
     loading ||
@@ -49,10 +55,82 @@
     void loadExtensions();
   });
 
+  onDestroy(() => {
+    clearAllAutoSaveTimers();
+  });
+
+  function clearAutoSaveTimer(name) {
+    const timer = autoSaveTimers.get(name);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      autoSaveTimers.delete(name);
+    }
+  }
+
+  function clearAllAutoSaveTimers() {
+    for (const timer of autoSaveTimers.values()) {
+      clearTimeout(timer);
+    }
+    autoSaveTimers.clear();
+  }
+
+  // Whether the extension's editable non-secret config differs from what is
+  // persisted — the dirty test that gates autosave and the "Already saved"
+  // toast. Invalid drafts (bad JSON, unparseable number) are never dirty here;
+  // their local validation error surfaces on an explicit Save instead.
+  function extensionConfigDirty(extension) {
+    if (hasSettingsSchema(extension)) {
+      const built = buildSchemaConfigFromForm(
+        extension.settingsSchema,
+        formStates[extension.name] ?? {},
+      );
+      if (!built.ok) {
+        return false;
+      }
+      return !configsMatch(built.config, extension.config);
+    }
+
+    const parsed = parseExtensionConfigDraft(configDrafts[extension.name]);
+    if (!parsed.ok) {
+      return false;
+    }
+    return !configsMatch(parsed.value, extension.config);
+  }
+
+  function configsMatch(left, right) {
+    return (
+      JSON.stringify(left ?? {}) ===
+      JSON.stringify(right && typeof right === 'object' ? right : {})
+    );
+  }
+
+  // Debounce a non-secret-config autosave for one extension after an edit. A
+  // clean or invalid form never schedules a save; a fresh edit resets the timer.
+  function scheduleExtensionAutoSave(extension) {
+    clearAutoSaveTimer(extension.name);
+    if (!extensionConfigDirty(extension)) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      autoSaveTimers.delete(extension.name);
+      if (hasSettingsSchema(extension)) {
+        void saveSchemaConfig(extension);
+      } else {
+        void saveExtensionConfig(extension);
+      }
+    }, AUTO_SAVE_DEBOUNCE_MS);
+    autoSaveTimers.set(extension.name, timer);
+  }
+
+  function extensionByName(name) {
+    return extensions.find((extension) => extension.name === name) ?? null;
+  }
+
   async function loadExtensions() {
     loading = true;
     loadError = '';
-    actionError = '';
+    onError('');
+    clearAllAutoSaveTimers();
 
     try {
       const result = await rpc('extensions.list');
@@ -87,7 +165,7 @@
     }
 
     reloading = true;
-    actionError = '';
+    onError('');
 
     try {
       await rpc('extensions.reload');
@@ -97,7 +175,9 @@
       });
       await loadExtensions();
     } catch (error) {
-      actionError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
     } finally {
       reloading = false;
     }
@@ -113,6 +193,10 @@
       delete nextForExtension[key];
       formFieldErrors = { ...formFieldErrors, [name]: nextForExtension };
     }
+    const extension = extensionByName(name);
+    if (extension) {
+      scheduleExtensionAutoSave(extension);
+    }
   }
 
   function setSecretDraft(name, key, value) {
@@ -120,6 +204,37 @@
       ...secretDrafts,
       [name]: { ...(secretDrafts[name] ?? {}), [key]: value },
     };
+  }
+
+  // Explicit Save on the schema form: a clean form confirms trust with the
+  // shared "Already saved" toast (the same behavior as every autosave surface);
+  // a dirty one persists immediately, cancelling the pending debounce.
+  function handleManualSchemaConfigSave(extension) {
+    if (panelBusy) {
+      return;
+    }
+    if (!extensionConfigDirty(extension)) {
+      // A form with an invalid field is not "already saved" — surface its
+      // validation errors instead of a success toast.
+      const built = buildSchemaConfigFromForm(
+        extension.settingsSchema,
+        formStates[extension.name] ?? {},
+      );
+      if (!built.ok) {
+        formFieldErrors = {
+          ...formFieldErrors,
+          [extension.name]: built.errors,
+        };
+        return;
+      }
+      onToast({
+        title: t('common.alreadySaved', 'Already saved'),
+        variant: 'success',
+      });
+      return;
+    }
+    clearAutoSaveTimer(extension.name);
+    void saveSchemaConfig(extension);
   }
 
   async function saveSchemaConfig(extension) {
@@ -137,7 +252,7 @@
     }
 
     savingConfigName = extension.name;
-    actionError = '';
+    onError('');
 
     const payload = buildExtensionsUpdatePayload(extensions, {
       name: extension.name,
@@ -155,7 +270,9 @@
       });
       await loadExtensions();
     } catch (error) {
-      actionError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
     } finally {
       savingConfigName = '';
     }
@@ -167,7 +284,7 @@
     }
 
     savingSecret = `${extension.name}:${field.key}`;
-    actionError = '';
+    onError('');
 
     try {
       await rpc('extensions.set_secret', {
@@ -184,7 +301,9 @@
       });
       await loadExtensions();
     } catch (error) {
-      actionError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
     } finally {
       savingSecret = '';
     }
@@ -213,6 +332,10 @@
       delete next[name];
       configErrors = next;
     }
+    const extension = extensionByName(name);
+    if (extension) {
+      scheduleExtensionAutoSave(extension);
+    }
   }
 
   async function toggleExtension(extension) {
@@ -221,7 +344,7 @@
     }
 
     actionName = extension.name;
-    actionError = '';
+    onError('');
 
     const payload = buildExtensionsUpdatePayload(extensions, {
       name: extension.name,
@@ -238,10 +361,40 @@
       });
       await loadExtensions();
     } catch (error) {
-      actionError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
     } finally {
       actionName = '';
     }
+  }
+
+  // Explicit Save on the raw-JSON config: same "Already saved" trust-confirm as
+  // the schema form, with a local parse error for invalid JSON.
+  function handleManualExtensionConfigSave(extension) {
+    if (panelBusy) {
+      return;
+    }
+    const parsed = parseExtensionConfigDraft(configDrafts[extension.name]);
+    if (!parsed.ok) {
+      configErrors = {
+        ...configErrors,
+        [extension.name]: t(
+          'settings.extensions.configInvalid',
+          'Config must be a JSON object.',
+        ),
+      };
+      return;
+    }
+    if (!extensionConfigDirty(extension)) {
+      onToast({
+        title: t('common.alreadySaved', 'Already saved'),
+        variant: 'success',
+      });
+      return;
+    }
+    clearAutoSaveTimer(extension.name);
+    void saveExtensionConfig(extension);
   }
 
   async function saveExtensionConfig(extension) {
@@ -262,7 +415,7 @@
     }
 
     savingConfigName = extension.name;
-    actionError = '';
+    onError('');
 
     const payload = buildExtensionsUpdatePayload(extensions, {
       name: extension.name,
@@ -280,7 +433,9 @@
       });
       await loadExtensions();
     } catch (error) {
-      actionError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
     } finally {
       savingConfigName = '';
     }
@@ -301,12 +456,28 @@
         {t('settings.extensions.reload', 'Reload extensions')}
       </Button>
     </div>
+    <dl class="s-field-help s-ext-actions-help">
+      <div class="s-ext-actions-help-item">
+        <dt>{t('common.refresh', 'Refresh')}</dt>
+        <dd>
+          {t(
+            'settings.extensions.refreshHelp',
+            'Re-reads the extension list and current status from the server.',
+          )}
+        </dd>
+      </div>
+      <div class="s-ext-actions-help-item">
+        <dt>{t('settings.extensions.reload', 'Reload extensions')}</dt>
+        <dd>
+          {t(
+            'settings.extensions.reloadHelp',
+            'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
+          )}
+        </dd>
+      </div>
+    </dl>
   </div>
 </div>
-
-{#if actionError}
-  <div class="s-feedback s-feedback--error">{actionError}</div>
-{/if}
 
 {#if loading}
   <div class="s-feedback s-feedback--neutral">
@@ -513,7 +684,7 @@
               <Button
                 variant="primary"
                 disabled={rowBusy}
-                onClick={() => saveSchemaConfig(extension)}
+                onClick={() => handleManualSchemaConfigSave(extension)}
               >
                 {savingConfigName === extension.name
                   ? t('common.saving', 'Saving…')
@@ -548,7 +719,7 @@
               <Button
                 variant="primary"
                 disabled={rowBusy}
-                onClick={() => saveExtensionConfig(extension)}
+                onClick={() => handleManualExtensionConfigSave(extension)}
               >
                 {savingConfigName === extension.name
                   ? t('common.saving', 'Saving…')
