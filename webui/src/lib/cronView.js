@@ -5,6 +5,60 @@ import { formatAgentAddress } from './agentAddress.js';
 export const CRON_SCHEDULE_TYPE_CRON = 'cron';
 export const CRON_SCHEDULE_TYPE_ONCE = 'once';
 
+// The "Custom" preset key: the selection state when the cron expression matches
+// none of the named presets (or the field is being hand-edited). It carries no
+// expression of its own — selecting it never rewrites the field.
+export const CRON_PRESET_CUSTOM = 'custom';
+
+// The named schedule presets, in display order. Each maps a stable key (its i18n
+// label lives in the catalog under `cron.presets.<key>`) to the cron expression
+// it fills in. `custom` is intentionally absent here — it is the no-expression
+// fallback, prepended by the option builder. The component only orchestrates;
+// filling, matching, and deriving are the pure helpers below.
+const CRON_PRESETS = [
+  { key: 'every15Minutes', expression: '*/15 * * * *' },
+  { key: 'hourly', expression: '0 * * * *' },
+  { key: 'dailyMorning', expression: '0 9 * * *' },
+  { key: 'weekdayMornings', expression: '0 9 * * 1-5' },
+  { key: 'mondayMornings', expression: '0 9 * * 1' },
+  { key: 'monthlyFirst', expression: '0 9 1 * *' },
+];
+
+// Dropdown options for the schedule-preset picker: the "Custom" fallback first,
+// then every named preset. Labels are passed in already-translated (this module
+// stays i18n-free), keyed by preset key via `translateLabel(key)`.
+export function buildCronPresetOptions(translateLabel) {
+  const label =
+    typeof translateLabel === 'function' ? translateLabel : () => '';
+  return [
+    { value: CRON_PRESET_CUSTOM, label: label(CRON_PRESET_CUSTOM) },
+    ...CRON_PRESETS.map((preset) => ({
+      value: preset.key,
+      label: label(preset.key),
+    })),
+  ];
+}
+
+// The expression a preset fills into the cron field. `custom` (or any unknown
+// key) fills nothing — the caller keeps the current expression.
+export function cronPresetExpression(presetKey) {
+  const preset = CRON_PRESETS.find((entry) => entry.key === presetKey);
+  return preset ? preset.expression : '';
+}
+
+// The preset a raw cron expression corresponds to, by EXACT (trimmed) match.
+// No match — including an empty expression — derives `custom`, so a hand-edited
+// field that drifts from its preset flips the selection back to Custom.
+export function cronPresetForExpression(expression) {
+  const normalized = asText(expression).trim();
+  if (!normalized) {
+    return CRON_PRESET_CUSTOM;
+  }
+
+  const preset = CRON_PRESETS.find((entry) => entry.expression === normalized);
+  return preset ? preset.key : CRON_PRESET_CUSTOM;
+}
+
 // Human-readable plain-text description of a cron expression, e.g.
 // "0 9 * * 1-5" → "At 09:00, Monday through Friday". Returns '' for empty or
 // unparseable expressions so callers can hide the preview instead of showing
@@ -42,8 +96,6 @@ export function createCronViewState() {
     jobs: [],
     loadingAgents: false,
     loadingJobs: false,
-    errorMessage: '',
-    statusMessage: '',
   };
 }
 

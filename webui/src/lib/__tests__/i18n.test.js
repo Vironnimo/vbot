@@ -767,6 +767,53 @@ describe('i18n t()', () => {
     expect(t('cron.form.agentGroup.project')).toBe('Project agents');
   });
 
+  it('contains cron master-detail labels, info rows, and schedule presets', () => {
+    expectCatalogKeys([
+      'cron.list.ariaLabel',
+      'cron.detail.createTitle',
+      'cron.detail.editTitle',
+      'cron.detail.status',
+      'cron.detail.lastFired',
+      'cron.detail.nextFire',
+      'cron.form.preset',
+      'cron.presets.custom',
+      'cron.presets.every15Minutes',
+      'cron.presets.hourly',
+      'cron.presets.dailyMorning',
+      'cron.presets.weekdayMornings',
+      'cron.presets.mondayMornings',
+      'cron.presets.monthlyFirst',
+    ]);
+    expect(t('cron.list.ariaLabel')).toBe('Cron jobs');
+    expect(t('cron.detail.createTitle')).toBe('Create cron job');
+    expect(t('cron.detail.editTitle')).toBe('Edit cron job');
+    expect(t('cron.form.preset')).toBe('Schedule preset');
+    expect(t('cron.presets.custom')).toBe('Custom');
+    expect(t('cron.presets.every15Minutes')).toBe('Every 15 minutes');
+    expect(t('cron.presets.monthlyFirst')).toBe('Monthly on the 1st at 9:00');
+  });
+
+  it('drops the retired cron table headers, modal titles, and edit action', () => {
+    // The table+modal rebuild removed these — the master-detail view reuses none
+    // of them, and the create/edit heading moved under `cron.detail.*`.
+    for (const retiredKey of [
+      'cron.table.caption',
+      'cron.table.agent',
+      'cron.table.prompt',
+      'cron.table.schedule',
+      'cron.table.timezone',
+      'cron.table.status',
+      'cron.table.lastFired',
+      'cron.table.nextFire',
+      'cron.table.actions',
+      'cron.modal.createTitle',
+      'cron.modal.editTitle',
+      'cron.actions.editJob',
+    ]) {
+      expect(englishCatalog[retiredKey], retiredKey).toBeUndefined();
+    }
+  });
+
   it('contains Projects tab copy for navigation, add, list, manage, report, and re-point', () => {
     const requiredKeys = [
       'navigation.projects',

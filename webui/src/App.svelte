@@ -973,7 +973,7 @@
       {modelsRefreshToken}
     />
   {:else if activeViewId === 'cron'}
-    <CronView />
+    <CronView onToast={showToast} />
   {:else if activeViewId === 'system-prompt'}
     <SystemPromptView
       onToast={showToast}
