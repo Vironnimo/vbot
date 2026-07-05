@@ -58,10 +58,12 @@ class FakeChannel:
         guild: object | None,
         parent_id: int | None = None,
         recipient_id: int | None = None,
+        name: str | None = None,
     ) -> None:
         self.id = channel_id
         self.guild = guild
         self.parent_id = parent_id
+        self.name = name
         self.recipient = SimpleNamespace(id=recipient_id) if recipient_id is not None else None
         self.sent: list[dict[str, Any]] = []
         self.history_messages: list[Any] = []
@@ -367,6 +369,50 @@ async def test_thread_inherits_parent_allowlist_and_uses_own_session(tmp_path: P
     assert metadata["platform_conv_id"] == "101"
     assert metadata["last_reply_target"]["platform_target"] == "101"
     await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_denied_guild_channel_is_recorded_with_guild_and_channel_name(
+    tmp_path: Path,
+) -> None:
+    channel = FakeChannel(200, guild=SimpleNamespace(id=1, name="My Server"), name="general")
+    adapter, _chat_sessions, trigger_mock, _client = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+    )
+
+    await adapter._handle_inbound_message(
+        make_message(channel, message_id=200, author_id=50, content="hello")
+    )
+
+    trigger_mock.assert_not_awaited()
+    entries = adapter.denied_chats()
+    assert len(entries) == 1
+    assert entries[0].chat_id == "200"
+    assert entries[0].kind == "group"
+    assert entries[0].display_name == "My Server / general"
+
+
+@pytest.mark.asyncio
+async def test_denied_direct_message_is_recorded_with_sender_name(tmp_path: Path) -> None:
+    channel = FakeChannel(300, guild=None, recipient_id=50)
+    adapter, _chat_sessions, trigger_mock, _client = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+    )
+
+    await adapter._handle_inbound_message(
+        make_message(channel, message_id=201, author_id=50, content="hello", display_name="Alice")
+    )
+
+    trigger_mock.assert_not_awaited()
+    entries = adapter.denied_chats()
+    assert len(entries) == 1
+    assert entries[0].chat_id == "300"
+    assert entries[0].kind == "direct"
+    assert entries[0].display_name == "Alice"
 
 
 @pytest.mark.asyncio

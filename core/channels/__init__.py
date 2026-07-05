@@ -3,6 +3,8 @@
 from core.channels.adapter import (
     ChannelAdapter,
     ConversationFacts,
+    DeniedChatFacts,
+    DeniedChatLog,
     MessageFacts,
     ReplyPlanFacts,
     RouteFacts,
@@ -26,6 +28,8 @@ __all__ = [
     "ChannelService",
     "ChannelStorage",
     "ConversationFacts",
+    "DeniedChatFacts",
+    "DeniedChatLog",
     "MessageFacts",
     "ReplyPlanFacts",
     "RouteFacts",
