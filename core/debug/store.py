@@ -201,7 +201,7 @@ class DebugTraceStore:
             removed_id = removed.get("trace_id", "")
             if removed_id:
                 self._delete_trace_file(removed_id)
-                _logger.info("Pruned oldest debug trace: %s", removed_id)
+                _logger.debug("Pruned oldest debug trace: %s", removed_id)
 
         return entries
 
