@@ -399,30 +399,37 @@
 
   // -- Owner / inheritance labels ------------------------------------------
 
-  function ownerLabel(owner) {
+  // The owner is gate 2 of the three-gate prompt filter: a block renders only
+  // while its owner condition holds. This turns the internal owner token into a
+  // plain sentence explaining that render condition.
+  function ownerHint(owner) {
     if (owner.startsWith('tool:')) {
-      return t('systemPrompt.blockList.owner.tool', 'tool: {name}', {
-        name: owner.slice('tool:'.length),
-      });
+      return t(
+        'systemPrompt.blockList.ownerHint.tool',
+        'Included only while the {name} tool is active.',
+        { name: owner.slice('tool:'.length) },
+      );
     }
     if (owner.startsWith('extension:')) {
-      return t('systemPrompt.blockList.owner.extension', 'extension: {name}', {
-        name: owner.slice('extension:'.length),
-      });
+      return t(
+        'systemPrompt.blockList.ownerHint.extension',
+        'Included only while the {name} extension is active.',
+        { name: owner.slice('extension:'.length) },
+      );
     }
     if (owner === 'memory') {
-      return t('systemPrompt.blockList.owner.memory', 'memory');
+      return t(
+        'systemPrompt.blockList.ownerHint.memory',
+        'Included only while the memory tool is on.',
+      );
     }
     if (owner === 'channel') {
-      return t('systemPrompt.blockList.owner.channel', 'channels');
+      return t(
+        'systemPrompt.blockList.ownerHint.channel',
+        'Included only while the agent has an active channel.',
+      );
     }
-    return t('systemPrompt.blockList.owner.always', 'always');
-  }
-
-  function appearsWhenLabel(owner) {
-    return t('systemPrompt.blockList.appearsWhen', 'appears when: {owner}', {
-      owner: ownerLabel(owner),
-    });
+    return t('systemPrompt.blockList.ownerHint.always', 'Always included.');
   }
 
   function dataKindLabel() {
@@ -1051,9 +1058,7 @@
                       </span>
                     {/if}
                   </div>
-                  <span class="sp-block-owner"
-                    >{appearsWhenLabel(block.owner)}</span
-                  >
+                  <span class="sp-block-owner">{ownerHint(block.owner)}</span>
                 </div>
 
                 <div class="sp-block-actions">
@@ -1532,9 +1537,9 @@
 
   .sp-block-owner {
     color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    letter-spacing: 0.02em;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    letter-spacing: 0.01em;
   }
 
   .sp-badge {

@@ -337,6 +337,11 @@ describe('i18n t()', () => {
       'systemPrompt.blockList.invalidSlug',
       'systemPrompt.blockList.dataBadge',
       'systemPrompt.blockList.dataHint',
+      'systemPrompt.blockList.ownerHint.always',
+      'systemPrompt.blockList.ownerHint.memory',
+      'systemPrompt.blockList.ownerHint.channel',
+      'systemPrompt.blockList.ownerHint.tool',
+      'systemPrompt.blockList.ownerHint.extension',
       'systemPrompt.preview.heading',
       'systemPrompt.preview.refresh',
       'systemPrompt.preview.copy',
@@ -377,6 +382,36 @@ describe('i18n t()', () => {
       'Edited — differs from the built-in default.',
     );
     expect(t('systemPrompt.blockList.dataHint')).toContain('Generated content');
+    // The owner line is now a plain sentence stating the render condition; the
+    // tool/extension variants weave the technical name into the sentence.
+    expect(t('systemPrompt.blockList.ownerHint.always')).toBe(
+      'Always included.',
+    );
+    expect(
+      t('systemPrompt.blockList.ownerHint.tool', undefined, { name: 'bash' }),
+    ).toBe('Included only while the bash tool is active.');
+    expect(
+      t('systemPrompt.blockList.ownerHint.extension', undefined, {
+        name: 'homeassistant',
+      }),
+    ).toBe('Included only while the homeassistant extension is active.');
+    expect(t('systemPrompt.blockList.ownerHint.memory')).toBe(
+      'Included only while the memory tool is on.',
+    );
+    expect(t('systemPrompt.blockList.ownerHint.channel')).toBe(
+      'Included only while the agent has an active channel.',
+    );
+    // The retired composed template and per-owner tokens must not linger.
+    for (const retiredKey of [
+      'systemPrompt.blockList.appearsWhen',
+      'systemPrompt.blockList.owner.always',
+      'systemPrompt.blockList.owner.memory',
+      'systemPrompt.blockList.owner.channel',
+      'systemPrompt.blockList.owner.tool',
+      'systemPrompt.blockList.owner.extension',
+    ]) {
+      expect(englishCatalog[retiredKey], retiredKey).toBeUndefined();
+    }
   });
 
   it('contains Toasted design labels for Settings sections', () => {
