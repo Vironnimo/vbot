@@ -11,8 +11,8 @@ const listProjectsMock = vi.fn();
 const showProjectMock = vi.fn();
 const setProjectMock = vi.fn();
 const removeProjectMock = vi.fn();
-const setPinMock = vi.fn();
-const clearPinMock = vi.fn();
+const setOverrideMock = vi.fn();
+const clearOverrideMock = vi.fn();
 const rpcMock = vi.fn();
 
 vi.mock('svelte', async () => {
@@ -25,8 +25,8 @@ vi.mock('$lib/api.js', () => ({
   showProject: (...args) => showProjectMock(...args),
   setProject: (...args) => setProjectMock(...args),
   removeProject: (...args) => removeProjectMock(...args),
-  setPin: (...args) => setPinMock(...args),
-  clearPin: (...args) => clearPinMock(...args),
+  setOverride: (...args) => setOverrideMock(...args),
+  clearOverride: (...args) => clearOverrideMock(...args),
   rpc: (...args) => rpcMock(...args),
 }));
 
@@ -49,8 +49,8 @@ describe('ProjectsView', () => {
     showProjectMock.mockReset();
     setProjectMock.mockReset();
     removeProjectMock.mockReset();
-    setPinMock.mockReset();
-    clearPinMock.mockReset();
+    setOverrideMock.mockReset();
+    clearOverrideMock.mockReset();
     rpcMock.mockReset();
 
     rpcMock.mockImplementation((method) => {
@@ -80,11 +80,11 @@ describe('ProjectsView', () => {
       scan: { team: [], report: { clean: true, findings: [] } },
     });
     removeProjectMock.mockResolvedValue({ project_id: 'demo', archived: true });
-    setPinMock.mockResolvedValue({
+    setOverrideMock.mockResolvedValue({
       project: project({ project_id: 'demo' }),
       scan: { team: [], report: { clean: true, findings: [] } },
     });
-    clearPinMock.mockResolvedValue({
+    clearOverrideMock.mockResolvedValue({
       project: project({ project_id: 'demo' }),
       scan: { team: [], report: { clean: true, findings: [] } },
     });
@@ -670,7 +670,7 @@ describe('ProjectsView', () => {
     });
   });
 
-  // ── Team rows: effective values, source badges, pins ─────────────────────
+  // ── Team rows: effective values, source badges, overrides ────────────────
 
   it('expands a team member and shows effective values with source badges', async () => {
     listProjectsMock.mockResolvedValue({
@@ -687,11 +687,11 @@ describe('ProjectsView', () => {
             source_format: 'opencode',
             source_path: '.opencode/agents/builder.md',
             effective: {
-              model: { value: 'openai/gpt-mini', source: 'pin' },
+              model: { value: 'openai/gpt-mini', source: 'override' },
               temperature: { value: 0.2, source: 'agent' },
               thinking_effort: { value: 'high', source: 'project_default' },
             },
-            pins: { model: 'openai/gpt-mini' },
+            overrides: { model: 'openai/gpt-mini' },
           }),
         ],
         report: { clean: true, findings: [] },
@@ -711,11 +711,11 @@ describe('ProjectsView', () => {
     buttonByTestId('project-team-toggle-builder').click();
     flushSync();
     await waitForCondition(() =>
-      document.body.textContent.includes('from pin'),
+      document.body.textContent.includes('from override'),
     );
 
     // Every source badge renders with its value.
-    expect(document.body.textContent).toContain('from pin');
+    expect(document.body.textContent).toContain('from override');
     expect(document.body.textContent).toContain('from agent file (repo)');
     expect(document.body.textContent).toContain('from project default');
     expect(document.body.textContent).toContain('openai/gpt-mini');
@@ -767,7 +767,7 @@ describe('ProjectsView', () => {
     expect(document.body.textContent).toContain('from global default');
   });
 
-  it('sets a model pin through project.set_pin and refreshes from the scan', async () => {
+  it('sets a model override through project.set_override and refreshes from the scan', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -805,16 +805,16 @@ describe('ProjectsView', () => {
       }
       return Promise.resolve({});
     });
-    setPinMock.mockResolvedValue({
+    setOverrideMock.mockResolvedValue({
       project: project({ project_id: 'demo' }),
       scan: {
         team: [
           member({
             agent_id: 'builder',
             display_name: 'Builder',
-            pins: { model: 'openai/gpt-5.2' },
+            overrides: { model: 'openai/gpt-5.2' },
             effective: {
-              model: { value: 'openai/gpt-5.2', source: 'pin' },
+              model: { value: 'openai/gpt-5.2', source: 'override' },
               temperature: { value: null, source: null },
               thinking_effort: { value: null, source: null },
             },
@@ -837,27 +837,32 @@ describe('ProjectsView', () => {
     // The draft is seeded from the effective model (openai/gpt-5.2), so Set is
     // enabled without picking anything.
     await waitForCondition(() =>
-      document.querySelector('[data-testid="project-pin-set-model-builder"]'),
+      document.querySelector(
+        '[data-testid="project-override-set-model-builder"]',
+      ),
     );
-    buttonByTestId('project-pin-set-model-builder').click();
+    buttonByTestId('project-override-set-model-builder').click();
 
-    await waitForCondition(() => setPinMock.mock.calls.length === 1);
-    expect(setPinMock).toHaveBeenCalledWith(
+    await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
+    expect(setOverrideMock).toHaveBeenCalledWith(
       'demo',
       'builder',
       'model',
       'openai/gpt-5.2',
     );
-    // After the pin, the model row reads "from pin" and a Clear pin appears.
+    // After the override, the model row reads "from override" and a Clear
+    // override appears.
     await waitForCondition(() =>
-      document.body.textContent.includes('from pin'),
+      document.body.textContent.includes('from override'),
     );
     expect(
-      document.querySelector('[data-testid="project-pin-clear-model-builder"]'),
+      document.querySelector(
+        '[data-testid="project-override-clear-model-builder"]',
+      ),
     ).toBeTruthy();
   });
 
-  it('sets a temperature pin with the comma-tolerant value', async () => {
+  it('sets a temperature override with the comma-tolerant value', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -879,12 +884,14 @@ describe('ProjectsView', () => {
     buttonByTestId('project-team-toggle-builder').click();
     flushSync();
 
-    await waitForCondition(() => inputById('project-pin-temperature-builder'));
-    setInputValue('project-pin-temperature-builder', '0,3');
-    buttonByTestId('project-pin-set-temperature-builder').click();
+    await waitForCondition(() =>
+      inputById('project-override-temperature-builder'),
+    );
+    setInputValue('project-override-temperature-builder', '0,3');
+    buttonByTestId('project-override-set-temperature-builder').click();
 
-    await waitForCondition(() => setPinMock.mock.calls.length === 1);
-    expect(setPinMock).toHaveBeenCalledWith(
+    await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
+    expect(setOverrideMock).toHaveBeenCalledWith(
       'demo',
       'builder',
       'temperature',
@@ -892,7 +899,7 @@ describe('ProjectsView', () => {
     );
   });
 
-  it('clears a pin through project.clear_pin', async () => {
+  it('clears an override through project.clear_override', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -903,9 +910,9 @@ describe('ProjectsView', () => {
           member({
             agent_id: 'builder',
             display_name: 'Builder',
-            pins: { model: 'openai/gpt-mini' },
+            overrides: { model: 'openai/gpt-mini' },
             effective: {
-              model: { value: 'openai/gpt-mini', source: 'pin' },
+              model: { value: 'openai/gpt-mini', source: 'override' },
               temperature: { value: null, source: null },
               thinking_effort: { value: null, source: null },
             },
@@ -914,7 +921,7 @@ describe('ProjectsView', () => {
         report: { clean: true, findings: [] },
       },
     });
-    clearPinMock.mockResolvedValue({
+    clearOverrideMock.mockResolvedValue({
       project: project({ project_id: 'demo' }),
       scan: {
         team: [
@@ -943,22 +950,25 @@ describe('ProjectsView', () => {
     flushSync();
 
     await waitForCondition(() =>
-      document.querySelector('[data-testid="project-pin-clear-model-builder"]'),
+      document.querySelector(
+        '[data-testid="project-override-clear-model-builder"]',
+      ),
     );
-    buttonByTestId('project-pin-clear-model-builder').click();
+    buttonByTestId('project-override-clear-model-builder').click();
 
-    await waitForCondition(() => clearPinMock.mock.calls.length === 1);
-    expect(clearPinMock).toHaveBeenCalledWith('demo', 'builder', 'model');
-    // The refreshed scan drops the pin — the Clear-pin control disappears.
+    await waitForCondition(() => clearOverrideMock.mock.calls.length === 1);
+    expect(clearOverrideMock).toHaveBeenCalledWith('demo', 'builder', 'model');
+    // The refreshed scan drops the override — the Clear-override control
+    // disappears.
     await waitForCondition(
       () =>
         !document.querySelector(
-          '[data-testid="project-pin-clear-model-builder"]',
+          '[data-testid="project-override-clear-model-builder"]',
         ),
     );
   });
 
-  it('surfaces a sticky error toast when a pin cannot be saved', async () => {
+  it('surfaces a sticky error toast when an override cannot be saved', async () => {
     const toastMock = vi.fn();
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
@@ -980,7 +990,7 @@ describe('ProjectsView', () => {
         report: { clean: true, findings: [] },
       },
     });
-    setPinMock.mockRejectedValue({ message: 'model not usable' });
+    setOverrideMock.mockRejectedValue({ message: 'model not usable' });
 
     mountedComponent = mount(ProjectsView, {
       target: document.body,
@@ -996,11 +1006,13 @@ describe('ProjectsView', () => {
     flushSync();
 
     await waitForCondition(() =>
-      document.querySelector('[data-testid="project-pin-set-model-builder"]'),
+      document.querySelector(
+        '[data-testid="project-override-set-model-builder"]',
+      ),
     );
-    buttonByTestId('project-pin-set-model-builder').click();
+    buttonByTestId('project-override-set-model-builder').click();
 
-    await waitForCondition(() => setPinMock.mock.calls.length === 1);
+    await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
     await waitForCondition(() =>
       toastMock.mock.calls.some(
         (call) => call[0]?.variant === 'error' && call[0]?.sticky === true,
@@ -1013,7 +1025,7 @@ describe('ProjectsView', () => {
     expect(errorToast.title).toContain('could not be saved');
   });
 
-  it('gates the thinking-effort pin options by the member effective model', async () => {
+  it('gates the thinking-effort override options by the member effective model', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -1068,9 +1080,9 @@ describe('ProjectsView', () => {
     flushSync();
 
     await waitForCondition(() =>
-      document.getElementById('project-pin-thinking-builder'),
+      document.getElementById('project-override-thinking-builder'),
     );
-    document.getElementById('project-pin-thinking-builder').click();
+    document.getElementById('project-override-thinking-builder').click();
     flushSync();
     await waitForCondition(() => optionByText('low'));
 
@@ -1267,7 +1279,7 @@ function project(overrides = {}) {
   };
 }
 
-// A scan team member with the step-1/2 payload shape (effective + pins).
+// A scan team member with the step-1/2 payload shape (effective + overrides).
 function member(overrides = {}) {
   return {
     agent_id: 'agent',
@@ -1279,7 +1291,7 @@ function member(overrides = {}) {
     source_format: 'opencode',
     source_path: '.opencode/agents/agent.md',
     denied_tools: [],
-    pins: null,
+    overrides: null,
     effective: {
       model: { value: null, source: null },
       temperature: { value: null, source: null },

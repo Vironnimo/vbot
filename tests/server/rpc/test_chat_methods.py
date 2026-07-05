@@ -496,11 +496,11 @@ class _RecordingProjects:
         self.set_calls: list[tuple[str, str, str, Any]] = []
         self.clear_calls: list[tuple[str, str, str]] = []
 
-    def set_pin(self, project_id: str, agent_id: str, field: str, value: Any) -> Any:
+    def set_override(self, project_id: str, agent_id: str, field: str, value: Any) -> Any:
         self.set_calls.append((project_id, agent_id, field, value))
         return SimpleNamespace(project_id=project_id)
 
-    def clear_pin(self, project_id: str, agent_id: str, field: str) -> Any:
+    def clear_override(self, project_id: str, agent_id: str, field: str) -> Any:
         self.clear_calls.append((project_id, agent_id, field))
         return SimpleNamespace(project_id=project_id)
 
@@ -566,7 +566,7 @@ def test_set_model_project_writes_override() -> None:
 
     _handle_set_model_command(state, "builder", "s1", "openai/gpt-mini", project_id="vbot")
 
-    # Project session writes a per-agent model pin; the identity store is untouched.
+    # Project session writes a per-agent model override; the identity store is untouched.
     assert projects.set_calls == [("vbot", "builder", "model", "openai/gpt-mini")]
     assert agents.updates == []
 

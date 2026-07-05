@@ -544,12 +544,12 @@ def test_dispatch_model_identity_none_source_origin() -> None:
     assert STATUS_PLACEHOLDER in reply
 
 
-def test_dispatch_model_project_pin_origin() -> None:
-    # A project session whose winning tier is the pin resolves to it and labels it.
-    reply = _model_reply(project_id="vbot", model_value="openai/gpt-mini", model_source="pin")
+def test_dispatch_model_project_override_origin() -> None:
+    # A project session whose winning tier is the override resolves to it and labels it.
+    reply = _model_reply(project_id="vbot", model_value="openai/gpt-mini", model_source="override")
 
     assert "openai/gpt-mini" in reply
-    assert "pin (set via /model)" in reply
+    assert "override (set via /model)" in reply
 
 
 def test_dispatch_model_project_agent_origin() -> None:

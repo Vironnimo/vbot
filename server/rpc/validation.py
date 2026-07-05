@@ -205,7 +205,7 @@ def _ensure_model_usable(state: Any, model: str) -> None:
     """Reject a model value that is not actually usable in this instance.
 
     Two gates, both surfaced as ``invalid_request`` and shared by the ``/model``
-    command's set-time validation and ``project.set_pin``'s model check so the
+    command's set-time validation and ``project.set_override``'s model check so the
     accepted-model rule can never drift: the model must be configured here (provider
     registered, in catalog, usable credential — the resolver's public
     ``is_model_configured`` seam, the same rule behind the scan's ``BAD_MODEL``

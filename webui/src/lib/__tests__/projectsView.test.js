@@ -13,15 +13,15 @@ import {
   buildSkillToggleSections,
   buildToolToggleList,
   hasManageChanges,
-  memberFieldIsPinned,
+  memberFieldIsOverridden,
   needsRePoint,
-  normalizePinTemperature,
+  normalizeOverrideTemperature,
   normalizeProject,
   normalizeProjects,
   normalizeScanReport,
   normalizeScanSkills,
   projectTeam,
-  seedTeamPinDraft,
+  seedTeamOverrideDraft,
   setListMembership,
 } from '../projectsView.js';
 
@@ -361,7 +361,7 @@ describe('normalizeProject / normalizeProjects', () => {
 });
 
 describe('projectTeam', () => {
-  it('projects the scan team into a display-ready list with pins + effective', () => {
+  it('projects the scan team into a display-ready list with overrides + effective', () => {
     expect(
       projectTeam({
         team: [
@@ -375,9 +375,9 @@ describe('projectTeam', () => {
             source_format: 'opencode',
             source_path: '.opencode/agents/builder.md',
             denied_tools: ['bash'],
-            pins: { model: 'openai/gpt-mini' },
+            overrides: { model: 'openai/gpt-mini' },
             effective: {
-              model: { value: 'openai/gpt-mini', source: 'pin' },
+              model: { value: 'openai/gpt-mini', source: 'override' },
               temperature: { value: 0.2, source: 'agent' },
               thinking_effort: { value: 'high', source: 'agent' },
             },
@@ -396,11 +396,11 @@ describe('projectTeam', () => {
         source_format: 'opencode',
         source_path: '.opencode/agents/builder.md',
         denied_tools: ['bash'],
-        // The per-agent pin object (subset of the three fields), or null.
-        pins: { model: 'openai/gpt-mini' },
+        // The per-agent override object (subset of the three fields), or null.
+        overrides: { model: 'openai/gpt-mini' },
         // Provenance-aware resolved values per run field.
         effective: {
-          model: { value: 'openai/gpt-mini', source: 'pin' },
+          model: { value: 'openai/gpt-mini', source: 'override' },
           temperature: { value: 0.2, source: 'agent' },
           thinking_effort: { value: 'high', source: 'agent' },
         },
@@ -415,8 +415,8 @@ describe('projectTeam', () => {
         source_format: '',
         source_path: '',
         denied_tools: [],
-        // No pin → null; effective defaults to a stable null-per-field map.
-        pins: null,
+        // No override → null; effective defaults to a stable null-per-field map.
+        overrides: null,
         effective: {
           model: { value: null, source: null },
           temperature: { value: null, source: null },
@@ -426,16 +426,16 @@ describe('projectTeam', () => {
     ]);
   });
 
-  it('drops unknown pin fields and treats an empty pin object as null', () => {
+  it('drops unknown override fields and treats an empty override object as null', () => {
     const [member] = projectTeam({
-      team: [{ agent_id: 'a', pins: { unknown: 'x' } }],
+      team: [{ agent_id: 'a', overrides: { unknown: 'x' } }],
     });
-    expect(member.pins).toBeNull();
+    expect(member.overrides).toBeNull();
 
     const [withTemp] = projectTeam({
-      team: [{ agent_id: 'a', pins: { temperature: 0.5, unknown: 'x' } }],
+      team: [{ agent_id: 'a', overrides: { temperature: 0.5, unknown: 'x' } }],
     });
-    expect(withTemp.pins).toEqual({ temperature: 0.5 });
+    expect(withTemp.overrides).toEqual({ temperature: 0.5 });
   });
 
   it('returns an empty list for a missing team', () => {
@@ -444,34 +444,34 @@ describe('projectTeam', () => {
   });
 });
 
-describe('memberFieldIsPinned', () => {
-  it('is true only when the effective source for the field is "pin"', () => {
+describe('memberFieldIsOverridden', () => {
+  it('is true only when the effective source for the field is "override"', () => {
     const member = {
       effective: {
-        model: { value: 'x', source: 'pin' },
+        model: { value: 'x', source: 'override' },
         temperature: { value: 0.2, source: 'agent' },
         thinking_effort: { value: null, source: null },
       },
     };
-    expect(memberFieldIsPinned(member, 'model')).toBe(true);
-    expect(memberFieldIsPinned(member, 'temperature')).toBe(false);
-    expect(memberFieldIsPinned(member, 'thinking_effort')).toBe(false);
-    expect(memberFieldIsPinned(undefined, 'model')).toBe(false);
+    expect(memberFieldIsOverridden(member, 'model')).toBe(true);
+    expect(memberFieldIsOverridden(member, 'temperature')).toBe(false);
+    expect(memberFieldIsOverridden(member, 'thinking_effort')).toBe(false);
+    expect(memberFieldIsOverridden(undefined, 'model')).toBe(false);
   });
 });
 
-describe('seedTeamPinDraft', () => {
-  it('seeds from the pinned values when present', () => {
-    const draft = seedTeamPinDraft({
-      pins: {
+describe('seedTeamOverrideDraft', () => {
+  it('seeds from the overridden values when present', () => {
+    const draft = seedTeamOverrideDraft({
+      overrides: {
         model: 'openai/gpt-mini',
         temperature: 0.3,
         thinking_effort: 'low',
       },
       effective: {
-        model: { value: 'openai/gpt-mini', source: 'pin' },
-        temperature: { value: 0.3, source: 'pin' },
-        thinking_effort: { value: 'low', source: 'pin' },
+        model: { value: 'openai/gpt-mini', source: 'override' },
+        temperature: { value: 0.3, source: 'override' },
+        thinking_effort: { value: 'low', source: 'override' },
       },
     });
     expect(draft).toEqual({
@@ -482,8 +482,8 @@ describe('seedTeamPinDraft', () => {
   });
 
   it('falls back to the effective values as a starting suggestion', () => {
-    const draft = seedTeamPinDraft({
-      pins: null,
+    const draft = seedTeamOverrideDraft({
+      overrides: null,
       effective: {
         model: { value: 'openai/gpt-5.2', source: 'agent' },
         temperature: { value: null, source: null },
@@ -498,12 +498,12 @@ describe('seedTeamPinDraft', () => {
   });
 });
 
-describe('normalizePinTemperature', () => {
+describe('normalizeOverrideTemperature', () => {
   it('parses comma-decimals and returns null for an empty/invalid box', () => {
-    expect(normalizePinTemperature('0,7')).toBe(0.7);
-    expect(normalizePinTemperature('0')).toBe(0);
-    expect(normalizePinTemperature('')).toBeNull();
-    expect(normalizePinTemperature('abc')).toBeNull();
+    expect(normalizeOverrideTemperature('0,7')).toBe(0.7);
+    expect(normalizeOverrideTemperature('0')).toBe(0);
+    expect(normalizeOverrideTemperature('')).toBeNull();
+    expect(normalizeOverrideTemperature('abc')).toBeNull();
   });
 });
 
