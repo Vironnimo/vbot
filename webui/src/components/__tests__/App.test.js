@@ -113,6 +113,34 @@ describe('App', () => {
     expect(toast.textContent).toContain('Provider credentials are missing.');
   });
 
+  it('keeps error toasts on screen past the auto-dismiss window (sticky by default)', () => {
+    vi.useFakeTimers();
+    try {
+      mountedComponent = mount(App, { target: document.body });
+      flushSync();
+
+      const [handlers] = subscribeServerEventsMock.mock.calls[0];
+
+      // An error toast without an explicit autoDismiss stays until the user
+      // dismisses it — a transport/server failure they must acknowledge.
+      handlers.onEvent({
+        type: 'app_error',
+        sequence: 1,
+        payload: { message: 'Provider credentials are missing.' },
+      });
+      flushSync();
+      expect(document.querySelector('.toast.error')).toBeTruthy();
+
+      // TOAST_AUTO_DISMISS_MS is 3200ms; advancing well past it leaves the
+      // error toast in place (success/info/warn would have gone by now).
+      vi.advanceTimersByTime(10000);
+      flushSync();
+      expect(document.querySelector('.toast.error')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('processes rapid run WebSocket events without dropping the assistant output', async () => {
     const agents = [
       {

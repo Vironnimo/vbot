@@ -646,10 +646,15 @@
     title,
     message = '',
     variant = 'info',
-    autoDismiss = true,
+    autoDismiss,
   }) => {
     const id = addToast(toastState, { title, message, variant });
-    if (!autoDismiss) {
+    // Error toasts stay until the user dismisses them (a transport/server
+    // failure the user must acknowledge); success/info/warn auto-dismiss. An
+    // explicit `autoDismiss` from the caller always wins over this default.
+    const effectiveAutoDismiss =
+      autoDismiss === undefined ? variant !== 'error' : autoDismiss;
+    if (!effectiveAutoDismiss) {
       return;
     }
 
@@ -662,11 +667,12 @@
 
   const handleServerEvent = async (event) => {
     if (event.type === 'app_error') {
+      // Error toasts stay until dismissed by default (see showToast) — a
+      // transport/server failure the user must acknowledge.
       showToast({
         title: t('errors.appError', 'Error'),
         message: event.payload?.message ?? '',
         variant: 'error',
-        autoDismiss: false,
       });
       return;
     }
