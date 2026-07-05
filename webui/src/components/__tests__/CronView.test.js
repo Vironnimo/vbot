@@ -31,11 +31,13 @@ const { default: CronView } = await import('../CronView.svelte');
 
 describe('CronView', () => {
   let mountedComponent;
+  let toastMock;
 
   beforeEach(() => {
     document.body.innerHTML = '';
     init('en');
     mountedComponent = null;
+    toastMock = vi.fn();
 
     rpcMock.mockReset();
     listCronJobsMock.mockReset();
@@ -64,7 +66,16 @@ describe('CronView', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders active, paused, and failed jobs while filtering completed jobs', async () => {
+  function mountView() {
+    mountedComponent = mount(CronView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
+    flushSync();
+    return mountedComponent;
+  }
+
+  it('lists active, paused, and failed jobs while filtering completed jobs', async () => {
     listCronJobsMock.mockResolvedValue({
       jobs: [
         cronJob({
@@ -90,44 +101,57 @@ describe('CronView', () => {
       ],
     });
 
-    mountedComponent = mount(CronView, { target: document.body });
-    flushSync();
+    mountView();
 
     await waitForCondition(() =>
-      document.body.textContent.includes('Nightly summary'),
+      document.querySelector('[data-testid="cron-item-job-active"]'),
     );
 
-    expect(document.body.textContent).toContain('Nightly summary');
-    expect(document.body.textContent).toContain('Pause me');
     // A failed once job stays visible (labelled Failed) so the user sees it
     // never ran; a successful completed fire is hidden from the list.
-    expect(document.body.textContent).toContain('Never ran');
-    expect(document.body.textContent).toContain('Failed');
-    expect(document.body.textContent).not.toContain('Completed and hidden');
     expect(
-      document.querySelector('[data-testid="cron-toggle-job-active"]'),
+      document.querySelector('[data-testid="cron-item-job-active"]'),
     ).toBeTruthy();
     expect(
-      document.querySelector('[data-testid="cron-toggle-job-paused"]'),
+      document.querySelector('[data-testid="cron-item-job-paused"]'),
     ).toBeTruthy();
     expect(
-      document.querySelector('[data-testid="cron-toggle-job-failed"]'),
+      document.querySelector('[data-testid="cron-item-job-failed"]'),
     ).toBeTruthy();
     expect(
-      document.querySelector('[data-testid="cron-toggle-job-completed"]'),
+      document.querySelector('[data-testid="cron-item-job-completed"]'),
     ).toBeFalsy();
+    expect(document.body.textContent).toContain('Failed');
   });
 
-  it('calls disable and enable RPC helpers from row toggles', async () => {
+  it('auto-selects the first job so its detail form renders on load', async () => {
     listCronJobsMock.mockResolvedValue({
-      jobs: [
-        cronJob({ id: 'job-active', status: 'active' }),
-        cronJob({ id: 'job-paused', status: 'paused' }),
-      ],
+      jobs: [cronJob({ id: 'job-first', status: 'active' })],
     });
 
-    mountedComponent = mount(CronView, { target: document.body });
-    flushSync();
+    mountView();
+
+    await waitForCondition(() => document.getElementById('cron-job-prompt'));
+
+    // The first job is selected: its toggle/delete controls live in the detail
+    // header, and the prompt field is pre-filled from that job.
+    expect(
+      document.querySelector('[data-testid="cron-toggle-job-first"]'),
+    ).toBeTruthy();
+    expect(
+      document.querySelector('[data-testid="cron-delete-job-first"]'),
+    ).toBeTruthy();
+    expect(document.getElementById('cron-job-prompt').value).toBe(
+      'Default cron prompt',
+    );
+  });
+
+  it('disables the selected job via the detail toggle', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [cronJob({ id: 'job-active', status: 'active' })],
+    });
+
+    mountView();
 
     await waitForCondition(() =>
       document.querySelector('[data-testid="cron-toggle-job-active"]'),
@@ -137,18 +161,40 @@ describe('CronView', () => {
 
     await waitForCondition(() => disableCronJobMock.mock.calls.length === 1);
     expect(disableCronJobMock).toHaveBeenCalledWith('job-active');
+  });
 
+  it('enables a paused job after selecting it', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({ id: 'job-active', status: 'active' }),
+        cronJob({ id: 'job-paused', status: 'paused' }),
+      ],
+    });
+
+    mountView();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-item-job-paused"]'),
+    );
+
+    // The first (active) job is auto-selected; select the paused one to bring
+    // its enable toggle into the detail header.
+    buttonByTestId('cron-item-job-paused').click();
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-toggle-job-paused"]'),
+    );
     buttonByTestId('cron-toggle-job-paused').click();
 
     await waitForCondition(() => enableCronJobMock.mock.calls.length === 1);
     expect(enableCronJobMock).toHaveBeenCalledWith('job-paused');
   });
 
-  it('submits create modal form through cron.create helper', async () => {
+  it('creates a job from the blank create form through cron.create helper', async () => {
     listCronJobsMock.mockResolvedValue({ jobs: [] });
 
-    mountedComponent = mount(CronView, { target: document.body });
-    flushSync();
+    mountView();
 
     await waitForCondition(() => {
       const button = findButtonByText('New job');
@@ -182,6 +228,34 @@ describe('CronView', () => {
     });
   });
 
+  it('fills the cron expression from a schedule preset selection', async () => {
+    listCronJobsMock.mockResolvedValue({ jobs: [] });
+
+    mountView();
+
+    await waitForCondition(() => {
+      const button = findButtonByText('New job');
+      return Boolean(button && !button.disabled);
+    });
+    buttonByText('New job').click();
+    flushSync();
+
+    await waitForCondition(() => document.getElementById('cron-job-preset'));
+
+    // Open the preset dropdown and pick "Every hour"; its expression fills the
+    // still-editable cron field.
+    document.getElementById('cron-job-preset').click();
+    flushSync();
+    const hourlyOption = Array.from(
+      document.querySelectorAll('.dropdown-option'),
+    ).find((option) => option.textContent.trim() === 'Every hour');
+    expect(hourlyOption, 'preset option not found').toBeTruthy();
+    hourlyOption.click();
+    flushSync();
+
+    expect(inputById('cron-job-expression').value).toBe('0 * * * *');
+  });
+
   it('keeps once run_at and session_id when saving an unchanged edit', async () => {
     const storedRunAt = '2026-05-14T10:00:00+00:00';
 
@@ -198,16 +272,9 @@ describe('CronView', () => {
       ],
     });
 
-    mountedComponent = mount(CronView, { target: document.body });
-    flushSync();
+    mountView();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="cron-edit-job-once"]'),
-    );
-
-    buttonByTestId('cron-edit-job-once').click();
-    flushSync();
-
+    // The single job auto-selects, so its edit form is already rendered.
     await waitForCondition(() => document.getElementById('cron-job-run-at'));
     const runAtInput = inputById('cron-job-run-at');
     expect(runAtInput.value.length).toBeGreaterThan(0);
@@ -231,8 +298,7 @@ describe('CronView', () => {
       jobs: [cronJob({ id: 'job-delete', status: 'active' })],
     });
 
-    mountedComponent = mount(CronView, { target: document.body });
-    flushSync();
+    mountView();
 
     await waitForCondition(() =>
       document.querySelector('[data-testid="cron-delete-job-delete"]'),
@@ -241,7 +307,7 @@ describe('CronView', () => {
     buttonByTestId('cron-delete-job-delete').click();
     flushSync();
 
-    // The row action opens the shared ConfirmDialog; nothing is deleted until
+    // The detail action opens the shared ConfirmDialog; nothing is deleted until
     // the user confirms.
     expect(deleteCronJobMock).not.toHaveBeenCalled();
     confirmDialog('Delete');
@@ -255,8 +321,7 @@ describe('CronView', () => {
       jobs: [cronJob({ id: 'job-delete', status: 'active' })],
     });
 
-    mountedComponent = mount(CronView, { target: document.body });
-    flushSync();
+    mountView();
 
     await waitForCondition(() =>
       document.querySelector('[data-testid="cron-delete-job-delete"]'),
