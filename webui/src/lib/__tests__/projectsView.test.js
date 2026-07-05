@@ -486,11 +486,54 @@ describe('buildToolToggleList', () => {
     });
 
     // memory (runtime-derived) and skill_manage (identity-only) are excluded; skill
-    // stays an ordinary, toggleable project tool.
+    // stays an ordinary, toggleable project tool. Each row carries the readiness
+    // fields (defaulting to ready) so a not-ready tool renders the shared notice.
     expect(rows).toEqual([
-      { name: 'edit', enabled: false },
-      { name: 'read', enabled: true },
-      { name: 'skill', enabled: true },
+      {
+        name: 'edit',
+        enabled: false,
+        ready: true,
+        readiness_hint: null,
+        extension: null,
+      },
+      {
+        name: 'read',
+        enabled: true,
+        ready: true,
+        readiness_hint: null,
+        extension: null,
+      },
+      {
+        name: 'skill',
+        enabled: true,
+        ready: true,
+        readiness_hint: null,
+        extension: null,
+      },
+    ]);
+  });
+
+  it('carries a not-ready tool s readiness fields through to its row', () => {
+    const rows = buildToolToggleList({
+      catalog: [
+        {
+          name: 'home_assistant',
+          ready: false,
+          readiness_hint: 'Set the Home Assistant token first.',
+          extension: 'homeassistant',
+        },
+      ],
+      allowedTools: [],
+    });
+
+    expect(rows).toEqual([
+      {
+        name: 'home_assistant',
+        enabled: false,
+        ready: false,
+        readiness_hint: 'Set the Home Assistant token first.',
+        extension: 'homeassistant',
+      },
     ]);
   });
 
@@ -501,6 +544,8 @@ describe('buildToolToggleList', () => {
     });
 
     expect(rows.map((row) => row.name)).toEqual(['bash', 'grep']);
+    // A bare-name entry has no readiness metadata, so it defaults to ready.
+    expect(rows[0]).toMatchObject({ ready: true, readiness_hint: null });
   });
 });
 

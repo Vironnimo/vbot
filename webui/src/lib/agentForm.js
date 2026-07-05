@@ -1,3 +1,5 @@
+import { parseModelSelectionValue } from './modelSelection.js';
+
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
 
@@ -13,6 +15,20 @@ export const AGENT_MEMORY_PROMPT_MODES = Object.freeze([
   'off',
   'agent',
   DEFAULT_AGENT_MEMORY_PROMPT_MODE,
+]);
+
+// The full thinking-effort ladder, empty first for the inherit option. Shared by
+// the editor and the create modal so both offer the same ordered set (each then
+// narrows it to the selected model's published reasoning ladder).
+export const THINKING_EFFORT_OPTIONS = Object.freeze([
+  '',
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
 ]);
 
 const EDITABLE_AGENT_FIELDS = Object.freeze([
@@ -32,16 +48,22 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const EMPTY_TEXT = '';
 
 export function createAgentFormValues(agent = {}) {
+  // The four inheritable run fields (model/fallback_model/temperature/
+  // thinking_effort) bind to the agent's RAW own values (`agent.config`), so an
+  // empty/null raw value reads as the inherit state instead of the baked
+  // top-level value. When no `config` block is present (create form, or an older
+  // payload shape) the top-level values stand in, preserving prior behavior.
+  const raw = isPlainObject(agent.config) ? agent.config : agent;
   return {
     id: asText(agent.id),
     name: asText(agent.name),
-    model: asText(agent.model),
-    fallback_model: asText(agent.fallback_model),
+    model: asText(raw.model),
+    fallback_model: asText(raw.fallback_model),
     workspace: asText(agent.workspace),
-    temperature: hasValue(agent.temperature)
-      ? String(agent.temperature)
+    temperature: hasValue(raw.temperature)
+      ? String(raw.temperature)
       : DEFAULT_AGENT_TEMPERATURE,
-    thinking_effort: asText(agent.thinking_effort),
+    thinking_effort: asText(raw.thinking_effort),
     memory_prompt_mode: normalizeMemoryPromptMode(agent.memory_prompt_mode),
     allowed_tools: normalizeList(
       agent.allowed_tools,
@@ -117,6 +139,36 @@ export function textToList(text) {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
+}
+
+// The selected model's reasoning capability block, or null when the value is
+// empty or the model is unknown/custom (the catalog has no entry). Shared by the
+// editor and the create modal so both gate the thinking-effort options the same
+// way. `models` is the `model.list` catalog array.
+export function reasoningForModelValue(modelValue, models) {
+  const { model } = parseModelSelectionValue(modelValue);
+  if (!model) {
+    return null;
+  }
+  const list = Array.isArray(models) ? models : [];
+  const match = list.find((candidate) => candidate.id === model);
+  return match?.capabilities?.reasoning ?? null;
+}
+
+// The thinking-effort options a model may show, gated by its reasoning ladder.
+// No catalog info (unknown/custom model) or no published ladder keeps the full
+// ladder — the adapter applies a provider-specific floor the UI cannot see, so
+// it must not hide options that may be valid. A model with a published ladder
+// shows only its possible efforts: the default (provider default, '') and "none"
+// (reasoning off) always apply; the rest are exactly the model's levels, kept in
+// canonical order so the dropdown reads consistently.
+export function effortOptionsForReasoning(reasoning) {
+  const levels = Array.isArray(reasoning?.levels) ? reasoning.levels : [];
+  if (levels.length === 0) {
+    return THINKING_EFFORT_OPTIONS;
+  }
+  const allowed = new Set(['', 'none', ...levels]);
+  return THINKING_EFFORT_OPTIONS.filter((option) => allowed.has(option));
 }
 
 function normalizeValues(values = {}) {
@@ -247,4 +299,8 @@ function asText(value) {
 
 function hasValue(value) {
   return value !== null && value !== undefined;
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

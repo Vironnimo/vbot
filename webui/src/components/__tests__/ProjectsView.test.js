@@ -258,6 +258,77 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('renders a not-ready tool greyed with the shared notice and extensions link', async () => {
+    const navigateMock = vi.fn();
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({
+          project_id: 'demo',
+          display_name: 'Demo',
+          allowed_tools: ['read'],
+        }),
+      ],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo', allowed_tools: ['read'] }),
+      scan: { team: [], report: { clean: true, findings: [] }, skills: {} },
+    });
+    rpcMock.mockImplementation((method) => {
+      if (method === 'model.list') {
+        return Promise.resolve({ models: [] });
+      }
+      if (method === 'connection.list') {
+        return Promise.resolve({ connections: [] });
+      }
+      if (method === 'tool.list') {
+        return Promise.resolve({
+          tools: [
+            { name: 'read', description: '', ready: true },
+            {
+              name: 'home_assistant',
+              description: '',
+              ready: false,
+              readiness_hint: 'Set the Home Assistant token first.',
+              extension: 'homeassistant',
+            },
+          ],
+          default_project_tools: ['read'],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    mountedComponent = mount(ProjectsView, {
+      target: document.body,
+      props: { onNavigateToSettingsPanel: navigateMock },
+    });
+    flushSync();
+
+    await expandDemo();
+    await waitForCondition(() =>
+      toggleByAriaLabel('Toggle tool home_assistant'),
+    );
+
+    // The not-ready badge and the server hint (verbatim) both render, and the
+    // whitelist toggle stays interactive.
+    expect(document.body.textContent).toContain('Currently unavailable');
+    expect(document.body.textContent).toContain(
+      'Set the Home Assistant token first.',
+    );
+    expect(toggleByAriaLabel('Toggle tool home_assistant').disabled).toBe(
+      false,
+    );
+
+    // The extensions link jumps to Settings → Extensions.
+    const openExtensions = Array.from(document.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === 'Open Extensions',
+    );
+    expect(openExtensions).toBeTruthy();
+    openExtensions.click();
+    flushSync();
+    expect(navigateMock).toHaveBeenCalledWith('extensions');
+  });
+
   it('resets the tool whitelist to the base list', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [

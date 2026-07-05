@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 
 import { init } from '../../lib/i18n.js';
+import { reactiveProps } from './_reactiveProps.svelte.js';
 
 const rpcMock = vi.fn();
 const listProjectsMock = vi.fn();
@@ -599,6 +600,81 @@ describe('SystemPromptView', () => {
     );
 
     expect(scopeOptionLabels()).toEqual(['Default', 'Alpha']);
+  });
+
+  it('selects the target agent scope when a scope deep-link request arrives', async () => {
+    rpcMock.mockImplementation(createRpcMock());
+
+    const props = reactiveProps({
+      targetScopeAgentId: '',
+      targetScopeRequestId: 0,
+    });
+    mountedComponent = mount(SystemPromptView, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => scopeTrigger()?.textContent.includes('Default'),
+      100,
+    );
+
+    // A deep-link request bumps the request id with a valid agent scope target.
+    props.targetScopeAgentId = 'agent-1';
+    props.targetScopeRequestId = 1;
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          (call) =>
+            call[0] === 'prompt.list' && call[1]?.scope?.agent_id === 'agent-1',
+        ),
+      100,
+    );
+
+    await waitForCondition(
+      () => scopeTrigger()?.textContent.includes('Alpha'),
+      100,
+    );
+    expect(scopeTrigger().textContent).toContain('Alpha');
+  });
+
+  it('falls back to the default scope when the deep-link target scope is absent', async () => {
+    rpcMock.mockImplementation(createRpcMock());
+
+    const props = reactiveProps({
+      targetScopeAgentId: '',
+      targetScopeRequestId: 0,
+    });
+    mountedComponent = mount(SystemPromptView, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => scopeTrigger()?.textContent.includes('Default'),
+      100,
+    );
+
+    // A request for an agent with no prompt scope leaves the default selected
+    // and never issues a scoped prompt.list for the missing agent.
+    props.targetScopeAgentId = 'ghost';
+    props.targetScopeRequestId = 1;
+    flushSync();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+
+    expect(scopeTrigger().textContent).toContain('Default');
+    expect(
+      rpcMock.mock.calls.some(
+        (call) =>
+          call[0] === 'prompt.list' && call[1]?.scope?.agent_id === 'ghost',
+      ),
+    ).toBe(false);
   });
 
   it('refresh calls prompt.preview and renders the token breakdown', async () => {
