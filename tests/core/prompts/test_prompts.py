@@ -1332,10 +1332,45 @@ def test_list_scopes_includes_enabled_agent_scopes(tmp_path: Path) -> None:
     disabled = _agent(tmp_path, agent_id="plain", custom_system_prompt_enabled=False)
     manager = _facade_manager(tmp_path, agents=[disabled, enabled])
 
+    # A scope with no saved layout or override reports has_customizations=False.
     assert manager.list_scopes() == [
         {"type": "default", "label": "Default"},
-        {"type": "agent", "agent_id": "coder", "label": "Coder Agent"},
+        {
+            "type": "agent",
+            "agent_id": "coder",
+            "label": "Coder Agent",
+            "has_customizations": False,
+        },
     ]
+
+
+def test_list_scopes_flags_agent_scope_with_saved_layout(tmp_path: Path) -> None:
+    enabled = _agent(tmp_path, custom_system_prompt_enabled=True)
+    store = StubBlockStore(layouts={"agent:coder": [LayoutEntry(id="core:tools", enabled=False)]})
+    manager = _facade_manager(tmp_path, store=store, agents=[enabled])
+
+    agent_scope = next(scope for scope in manager.list_scopes() if scope["type"] == "agent")
+    assert agent_scope["has_customizations"] is True
+
+
+def test_list_scopes_flags_agent_scope_with_block_override(tmp_path: Path) -> None:
+    enabled = _agent(tmp_path, custom_system_prompt_enabled=True)
+    store = StubBlockStore(overrides={("agent:coder", "core:tools"): "agent text"})
+    manager = _facade_manager(tmp_path, store=store, agents=[enabled])
+
+    agent_scope = next(scope for scope in manager.list_scopes() if scope["type"] == "agent")
+    assert agent_scope["has_customizations"] is True
+
+
+def test_list_scopes_ignores_default_scope_override_for_agent_flag(tmp_path: Path) -> None:
+    # A default-scope override is not the agent scope's own customization, so it
+    # must not flag the agent scope.
+    enabled = _agent(tmp_path, custom_system_prompt_enabled=True)
+    store = StubBlockStore(overrides={("default", "core:tools"): "default text"})
+    manager = _facade_manager(tmp_path, store=store, agents=[enabled])
+
+    agent_scope = next(scope for scope in manager.list_scopes() if scope["type"] == "agent")
+    assert agent_scope["has_customizations"] is False
 
 
 def test_edit_facade_rejects_disabled_agent_scope(tmp_path: Path) -> None:

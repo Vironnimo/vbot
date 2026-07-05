@@ -219,6 +219,7 @@ describe('i18n t()', () => {
       'agents.detail.identity',
       'agents.detail.model',
       'agents.detail.systemPrompt',
+      'agents.detail.memory',
       'agents.detail.access',
       'agents.detail.metadata',
       'agents.detail.idValue',
@@ -227,6 +228,7 @@ describe('i18n t()', () => {
       'agents.form.customSystemPrompt',
       'agents.form.customPromptHelp',
       'agents.form.memoryPromptModeHelp',
+      'agents.form.memoryModeHelp',
       'agents.form.fallbackModelHelp',
       'agents.form.temperatureHelp',
       'agents.form.thinkingEffortHelp',
@@ -250,11 +252,57 @@ describe('i18n t()', () => {
       'Agent + user notes (MEMORY.md + USER.md)',
     );
     expect(t('agents.form.customPromptHelp')).toContain('System Prompt tab');
+    expect(t('agents.form.memoryModeHelp')).toContain('memory tool follows');
     expect(
       t('agents.form.modelUnavailableOption', undefined, {
         model: 'custom/provider-model',
       }),
     ).toBe('Unavailable / custom: custom/provider-model');
+  });
+
+  it('contains the agent inherit-state, memory tool row, and disable-confirm copy', () => {
+    const requiredKeys = [
+      'agents.form.inheritOption',
+      'agents.form.inheritOptionNotConfigured',
+      'agents.form.inheritOptionProviderDefault',
+      'agents.form.inheritedHint',
+      'agents.form.inheritedHintProviderDefault',
+      'agents.form.resetToInherit',
+      'agents.form.editGlobalDefaults',
+      'agents.form.editAgentPrompt',
+      'agents.tools.memoryFollowsActive',
+      'agents.tools.memoryFollowsOff',
+      'agents.tools.notReadyBadge',
+      'agents.tools.openExtensions',
+      'agents.confirmDisableCustomPrompt.title',
+      'agents.confirmDisableCustomPrompt.body',
+      'agents.confirmDisableCustomPrompt.confirm',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    // The retired thinking-effort default key must not return to the catalog.
+    expect(englishCatalog['agents.form.thinkingEffortDefault']).toBeUndefined();
+    expect(t('agents.form.thinkingEffortDefault')).toBe(
+      'agents.form.thinkingEffortDefault',
+    );
+    // The inherit-value keys interpolate the global-default value.
+    expect(
+      t('agents.form.inheritOption', undefined, { value: 'openai/gpt-5.2' }),
+    ).toBe('Inherited: openai/gpt-5.2 (global default)');
+    expect(t('agents.form.inheritedHint', undefined, { value: '0.7' })).toBe(
+      'Inherited: 0.7 (global default)',
+    );
+    expect(t('agents.form.inheritOptionNotConfigured')).toBe(
+      'Inherit (not configured)',
+    );
+    expect(t('agents.form.inheritOptionProviderDefault')).toBe(
+      'Inherit (provider default)',
+    );
+    expect(t('agents.form.editAgentPrompt')).toBe("Edit this agent's prompt");
+    expect(t('agents.confirmDisableCustomPrompt.confirm')).toBe(
+      'Disable custom prompt',
+    );
+    expect(t('agents.tools.notReadyBadge')).toBe('Currently unavailable');
   });
 
   it('contains System Prompt scope labels and states', () => {
