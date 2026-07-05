@@ -13,12 +13,15 @@ import {
   buildSkillToggleSections,
   buildToolToggleList,
   hasManageChanges,
+  memberFieldIsPinned,
   needsRePoint,
+  normalizePinTemperature,
   normalizeProject,
   normalizeProjects,
   normalizeScanReport,
   normalizeScanSkills,
   projectTeam,
+  seedTeamPinDraft,
   setListMembership,
 } from '../projectsView.js';
 
@@ -358,7 +361,7 @@ describe('normalizeProject / normalizeProjects', () => {
 });
 
 describe('projectTeam', () => {
-  it('projects the scan team into a display-ready list', () => {
+  it('projects the scan team into a display-ready list with pins + effective', () => {
     expect(
       projectTeam({
         team: [
@@ -371,7 +374,13 @@ describe('projectTeam', () => {
             thinking_effort: 'high',
             source_format: 'opencode',
             source_path: '.opencode/agents/builder.md',
+            denied_tools: ['bash'],
             pins: { model: 'openai/gpt-mini' },
+            effective: {
+              model: { value: 'openai/gpt-mini', source: 'pin' },
+              temperature: { value: 0.2, source: 'agent' },
+              thinking_effort: { value: 'high', source: 'agent' },
+            },
           },
           { agent_id: 'planner' },
         ],
@@ -386,9 +395,15 @@ describe('projectTeam', () => {
         thinking_effort: 'high',
         source_format: 'opencode',
         source_path: '.opencode/agents/builder.md',
-        denied_tools: [],
-        // The per-agent override is carried through for the team-row badge.
-        model_override: 'openai/gpt-mini',
+        denied_tools: ['bash'],
+        // The per-agent pin object (subset of the three fields), or null.
+        pins: { model: 'openai/gpt-mini' },
+        // Provenance-aware resolved values per run field.
+        effective: {
+          model: { value: 'openai/gpt-mini', source: 'pin' },
+          temperature: { value: 0.2, source: 'agent' },
+          thinking_effort: { value: 'high', source: 'agent' },
+        },
       },
       {
         agent_id: 'planner',
@@ -400,15 +415,95 @@ describe('projectTeam', () => {
         source_format: '',
         source_path: '',
         denied_tools: [],
-        // No override → null (an agent without a pinned model shows no badge).
-        model_override: null,
+        // No pin → null; effective defaults to a stable null-per-field map.
+        pins: null,
+        effective: {
+          model: { value: null, source: null },
+          temperature: { value: null, source: null },
+          thinking_effort: { value: null, source: null },
+        },
       },
     ]);
+  });
+
+  it('drops unknown pin fields and treats an empty pin object as null', () => {
+    const [member] = projectTeam({
+      team: [{ agent_id: 'a', pins: { unknown: 'x' } }],
+    });
+    expect(member.pins).toBeNull();
+
+    const [withTemp] = projectTeam({
+      team: [{ agent_id: 'a', pins: { temperature: 0.5, unknown: 'x' } }],
+    });
+    expect(withTemp.pins).toEqual({ temperature: 0.5 });
   });
 
   it('returns an empty list for a missing team', () => {
     expect(projectTeam({})).toEqual([]);
     expect(projectTeam(undefined)).toEqual([]);
+  });
+});
+
+describe('memberFieldIsPinned', () => {
+  it('is true only when the effective source for the field is "pin"', () => {
+    const member = {
+      effective: {
+        model: { value: 'x', source: 'pin' },
+        temperature: { value: 0.2, source: 'agent' },
+        thinking_effort: { value: null, source: null },
+      },
+    };
+    expect(memberFieldIsPinned(member, 'model')).toBe(true);
+    expect(memberFieldIsPinned(member, 'temperature')).toBe(false);
+    expect(memberFieldIsPinned(member, 'thinking_effort')).toBe(false);
+    expect(memberFieldIsPinned(undefined, 'model')).toBe(false);
+  });
+});
+
+describe('seedTeamPinDraft', () => {
+  it('seeds from the pinned values when present', () => {
+    const draft = seedTeamPinDraft({
+      pins: {
+        model: 'openai/gpt-mini',
+        temperature: 0.3,
+        thinking_effort: 'low',
+      },
+      effective: {
+        model: { value: 'openai/gpt-mini', source: 'pin' },
+        temperature: { value: 0.3, source: 'pin' },
+        thinking_effort: { value: 'low', source: 'pin' },
+      },
+    });
+    expect(draft).toEqual({
+      model: 'openai/gpt-mini',
+      temperature: '0.3',
+      thinking_effort: 'low',
+    });
+  });
+
+  it('falls back to the effective values as a starting suggestion', () => {
+    const draft = seedTeamPinDraft({
+      pins: null,
+      effective: {
+        model: { value: 'openai/gpt-5.2', source: 'agent' },
+        temperature: { value: null, source: null },
+        thinking_effort: { value: 'high', source: 'project_default' },
+      },
+    });
+    expect(draft).toEqual({
+      model: 'openai/gpt-5.2',
+      temperature: '',
+      thinking_effort: 'high',
+    });
+  });
+});
+
+describe('normalizePinTemperature', () => {
+  it('parses comma-decimals and returns null for an empty/invalid box', () => {
+    expect(normalizePinTemperature('0,7')).toBe(0.7);
+    expect(normalizePinTemperature('0')).toBe(0);
+    expect(normalizePinTemperature('')).toBeNull();
+    expect(normalizePinTemperature('abc')).toBeNull();
   });
 });
 

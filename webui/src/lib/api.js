@@ -517,7 +517,49 @@ export function setProject(projectId, changes = {}, options = {}) {
   return rpc('project.set', { ...changes, project_id: projectId }, options);
 }
 
-export function clearModelOverride(projectId, agentId, options = {}) {
+export function setPin(projectId, agentId, field, value, options = {}) {
+  if (!isNonEmptyString(projectId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project id must be a non-empty string',
+      {
+        method: 'project.set_pin',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(agentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent id must be a non-empty string',
+      {
+        method: 'project.set_pin',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(field)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Pin field must be a non-empty string',
+      {
+        method: 'project.set_pin',
+      },
+    );
+  }
+
+  // A per-agent pin (model / temperature / thinking_effort) becomes the top tier
+  // of that field's resolution chain for this agent in this project. The value
+  // shape is field-specific (a model address string, a number, an effort string);
+  // the server validates it against the canonical agent rules.
+  return rpc(
+    'project.set_pin',
+    { project_id: projectId, agent_id: agentId, field, value },
+    options,
+  );
+}
+
+export function clearPin(projectId, agentId, field, options = {}) {
   if (!isNonEmptyString(projectId)) {
     throw new ApiClientError(
       RPC_ERROR_INVALID_CLIENT_REQUEST,
@@ -538,11 +580,21 @@ export function clearModelOverride(projectId, agentId, options = {}) {
     );
   }
 
-  // The Projects tab only ever clears the model pin (the `x` on a team row); a
-  // pin is set via /model. Field-scoped clear through the new pins RPC.
+  if (!isNonEmptyString(field)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Pin field must be a non-empty string',
+      {
+        method: 'project.clear_pin',
+      },
+    );
+  }
+
+  // Drop one pinned field for this agent; clearing the agent's last field removes
+  // the pin entry entirely (server-side). The field falls back through its chain.
   return rpc(
     'project.clear_pin',
-    { project_id: projectId, agent_id: agentId, field: 'model' },
+    { project_id: projectId, agent_id: agentId, field },
     options,
   );
 }

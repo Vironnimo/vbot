@@ -260,15 +260,15 @@ describe('i18n t()', () => {
     ).toBe('Unavailable / custom: custom/provider-model');
   });
 
-  it('contains the agent inherit-state, memory tool row, and disable-confirm copy', () => {
+  it('contains the shared inherit-state, memory tool row, and disable-confirm copy', () => {
     const requiredKeys = [
-      'agents.form.inheritOption',
-      'agents.form.inheritOptionNotConfigured',
-      'agents.form.inheritOptionProviderDefault',
-      'agents.form.inheritedHint',
-      'agents.form.inheritedHintProviderDefault',
-      'agents.form.resetToInherit',
-      'agents.form.editGlobalDefaults',
+      'inherit.option',
+      'inherit.optionNotConfigured',
+      'inherit.optionProviderDefault',
+      'inherit.hint',
+      'inherit.hintProviderDefault',
+      'inherit.resetToInherit',
+      'inherit.editGlobalDefaults',
       'agents.form.editAgentPrompt',
       'agents.tools.memoryFollowsActive',
       'agents.tools.memoryFollowsOff',
@@ -285,18 +285,34 @@ describe('i18n t()', () => {
     expect(t('agents.form.thinkingEffortDefault')).toBe(
       'agents.form.thinkingEffortDefault',
     );
+    // The inherit keys moved from the agents.form.* namespace to the shared
+    // inherit.* namespace — the old spellings must not linger in the catalog.
+    for (const retiredKey of [
+      'agents.form.inheritOption',
+      'agents.form.inheritOptionNotConfigured',
+      'agents.form.inheritOptionProviderDefault',
+      'agents.form.inheritedHint',
+      'agents.form.inheritedHintProviderDefault',
+      'agents.form.resetToInherit',
+      'agents.form.editGlobalDefaults',
+    ]) {
+      expect(englishCatalog[retiredKey]).toBeUndefined();
+    }
     // The inherit-value keys interpolate the global-default value.
-    expect(
-      t('agents.form.inheritOption', undefined, { value: 'openai/gpt-5.2' }),
-    ).toBe('Inherited: openai/gpt-5.2 (global default)');
-    expect(t('agents.form.inheritedHint', undefined, { value: '0.7' })).toBe(
+    expect(t('inherit.option', undefined, { value: 'openai/gpt-5.2' })).toBe(
+      'Inherited: openai/gpt-5.2 (global default)',
+    );
+    expect(t('inherit.hint', undefined, { value: '0.7' })).toBe(
       'Inherited: 0.7 (global default)',
     );
-    expect(t('agents.form.inheritOptionNotConfigured')).toBe(
-      'Inherit (not configured)',
-    );
-    expect(t('agents.form.inheritOptionProviderDefault')).toBe(
+    expect(t('inherit.optionNotConfigured')).toBe('Inherit (not configured)');
+    expect(t('inherit.optionProviderDefault')).toBe(
       'Inherit (provider default)',
+    );
+    expect(t('inherit.resetToInherit')).toBe('Reset to inherited value');
+    expect(t('inherit.editGlobalDefaults')).toBe('Edit global defaults');
+    expect(t('inherit.hintProviderDefault')).toBe(
+      'Provider default — nothing is set here or in the global defaults.',
     );
     expect(t('agents.form.editAgentPrompt')).toBe("Edit this agent's prompt");
     expect(t('agents.confirmDisableCustomPrompt.confirm')).toBe(
