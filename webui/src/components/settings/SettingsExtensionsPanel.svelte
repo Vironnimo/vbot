@@ -5,6 +5,7 @@
   import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -587,19 +588,13 @@
                   <span class="s-field-hint">{field.description}</span>
                 {/if}
                 {#if field.type === 'toggle'}
-                  <label class="s-ext-toggle">
-                    <input
-                      type="checkbox"
-                      checked={formStates[extension.name]?.[field.key] === true}
-                      disabled={rowBusy}
-                      onchange={(event) =>
-                        setFormValue(
-                          extension.name,
-                          field.key,
-                          event.currentTarget.checked,
-                        )}
-                    />
-                  </label>
+                  <Toggle
+                    checked={formStates[extension.name]?.[field.key] === true}
+                    disabled={rowBusy}
+                    ariaLabel={field.label}
+                    onChange={(next) =>
+                      setFormValue(extension.name, field.key, next)}
+                  />
                 {:else if field.type === 'secret'}
                   <div class="s-ext-secret">
                     <StatusChip variant={field.set ? 'success' : 'warn'}>
