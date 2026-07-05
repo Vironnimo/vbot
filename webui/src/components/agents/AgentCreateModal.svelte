@@ -74,35 +74,21 @@
   function inheritLabelForDefault(fieldName) {
     const value = defaultValueText(fieldName);
     if (value) {
-      return t(
-        'agents.form.inheritOption',
-        'Inherited: {value} (global default)',
-        {
-          value,
-        },
-      );
+      return t('inherit.option', 'Inherited: {value} (global default)', {
+        value,
+      });
     }
-    return t(
-      'agents.form.inheritOptionNotConfigured',
-      'Inherit (not configured)',
-    );
+    return t('inherit.optionNotConfigured', 'Inherit (not configured)');
   }
 
   function thinkingEffortInheritLabel() {
     const value = defaultValueText('thinking_effort');
     if (value) {
-      return t(
-        'agents.form.inheritOption',
-        'Inherited: {value} (global default)',
-        {
-          value,
-        },
-      );
+      return t('inherit.option', 'Inherited: {value} (global default)', {
+        value,
+      });
     }
-    return t(
-      'agents.form.inheritOptionProviderDefault',
-      'Inherit (provider default)',
-    );
+    return t('inherit.optionProviderDefault', 'Inherit (provider default)');
   }
 
   function defaultValueText(fieldName) {

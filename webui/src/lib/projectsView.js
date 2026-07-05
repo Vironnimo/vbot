@@ -374,8 +374,29 @@ export function normalizeProjects(projects) {
   return raw.map((project) => normalizeProject(project));
 }
 
+// The three per-agent pinnable / effective run fields, in display order. Each is
+// resolved through the config-agent chain (pin → agent file → project default →
+// global default) and reported by the scan as `effective[field] = {value, source}`.
+export const TEAM_EFFECTIVE_FIELDS = Object.freeze([
+  'model',
+  'temperature',
+  'thinking_effort',
+]);
+
+// The winning-source discriminants the scan reports on `effective[field].source`.
+export const EFFECTIVE_SOURCE_PIN = 'pin';
+export const EFFECTIVE_SOURCE_AGENT = 'agent';
+export const EFFECTIVE_SOURCE_PROJECT_DEFAULT = 'project_default';
+export const EFFECTIVE_SOURCE_GLOBAL_DEFAULT = 'global_default';
+
 // Project the scan's team into a stable, display-ready list. The repo is the
-// source of truth (no copy drift) — this only shapes what the view renders.
+// source of truth (no copy drift) — this only shapes what the view renders. Each
+// member carries its raw repo-declared values (for reference), the per-agent
+// `pins` object (or null), and the `effective` map of `{value, source}` per run
+// field so the row can show the resolved value with provenance.
+//
+// NOTE: `agent_id` and `display_name` are consumed by ChatView's project team bar
+// (the second consumer of this helper) — do not drop or rename them.
 export function projectTeam(scan) {
   const raw = Array.isArray(scan?.team) ? scan.team : [];
   return raw.map((member) => ({
@@ -389,11 +410,102 @@ export function projectTeam(scan) {
     source_format: asText(member?.source_format),
     source_path: asText(member?.source_path),
     denied_tools: normalizeStringList(member?.denied_tools),
-    // The per-agent model pin (vBot-owned, top model-chain tier), read from the
-    // member's `pins` object, or null. The team row shows it with an `x` to clear;
-    // a pin is set only via /model. UI keeps the existing "override" naming.
-    model_override: stringOrNull(member?.pins?.model),
+    // The per-agent pin object (any subset of model/temperature/thinking_effort),
+    // or null when the agent has no pin. Read shape-only here — the row derives
+    // whether a field is pinned from `effective[field].source === 'pin'`.
+    pins: normalizePins(member?.pins),
+    // The provenance-aware resolved values, one entry per run field:
+    // `{ value, source }`. A null value means "not configured" (model) or
+    // "provider default" (temperature/thinking); a null source means no tier won.
+    effective: normalizeEffective(member?.effective),
   }));
+}
+
+// Normalize the member's `pins` object into a plain map of the known fields, or
+// null when absent/empty. The value shapes are field-specific and passed through
+// verbatim (model string, temperature number, thinking-effort string).
+function normalizePins(pins) {
+  if (!isPlainObject(pins)) {
+    return null;
+  }
+  const normalized = {};
+  for (const field of TEAM_EFFECTIVE_FIELDS) {
+    if (Object.hasOwn(pins, field)) {
+      normalized[field] = pins[field];
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+// Normalize the member's `effective` map into `{ field: { value, source } }` for
+// the known run fields. A missing field entry becomes `{ value: null, source:
+// null }` so the row renders a stable "not configured / provider default" state
+// rather than crashing on an absent key.
+function normalizeEffective(effective) {
+  const source = isPlainObject(effective) ? effective : {};
+  const normalized = {};
+  for (const field of TEAM_EFFECTIVE_FIELDS) {
+    const entry = isPlainObject(source[field]) ? source[field] : {};
+    normalized[field] = {
+      value: entry.value ?? null,
+      source: stringOrNull(entry.source),
+    };
+  }
+  return normalized;
+}
+
+// Whether a team member currently has a pin for the given field. Derived from
+// `effective[field].source === 'pin'`, the single truth for "pinned" that also
+// drives the Clear-pin control's visibility.
+export function memberFieldIsPinned(member, field) {
+  return member?.effective?.[field]?.source === EFFECTIVE_SOURCE_PIN;
+}
+
+// Seed the per-field pin draft (the values the pin controls edit) for one team
+// member. The model draft is the member's pinned model (or the effective/repo
+// model as a starting suggestion), the temperature draft a text box seeded from
+// the pinned/effective number, the thinking-effort draft the pinned/effective
+// level. A blank draft means "nothing typed yet".
+export function seedTeamPinDraft(member) {
+  const pins = isPlainObject(member?.pins) ? member.pins : {};
+  const effective = member?.effective ?? {};
+
+  const modelSeed = hasText(pins.model)
+    ? String(pins.model)
+    : effectiveTextValue(effective.model);
+  const temperatureSeed = hasNumber(pins.temperature)
+    ? String(pins.temperature)
+    : effectiveTextValue(effective.temperature);
+  const thinkingSeed =
+    typeof pins.thinking_effort === 'string'
+      ? pins.thinking_effort
+      : effectiveTextValue(effective.thinking_effort);
+
+  return {
+    model: modelSeed,
+    temperature: temperatureSeed,
+    thinking_effort: thinkingSeed,
+  };
+}
+
+// The temperature pin value for the payload: a comma-tolerant number, or null
+// when the box is empty/non-numeric (the Set button is disabled on null — a pin
+// must carry a value; clearing is a separate action).
+export function normalizePinTemperature(value) {
+  return normalizeProjectTemperature(value);
+}
+
+function effectiveTextValue(entry) {
+  const value = isPlainObject(entry) ? entry.value : null;
+  return value === null || value === undefined ? '' : String(value);
+}
+
+function hasText(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function hasNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
 }
 
 // Normalize the scan report into a render-ready shape: the `clean` flag plus

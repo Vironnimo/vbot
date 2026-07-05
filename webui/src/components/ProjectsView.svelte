@@ -12,10 +12,11 @@
   import ToolReadinessNotice from './ui/ToolReadinessNotice.svelte';
   import {
     addProject,
-    clearModelOverride,
+    clearPin,
     listProjects,
     removeProject,
     rpc,
+    setPin,
     setProject,
     showProject,
   } from '$lib/api.js';
@@ -29,12 +30,15 @@
     buildSkillToggleSections,
     buildToolToggleList,
     hasManageChanges,
+    memberFieldIsPinned,
     needsRePoint,
+    normalizePinTemperature,
     normalizeProject,
     normalizeProjects,
     normalizeScanReport,
     normalizeScanSkills,
     projectTeam,
+    seedTeamPinDraft,
     setListMembership,
   } from '$lib/projectsView.js';
   import {
@@ -44,6 +48,10 @@
     selectModelValue,
   } from '$lib/modelSelection.js';
   import {
+    effortOptionsForReasoning,
+    reasoningForModelValue,
+  } from '$lib/agentForm.js';
+  import {
     SURFACE_FORM,
     shouldApplyReloadNow,
   } from '$lib/resourceInvalidation.js';
@@ -51,10 +59,34 @@
 
   const PROJECT_BUSY_CODE = 'project_busy';
   const PROJECT_IN_USE_CODE = 'project_in_use';
-  // The inline project edit panel is a settings-style surface, so it follows the
+  // The project settings form is a settings-style surface, so it follows the
   // shared save model (DESIGN.md → Save model): auto-save after a short idle,
   // plus the explicit Save button for users who prefer to commit manually.
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+
+  // Maps each effective/pin field to its section-header label key and the empty
+  // wording (a null model reads "not configured", a null temperature/thinking
+  // reads "provider default").
+  const EFFECTIVE_FIELD_META = Object.freeze({
+    model: {
+      labelKey: 'projects.team.effectiveModel',
+      labelFallback: 'Model',
+      emptyKey: 'projects.team.valueNotConfigured',
+      emptyFallback: 'not configured',
+    },
+    temperature: {
+      labelKey: 'projects.team.effectiveTemperature',
+      labelFallback: 'Temperature',
+      emptyKey: 'projects.team.valueProviderDefault',
+      emptyFallback: 'provider default',
+    },
+    thinking_effort: {
+      labelKey: 'projects.team.effectiveThinkingEffort',
+      labelFallback: 'Thinking effort',
+      emptyKey: 'projects.team.valueProviderDefault',
+      emptyFallback: 'provider default',
+    },
+  });
 
   const noop = () => {};
 
@@ -69,15 +101,20 @@
   let listError = $state('');
   let statusMessage = $state('');
 
-  // Model/connection catalogs feed the project default-model searchable
-  // dropdown (the same picker the Agents tab uses, see modelSelection.js).
+  // Model/connection catalogs feed the default-model / model-pin searchable
+  // dropdowns (the same picker the Agents tab uses, see modelSelection.js).
   let availableModels = $state([]);
   let availableConnections = $state([]);
   // A live model reload fetches in the background but holds the visible option
-  // swap while the picker is open, so an open selection is never disturbed.
+  // swap while a picker is open, so an open selection is never disturbed.
   let modelDropdownOpenCount = $state(0);
   let pendingModelCatalogs = null;
   let lastModelsRefreshToken = null;
+
+  // The global agent defaults (`settings.get` → `defaults.agent`), fetched once
+  // when the view loads so the project-default inherit options can name the
+  // global default. Empty object on failure → the absent-case labels render.
+  let globalAgentDefaults = $state({});
 
   // Add modal state — the popup needs only the repo path plus an optional
   // display name (blank → backend derives the name from the folder).
@@ -86,9 +123,9 @@
   let addingProject = $state(false);
   let addError = $state('');
 
-  // The single expanded project: its inline edit form plus the scanned team and
-  // report shown underneath. Editing happens in place — there is no manage modal.
-  let expandedProjectId = $state('');
+  // The selected project drives the detail pane. Its settings form, scanned
+  // team, report, and skill pool are held here and reset on selection change.
+  let selectedProjectId = $state('');
   let editForm = $state(createEditForm());
   let editSaving = $state(false);
   let editError = $state('');
@@ -97,18 +134,19 @@
   let autoLoadDraft = $state('');
   let activeTeam = $state([]);
   let activeReport = $state(null);
-  // The expanded project's skill pool (own + bundled + global names) from the scan,
-  // for the skill toggle sections. Reset whenever the expansion changes.
   let activeScanSkills = $state({ project: [], bundled: [], global: [] });
   let scanLoading = $state(false);
   let removingProjectId = $state('');
-  // The project awaiting remove confirmation (null = dialog closed). The remove
-  // only runs once the confirm dialog resolves.
+  // The project awaiting remove confirmation (null = dialog closed).
   let removeConfirmProject = $state(null);
-  // The team agent whose model override is being cleared, so its `x` disables
-  // while the clear RPC is in flight (empty = none clearing). Setting an override
-  // is command-only (/model); the tab only clears.
-  let clearingOverrideAgentId = $state('');
+
+  // Which team-member rows are expanded (keyed agent id → true), plus each
+  // member's pin draft and the in-flight pin field, so a row's expand state and
+  // controls persist while the detail is open. Reset when the project changes.
+  let expandedMembers = $state({});
+  let pinDrafts = $state({});
+  // The `${agentId}:${field}` currently being written, so its buttons disable.
+  let pinBusyKey = $state('');
 
   // The toggleable tool catalog and the base Tool Whitelist (reset target), both
   // from the tool-catalog RPC so new tools appear without hardcoding names.
@@ -128,12 +166,17 @@
 
   let hasProjects = $derived(projects.length > 0);
   let canSubmitAdd = $derived(addForm.cwd.trim().length > 0 && !addingProject);
+
+  let selectedProject = $derived(
+    projects.find((item) => item.project_id === selectedProjectId) ?? null,
+  );
+
   let modelOptions = $derived(
     buildModelSelectOptions({
       models: availableModels,
       connections: availableConnections,
       selectedModelValue: editForm.default_model,
-      emptyLabel: t('projects.manage.defaultModelEmpty', 'No project default'),
+      emptyLabel: defaultModelInheritLabel(),
       translate: t,
     }),
   );
@@ -155,8 +198,8 @@
   );
 
   // The project default thinking-effort options: the "no default" sentinel and
-  // the "provider default" ('') choice wrap the shared effort ladder, reusing the
-  // agent effort-level labels so there is no duplicate label catalog.
+  // the inherit ('') choice wrap the shared effort ladder, reusing the agent
+  // effort-level labels so there is no duplicate label catalog.
   let thinkingEffortOptions = $derived([
     {
       value: PROJECT_THINKING_EFFORT_NO_DEFAULT,
@@ -164,10 +207,7 @@
     },
     {
       value: '',
-      label: t(
-        'projects.manage.providerThinkingEffortDefault',
-        '— (provider default)',
-      ),
+      label: defaultThinkingEffortInheritLabel(),
     },
     ...PROJECT_THINKING_EFFORT_OPTIONS.map((option) => ({
       value: option,
@@ -175,15 +215,10 @@
     })),
   ]);
 
-  // The currently expanded project record (or null). Both the auto-save diff and
-  // the explicit Save target it as the single source of truth.
-  let expandedProject = $derived(
-    projects.find((item) => item.project_id === expandedProjectId) ?? null,
-  );
   // The sparse project.set changes the open form represents versus the saved
   // project — empty when the form matches what the server already holds.
   let pendingChanges = $derived(
-    expandedProject
+    selectedProject
       ? buildManageProjectPayload(
           {
             display_name: editForm.display_name,
@@ -197,15 +232,14 @@
             skills_global_enabled: editForm.skills_global_enabled,
             skills_project_disabled: editForm.skills_project_disabled,
           },
-          expandedProject,
+          selectedProject,
         )
       : {},
   );
   let saveDisabled = $derived(editSaving || !hasManageChanges(pendingChanges));
 
-  // The Tool Whitelist toggle rows (catalog minus memory, checked when in the
-  // project ceiling) and the Skill Whitelist sections (project skills auto-on,
-  // bundled opt-in), recomputed as the form's lists change.
+  let temperatureIsInherit = $derived(editForm.default_temperature === '');
+
   let toolToggleRows = $derived(
     buildToolToggleList({
       catalog: toolCatalog,
@@ -225,6 +259,7 @@
 
   onMount(() => {
     void loadCatalogs();
+    void loadGlobalDefaults();
     void loadProjects();
 
     return () => {
@@ -236,9 +271,7 @@
     clearAutoSaveTimer();
   });
 
-  // Auto-save the open edit form once it has been idle for the debounce window.
-  // The effect only schedules while the form is dirty (saveDisabled is false),
-  // so collapsing, switching projects, or saving cancels the pending timer.
+  // Auto-save the settings form once it has been idle for the debounce window.
   $effect(() => {
     if (saveDisabled) {
       return;
@@ -246,7 +279,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveExpandedProject();
+      void saveSelectedProject();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -309,6 +342,54 @@
     }
   }
 
+  // The inherit-option label for the project default-model select. A present
+  // global default names its value; an absent one shows the not-configured copy.
+  function defaultModelInheritLabel() {
+    const value = globalDefaultText('model');
+    if (value) {
+      return t('inherit.option', 'Inherited: {value} (global default)', {
+        value,
+      });
+    }
+    return t('inherit.optionNotConfigured', 'Inherit (not configured)');
+  }
+
+  // The inherit ('') label for the project default thinking-effort select.
+  function defaultThinkingEffortInheritLabel() {
+    const value = globalDefaultText('thinking_effort');
+    if (value) {
+      return t('inherit.option', 'Inherited: {value} (global default)', {
+        value,
+      });
+    }
+    return t('inherit.optionProviderDefault', 'Inherit (provider default)');
+  }
+
+  function globalDefaultText(fieldName) {
+    const raw =
+      globalAgentDefaults && typeof globalAgentDefaults === 'object'
+        ? globalAgentDefaults[fieldName]
+        : null;
+    if (raw === null || raw === undefined) {
+      return '';
+    }
+    return String(raw).trim();
+  }
+
+  async function loadGlobalDefaults() {
+    try {
+      const result = await rpc('settings.get');
+      if (destroyed) {
+        return;
+      }
+      const defaults = result?.defaults?.agent;
+      globalAgentDefaults =
+        defaults && typeof defaults === 'object' ? defaults : {};
+    } catch {
+      globalAgentDefaults = {};
+    }
+  }
+
   async function fetchModelCatalogs() {
     try {
       const [modelsResult, connectionsResult] = await Promise.all([
@@ -325,8 +406,8 @@
           : [],
       };
     } catch {
-      // A missing model catalog only degrades the default-model picker (it still
-      // lists the empty option); it must not block the projects list itself.
+      // A missing model catalog only degrades the model pickers (they still list
+      // the empty option); it must not block the projects list itself.
       return null;
     }
   }
@@ -415,13 +496,13 @@
   }
 
   // The Refresh button re-reads everything the tab shows from disk: the project
-  // list plus, when a project is expanded, its scan — which on the backend reloads
+  // list plus, when a project is selected, its scan — which on the backend reloads
   // the global skill registry, so a skill hand-dropped into the global skills folder
   // shows up in the opt-in pool instead of waiting for a restart.
   async function refreshProjects() {
     await loadProjects();
-    if (expandedProjectId) {
-      await loadScan(expandedProjectId);
+    if (selectedProjectId) {
+      await loadScan(selectedProjectId);
     }
   }
 
@@ -473,9 +554,9 @@
       addForm = createAddForm();
       await loadProjects();
       if (!destroyed) {
-        // Open the freshly added project so its scan (team + report) is the
+        // Select the freshly added project so its scan (team + report) is the
         // review surface right away (add-then-review, no dry-run).
-        expandProject(project.project_id, result?.scan);
+        selectProject(project.project_id, result?.scan);
       }
     } catch (error) {
       if (destroyed) {
@@ -489,43 +570,47 @@
     }
   }
 
-  function toggleProject(project) {
-    if (expandedProjectId === project.project_id) {
-      collapseProject();
-      return;
-    }
-    expandProject(project.project_id);
-  }
-
-  // Expand a project for inline editing. When a scan is already in hand (right
+  // Select a project for the detail pane. When a scan is already in hand (right
   // after add) it seeds the team/report immediately; otherwise it fetches one.
-  function expandProject(projectId, scan = null) {
+  function selectProject(projectId, scan = null) {
     const project =
       projects.find((item) => item.project_id === projectId) ?? null;
-    expandedProjectId = projectId;
+    selectedProjectId = projectId;
     editForm = createEditForm(project);
     autoLoadDraft = '';
     editError = '';
     activeTeam = [];
     activeReport = null;
     activeScanSkills = { project: [], bundled: [], global: [] };
+    expandedMembers = {};
+    pinDrafts = {};
+    pinBusyKey = '';
 
     if (scan) {
-      activeTeam = projectTeam(scan);
-      activeReport = normalizeScanReport(scan.report);
-      activeScanSkills = normalizeScanSkills(scan);
+      applyScan(scan);
       return;
     }
 
     void loadScan(projectId);
   }
 
-  function collapseProject() {
-    expandedProjectId = '';
-    activeTeam = [];
-    activeReport = null;
-    activeScanSkills = { project: [], bundled: [], global: [] };
-    editError = '';
+  function applyScan(scan) {
+    activeTeam = projectTeam(scan);
+    activeReport = normalizeScanReport(scan?.report);
+    activeScanSkills = normalizeScanSkills(scan);
+    seedPinDrafts();
+  }
+
+  // Seed each team member's pin draft from its current pin/effective values, only
+  // for members that have no draft yet (an open control's typed text is kept).
+  function seedPinDrafts() {
+    const next = { ...pinDrafts };
+    for (const member of activeTeam) {
+      if (!next[member.agent_id]) {
+        next[member.agent_id] = seedTeamPinDraft(member);
+      }
+    }
+    pinDrafts = next;
   }
 
   async function loadScan(projectId) {
@@ -538,9 +623,7 @@
       if (destroyed || requestId !== scanRequestId) {
         return;
       }
-      activeTeam = projectTeam(result?.scan);
-      activeReport = normalizeScanReport(result?.scan?.report);
-      activeScanSkills = normalizeScanSkills(result?.scan);
+      applyScan(result?.scan);
     } catch (error) {
       if (destroyed || requestId !== scanRequestId) {
         return;
@@ -558,10 +641,6 @@
     editError = '';
   }
 
-  // Tool/Skill Whitelist toggles mutate the editForm lists; the auto-save effect
-  // then persists the diff. A tool is in the ceiling when checked. A project skill
-  // is active unless named in skills_project_disabled (so unchecking adds it there);
-  // a bundled skill is opt-in via skills_bundled_enabled.
   function toggleTool(name, enabled) {
     editForm.allowed_tools = setListMembership(
       editForm.allowed_tools,
@@ -574,6 +653,10 @@
   // A not-ready tool row's "Open Extensions" link jumps to Settings → Extensions.
   function navigateToExtensions(_extensionName) {
     onNavigateToSettingsPanel('extensions');
+  }
+
+  function navigateToAgentDefaults() {
+    onNavigateToSettingsPanel('defaults');
   }
 
   function toggleProjectSkill(name, active) {
@@ -603,8 +686,7 @@
     editError = '';
   }
 
-  // Reset the Tool Whitelist to the base list (the server-provided default), the
-  // single "back to defaults" affordance for the ceiling.
+  // Reset the Tool Whitelist to the base list (the server-provided default).
   function resetToolsToDefaults() {
     editForm.allowed_tools = [...defaultProjectTools];
     editError = '';
@@ -617,6 +699,10 @@
       selection.connectionLocalId,
     );
     editError = '';
+  }
+
+  function clearDefaultTemperature() {
+    updateEditField('default_temperature', '');
   }
 
   // Explicit Save button / form submit. On a clean form it confirms trust with
@@ -635,14 +721,14 @@
       return;
     }
     clearAutoSaveTimer();
-    void saveExpandedProject();
+    void saveSelectedProject();
   }
 
-  // Persist the open form's pending changes. Shared by the debounced auto-save
-  // and the explicit Save button; both target the expanded project and re-seed
-  // the panel from the saved state so the form reads as clean afterwards.
-  async function saveExpandedProject() {
-    const project = expandedProject;
+  // Persist the settings form's pending changes. Shared by the debounced
+  // auto-save and the explicit Save button; both target the selected project and
+  // re-seed the panel from the saved state so the form reads as clean afterwards.
+  async function saveSelectedProject() {
+    const project = selectedProject;
     if (!project || editSaving) {
       return;
     }
@@ -667,9 +753,7 @@
       }
       const saved = normalizeProject(result?.project);
       editForm = createEditForm(saved);
-      activeTeam = projectTeam(result?.scan);
-      activeReport = normalizeScanReport(result?.scan?.report);
-      activeScanSkills = normalizeScanSkills(result?.scan);
+      applyScan(result?.scan);
       onToast({
         title: t('projects.manage.saveSuccess', 'Project updated.'),
         variant: 'success',
@@ -686,41 +770,227 @@
     }
   }
 
-  // Clear one team agent's model override (the Projects-tab `x`). The override is
-  // set only via the /model command; the tab is display + clear. On success the
-  // returned scan re-seeds the team/report so the row drops back to its repo model.
-  async function clearOverride(agentId) {
-    const project = expandedProject;
-    if (!project || clearingOverrideAgentId) {
+  // ── Team rows ──────────────────────────────────────────────────────────────
+
+  function toggleMember(agentId) {
+    expandedMembers = {
+      ...expandedMembers,
+      [agentId]: !expandedMembers[agentId],
+    };
+  }
+
+  function pinDraft(agentId) {
+    return (
+      pinDrafts[agentId] ?? { model: '', temperature: '', thinking_effort: '' }
+    );
+  }
+
+  function updatePinDraft(agentId, field, value) {
+    pinDrafts = {
+      ...pinDrafts,
+      [agentId]: { ...pinDraft(agentId), [field]: value },
+    };
+    editError = '';
+  }
+
+  function updatePinModelSelection(agentId, selectedValue) {
+    const selection = parseModelSelectionValue(selectedValue);
+    updatePinDraft(
+      agentId,
+      'model',
+      modelSelectionValue(selection.model, selection.connectionLocalId),
+    );
+  }
+
+  // The effective-value display: the label, the value text (with the null-case
+  // wording), and the source label — for one field of one member.
+  function effectiveDisplay(member, field) {
+    const meta = EFFECTIVE_FIELD_META[field];
+    const entry = member?.effective?.[field] ?? { value: null, source: null };
+    const isEmpty = entry.value === null || entry.value === undefined;
+    return {
+      label: t(meta.labelKey, meta.labelFallback),
+      value: isEmpty
+        ? t(meta.emptyKey, meta.emptyFallback)
+        : String(entry.value),
+      isEmpty,
+      sourceLabel: sourceLabel(entry.source),
+    };
+  }
+
+  function sourceLabel(source) {
+    switch (source) {
+      case 'pin':
+        return t('projects.team.sourcePin', 'pin');
+      case 'agent':
+        return t('projects.team.sourceAgentFile', 'agent file (repo)');
+      case 'project_default':
+        return t('projects.team.sourceProjectDefault', 'project default');
+      case 'global_default':
+        return t('projects.team.sourceGlobalDefault', 'global default');
+      default:
+        return '';
+    }
+  }
+
+  // The thinking-effort pin options, gated by the member's effective model via
+  // the shared agentForm helpers (mirrors the agent editor). The empty option is
+  // the "provider default" pin value.
+  function pinEffortOptions(member) {
+    const reasoning = reasoningForModelValue(
+      pinDraft(member.agent_id).model || member?.effective?.model?.value || '',
+      availableModels,
+    );
+    return effortOptionsForReasoning(reasoning).map((option) => ({
+      value: option,
+      label:
+        option === ''
+          ? t(
+              'projects.manage.providerThinkingEffortDefault',
+              '— (provider default)',
+            )
+          : t(`agents.form.thinkingEffortOption.${option}`, option),
+    }));
+  }
+
+  // The model-pin picker options for one member (its own draft as the selected
+  // value so a saved/pinned value stays visible even if unavailable).
+  function pinModelOptions(member) {
+    return buildModelSelectOptions({
+      models: availableModels,
+      connections: availableConnections,
+      selectedModelValue: pinDraft(member.agent_id).model,
+      emptyLabel: t('projects.team.pinModelPlaceholder', 'No pin'),
+      translate: t,
+    });
+  }
+
+  function pinKey(agentId, field) {
+    return `${agentId}:${field}`;
+  }
+
+  function isPinBusy(agentId, field) {
+    return pinBusyKey === pinKey(agentId, field);
+  }
+
+  // Whether the Set-pin button is enabled: not busy and the draft carries a real
+  // value for the field (a pin must have a value; clearing is a separate action).
+  function canSetPin(agentId, field) {
+    if (pinBusyKey) {
+      return false;
+    }
+    const draft = pinDraft(agentId);
+    if (field === 'model') {
+      return typeof draft.model === 'string' && draft.model.trim().length > 0;
+    }
+    if (field === 'temperature') {
+      return normalizePinTemperature(draft.temperature) !== null;
+    }
+    // thinking_effort: a level or '' (provider default) is a valid pin value.
+    return typeof draft.thinking_effort === 'string';
+  }
+
+  // The value sent to project.set_pin for a field, from that field's draft.
+  function pinValueForField(agentId, field) {
+    const draft = pinDraft(agentId);
+    if (field === 'model') {
+      return draft.model.trim();
+    }
+    if (field === 'temperature') {
+      return normalizePinTemperature(draft.temperature);
+    }
+    return draft.thinking_effort;
+  }
+
+  async function applySetPin(agentId, field) {
+    const project = selectedProject;
+    if (!project || pinBusyKey || !canSetPin(agentId, field)) {
       return;
     }
 
-    clearingOverrideAgentId = agentId;
+    pinBusyKey = pinKey(agentId, field);
     editError = '';
 
     try {
-      const result = await clearModelOverride(project.project_id, agentId);
+      const result = await setPin(
+        project.project_id,
+        agentId,
+        field,
+        pinValueForField(agentId, field),
+      );
       if (destroyed) {
         return;
       }
-      activeTeam = projectTeam(result?.scan);
-      activeReport = normalizeScanReport(result?.scan?.report);
-      activeScanSkills = normalizeScanSkills(result?.scan);
+      refreshTeamFromScan(result?.scan);
       onToast({
-        title: t('projects.team.overrideCleared', 'Model override cleared.'),
+        title: t('projects.team.pinSaved', 'Pin saved.'),
         variant: 'success',
       });
     } catch (error) {
       if (destroyed) {
         return;
       }
-      editError = `${t('projects.team.overrideClearError', 'The model override could not be cleared.')} ${errorText(error)}`;
+      onToast({
+        title: `${t('projects.team.pinError', 'The pin could not be saved.')} ${errorText(error)}`,
+        variant: 'error',
+        sticky: true,
+      });
     } finally {
       if (!destroyed) {
-        clearingOverrideAgentId = '';
+        pinBusyKey = '';
       }
     }
   }
+
+  async function applyClearPin(agentId, field) {
+    const project = selectedProject;
+    if (!project || pinBusyKey) {
+      return;
+    }
+
+    pinBusyKey = pinKey(agentId, field);
+    editError = '';
+
+    try {
+      const result = await clearPin(project.project_id, agentId, field);
+      if (destroyed) {
+        return;
+      }
+      refreshTeamFromScan(result?.scan);
+      onToast({
+        title: t('projects.team.pinCleared', 'Pin cleared.'),
+        variant: 'success',
+      });
+    } catch (error) {
+      if (destroyed) {
+        return;
+      }
+      onToast({
+        title: `${t('projects.team.pinClearError', 'The pin could not be cleared.')} ${errorText(error)}`,
+        variant: 'error',
+        sticky: true,
+      });
+    } finally {
+      if (!destroyed) {
+        pinBusyKey = '';
+      }
+    }
+  }
+
+  // Re-seed the team/report/skills from a pin RPC's returned scan, then refresh
+  // the affected members' pin drafts so the controls reflect the new pin state.
+  function refreshTeamFromScan(scan) {
+    activeTeam = projectTeam(scan);
+    activeReport = normalizeScanReport(scan?.report);
+    activeScanSkills = normalizeScanSkills(scan);
+    const next = {};
+    for (const member of activeTeam) {
+      next[member.agent_id] = seedTeamPinDraft(member);
+    }
+    pinDrafts = next;
+  }
+
+  // ── Remove / re-point ────────────────────────────────────────────────────
 
   function removeOne(project) {
     removeConfirmProject = project;
@@ -747,8 +1017,11 @@
       if (destroyed) {
         return;
       }
-      if (expandedProjectId === project.project_id) {
-        collapseProject();
+      if (selectedProjectId === project.project_id) {
+        selectedProjectId = '';
+        activeTeam = [];
+        activeReport = null;
+        activeScanSkills = { project: [], bundled: [], global: [] };
       }
       statusMessage = t('projects.remove.success', 'Project removed.');
       await loadProjects();
@@ -757,7 +1030,7 @@
         return;
       }
       const message = removeErrorText(error);
-      if (expandedProjectId === project.project_id) {
+      if (selectedProjectId === project.project_id) {
         editError = message;
       } else {
         listError = message;
@@ -812,8 +1085,8 @@
       statusMessage = t('projects.rePoint.success', 'Project re-pointed.');
       rePointProject = null;
       await loadProjects();
-      if (!destroyed && expandedProjectId === projectId) {
-        expandProject(projectId, result?.scan);
+      if (!destroyed && selectedProjectId === projectId) {
+        selectProject(projectId, result?.scan);
       }
     } catch (error) {
       if (destroyed) {
@@ -862,7 +1135,6 @@
     if (entry === '') {
       return;
     }
-    // Skip a duplicate so the same file can never be listed (and rendered) twice.
     if (!editForm.auto_load.includes(entry)) {
       editForm.auto_load = [...editForm.auto_load, entry];
     }
@@ -878,7 +1150,6 @@
   }
 
   function handleAutoLoadKeydown(event) {
-    // Enter adds the entry instead of submitting the surrounding edit form.
     if (event.key === 'Enter') {
       event.preventDefault();
       addAutoLoadEntry();
@@ -886,103 +1157,76 @@
   }
 </script>
 
-<section class="projects-view view active" aria-labelledby="projects-title">
-  <header class="projects-view__header">
-    <div>
-      <p class="projects-view__eyebrow">
-        {t('projects.eyebrow', 'Project workspaces')}
-      </p>
-      <h2 id="projects-title" class="projects-view__title">
-        {t('projects.title', 'Projects')}
-      </h2>
-      <p class="projects-view__subtitle">
-        {t(
-          'projects.subtitle',
-          'Add a repository as a project to discover its team and chat with project agents. Adding a project also scans its repo for issues.',
-        )}
-      </p>
-    </div>
-
-    <div class="projects-view__header-actions">
-      <Button
-        variant="secondary"
-        data-testid="projects-refresh"
-        onClick={() => refreshProjects()}
-      >
-        {t('projects.refresh', 'Refresh')}
-      </Button>
-    </div>
-  </header>
-
-  {#if listError}
-    <p class="projects-view__notice projects-view__notice--error" role="alert">
-      {listError}
-    </p>
-  {/if}
-
-  {#if statusMessage}
-    <p class="projects-view__notice" role="status">{statusMessage}</p>
-  {/if}
-
-  <div class="projects-view__list">
-    <div class="projects-view__list-head">
-      <h3 class="projects-view__section-title">
-        {t('projects.list.title', 'Your projects')}
-      </h3>
-      <Button
-        variant="primary"
-        data-testid="project-add-open"
-        onClick={openAdd}
-      >
-        {t('projects.add.open', 'Add project')}
-      </Button>
-    </div>
-
-    {#if loadingProjects}
-      <p class="projects-view__notice" role="status">
-        {t('projects.loading', 'Loading projects…')}
-      </p>
-    {:else if !hasProjects}
-      <div class="projects-view__empty">
-        <p class="projects-view__empty-title">
-          {t('projects.emptyTitle', 'No projects yet')}
-        </p>
-        <p class="projects-view__empty-subtitle">
-          {t(
-            'projects.emptySubtitle',
-            'Add a repository path below to create your first project.',
-          )}
-        </p>
-      </div>
-    {:else}
-      <ul class="projects-view__items">
-        {#each projects as project (project.project_id)}
-          {@const expanded = expandedProjectId === project.project_id}
-          <li
-            class="projects-view__item"
-            class:projects-view__item--expanded={expanded}
-            data-testid={`project-${project.project_id}`}
+<section
+  class="projects-view view active"
+  aria-labelledby="projects-list-title"
+>
+  <div class="projects-layout">
+    <aside class="project-list-pane" aria-labelledby="projects-list-title">
+      <div class="pane-header">
+        <span id="projects-list-title" class="pane-title">
+          {t('projects.title', 'Projects')}
+        </span>
+        <div class="pane-header-actions">
+          <Button
+            variant="secondary"
+            data-testid="projects-refresh"
+            onClick={() => refreshProjects()}
           >
+            {t('projects.refresh', 'Refresh')}
+          </Button>
+          <Button
+            variant="primary"
+            data-testid="project-add-open"
+            onClick={openAdd}
+          >
+            {t('projects.add.open', 'Add project')}
+          </Button>
+        </div>
+      </div>
+
+      <div class="project-list-scroll">
+        {#if listError}
+          <p
+            class="projects-notice projects-notice--error project-list-state"
+            role="alert"
+          >
+            {listError}
+          </p>
+        {/if}
+        {#if statusMessage}
+          <p class="project-list-state" role="status">{statusMessage}</p>
+        {/if}
+
+        {#if loadingProjects}
+          <p class="project-list-state" role="status">
+            {t('projects.loading', 'Loading projects…')}
+          </p>
+        {:else if !hasProjects}
+          <div class="project-empty-list">
+            <p class="project-empty-title">
+              {t('projects.emptyTitle', 'No projects yet')}
+            </p>
+            <p class="project-empty-sub">
+              {t(
+                'projects.emptySubtitle',
+                'Add a repository path below to create your first project.',
+              )}
+            </p>
+          </div>
+        {:else}
+          {#each projects as project (project.project_id)}
             <button
               type="button"
-              class="projects-view__item-header"
+              class="project-item"
+              class:active={project.project_id === selectedProjectId}
               data-testid={`project-toggle-${project.project_id}`}
-              aria-expanded={expanded}
-              onclick={() => toggleProject(project)}
+              onclick={() => selectProject(project.project_id)}
             >
-              <svg
-                class="projects-view__chevron"
-                class:projects-view__chevron--open={expanded}
-                viewBox="0 0 12 12"
-                width="11"
-                height="11"
-                aria-hidden="true"
-              >
-                <path d="M4 2l4 4-4 4" />
-              </svg>
-              <span class="projects-view__item-main">
-                <span class="projects-view__item-head">
-                  <span class="projects-view__item-name">
+              <span class="project-bar"></span>
+              <span class="project-item-inner">
+                <span class="project-item-head">
+                  <span class="project-item-name">
                     {project.display_name || project.project_id}
                   </span>
                   {#if needsRePoint(project)}
@@ -991,96 +1235,164 @@
                     </StatusChip>
                   {/if}
                 </span>
-                <span class="projects-view__item-cwd" title={project.cwd}>
+                <span class="project-item-cwd" title={project.cwd}>
                   {project.cwd}
                 </span>
               </span>
             </button>
+          {/each}
+        {/if}
+      </div>
+    </aside>
 
-            {#if expanded}
-              <div
-                class="projects-view__panel"
-                data-testid={`project-panel-${project.project_id}`}
-              >
-                <form class="projects-view__edit" onsubmit={handleManualSave}>
-                  <div class="projects-view__edit-grid">
-                    <label class="projects-view__field">
-                      <span class="projects-view__label">
-                        {t('projects.manage.displayName', 'Display name')}
-                      </span>
-                      <TextField
-                        id="project-edit-name"
-                        value={editForm.display_name}
-                        disabled={editSaving}
-                        onInput={(next) =>
-                          updateEditField('display_name', next)}
-                      />
-                    </label>
+    {#if !selectedProject}
+      <div class="project-detail-pane">
+        <p class="project-detail-empty">
+          {t('projects.detail.empty', 'Select a project to view and edit it.')}
+        </p>
+      </div>
+    {:else}
+      {#key selectedProject.project_id}
+        <div
+          class="project-detail-pane"
+          data-testid={`project-panel-${selectedProject.project_id}`}
+        >
+          <div class="project-detail-scroll">
+            <div class="detail-top">
+              <div>
+                <div class="detail-heading-row">
+                  <span class="detail-heading">
+                    {selectedProject.display_name || selectedProject.project_id}
+                  </span>
+                  {#if needsRePoint(selectedProject)}
+                    <StatusChip variant="error">
+                      {t('projects.rePoint.title', 'Repository not found')}
+                    </StatusChip>
+                  {/if}
+                </div>
+                <div class="detail-sub">{selectedProject.cwd}</div>
+              </div>
+              <div class="detail-btns">
+                {#if needsRePoint(selectedProject)}
+                  <Button
+                    variant="secondary"
+                    data-testid={`project-repoint-${selectedProject.project_id}`}
+                    disabled={editSaving}
+                    onClick={() => openRePoint(selectedProject)}
+                  >
+                    {t('projects.rePoint.submit', 'Re-point')}
+                  </Button>
+                {/if}
+                <Button
+                  variant="danger"
+                  data-testid={`project-remove-${selectedProject.project_id}`}
+                  disabled={removingProjectId === selectedProject.project_id ||
+                    editSaving}
+                  onClick={() => removeOne(selectedProject)}
+                >
+                  {t('projects.remove', 'Remove')}
+                </Button>
+              </div>
+            </div>
 
-                    <label class="projects-view__field">
-                      <span class="projects-view__label">
-                        {t('projects.manage.defaultAgent', 'Default agent')}
-                      </span>
-                      <Dropdown
-                        id="project-edit-agent"
-                        value={editForm.default_agent}
-                        options={agentOptions}
-                        placeholder={t(
-                          'projects.manage.defaultAgentEmpty',
-                          'No project default',
-                        )}
-                        ariaLabel={t(
-                          'projects.manage.defaultAgent',
-                          'Default agent',
-                        )}
-                        disabled={editSaving}
-                        triggerClass="projects-view__dropdown"
-                        onValueChange={(value) =>
-                          updateEditField('default_agent', value)}
-                      />
-                    </label>
+            {#if editError}
+              <p class="projects-notice projects-notice--error" role="alert">
+                {editError}
+              </p>
+            {/if}
 
-                    <label class="projects-view__field">
-                      <span class="projects-view__label">
-                        {t('projects.manage.defaultModel', 'Default model')}
-                      </span>
-                      <SearchableDropdown
-                        id="project-edit-model"
-                        value={modelSelectValue}
-                        options={modelOptions}
-                        placeholder={t(
-                          'projects.manage.defaultModelEmpty',
-                          'No project default',
-                        )}
-                        searchPlaceholder={t(
-                          'projects.manage.modelSearchPlaceholder',
-                          'Filter models…',
-                        )}
-                        emptyLabel={t(
-                          'projects.manage.modelSearchEmpty',
-                          'No models match',
-                        )}
-                        ariaLabel={t(
-                          'projects.manage.defaultModel',
-                          'Default model',
-                        )}
-                        disabled={editSaving}
-                        triggerClass="projects-view__dropdown"
-                        panelClass="projects-view__search-panel"
-                        onOpenChange={trackModelDropdownOpen}
-                        onValueChange={updateModelSelection}
-                      />
-                    </label>
+            <!-- Section 1: Project settings -->
+            <form
+              class="detail-section detail-section--overflow"
+              onsubmit={handleManualSave}
+            >
+              <div class="detail-section-title">
+                {t('projects.detail.sectionSettings', 'Project settings')}
+              </div>
+              <div class="detail-section-body">
+                <div class="projects-field-grid">
+                  <label class="projects-field">
+                    <span class="projects-label">
+                      {t('projects.manage.displayName', 'Display name')}
+                    </span>
+                    <TextField
+                      id="project-edit-name"
+                      value={editForm.display_name}
+                      disabled={editSaving}
+                      onInput={(next) => updateEditField('display_name', next)}
+                    />
+                  </label>
 
-                    <label class="projects-view__field">
-                      <span class="projects-view__label">
-                        {t(
-                          'projects.manage.defaultTemperature',
-                          'Default temperature',
-                        )}
-                      </span>
+                  <label class="projects-field">
+                    <span class="projects-label">
+                      {t('projects.manage.defaultAgent', 'Default agent')}
+                    </span>
+                    <Dropdown
+                      id="project-edit-agent"
+                      value={editForm.default_agent}
+                      options={agentOptions}
+                      placeholder={t(
+                        'projects.manage.defaultAgentEmpty',
+                        'No project default',
+                      )}
+                      ariaLabel={t(
+                        'projects.manage.defaultAgent',
+                        'Default agent',
+                      )}
+                      disabled={editSaving}
+                      triggerClass="projects-dropdown"
+                      onValueChange={(value) =>
+                        updateEditField('default_agent', value)}
+                    />
+                  </label>
+
+                  <label class="projects-field">
+                    <span class="projects-label">
+                      {t('projects.manage.defaultModel', 'Default model')}
+                    </span>
+                    <SearchableDropdown
+                      id="project-edit-model"
+                      value={modelSelectValue}
+                      options={modelOptions}
+                      placeholder={defaultModelInheritLabel()}
+                      searchPlaceholder={t(
+                        'projects.manage.modelSearchPlaceholder',
+                        'Filter models…',
+                      )}
+                      emptyLabel={t(
+                        'projects.manage.modelSearchEmpty',
+                        'No models match',
+                      )}
+                      ariaLabel={t(
+                        'projects.manage.defaultModel',
+                        'Default model',
+                      )}
+                      disabled={editSaving}
+                      triggerClass="projects-dropdown"
+                      panelClass="projects-view__search-panel"
+                      onOpenChange={trackModelDropdownOpen}
+                      onValueChange={updateModelSelection}
+                    />
+                    <Button
+                      variant="tertiary"
+                      class="projects-inherit-link"
+                      onClick={navigateToAgentDefaults}
+                    >
+                      {t('inherit.editGlobalDefaults', 'Edit global defaults')}
+                    </Button>
+                  </label>
+
+                  <label class="projects-field">
+                    <span class="projects-label">
+                      {t(
+                        'projects.manage.defaultTemperature',
+                        'Default temperature',
+                      )}
+                    </span>
+                    <div class="projects-pin-controls">
                       <TextField
                         id="project-edit-temperature"
+                        class="projects-pin-input"
                         inputmode="decimal"
                         value={editForm.default_temperature}
                         disabled={editSaving}
@@ -1091,373 +1403,157 @@
                         onInput={(next) =>
                           updateEditField('default_temperature', next)}
                       />
-                    </label>
-
-                    <label class="projects-view__field">
-                      <span class="projects-view__label">
-                        {t(
-                          'projects.manage.defaultThinkingEffort',
-                          'Default thinking effort',
-                        )}
-                      </span>
-                      <Dropdown
-                        id="project-edit-thinking-effort"
-                        value={editForm.default_thinking_effort}
-                        options={thinkingEffortOptions}
-                        ariaLabel={t(
-                          'projects.manage.defaultThinkingEffort',
-                          'Default thinking effort',
-                        )}
-                        disabled={editSaving}
-                        triggerClass="projects-view__dropdown"
-                        onValueChange={(value) =>
-                          updateEditField('default_thinking_effort', value)}
-                      />
-                    </label>
-                  </div>
-
-                  <div class="projects-view__field">
-                    <label
-                      class="projects-view__label"
-                      for="project-edit-auto-load"
-                    >
-                      {t('projects.manage.autoLoad', 'Auto-load files')}
-                    </label>
-                    {#if editForm.auto_load.length > 0}
-                      <ul class="projects-view__file-list">
-                        {#each editForm.auto_load as filePath, index (index)}
-                          <li class="projects-view__file-row">
-                            <span class="projects-view__file-name">
-                              {filePath}
-                            </span>
-                            <button
-                              type="button"
-                              class="projects-view__file-remove"
-                              data-testid={`project-auto-load-remove-${index}`}
-                              disabled={editSaving}
-                              aria-label={t(
-                                'projects.manage.autoLoadRemove',
-                                'Remove {file}',
-                                { file: filePath },
-                              )}
-                              onclick={() => removeAutoLoadEntry(index)}
-                            >
-                              ×
-                            </button>
-                          </li>
-                        {/each}
-                      </ul>
-                    {:else}
-                      <p class="projects-view__file-empty">
-                        {t(
-                          'projects.manage.autoLoadEmpty',
-                          'No auto-load files',
-                        )}
-                      </p>
+                      {#if !temperatureIsInherit}
+                        <Button
+                          variant="tertiary"
+                          title={t(
+                            'inherit.resetToInherit',
+                            'Reset to inherited value',
+                          )}
+                          ariaLabel={t(
+                            'inherit.resetToInherit',
+                            'Reset to inherited value',
+                          )}
+                          onClick={clearDefaultTemperature}
+                        >
+                          —
+                        </Button>
+                      {/if}
+                    </div>
+                    {#if temperatureIsInherit}
+                      {#if globalDefaultText('temperature')}
+                        <small class="projects-inherit-hint">
+                          {t(
+                            'inherit.hint',
+                            'Inherited: {value} (global default)',
+                            { value: globalDefaultText('temperature') },
+                          )}
+                        </small>
+                      {:else}
+                        <small class="projects-inherit-hint">
+                          {t(
+                            'inherit.hintProviderDefault',
+                            'Provider default — nothing is set here or in the global defaults.',
+                          )}
+                        </small>
+                      {/if}
                     {/if}
-                    <div class="projects-view__file-add">
-                      <TextField
-                        id="project-edit-auto-load"
-                        class="projects-view__file-input"
-                        value={autoLoadDraft}
-                        placeholder={t(
-                          'projects.manage.autoLoadPlaceholder',
-                          'Add a file path…',
-                        )}
-                        disabled={editSaving}
-                        ariaLabel={t(
-                          'projects.manage.autoLoad',
-                          'Auto-load files',
-                        )}
-                        onInput={(next) => {
-                          autoLoadDraft = next;
-                        }}
-                        onkeydown={handleAutoLoadKeydown}
-                      />
-                      <Button
-                        variant="secondary"
-                        data-testid="project-auto-load-add"
-                        disabled={editSaving ||
-                          autoLoadDraft.trim().length === 0}
-                        onClick={addAutoLoadEntry}
-                      >
-                        {t('projects.manage.autoLoadAdd', 'Add')}
-                      </Button>
-                    </div>
-                  </div>
+                  </label>
 
-                  <div class="projects-view__field">
-                    <div class="projects-view__field-header">
-                      <span class="projects-view__label">
-                        {t('projects.manage.allowedTools', 'Tool whitelist')}
-                      </span>
-                      <Button
-                        variant="tertiary"
-                        data-testid="project-tools-reset"
-                        disabled={editSaving}
-                        onClick={resetToolsToDefaults}
-                      >
-                        {t(
-                          'projects.manage.resetDefaults',
-                          'Reset to defaults',
-                        )}
-                      </Button>
-                    </div>
-                    <p class="projects-view__help">
+                  <label class="projects-field">
+                    <span class="projects-label">
                       {t(
-                        'projects.manage.allowedToolsHelp',
-                        'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
+                        'projects.manage.defaultThinkingEffort',
+                        'Default thinking effort',
                       )}
-                    </p>
-                    {#if toolToggleRows.length > 0}
-                      <ul class="projects-view__file-list">
-                        {#each toolToggleRows as tool (tool.name)}
-                          <li
-                            class="projects-view__file-row"
-                            class:projects-view__file-row--not-ready={tool.ready ===
-                              false}
-                          >
-                            <div class="projects-view__tool-copy">
-                              <span class="projects-view__file-name">
-                                {tool.name}
-                              </span>
-                              <ToolReadinessNotice
-                                ready={tool.ready}
-                                readinessHint={tool.readiness_hint}
-                                extension={tool.extension}
-                                onOpenExtensions={navigateToExtensions}
-                              />
-                            </div>
-                            <Toggle
-                              size="sm"
-                              checked={tool.enabled}
-                              disabled={editSaving}
-                              ariaLabel={t(
-                                'projects.manage.toggleTool',
-                                'Toggle tool {name}',
-                                { name: tool.name },
-                              )}
-                              onChange={(next) => toggleTool(tool.name, next)}
-                            />
-                          </li>
-                        {/each}
-                      </ul>
-                    {:else}
-                      <p class="projects-view__file-empty">
-                        {t('projects.manage.toolsEmpty', 'No tools available')}
-                      </p>
-                    {/if}
-                  </div>
-
-                  <div class="projects-view__field">
-                    <span class="projects-view__label">
-                      {t('projects.manage.allowedSkills', 'Skill whitelist')}
                     </span>
-                    <p class="projects-view__help">
-                      {t(
-                        'projects.manage.allowedSkillsHelp',
-                        'Project skills are active by default; bundled and global skills are opt-in.',
+                    <Dropdown
+                      id="project-edit-thinking-effort"
+                      value={editForm.default_thinking_effort}
+                      options={thinkingEffortOptions}
+                      ariaLabel={t(
+                        'projects.manage.defaultThinkingEffort',
+                        'Default thinking effort',
                       )}
-                    </p>
-                    {#if skillToggleSections.project.length > 0}
-                      <span class="projects-view__sublabel">
-                        {t('projects.manage.projectSkills', 'Project skills')}
-                      </span>
-                      <ul class="projects-view__file-list">
-                        {#each skillToggleSections.project as skill (skill.name)}
-                          <li class="projects-view__file-row">
-                            <span class="projects-view__file-name">
-                              {skill.name}
-                            </span>
-                            <Toggle
-                              size="sm"
-                              checked={skill.enabled}
-                              disabled={editSaving}
-                              ariaLabel={t(
-                                'projects.manage.toggleSkill',
-                                'Toggle skill {name}',
-                                { name: skill.name },
-                              )}
-                              onChange={(next) =>
-                                toggleProjectSkill(skill.name, next)}
-                            />
-                          </li>
-                        {/each}
-                      </ul>
-                    {/if}
-                    {#if skillToggleSections.bundled.length > 0}
-                      <span class="projects-view__sublabel">
-                        {t('projects.manage.bundledSkills', 'Bundled skills')}
-                      </span>
-                      <ul class="projects-view__file-list">
-                        {#each skillToggleSections.bundled as skill (skill.name)}
-                          <li class="projects-view__file-row">
-                            <span class="projects-view__file-name">
-                              {skill.name}
-                            </span>
-                            <Toggle
-                              size="sm"
-                              checked={skill.enabled}
-                              disabled={editSaving}
-                              ariaLabel={t(
-                                'projects.manage.toggleSkill',
-                                'Toggle skill {name}',
-                                { name: skill.name },
-                              )}
-                              onChange={(next) =>
-                                toggleBundledSkill(skill.name, next)}
-                            />
-                          </li>
-                        {/each}
-                      </ul>
-                    {/if}
-                    {#if skillToggleSections.global.length > 0}
-                      <span class="projects-view__sublabel">
-                        {t('projects.manage.globalSkills', 'Global skills')}
-                      </span>
-                      <ul class="projects-view__file-list">
-                        {#each skillToggleSections.global as skill (skill.name)}
-                          <li class="projects-view__file-row">
-                            <span class="projects-view__file-name">
-                              {skill.name}
-                            </span>
-                            <Toggle
-                              size="sm"
-                              checked={skill.enabled}
-                              disabled={editSaving}
-                              ariaLabel={t(
-                                'projects.manage.toggleSkill',
-                                'Toggle skill {name}',
-                                { name: skill.name },
-                              )}
-                              onChange={(next) =>
-                                toggleGlobalSkill(skill.name, next)}
-                            />
-                          </li>
-                        {/each}
-                      </ul>
-                    {/if}
-                    {#if skillToggleSections.project.length === 0 && skillToggleSections.bundled.length === 0 && skillToggleSections.global.length === 0}
-                      <p class="projects-view__file-empty">
-                        {t(
-                          'projects.manage.skillsEmpty',
-                          'No skills available',
-                        )}
-                      </p>
-                    {/if}
-                  </div>
-
-                  {#if editError}
-                    <p
-                      class="projects-view__notice projects-view__notice--error"
-                      role="alert"
-                    >
-                      {editError}
-                    </p>
-                  {/if}
-
-                  <div class="projects-view__edit-actions">
-                    <Button
-                      variant="danger"
-                      data-testid={`project-remove-${project.project_id}`}
-                      disabled={removingProjectId === project.project_id ||
-                        editSaving}
-                      onClick={() => removeOne(project)}
-                    >
-                      {t('projects.remove', 'Remove')}
-                    </Button>
-                    {#if needsRePoint(project)}
-                      <Button
-                        variant="secondary"
-                        data-testid={`project-repoint-${project.project_id}`}
-                        disabled={editSaving}
-                        onClick={() => openRePoint(project)}
-                      >
-                        {t('projects.rePoint.submit', 'Re-point')}
-                      </Button>
-                    {/if}
-                    <Button
-                      variant="primary"
-                      type="submit"
-                      data-testid={`project-save-${project.project_id}`}
                       disabled={editSaving}
-                    >
-                      {editSaving
-                        ? t('projects.manage.saving', 'Saving…')
-                        : t('projects.manage.save', 'Save changes')}
-                    </Button>
-                  </div>
-                </form>
+                      triggerClass="projects-dropdown"
+                      onValueChange={(value) =>
+                        updateEditField('default_thinking_effort', value)}
+                    />
+                  </label>
+                </div>
 
-                <div class="projects-view__panel-section">
-                  <span class="projects-view__panel-label">
-                    {t('projects.team.title', 'Team')}
-                  </span>
-                  {#if scanLoading}
-                    <p class="projects-view__notice" role="status">
-                      {t('projects.loading', 'Loading projects…')}
-                    </p>
-                  {:else if activeTeam.length === 0}
-                    <p class="projects-view__team-empty">
-                      {t(
-                        'projects.team.empty',
-                        'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
-                      )}
-                    </p>
-                  {:else}
-                    <ul class="projects-view__team">
-                      {#each activeTeam as member (member.agent_id)}
-                        <li class="projects-view__team-member">
-                          <span class="projects-view__team-name">
-                            {member.display_name}
-                          </span>
-                          <span class="projects-view__team-meta">
-                            <span class="projects-view__team-model">
-                              {member.model ||
-                                t('projects.team.noModel', 'No model')}
-                            </span>
-                            {#if member.model_override}
-                              <span class="projects-view__team-override">
-                                <span
-                                  class="projects-view__team-override-label"
-                                >
-                                  {t(
-                                    'projects.team.modelOverride',
-                                    'Model override: {model}',
-                                    { model: member.model_override },
-                                  )}
-                                </span>
-                                <button
-                                  type="button"
-                                  class="projects-view__team-override-clear"
-                                  data-testid={`project-model-override-clear-${member.agent_id}`}
-                                  disabled={clearingOverrideAgentId ===
-                                    member.agent_id}
-                                  aria-label={t(
-                                    'projects.team.modelOverrideClear',
-                                    'Clear model override for {agent}',
-                                    { agent: member.display_name },
-                                  )}
-                                  onclick={() => clearOverride(member.agent_id)}
-                                >
-                                  ×
-                                </button>
-                              </span>
-                            {/if}
-                          </span>
+                <div class="detail-btns projects-save-row">
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    data-testid={`project-save-${selectedProject.project_id}`}
+                    disabled={editSaving}
+                  >
+                    {editSaving
+                      ? t('projects.manage.saving', 'Saving…')
+                      : t('projects.manage.save', 'Save changes')}
+                  </Button>
+                </div>
+              </div>
+            </form>
+
+            <!-- Section 2: Auto-load files -->
+            <div class="detail-section">
+              <div class="detail-section-title">
+                {t('projects.detail.sectionAutoLoad', 'Auto-load files')}
+              </div>
+              <div class="detail-section-body">
+                <div class="projects-field">
+                  {#if editForm.auto_load.length > 0}
+                    <ul class="projects-file-list">
+                      {#each editForm.auto_load as filePath, index (index)}
+                        <li class="projects-file-row">
+                          <span class="projects-file-name">{filePath}</span>
+                          <button
+                            type="button"
+                            class="projects-file-remove"
+                            data-testid={`project-auto-load-remove-${index}`}
+                            disabled={editSaving}
+                            aria-label={t(
+                              'projects.manage.autoLoadRemove',
+                              'Remove {file}',
+                              { file: filePath },
+                            )}
+                            onclick={() => removeAutoLoadEntry(index)}
+                          >
+                            ×
+                          </button>
                         </li>
                       {/each}
                     </ul>
+                  {:else}
+                    <p class="projects-file-empty">
+                      {t('projects.manage.autoLoadEmpty', 'No auto-load files')}
+                    </p>
                   {/if}
+                  <div class="projects-file-add">
+                    <TextField
+                      id="project-edit-auto-load"
+                      class="projects-file-input"
+                      value={autoLoadDraft}
+                      placeholder={t(
+                        'projects.manage.autoLoadPlaceholder',
+                        'Add a file path…',
+                      )}
+                      disabled={editSaving}
+                      ariaLabel={t(
+                        'projects.manage.autoLoad',
+                        'Auto-load files',
+                      )}
+                      onInput={(next) => {
+                        autoLoadDraft = next;
+                      }}
+                      onkeydown={handleAutoLoadKeydown}
+                    />
+                    <Button
+                      variant="secondary"
+                      data-testid="project-auto-load-add"
+                      disabled={editSaving || autoLoadDraft.trim().length === 0}
+                      onClick={addAutoLoadEntry}
+                    >
+                      {t('projects.manage.autoLoadAdd', 'Add')}
+                    </Button>
+                  </div>
                 </div>
+              </div>
+            </div>
 
+            <!-- Section 3: Team -->
+            <div class="detail-section">
+              <div class="detail-section-title">
+                {t('projects.detail.sectionTeam', 'Team')}
+              </div>
+              <div class="detail-section-body">
                 {#if activeReport && !scanLoading && !activeReport.clean}
-                  <div class="projects-view__panel-section">
-                    <span class="projects-view__panel-label">
-                      {t('projects.report.title', 'Scan report')}
-                    </span>
+                  <div class="projects-field">
                     <p
-                      class="projects-view__notice projects-view__notice--warn"
+                      class="projects-notice projects-notice--warn"
                       role="status"
                     >
                       {t(
@@ -1469,18 +1565,18 @@
                       )}
                     </p>
                     {#each activeReport.groups as group (group.type)}
-                      <div class="projects-view__finding-group">
-                        <h4 class="projects-view__finding-title">
+                      <div class="projects-finding-group">
+                        <h4 class="projects-finding-title">
                           {groupLabel(group.type)}
                         </h4>
-                        <ul class="projects-view__findings">
+                        <ul class="projects-findings">
                           {#each group.findings as finding, index (`${group.type}-${index}`)}
-                            <li class="projects-view__finding">
-                              <span class="projects-view__finding-detail">
+                            <li class="projects-finding">
+                              <span class="projects-finding-detail">
                                 {finding.detail}
                               </span>
                               {#if finding.agent_id}
-                                <span class="projects-view__finding-meta">
+                                <span class="projects-finding-meta">
                                   {t(
                                     'projects.report.finding.agent',
                                     'Agent {agentId}',
@@ -1489,7 +1585,7 @@
                                 </span>
                               {/if}
                               {#if finding.source_path}
-                                <span class="projects-view__finding-meta">
+                                <span class="projects-finding-meta">
                                   {t(
                                     'projects.report.finding.source',
                                     'Source: {source}',
@@ -1504,11 +1600,527 @@
                     {/each}
                   </div>
                 {/if}
+
+                {#if scanLoading}
+                  <p class="projects-scan-loading" role="status">
+                    {t('projects.loading', 'Loading projects…')}
+                  </p>
+                {:else if activeTeam.length === 0}
+                  <p class="projects-team-empty">
+                    {t(
+                      'projects.team.empty',
+                      'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
+                    )}
+                  </p>
+                {:else}
+                  <ul class="projects-team">
+                    {#each activeTeam as member (member.agent_id)}
+                      {@const expanded =
+                        expandedMembers[member.agent_id] === true}
+                      {@const summary = effectiveDisplay(member, 'model')}
+                      <li
+                        class="projects-team-member"
+                        class:projects-team-member--expanded={expanded}
+                        data-testid={`project-team-member-${member.agent_id}`}
+                      >
+                        <button
+                          type="button"
+                          class="projects-team-header"
+                          data-testid={`project-team-toggle-${member.agent_id}`}
+                          aria-expanded={expanded}
+                          onclick={() => toggleMember(member.agent_id)}
+                        >
+                          <svg
+                            class="projects-team-chevron"
+                            class:projects-team-chevron--open={expanded}
+                            viewBox="0 0 12 12"
+                            width="11"
+                            height="11"
+                            aria-hidden="true"
+                          >
+                            <path d="M4 2l4 4-4 4" />
+                          </svg>
+                          <span class="projects-team-headline">
+                            <span class="projects-team-name">
+                              {member.display_name}
+                            </span>
+                            {#if member.description}
+                              <span class="projects-team-description">
+                                {member.description}
+                              </span>
+                            {/if}
+                          </span>
+                          <span
+                            class="projects-team-summary"
+                            title={summary.value}
+                          >
+                            {summary.value}
+                          </span>
+                        </button>
+
+                        {#if expanded}
+                          <div class="projects-team-detail">
+                            <ul class="projects-effective-list">
+                              {#each ['model', 'temperature', 'thinking_effort'] as field (field)}
+                                {@const display = effectiveDisplay(
+                                  member,
+                                  field,
+                                )}
+                                <li class="projects-effective-row">
+                                  <span class="projects-effective-label">
+                                    {display.label}
+                                  </span>
+                                  <span
+                                    class="projects-effective-value"
+                                    class:projects-effective-value--muted={display.isEmpty}
+                                  >
+                                    {display.value}
+                                  </span>
+                                  {#if display.sourceLabel}
+                                    <span class="projects-effective-source">
+                                      {t(
+                                        'projects.team.fromSource',
+                                        'from {source}',
+                                        { source: display.sourceLabel },
+                                      )}
+                                    </span>
+                                  {/if}
+                                </li>
+                              {/each}
+                            </ul>
+
+                            <div class="projects-pins">
+                              <!-- Model pin -->
+                              <div class="projects-pin-row">
+                                <span class="projects-label">
+                                  {t('projects.team.pinLabel', 'Pin')} · {t(
+                                    'projects.team.effectiveModel',
+                                    'Model',
+                                  )}
+                                </span>
+                                <div class="projects-pin-controls">
+                                  <div class="projects-pin-input">
+                                    <SearchableDropdown
+                                      id={`project-pin-model-${member.agent_id}`}
+                                      value={selectModelValue(
+                                        pinDraft(member.agent_id).model,
+                                        pinModelOptions(member),
+                                      )}
+                                      options={pinModelOptions(member)}
+                                      placeholder={t(
+                                        'projects.team.pinModelPlaceholder',
+                                        'No pin',
+                                      )}
+                                      searchPlaceholder={t(
+                                        'projects.manage.modelSearchPlaceholder',
+                                        'Filter models…',
+                                      )}
+                                      emptyLabel={t(
+                                        'projects.manage.modelSearchEmpty',
+                                        'No models match',
+                                      )}
+                                      ariaLabel={t(
+                                        'projects.team.effectiveModel',
+                                        'Model',
+                                      )}
+                                      disabled={isPinBusy(
+                                        member.agent_id,
+                                        'model',
+                                      )}
+                                      triggerClass="projects-dropdown"
+                                      panelClass="projects-view__search-panel"
+                                      onOpenChange={trackModelDropdownOpen}
+                                      onValueChange={(value) =>
+                                        updatePinModelSelection(
+                                          member.agent_id,
+                                          value,
+                                        )}
+                                    />
+                                  </div>
+                                  <Button
+                                    variant="secondary"
+                                    data-testid={`project-pin-set-model-${member.agent_id}`}
+                                    disabled={!canSetPin(
+                                      member.agent_id,
+                                      'model',
+                                    )}
+                                    onClick={() =>
+                                      applySetPin(member.agent_id, 'model')}
+                                  >
+                                    {t('projects.team.setPin', 'Set pin')}
+                                  </Button>
+                                  {#if memberFieldIsPinned(member, 'model')}
+                                    <Button
+                                      variant="tertiary"
+                                      data-testid={`project-pin-clear-model-${member.agent_id}`}
+                                      disabled={isPinBusy(
+                                        member.agent_id,
+                                        'model',
+                                      )}
+                                      onClick={() =>
+                                        applyClearPin(member.agent_id, 'model')}
+                                    >
+                                      {t('projects.team.clearPin', 'Clear pin')}
+                                    </Button>
+                                  {/if}
+                                </div>
+                              </div>
+
+                              <!-- Temperature pin -->
+                              <div class="projects-pin-row">
+                                <span class="projects-label">
+                                  {t('projects.team.pinLabel', 'Pin')} · {t(
+                                    'projects.team.effectiveTemperature',
+                                    'Temperature',
+                                  )}
+                                </span>
+                                <div class="projects-pin-controls">
+                                  <TextField
+                                    id={`project-pin-temperature-${member.agent_id}`}
+                                    class="projects-pin-input"
+                                    inputmode="decimal"
+                                    value={pinDraft(member.agent_id)
+                                      .temperature}
+                                    placeholder={t(
+                                      'projects.team.pinTemperaturePlaceholder',
+                                      'e.g. 0.7',
+                                    )}
+                                    disabled={isPinBusy(
+                                      member.agent_id,
+                                      'temperature',
+                                    )}
+                                    ariaLabel={t(
+                                      'projects.team.effectiveTemperature',
+                                      'Temperature',
+                                    )}
+                                    onInput={(next) =>
+                                      updatePinDraft(
+                                        member.agent_id,
+                                        'temperature',
+                                        next,
+                                      )}
+                                  />
+                                  <Button
+                                    variant="secondary"
+                                    data-testid={`project-pin-set-temperature-${member.agent_id}`}
+                                    disabled={!canSetPin(
+                                      member.agent_id,
+                                      'temperature',
+                                    )}
+                                    onClick={() =>
+                                      applySetPin(
+                                        member.agent_id,
+                                        'temperature',
+                                      )}
+                                  >
+                                    {t('projects.team.setPin', 'Set pin')}
+                                  </Button>
+                                  {#if memberFieldIsPinned(member, 'temperature')}
+                                    <Button
+                                      variant="tertiary"
+                                      data-testid={`project-pin-clear-temperature-${member.agent_id}`}
+                                      disabled={isPinBusy(
+                                        member.agent_id,
+                                        'temperature',
+                                      )}
+                                      onClick={() =>
+                                        applyClearPin(
+                                          member.agent_id,
+                                          'temperature',
+                                        )}
+                                    >
+                                      {t('projects.team.clearPin', 'Clear pin')}
+                                    </Button>
+                                  {/if}
+                                </div>
+                              </div>
+
+                              <!-- Thinking-effort pin -->
+                              <div class="projects-pin-row">
+                                <span class="projects-label">
+                                  {t('projects.team.pinLabel', 'Pin')} · {t(
+                                    'projects.team.effectiveThinkingEffort',
+                                    'Thinking effort',
+                                  )}
+                                </span>
+                                <div class="projects-pin-controls">
+                                  <div class="projects-pin-input">
+                                    <Dropdown
+                                      id={`project-pin-thinking-${member.agent_id}`}
+                                      value={pinDraft(member.agent_id)
+                                        .thinking_effort}
+                                      options={pinEffortOptions(member)}
+                                      ariaLabel={t(
+                                        'projects.team.effectiveThinkingEffort',
+                                        'Thinking effort',
+                                      )}
+                                      disabled={isPinBusy(
+                                        member.agent_id,
+                                        'thinking_effort',
+                                      )}
+                                      triggerClass="projects-dropdown"
+                                      onValueChange={(value) =>
+                                        updatePinDraft(
+                                          member.agent_id,
+                                          'thinking_effort',
+                                          value,
+                                        )}
+                                    />
+                                  </div>
+                                  <Button
+                                    variant="secondary"
+                                    data-testid={`project-pin-set-thinking-${member.agent_id}`}
+                                    disabled={!canSetPin(
+                                      member.agent_id,
+                                      'thinking_effort',
+                                    )}
+                                    onClick={() =>
+                                      applySetPin(
+                                        member.agent_id,
+                                        'thinking_effort',
+                                      )}
+                                  >
+                                    {t('projects.team.setPin', 'Set pin')}
+                                  </Button>
+                                  {#if memberFieldIsPinned(member, 'thinking_effort')}
+                                    <Button
+                                      variant="tertiary"
+                                      data-testid={`project-pin-clear-thinking-${member.agent_id}`}
+                                      disabled={isPinBusy(
+                                        member.agent_id,
+                                        'thinking_effort',
+                                      )}
+                                      onClick={() =>
+                                        applyClearPin(
+                                          member.agent_id,
+                                          'thinking_effort',
+                                        )}
+                                    >
+                                      {t('projects.team.clearPin', 'Clear pin')}
+                                    </Button>
+                                  {/if}
+                                </div>
+                              </div>
+
+                              <p class="projects-pin-help">
+                                {t(
+                                  'projects.team.pinHelp',
+                                  'A pin overrides the agent file and all defaults for this agent in this project. The model pin can also be set with /model in chat.',
+                                )}
+                              </p>
+                            </div>
+
+                            <div>
+                              {#if member.denied_tools.length > 0}
+                                <p class="projects-tools-line">
+                                  {t(
+                                    'projects.team.deniedTools',
+                                    'Denied by the agent file: {tools}',
+                                    { tools: member.denied_tools.join(', ') },
+                                  )}
+                                </p>
+                                <p class="projects-tools-follow">
+                                  {t(
+                                    'projects.team.toolsFollowWhitelist',
+                                    'All other tools follow the project tool whitelist.',
+                                  )}
+                                </p>
+                              {:else}
+                                <p class="projects-tools-line">
+                                  {t(
+                                    'projects.team.deniedToolsNone',
+                                    'No tool denials — follows the project tool whitelist.',
+                                  )}
+                                </p>
+                              {/if}
+                            </div>
+
+                            {#if member.source_path}
+                              <p class="projects-source-line">
+                                {t(
+                                  'projects.team.sourceFile',
+                                  'Source: {path} ({format})',
+                                  {
+                                    path: member.source_path,
+                                    format: member.source_format,
+                                  },
+                                )}
+                              </p>
+                            {/if}
+                          </div>
+                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
               </div>
-            {/if}
-          </li>
-        {/each}
-      </ul>
+            </div>
+
+            <!-- Section 4: Tools -->
+            <div class="detail-section">
+              <div class="detail-section-title">
+                {t('projects.detail.sectionTools', 'Tools')}
+              </div>
+              <div class="detail-section-body">
+                <div class="projects-field">
+                  <div class="projects-field-header">
+                    <span class="projects-label">
+                      {t('projects.manage.allowedTools', 'Tool whitelist')}
+                    </span>
+                    <Button
+                      variant="tertiary"
+                      data-testid="project-tools-reset"
+                      disabled={editSaving}
+                      onClick={resetToolsToDefaults}
+                    >
+                      {t('projects.manage.resetDefaults', 'Reset to defaults')}
+                    </Button>
+                  </div>
+                  <p class="projects-help">
+                    {t(
+                      'projects.manage.allowedToolsHelp',
+                      'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
+                    )}
+                  </p>
+                  {#if toolToggleRows.length > 0}
+                    <ul class="projects-file-list">
+                      {#each toolToggleRows as tool (tool.name)}
+                        <li
+                          class="projects-file-row"
+                          class:projects-file-row--not-ready={tool.ready ===
+                            false}
+                        >
+                          <div class="projects-tool-copy">
+                            <span class="projects-file-name">{tool.name}</span>
+                            <ToolReadinessNotice
+                              ready={tool.ready}
+                              readinessHint={tool.readiness_hint}
+                              extension={tool.extension}
+                              onOpenExtensions={navigateToExtensions}
+                            />
+                          </div>
+                          <Toggle
+                            size="sm"
+                            checked={tool.enabled}
+                            disabled={editSaving}
+                            ariaLabel={t(
+                              'projects.manage.toggleTool',
+                              'Toggle tool {name}',
+                              { name: tool.name },
+                            )}
+                            onChange={(next) => toggleTool(tool.name, next)}
+                          />
+                        </li>
+                      {/each}
+                    </ul>
+                  {:else}
+                    <p class="projects-file-empty">
+                      {t('projects.manage.toolsEmpty', 'No tools available')}
+                    </p>
+                  {/if}
+                </div>
+              </div>
+            </div>
+
+            <!-- Section 5: Skills -->
+            <div class="detail-section">
+              <div class="detail-section-title">
+                {t('projects.detail.sectionSkills', 'Skills')}
+              </div>
+              <div class="detail-section-body">
+                <div class="projects-field">
+                  <span class="projects-label">
+                    {t('projects.manage.allowedSkills', 'Skill whitelist')}
+                  </span>
+                  <p class="projects-help">
+                    {t(
+                      'projects.manage.allowedSkillsHelp',
+                      'Project skills are active by default; bundled and global skills are opt-in.',
+                    )}
+                  </p>
+                  {#if skillToggleSections.project.length > 0}
+                    <span class="projects-sublabel">
+                      {t('projects.manage.projectSkills', 'Project skills')}
+                    </span>
+                    <ul class="projects-file-list">
+                      {#each skillToggleSections.project as skill (skill.name)}
+                        <li class="projects-file-row">
+                          <span class="projects-file-name">{skill.name}</span>
+                          <Toggle
+                            size="sm"
+                            checked={skill.enabled}
+                            disabled={editSaving}
+                            ariaLabel={t(
+                              'projects.manage.toggleSkill',
+                              'Toggle skill {name}',
+                              { name: skill.name },
+                            )}
+                            onChange={(next) =>
+                              toggleProjectSkill(skill.name, next)}
+                          />
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                  {#if skillToggleSections.bundled.length > 0}
+                    <span class="projects-sublabel">
+                      {t('projects.manage.bundledSkills', 'Bundled skills')}
+                    </span>
+                    <ul class="projects-file-list">
+                      {#each skillToggleSections.bundled as skill (skill.name)}
+                        <li class="projects-file-row">
+                          <span class="projects-file-name">{skill.name}</span>
+                          <Toggle
+                            size="sm"
+                            checked={skill.enabled}
+                            disabled={editSaving}
+                            ariaLabel={t(
+                              'projects.manage.toggleSkill',
+                              'Toggle skill {name}',
+                              { name: skill.name },
+                            )}
+                            onChange={(next) =>
+                              toggleBundledSkill(skill.name, next)}
+                          />
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                  {#if skillToggleSections.global.length > 0}
+                    <span class="projects-sublabel">
+                      {t('projects.manage.globalSkills', 'Global skills')}
+                    </span>
+                    <ul class="projects-file-list">
+                      {#each skillToggleSections.global as skill (skill.name)}
+                        <li class="projects-file-row">
+                          <span class="projects-file-name">{skill.name}</span>
+                          <Toggle
+                            size="sm"
+                            checked={skill.enabled}
+                            disabled={editSaving}
+                            ariaLabel={t(
+                              'projects.manage.toggleSkill',
+                              'Toggle skill {name}',
+                              { name: skill.name },
+                            )}
+                            onChange={(next) =>
+                              toggleGlobalSkill(skill.name, next)}
+                          />
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                  {#if skillToggleSections.project.length === 0 && skillToggleSections.bundled.length === 0 && skillToggleSections.global.length === 0}
+                    <p class="projects-file-empty">
+                      {t('projects.manage.skillsEmpty', 'No skills available')}
+                    </p>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      {/key}
     {/if}
   </div>
 
@@ -1523,7 +2135,7 @@
       {#snippet body()}
         <form onsubmit={submitAdd}>
           <div class="modal-body">
-            <p class="projects-view__help">
+            <p class="projects-help">
               {t(
                 'projects.add.subtitle',
                 'Enter the path to a repository on this machine. The folder must already exist; vBot reads it but never writes to it.',
@@ -1545,7 +2157,7 @@
                 disabled={addingProject}
                 onInput={(next) => updateAddField('cwd', next)}
               />
-              <span class="projects-view__help">
+              <span class="projects-help">
                 {t(
                   'projects.add.cwdHelp',
                   'The folder must exist. The project is created immediately and then scanned — you can remove it again afterwards.',
@@ -1571,10 +2183,7 @@
             </label>
 
             {#if addError}
-              <p
-                class="projects-view__notice projects-view__notice--error"
-                role="alert"
-              >
+              <p class="projects-notice projects-notice--error" role="alert">
                 {addError}
               </p>
             {/if}
@@ -1609,7 +2218,7 @@
       {#snippet body()}
         <form onsubmit={submitRePoint}>
           <div class="modal-body">
-            <p class="projects-view__help">
+            <p class="projects-help">
               {t(
                 'projects.rePoint.description',
                 'The repository folder for this project no longer exists. Point it at the new location to restore the project.',
@@ -1636,10 +2245,7 @@
             </label>
 
             {#if rePointError}
-              <p
-                class="projects-view__notice projects-view__notice--error"
-                role="alert"
-              >
+              <p class="projects-notice projects-notice--error" role="alert">
                 {rePointError}
               </p>
             {/if}
@@ -1682,525 +2288,3 @@
     />
   {/if}
 </section>
-
-<style>
-  .projects-view {
-    display: flex;
-    min-width: 0;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 16px;
-    overflow: auto;
-    padding: 24px 28px 28px;
-    background: var(--bg);
-  }
-
-  .projects-view__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
-  .projects-view__eyebrow {
-    margin: 0 0 6px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .projects-view__title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 20px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    line-height: 1.2;
-  }
-
-  .projects-view__subtitle {
-    max-width: 760px;
-    margin: 6px 0 0;
-    color: var(--text-med);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .projects-view__header-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 10px;
-  }
-
-  .projects-view__notice {
-    margin: 0;
-    padding: 11px 14px;
-    border: 1px solid var(--border-2);
-    border-left: 2px solid var(--green);
-    border-radius: var(--r-md);
-    color: var(--text-med);
-    font-size: 12.5px;
-    line-height: 1.4;
-    background: var(--surface);
-  }
-
-  .projects-view__notice--error {
-    border-left-color: var(--red);
-    color: var(--red);
-  }
-
-  .projects-view__notice--warn {
-    border-left-color: var(--amber);
-    color: var(--amber);
-  }
-
-  .projects-view__list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 18px 20px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: var(--surface);
-  }
-
-  .projects-view__list-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .projects-view__section-title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 14px;
-    font-weight: 600;
-  }
-
-  .projects-view__field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .projects-view__field-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .projects-view__label {
-    color: var(--text-med);
-    font-size: 12px;
-    font-weight: 500;
-  }
-
-  .projects-view__sublabel {
-    margin-top: 4px;
-    color: var(--text-lo);
-    font-size: 11px;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .projects-view__help {
-    margin: 0;
-    color: var(--text-lo);
-    font-size: 11.5px;
-    line-height: 1.4;
-  }
-
-  .projects-view__file-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .projects-view__file-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 4px 6px 4px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: rgba(255, 255, 255, 0.02);
-  }
-
-  .projects-view__file-name {
-    overflow: hidden;
-    color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Tool-whitelist row copy: the name plus the shared not-ready notice, stacked
-     so the "currently unavailable" badge/hint sit under the tool name. */
-  .projects-view__tool-copy {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  /* A not-ready tool row is greyed but its toggle stays interactive (the
-     whitelist is independent of readiness). */
-  .projects-view__file-row--not-ready .projects-view__file-name {
-    opacity: 0.55;
-  }
-
-  .projects-view__file-remove {
-    flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border: none;
-    border-radius: var(--r-sm);
-    background: transparent;
-    color: var(--text-med);
-    font-size: 15px;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .projects-view__file-remove:hover:not(:disabled) {
-    background: rgba(252, 129, 129, 0.12);
-    color: var(--red);
-  }
-
-  .projects-view__file-remove:disabled {
-    cursor: default;
-    opacity: 0.5;
-  }
-
-  .projects-view__file-empty {
-    margin: 0;
-    color: var(--text-med);
-    font-size: 12px;
-  }
-
-  .projects-view__file-add {
-    display: flex;
-    gap: 8px;
-    margin-top: 6px;
-  }
-
-  /* The input is rendered inside the TextField child, so reach it through the
-     scoped parent + :global (the project's pattern for styling a primitive). */
-  .projects-view__file-add :global(.projects-view__file-input) {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .projects-view__empty {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 22px;
-    border: 1px dashed var(--border);
-    border-radius: var(--r-lg);
-    background: rgba(255, 255, 255, 0.02);
-    text-align: center;
-  }
-
-  .projects-view__empty-title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 14px;
-    font-weight: 600;
-  }
-
-  .projects-view__empty-subtitle {
-    margin: 0;
-    color: var(--text-med);
-    font-size: 12.5px;
-  }
-
-  .projects-view__items {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .projects-view__item {
-    overflow: hidden;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-  }
-
-  .projects-view__item--expanded {
-    border-color: rgba(232, 135, 10, 0.32);
-  }
-
-  .projects-view__item-header {
-    display: flex;
-    width: 100%;
-    align-items: center;
-    gap: 11px;
-    padding: 11px 13px;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .projects-view__item-header:hover {
-    background: var(--surface-3);
-  }
-
-  .projects-view__chevron {
-    flex-shrink: 0;
-    fill: none;
-    stroke: var(--text-med);
-    stroke-width: 1.6;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    transition: transform 0.18s ease;
-  }
-
-  .projects-view__chevron--open {
-    transform: rotate(90deg);
-  }
-
-  .projects-view__item-main {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .projects-view__item-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .projects-view__item-name {
-    color: var(--text-hi);
-    font-size: 13.5px;
-    font-weight: 600;
-  }
-
-  .projects-view__item-cwd {
-    overflow: hidden;
-    color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .projects-view__panel {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    padding: 4px 14px 16px;
-    border-top: 1px solid var(--border);
-  }
-
-  .projects-view__edit {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding-top: 14px;
-  }
-
-  .projects-view__edit-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 12px;
-  }
-
-  .projects-view__edit-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-
-  /* The class lands on the dropdown component's own root, outside this
-     component's scope, so it must be global to take effect. */
-  :global(.projects-view__dropdown) {
-    width: 100%;
-  }
-
-  .projects-view__panel-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .projects-view__panel-label {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .projects-view__team {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .projects-view__team-member {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 5px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    background: var(--surface);
-  }
-
-  .projects-view__team-name {
-    color: var(--text-hi);
-    font-size: 12.5px;
-    font-weight: 500;
-  }
-
-  .projects-view__team-model {
-    color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 11px;
-  }
-
-  .projects-view__team-meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-
-  .projects-view__team-override {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 1px 2px 1px 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    background: rgba(255, 255, 255, 0.02);
-    color: var(--text-med);
-    font-size: 10.5px;
-  }
-
-  .projects-view__team-override-label {
-    font-family: var(--font-mono);
-  }
-
-  .projects-view__team-override-clear {
-    flex-shrink: 0;
-    width: 16px;
-    height: 16px;
-    padding: 0;
-    border: none;
-    border-radius: var(--r-sm);
-    background: transparent;
-    color: var(--text-med);
-    font-size: 13px;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .projects-view__team-override-clear:hover:not(:disabled) {
-    background: rgba(252, 129, 129, 0.12);
-    color: var(--red);
-  }
-
-  .projects-view__team-empty {
-    margin: 0;
-    color: var(--text-lo);
-    font-size: 11.5px;
-    line-height: 1.4;
-  }
-
-  .projects-view__finding-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .projects-view__finding-title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 12.5px;
-    font-weight: 600;
-  }
-
-  .projects-view__findings {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .projects-view__finding {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 8px 12px;
-    border: 1px solid var(--border-2);
-    border-left: 2px solid var(--amber);
-    border-radius: var(--r-md);
-    background: var(--surface);
-  }
-
-  .projects-view__finding-detail {
-    color: var(--text-med);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
-  .projects-view__finding-meta {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 11px;
-  }
-
-  :global(.projects-view__modal) {
-    width: 480px;
-    max-width: calc(100vw - 40px);
-  }
-
-  @media (max-width: 960px) {
-    .projects-view {
-      padding: 20px;
-    }
-
-    .projects-view__header,
-    .projects-view__header-actions {
-      align-items: stretch;
-      flex-direction: column;
-    }
-  }
-</style>
