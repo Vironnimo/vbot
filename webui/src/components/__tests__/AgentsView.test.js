@@ -189,8 +189,15 @@ describe('AgentsView', () => {
 
     openSimpleDropdown('agent-thinking-effort');
     const labels = simpleOptionLabels('agent-thinking-effort');
-    // Default (—) and "none" always apply; the rest are exactly the ladder.
-    expect(labels).toEqual(['—', 'none', 'high', 'xhigh']);
+    // The inherit option (empty value) and "none" always apply; the rest are
+    // exactly the ladder. With no effective source in the fixture the inherit
+    // option reads as the provider-default variant.
+    expect(labels).toEqual([
+      'Inherit (provider default)',
+      'none',
+      'high',
+      'xhigh',
+    ]);
     expect(labels).not.toContain('low');
     expect(labels).not.toContain('medium');
   });
@@ -547,7 +554,10 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => thinkingTriggerLabel() === '—', 100);
+    await waitForCondition(
+      () => thinkingTriggerLabel() === 'Inherit (provider default)',
+      100,
+    );
 
     openSimpleDropdown('agent-thinking-effort');
     expect(simpleOptionLabels('agent-thinking-effort')).toContain('high');
@@ -653,7 +663,7 @@ describe('AgentsView', () => {
     });
   });
 
-  it('hides memory from configurable tool access', async () => {
+  it('renders memory as a display-only first tool row that is never a toggle', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         tools: [
@@ -669,12 +679,51 @@ describe('AgentsView', () => {
 
     await waitForText('write');
 
+    // The memory tool is shown, but never as an allow-list toggle — it renders
+    // as the first, display-only row that follows the Memory setting.
     expect(document.body.textContent).toContain('Run shell commands.');
     expect(document.body.textContent).toContain('Write files.');
-    expect(document.body.textContent).not.toContain('Manage pinned memory.');
+    expect(document.body.textContent).toContain('Manage pinned memory.');
     expect(
       document.body.querySelector('button[aria-label="Toggle tool memory"]'),
     ).toBeNull();
+
+    const memoryState = document.body.querySelector(
+      '[data-testid="memory-tool-row-state"]',
+    );
+    expect(memoryState).toBeTruthy();
+    // baseAgent() uses memory_prompt_mode 'agent_user' (not off) → available.
+    expect(memoryState.textContent).toContain('currently available');
+
+    // The memory row is the first row in the tool list.
+    const firstRowName = document.body
+      .querySelector('.tl-items .tl-item .tl-item-name')
+      ?.textContent?.trim();
+    expect(firstRowName).toBe('memory');
+  });
+
+  it('switches the memory tool row text when Memory is set to off', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [{ ...baseAgent(), memory_prompt_mode: 'off' }],
+        tools: [
+          { name: 'bash', description: 'Run shell commands.' },
+          { name: 'memory', description: 'Manage pinned memory.' },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForText('Run shell commands.');
+
+    const memoryState = document.body.querySelector(
+      '[data-testid="memory-tool-row-state"]',
+    );
+    expect(memoryState).toBeTruthy();
+    expect(memoryState.textContent).toContain('currently unavailable');
+    expect(memoryState.textContent).toContain('Memory is off');
   });
 
   it('manual save cancels a pending agent autosave', async () => {
@@ -776,7 +825,7 @@ describe('AgentsView', () => {
     flushSync();
 
     openSimpleDropdown('agent-thinking-effort');
-    selectSimpleOption('agent-thinking-effort', '—');
+    selectSimpleOption('agent-thinking-effort', 'Inherit (provider default)');
 
     document.body
       .querySelector('form')
@@ -823,15 +872,18 @@ describe('AgentsView', () => {
     );
 
     await openSearchableDropdown('agent-model');
-    selectSearchableOption('agent-model', 'Default (no model selected)');
+    selectSearchableOption('agent-model', 'Inherit (not configured)');
     await waitForCondition(
-      () => modelTriggerLabel() === 'Default (no model selected)',
+      () => modelTriggerLabel() === 'Inherit (not configured)',
       100,
     );
 
     await openSearchableDropdown('agent-fallback-model');
-    selectSearchableOption('agent-fallback-model', 'None');
-    await waitForCondition(() => fallbackTriggerLabel() === 'None', 100);
+    selectSearchableOption('agent-fallback-model', 'Inherit (not configured)');
+    await waitForCondition(
+      () => fallbackTriggerLabel() === 'Inherit (not configured)',
+      100,
+    );
 
     document.body
       .querySelector('form')
@@ -1169,7 +1221,10 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => thinkingTriggerLabel() === '—', 100);
+    await waitForCondition(
+      () => thinkingTriggerLabel() === 'Inherit (provider default)',
+      100,
+    );
 
     const modelCard = Array.from(
       document.body.querySelectorAll('.detail-group.agents-view__model-group'),
@@ -1199,7 +1254,7 @@ describe('AgentsView', () => {
     expect(simpleList.closest('.detail-group')).toBeNull();
   });
 
-  it('lets the memory dropdown escape the system prompt card clipping', async () => {
+  it('lets the memory dropdown escape the memory card clipping', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, { target: document.body });
@@ -1210,20 +1265,22 @@ describe('AgentsView', () => {
       100,
     );
 
-    const promptCard = Array.from(
-      document.body.querySelectorAll('.detail-group.agents-view__prompt-group'),
-    ).find((group) => group.textContent.includes('System Prompt'));
+    // The memory dropdown now lives in its own Memory card (split out of the
+    // System Prompt card), which must still let the portaled list escape.
+    const memoryCard = Array.from(
+      document.body.querySelectorAll('.detail-group.agents-view__memory-group'),
+    ).find((group) => group.textContent.includes('Memory'));
     const identityCard = Array.from(
       document.body.querySelectorAll('.detail-group'),
     ).find((group) => group.textContent.includes('Identity'));
     const simpleRoot = getSimpleRoot('agent-memory-prompt-mode');
 
-    expect(promptCard).toBeTruthy();
+    expect(memoryCard).toBeTruthy();
     expect(identityCard).toBeTruthy();
-    expect(identityCard.classList.contains('agents-view__prompt-group')).toBe(
+    expect(identityCard.classList.contains('agents-view__memory-group')).toBe(
       false,
     );
-    expect(simpleRoot.closest('.detail-group')).toBe(promptCard);
+    expect(simpleRoot.closest('.detail-group')).toBe(memoryCard);
 
     openSimpleDropdown('agent-memory-prompt-mode');
 
@@ -1423,6 +1480,280 @@ describe('AgentsView', () => {
     expect(searchableOptionLabels('agent-model')).toContain(
       'anthropic/claude-sonnet-4-20250219',
     );
+  });
+
+  it('labels the model inherit option from the effective global default', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            config: {
+              model: '',
+              fallback_model: '',
+              temperature: null,
+              thinking_effort: null,
+            },
+            effective: {
+              model: { value: 'openai/gpt-5.2', source: 'global_default' },
+              fallback_model: { value: null, source: null },
+              temperature: { value: 0.7, source: 'global_default' },
+              thinking_effort: { value: 'high', source: 'global_default' },
+            },
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    // The raw model is empty, so the field is in the inherit state; its trigger
+    // shows the global-default inherit label.
+    await waitForCondition(
+      () =>
+        modelTriggerLabel() === 'Inherited: openai/gpt-5.2 (global default)',
+      100,
+    );
+    // The fallback has no configured value anywhere → the not-configured label.
+    expect(fallbackTriggerLabel()).toBe('Inherit (not configured)');
+    // The thinking-effort inherit option reads the global-default value too.
+    expect(thinkingTriggerLabel()).toBe('Inherited: high (global default)');
+  });
+
+  it('shows the temperature inherit hint and a reset affordance', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            temperature: '0.9',
+            config: {
+              model: 'openai/gpt-5.2::api-key',
+              fallback_model: '',
+              temperature: 0.9,
+              thinking_effort: null,
+            },
+            effective: {
+              model: { value: 'openai/gpt-5.2', source: 'agent' },
+              fallback_model: { value: null, source: null },
+              temperature: { value: 0.9, source: 'agent' },
+              thinking_effort: {
+                value: 0.5,
+                source: 'global_default',
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => temperatureInput()?.value === '0.9', 100);
+
+    // While a value is typed, a reset-to-inherit affordance is present and the
+    // inherit hint is hidden.
+    const resetButton = getButtonByAriaLabel('Reset to inherited value');
+    expect(resetButton).toBeTruthy();
+    expect(document.body.textContent).not.toContain(
+      'Provider default — nothing is set here',
+    );
+
+    resetButton.click();
+    flushSync();
+
+    // Clearing the field switches to the inherit state: hint appears, reset gone.
+    await waitForCondition(() => temperatureInput()?.value === '', 100);
+    expect(
+      document.body.querySelector('[aria-label="Reset to inherited value"]'),
+    ).toBeNull();
+    expect(document.body.textContent).toContain('Provider default');
+  });
+
+  it('renders a not-ready tool greyed with a badge, verbatim hint, and extensions link', async () => {
+    const navigateMock = vi.fn();
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        tools: [
+          { name: 'bash', description: 'Run shell commands.', ready: true },
+          {
+            name: 'home_assistant',
+            description: 'Control Home Assistant.',
+            ready: false,
+            readiness_hint: 'Set the Home Assistant token first.',
+            extension: 'homeassistant',
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { onNavigateToSettingsPanel: navigateMock },
+    });
+    flushSync();
+
+    await waitForText('home_assistant');
+
+    // The not-ready badge and the server-delivered hint (verbatim) both render.
+    expect(document.body.textContent).toContain('Currently unavailable');
+    expect(document.body.textContent).toContain(
+      'Set the Home Assistant token first.',
+    );
+
+    // The toggle for a not-ready tool still fires (allow-list is independent of
+    // readiness).
+    const toggle = getButtonByAriaLabel('Toggle tool home_assistant');
+    expect(toggle).toBeTruthy();
+    expect(toggle.disabled).toBe(false);
+
+    // The extensions link navigates to the Extensions settings panel.
+    const openExtensions = Array.from(
+      document.body.querySelectorAll('button'),
+    ).find((button) => button.textContent.trim() === 'Open Extensions');
+    expect(openExtensions).toBeTruthy();
+    openExtensions.click();
+    flushSync();
+    expect(navigateMock).toHaveBeenCalledWith('extensions');
+  });
+
+  it('gates create-modal thinking effort by the selected model and defaults to inherit', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        models: [
+          {
+            id: 'openai/gpt-5.2',
+            provider_id: 'openai',
+            model_id: 'gpt-5.2',
+            name: 'GPT-5.2',
+            capabilities: {
+              reasoning: { supported: true, levels: ['high', 'xhigh'] },
+            },
+          },
+        ],
+        settingsDefaults: { model: 'openai/gpt-5.2' },
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('id: alpha'),
+      100,
+    );
+
+    getButton('New').click();
+    flushSync();
+    await flushAsyncUpdates();
+
+    const modal = getDialog('Create agent');
+    // The three run fields default to the inherit state. The model inherit
+    // option shows the global default fetched on open.
+    await waitForCondition(
+      () =>
+        triggerTextContent(getSearchableTrigger('agent-create-model')) ===
+        'Inherited: openai/gpt-5.2 (global default)',
+      100,
+    );
+
+    // Selecting the reasoning model narrows the thinking-effort options to its
+    // ladder (default inherit + none + the levels).
+    await openSearchableDropdown('agent-create-model');
+    selectSearchableOption('agent-create-model', 'openai/gpt-5.2');
+    await flushAsyncUpdates();
+
+    openSimpleDropdown('agent-create-thinking-effort');
+    const labels = simpleOptionLabels('agent-create-thinking-effort');
+    expect(labels).toEqual([
+      'Inherit (provider default)',
+      'none',
+      'high',
+      'xhigh',
+    ]);
+    expect(modal.textContent).not.toContain('low');
+  });
+
+  it('confirms before disabling a custom prompt that has customizations', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [{ ...baseAgent(), custom_system_prompt_enabled: true }],
+        scopes: [
+          { type: 'default', label: 'Default' },
+          {
+            type: 'agent',
+            agent_id: 'alpha',
+            label: 'Alpha',
+            has_customizations: true,
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForText('Custom system prompt');
+
+    const toggle = getButtonByAriaLabel('Custom system prompt');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    toggle.click();
+    flushSync();
+    await flushAsyncUpdates();
+
+    // The confirm dialog appears; the toggle has NOT flipped yet.
+    const dialog = getDialog('Disable custom system prompt?');
+    expect(dialog).toBeTruthy();
+    expect(
+      getButtonByAriaLabel('Custom system prompt').getAttribute('aria-checked'),
+    ).toBe('true');
+
+    // Confirming applies the change.
+    const confirmButton = Array.from(dialog.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === 'Disable custom prompt',
+    );
+    expect(confirmButton).toBeTruthy();
+    confirmButton.click();
+    flushSync();
+    await flushAsyncUpdates();
+
+    expect(
+      getButtonByAriaLabel('Custom system prompt').getAttribute('aria-checked'),
+    ).toBe('false');
+  });
+
+  it('disables a custom prompt without a dialog when it has no customizations', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [{ ...baseAgent(), custom_system_prompt_enabled: true }],
+        scopes: [
+          { type: 'default', label: 'Default' },
+          {
+            type: 'agent',
+            agent_id: 'alpha',
+            label: 'Alpha',
+            has_customizations: false,
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForText('Custom system prompt');
+
+    getButtonByAriaLabel('Custom system prompt').click();
+    flushSync();
+    await flushAsyncUpdates();
+
+    // No dialog, and the toggle flipped straight to off.
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    expect(
+      getButtonByAriaLabel('Custom system prompt').getAttribute('aria-checked'),
+    ).toBe('false');
   });
 });
 
@@ -1637,6 +1968,10 @@ function getButtonByAriaLabel(label) {
   return button;
 }
 
+function temperatureInput() {
+  return document.body.querySelector('input.s-input[inputmode="decimal"]');
+}
+
 function getAgentButton(label) {
   const button = Array.from(
     document.body.querySelectorAll('button.agent-item'),
@@ -1697,6 +2032,21 @@ function createAgentsRpcMock(options = {}) {
 
     if (method === 'agent.list') {
       return { agents };
+    }
+
+    if (method === 'settings.get') {
+      // The create modal fetches the global agent defaults for its inherit
+      // labels. `settingsDefaults` (or an empty object) stands in for
+      // `defaults.agent`.
+      return { defaults: { agent: options.settingsDefaults ?? {} } };
+    }
+
+    if (method === 'prompt.list') {
+      // The disable-custom-prompt confirm fetches scopes to read
+      // has_customizations for the current agent.
+      return {
+        scopes: options.scopes ?? [{ type: 'default', label: 'Default' }],
+      };
     }
 
     if (method === 'agent.create' || method === 'agent.update') {

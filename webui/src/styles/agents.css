@@ -191,12 +191,14 @@
 
 .agents-view .agents-view__model-group,
 .agents-view .agents-view__prompt-group,
+.agents-view .agents-view__memory-group,
 .agents-view .agents-view__model-fields {
   position: relative;
 }
 
 .agents-view .agents-view__model-group,
-.agents-view .agents-view__prompt-group {
+.agents-view .agents-view__prompt-group,
+.agents-view .agents-view__memory-group {
   overflow: visible;
 }
 
@@ -311,6 +313,20 @@
   grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
   align-items: center;
   gap: 12px;
+  padding: 14px 16px 4px;
+}
+
+.agents-view .agents-view__prompt-toggle-controls {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Group-level help texts (custom-prompt help, memory-mode help) align with the
+   group content rather than sitting flush against the card edge. */
+.agents-view .agents-view__prompt-group > .agents-view__field-help,
+.agents-view .agents-view__memory-group > .agents-view__field-help {
   padding: 0 16px 14px;
 }
 
@@ -470,6 +486,54 @@
 
 .agents-view .agents-view__wrap-value {
   overflow-wrap: anywhere;
+}
+
+/* The subtle jump link to Settings → Agent defaults / the agent's prompt scope,
+   sized down to sit beside a field without competing with it. */
+.agents-view .agents-view__inherit-link {
+  align-self: flex-start;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.agents-view .agents-view__inherit-hint {
+  color: var(--text-med);
+}
+
+/* Temperature input + its reset-to-inherit affordance on one row. */
+.agents-view .agents-view__temperature-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agents-view .agents-view__temperature-input > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.agents-view .agents-view__reset-inherit {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+}
+
+/* The display-only memory tool row: its status text stands in for a toggle. */
+.agents-view .agents-view__memory-tool-state {
+  flex-shrink: 0;
+  max-width: 45%;
+  color: var(--text-lo);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+/* A not-ready tool row is greyed but its toggle stays interactive. */
+.agents-view .agents-view__tool-row--not-ready .tl-item-name,
+.agents-view
+  .agents-view__tool-row--not-ready
+  .agents-view__access-description {
+  opacity: 0.55;
 }
 
 @media (max-width: 960px) {

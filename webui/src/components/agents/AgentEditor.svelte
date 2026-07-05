@@ -4,9 +4,11 @@
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import ToolReadinessNotice from '../ui/ToolReadinessNotice.svelte';
   import { rpc } from '$lib/api.js';
   import {
     AGENT_MEMORY_PROMPT_MODES,
@@ -14,7 +16,9 @@
     AGENT_FORM_MODE_EDIT,
     MEMORY_TOOL_NAME,
     createAgentFormValues,
+    effortOptionsForReasoning,
     normalizeAgentForm,
+    reasoningForModelValue,
   } from '$lib/agentForm.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
@@ -31,16 +35,6 @@
     timeStyle: 'short',
   });
   const WILDCARD_ACCESS = '*';
-  const THINKING_EFFORT_OPTIONS = Object.freeze([
-    '',
-    'none',
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
-  ]);
 
   let {
     agent = null,
@@ -56,6 +50,8 @@
     onAgentDeleted = async () => {},
     onToast = () => {},
     onModelDropdownOpenChange = () => {},
+    onNavigateToSettingsPanel = () => {},
+    onNavigateToAgentPrompt = () => {},
   } = $props();
 
   const initialAgent = untrack(() => agent);
@@ -73,6 +69,10 @@
   let errorMessage = $state('');
   let agentAutoSaveTimer = null;
   let destroyed = false;
+  // Open state for the "disable custom prompt while customizations exist" confirm.
+  // Set only when the user switches the toggle off and the agent's scope reports
+  // has_customizations; the toggle is reverted first and re-applied on confirm.
+  let disableCustomPromptConfirmOpen = $state(false);
 
   let canDeleteSelectedAgent = $derived(Boolean(agent) && agentsCount > 1);
   let submitLabel = $derived(
@@ -89,21 +89,23 @@
   );
   let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(skillAccessItems());
+  // The memory tool from the catalog (if present), rendered as a display-only
+  // first row: it follows the Memory setting and is never an allow-list toggle.
+  let memoryToolItem = $derived(
+    availableTools.find((tool) => tool.name === MEMORY_TOOL_NAME) ?? null,
+  );
   // The wildcard default (`["*"]`) means "everything, including future items".
   // The toggle list renders every item as on with no signal, so a note explains
   // that flipping any single toggle collapses the wildcard into a fixed list.
   let toolsAreWildcard = $derived(isWildcardAccess(formValues.allowed_tools));
   let skillsAreWildcard = $derived(isWildcardAccess(formValues.allowed_skills));
   let modelOptions = $derived(
-    selectModelOptions(
-      formValues.model,
-      t('agents.form.modelPlaceholder', 'Default (no model selected)'),
-    ),
+    selectModelOptions(formValues.model, inheritModelLabel('model')),
   );
   let fallbackModelOptions = $derived(
     selectModelOptions(
       formValues.fallback_model,
-      t('agents.form.fallbackModelPlaceholder', 'None'),
+      inheritModelLabel('fallback_model'),
     ),
   );
   let modelSelectValue = $derived(
@@ -127,6 +129,15 @@
       label: thinkingEffortLabel(option),
     })),
   );
+  // The per-field effective value + winning source from the agent payload, so an
+  // empty (inherit) field can describe what it inherits. Absent for the create
+  // form (no persisted agent yet) — the create modal builds its own labels.
+  let effectiveConfig = $derived(
+    agent?.effective && typeof agent.effective === 'object'
+      ? agent.effective
+      : {},
+  );
+  let temperatureIsInherit = $derived(formValues.temperature === '');
   let memoryPromptOptions = $derived(
     AGENT_MEMORY_PROMPT_MODES.map((option) => ({
       value: option,
@@ -513,36 +524,133 @@
   }
 
   function thinkingEffortLabel(option) {
+    // The empty option is the inherit state: describe what it inherits. A global
+    // default value → "Inherited: <value> (global default)"; nothing set anywhere
+    // → the provider default falls through.
     if (option === '') {
-      return t('agents.form.thinkingEffortDefault', EMPTY_VALUE);
+      if (inheritSource('thinking_effort') === 'global_default') {
+        return t(
+          'agents.form.inheritOption',
+          'Inherited: {value} (global default)',
+          {
+            value: inheritDisplayValue('thinking_effort'),
+          },
+        );
+      }
+      return t(
+        'agents.form.inheritOptionProviderDefault',
+        'Inherit (provider default)',
+      );
     }
 
     return t(`agents.form.thinkingEffortOption.${option}`, option);
   }
 
-  function reasoningForModelValue(modelValue, models) {
-    const { model } = parseModelSelectionValue(modelValue);
-    if (!model) {
-      return null;
+  // The empty-option label for the model / fallback-model select. Uses that
+  // field's effective source: a global default fills the value; a fully
+  // unconfigured model shows "Inherit (not configured)".
+  function inheritModelLabel(fieldName) {
+    if (inheritSource(fieldName) === 'global_default') {
+      return t(
+        'agents.form.inheritOption',
+        'Inherited: {value} (global default)',
+        {
+          value: inheritDisplayValue(fieldName),
+        },
+      );
     }
-    const match = models.find((candidate) => candidate.id === model);
-    return match?.capabilities?.reasoning ?? null;
+    return t(
+      'agents.form.inheritOptionNotConfigured',
+      'Inherit (not configured)',
+    );
   }
 
-  function effortOptionsForReasoning(reasoning) {
-    // No catalog reasoning info (unknown/custom model) or no feed ladder: keep
-    // the full ladder — the adapter applies a provider-specific floor the UI
-    // cannot see, so it must not hide options that may be valid.
-    const levels = Array.isArray(reasoning?.levels) ? reasoning.levels : [];
-    if (levels.length === 0) {
-      return THINKING_EFFORT_OPTIONS;
+  function inheritSource(fieldName) {
+    const field = effectiveConfig[fieldName];
+    return field && typeof field === 'object' ? (field.source ?? null) : null;
+  }
+
+  function inheritDisplayValue(fieldName) {
+    const field = effectiveConfig[fieldName];
+    const value = field && typeof field === 'object' ? field.value : null;
+    return value === null || value === undefined ? '' : String(value);
+  }
+
+  function navigateToAgentDefaults() {
+    onNavigateToSettingsPanel('defaults');
+  }
+
+  function navigateToExtensions(_extensionName) {
+    onNavigateToSettingsPanel('extensions');
+  }
+
+  function navigateToAgentPrompt() {
+    if (agent?.id) {
+      onNavigateToAgentPrompt(agent.id);
     }
-    // A model with a published ladder shows only its possible efforts: the
-    // default (provider default) and "none" (turn reasoning off) always apply;
-    // the remaining options are exactly the model's levels, kept in canonical
-    // order so the dropdown reads consistently.
-    const allowed = new Set(['', 'none', ...levels]);
-    return THINKING_EFFORT_OPTIONS.filter((option) => allowed.has(option));
+  }
+
+  function clearTemperature() {
+    formValues.temperature = '';
+  }
+
+  function memoryToolRowText() {
+    return formValues.memory_prompt_mode === 'off'
+      ? t(
+          'agents.tools.memoryFollowsOff',
+          'Follows the Memory setting — currently unavailable (Memory is off).',
+        )
+      : t(
+          'agents.tools.memoryFollowsActive',
+          'Follows the Memory setting — currently available.',
+        );
+  }
+
+  // Turning the custom-prompt toggle off while the agent's scope owns customized
+  // blocks opens a confirm first (the blocks are kept, just no longer used).
+  // Turning it on, or off with no customizations / a failed scope fetch, applies
+  // immediately with no dialog.
+  async function handleCustomPromptToggle(next) {
+    if (next) {
+      formValues.custom_system_prompt_enabled = true;
+      return;
+    }
+
+    if (!(await agentPromptScopeHasCustomizations())) {
+      formValues.custom_system_prompt_enabled = false;
+      return;
+    }
+
+    disableCustomPromptConfirmOpen = true;
+  }
+
+  async function agentPromptScopeHasCustomizations() {
+    const agentId = agent?.id;
+    if (!agentId) {
+      return false;
+    }
+    try {
+      const result = await rpc('prompt.list');
+      const scopes = Array.isArray(result?.scopes) ? result.scopes : [];
+      const scope = scopes.find(
+        (item) => item?.type === 'agent' && item.agent_id === agentId,
+      );
+      return scope?.has_customizations === true;
+    } catch {
+      // A failed scope fetch must not block disabling — apply without the dialog.
+      return false;
+    }
+  }
+
+  function confirmDisableCustomPrompt() {
+    disableCustomPromptConfirmOpen = false;
+    formValues.custom_system_prompt_enabled = false;
+  }
+
+  function cancelDisableCustomPrompt() {
+    // Cancel reverts the toggle — it never left the on state in the form, so this
+    // just closes the dialog.
+    disableCustomPromptConfirmOpen = false;
   }
 
   function memoryPromptLabel(option) {
@@ -593,6 +701,18 @@
     );
   }
 </script>
+
+{#snippet globalDefaultsLink()}
+  {#if formMode === AGENT_FORM_MODE_EDIT}
+    <Button
+      variant="tertiary"
+      class="agents-view__inherit-link"
+      onClick={navigateToAgentDefaults}
+    >
+      {t('agents.form.editGlobalDefaults', 'Edit global defaults')}
+    </Button>
+  {/if}
+{/snippet}
 
 <form class="agent-detail-pane" onsubmit={saveAgent}>
   <div class="agent-detail-scroll">
@@ -715,10 +835,7 @@
             id="agent-model"
             value={modelSelectValue}
             options={modelOptions}
-            placeholder={t(
-              'agents.form.modelPlaceholder',
-              'Default (no model selected)',
-            )}
+            placeholder={inheritModelLabel('model')}
             searchPlaceholder={t(
               'agents.form.modelSearchPlaceholder',
               'Filter models…',
@@ -731,6 +848,7 @@
             onValueChange={(selectedValue) =>
               updateModelSelection('model', selectedValue)}
           />
+          {@render globalDefaultsLink()}
         </label>
 
         <label class="f">
@@ -741,7 +859,7 @@
             id="agent-fallback-model"
             value={fallbackModelSelectValue}
             options={fallbackModelOptions}
-            placeholder={t('agents.form.fallbackModelPlaceholder', 'None')}
+            placeholder={inheritModelLabel('fallback_model')}
             searchPlaceholder={t(
               'agents.form.modelSearchPlaceholder',
               'Filter models…',
@@ -760,6 +878,7 @@
               'Used automatically when the primary model fails or is unavailable.',
             )}
           </small>
+          {@render globalDefaultsLink()}
         </label>
 
         <label class="f agents-view__thinking-field">
@@ -796,24 +915,65 @@
               )}
             </small>
           {/if}
+          {#if formValues.thinking_effort === ''}
+            {@render globalDefaultsLink()}
+          {/if}
         </label>
 
         <label class="f">
           <span class="f-label">
             {t('agents.form.temperature', 'Temperature')}
           </span>
-          <TextField
-            inputmode="decimal"
-            invalid={Boolean(formErrors.temperature)}
-            value={formValues.temperature}
-            onInput={(next) => (formValues.temperature = next)}
-          />
+          <div class="agents-view__temperature-input">
+            <TextField
+              inputmode="decimal"
+              invalid={Boolean(formErrors.temperature)}
+              value={formValues.temperature}
+              onInput={(next) => (formValues.temperature = next)}
+            />
+            {#if !temperatureIsInherit}
+              <Button
+                variant="tertiary"
+                class="agents-view__reset-inherit"
+                title={t(
+                  'agents.form.resetToInherit',
+                  'Reset to inherited value',
+                )}
+                ariaLabel={t(
+                  'agents.form.resetToInherit',
+                  'Reset to inherited value',
+                )}
+                onClick={clearTemperature}
+              >
+                {EMPTY_VALUE}
+              </Button>
+            {/if}
+          </div>
           <small class="agents-view__field-help">
             {t(
               'agents.form.temperatureHelp',
               'Sampling randomness, typically 0–2. Leave empty to use the default.',
             )}
           </small>
+          {#if temperatureIsInherit}
+            {#if inheritSource('temperature') === 'global_default'}
+              <small class="agents-view__field-help agents-view__inherit-hint">
+                {t(
+                  'agents.form.inheritedHint',
+                  'Inherited: {value} (global default)',
+                  { value: inheritDisplayValue('temperature') },
+                )}
+              </small>
+            {:else}
+              <small class="agents-view__field-help agents-view__inherit-hint">
+                {t(
+                  'agents.form.inheritedHintProviderDefault',
+                  'Provider default — nothing is set here or in the global defaults.',
+                )}
+              </small>
+            {/if}
+            {@render globalDefaultsLink()}
+          {/if}
           {#if formErrors.temperature}
             <small class="agents-view__field-error">
               {fieldError('temperature')}
@@ -831,19 +991,30 @@
         <span class="agents-view__prompt-toggle-label">
           {t('agents.form.customSystemPrompt', 'Custom system prompt')}
         </span>
-        <Toggle
-          size="sm"
-          class="agents-view__prompt-toggle"
-          checked={formValues.custom_system_prompt_enabled}
-          ariaLabel={t(
-            'agents.form.customSystemPrompt',
-            'Custom system prompt',
-          )}
-          disabled={formMode === AGENT_FORM_MODE_CREATE}
-          onChange={(next) => {
-            formValues.custom_system_prompt_enabled = next;
-          }}
-        />
+        <div class="agents-view__prompt-toggle-controls">
+          {#if formMode === AGENT_FORM_MODE_EDIT && formValues.custom_system_prompt_enabled}
+            <Button
+              variant="tertiary"
+              class="agents-view__inherit-link"
+              onClick={navigateToAgentPrompt}
+            >
+              {t('agents.form.editAgentPrompt', "Edit this agent's prompt")}
+            </Button>
+          {/if}
+          <Toggle
+            size="sm"
+            class="agents-view__prompt-toggle"
+            checked={formValues.custom_system_prompt_enabled}
+            ariaLabel={t(
+              'agents.form.customSystemPrompt',
+              'Custom system prompt',
+            )}
+            disabled={formMode === AGENT_FORM_MODE_CREATE}
+            onChange={(next) => {
+              void handleCustomPromptToggle(next);
+            }}
+          />
+        </div>
       </div>
       <small class="agents-view__field-help">
         {t(
@@ -851,6 +1022,12 @@
           'Gives this agent its own editable copy of the system prompt. Edit it in the System Prompt tab by selecting this agent as the scope. Turning this off keeps the customized blocks but stops using them.',
         )}
       </small>
+    </div>
+
+    <div class="detail-group agents-view__memory-group">
+      <div class="detail-group-title">
+        {t('agents.detail.memory', 'Memory')}
+      </div>
       <div class="agents-view__prompt-memory-row">
         <span class="agents-view__prompt-toggle-label">
           {t('agents.form.memoryPromptMode', 'Memory')}
@@ -869,8 +1046,8 @@
       </div>
       <small class="agents-view__field-help">
         {t(
-          'agents.form.memoryPromptModeHelp',
-          'Which memory notes are shown to the model: the agent’s own notes (MEMORY.md), or additionally what it knows about you (USER.md).',
+          'agents.form.memoryModeHelp',
+          'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
         )}
       </small>
     </div>
@@ -910,10 +1087,33 @@
             )}
           </small>
         {/if}
-        {#if visibleToolItems.length > 0}
+        {#if memoryToolItem || visibleToolItems.length > 0}
           <div class="tl-items">
+            {#if memoryToolItem}
+              <div class="tl-item agents-view__memory-tool-row">
+                <div class="agents-view__access-copy">
+                  <span class="tl-item-name">{memoryToolItem.name}</span>
+                  {#if memoryToolItem.description}
+                    <span class="agents-view__access-description">
+                      {t('agents.access.descriptionLabel', '{description}', {
+                        description: memoryToolItem.description,
+                      })}
+                    </span>
+                  {/if}
+                </div>
+                <span
+                  class="agents-view__memory-tool-state"
+                  data-testid="memory-tool-row-state"
+                >
+                  {memoryToolRowText()}
+                </span>
+              </div>
+            {/if}
             {#each visibleToolItems as item (item.name)}
-              <div class="tl-item">
+              <div
+                class="tl-item"
+                class:agents-view__tool-row--not-ready={item.ready === false}
+              >
                 <div class="agents-view__access-copy">
                   <span class="tl-item-name">{item.name}</span>
                   {#if item.description}
@@ -923,6 +1123,12 @@
                       })}
                     </span>
                   {/if}
+                  <ToolReadinessNotice
+                    ready={item.ready}
+                    readinessHint={item.readiness_hint}
+                    extension={item.extension}
+                    onOpenExtensions={navigateToExtensions}
+                  />
                 </div>
                 <Toggle
                   size="sm"
@@ -1104,3 +1310,23 @@
     </div>
   </div>
 </form>
+
+{#if disableCustomPromptConfirmOpen}
+  <ConfirmDialog
+    danger={false}
+    title={t(
+      'agents.confirmDisableCustomPrompt.title',
+      'Disable custom system prompt?',
+    )}
+    body={t(
+      'agents.confirmDisableCustomPrompt.body',
+      'This agent has customized prompt blocks. They will be kept, but the agent stops using them and follows the Default scope again. Re-enabling brings them back.',
+    )}
+    confirmLabel={t(
+      'agents.confirmDisableCustomPrompt.confirm',
+      'Disable custom prompt',
+    )}
+    onConfirm={confirmDisableCustomPrompt}
+    onCancel={cancelDisableCustomPrompt}
+  />
+{/if}

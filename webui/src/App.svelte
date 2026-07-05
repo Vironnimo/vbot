@@ -266,6 +266,10 @@
   let wakewordStatus = $state({ enabled: false, state: 'off' });
   let settingsPanelTarget = $state('');
   let settingsPanelTargetRequestId = $state(0);
+  // System Prompt scope deep-link target (an agent id) + a fresh request id per
+  // request, so SystemPromptView selects that agent's scope when the id changes.
+  let promptScopeTarget = $state('');
+  let promptScopeTargetRequestId = $state(0);
   let sessionNavigationRequestId = 0;
   // Mirror of ChatView's accessor-local session override (sub-agent session or
   // drawer selection), kept so history entries can encode it and history-driven
@@ -730,10 +734,27 @@
     }
   };
 
-  const navigateToVoiceSettings = () => {
-    settingsPanelTarget = 'voice';
+  // Deep-link to a specific Settings panel (Agent defaults, Extensions, Voice…).
+  // Sets the target + a fresh request id, then switches to the Settings view;
+  // SettingsView selects the panel when the request id changes.
+  const navigateToSettingsPanel = (panelId) => {
+    settingsPanelTarget = panelId;
     settingsPanelTargetRequestId += 1;
     selectView('settings');
+  };
+
+  const navigateToVoiceSettings = () => {
+    navigateToSettingsPanel('voice');
+  };
+
+  // Deep-link to the System Prompt view with a given agent's scope preselected.
+  // Mirrors the settings-panel mechanism: a target agent id + a fresh request id
+  // SystemPromptView reacts to once scopes have loaded, falling back to the
+  // default scope when the target scope is absent.
+  const navigateToAgentPromptScope = (agentId) => {
+    promptScopeTarget = typeof agentId === 'string' ? agentId : '';
+    promptScopeTargetRequestId += 1;
+    selectView('system-prompt');
   };
 
   const handleDebugEnabledChange = (enabled) => {
@@ -941,14 +962,24 @@
       onAgentsChanged={refreshAgents}
       onAgentSelected={selectAgent}
       onToast={showToast}
+      onNavigateToSettingsPanel={navigateToSettingsPanel}
+      onNavigateToAgentPrompt={navigateToAgentPromptScope}
       {modelsRefreshToken}
     />
   {:else if activeViewId === 'projects'}
-    <ProjectsView onToast={showToast} {modelsRefreshToken} />
+    <ProjectsView
+      onToast={showToast}
+      onNavigateToSettingsPanel={navigateToSettingsPanel}
+      {modelsRefreshToken}
+    />
   {:else if activeViewId === 'cron'}
     <CronView />
   {:else if activeViewId === 'system-prompt'}
-    <SystemPromptView onToast={showToast} />
+    <SystemPromptView
+      onToast={showToast}
+      targetScopeAgentId={promptScopeTarget}
+      targetScopeRequestId={promptScopeTargetRequestId}
+    />
   {:else if activeViewId === 'settings'}
     <SettingsView
       {providerAuthEvent}

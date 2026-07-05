@@ -211,10 +211,17 @@ def test_list_returns_blocks_in_layout_order_with_scopes(tmp_path: Path) -> None
     assert tools["editable"] is True
     assert tools["source"] == "core"
     assert tools["rank"] == block_ids.index("core:tools")
-    # ``scopes`` still returned (default + the enabled agent scope).
+    # ``scopes`` still returned (default + the enabled agent scope). The agent
+    # scope carries has_customizations; here the stub store has no saved layout or
+    # override for it, so it is False.
     assert result["scopes"] == [
         {"type": "default", "label": "Default"},
-        {"type": "agent", "agent_id": "coder", "label": "Coder"},
+        {
+            "type": "agent",
+            "agent_id": "coder",
+            "label": "Coder",
+            "has_customizations": False,
+        },
     ]
 
 

@@ -8,7 +8,9 @@
   import {
     AGENT_FORM_MODE_CREATE,
     createAgentFormValues,
+    effortOptionsForReasoning,
     normalizeAgentForm,
+    reasoningForModelValue,
   } from '$lib/agentForm.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -18,21 +20,15 @@
     selectModelValue,
   } from '$lib/modelSelection.js';
 
-  const EMPTY_VALUE = '—';
-  const THINKING_EFFORT_OPTIONS = Object.freeze([
-    '',
-    'none',
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
-  ]);
-
   let {
     availableModels = [],
     availableConnections = [],
+    // The global agent defaults (`settings.get` → `defaults.agent`), fetched by
+    // AgentsView when the modal opens. Since no agent exists yet, the modal's
+    // "effective" for a run field IS the global default directly: a present
+    // default fills the inherit-option value; an absent one shows the
+    // not-configured / provider-default label. Empty object on a fetch failure.
+    agentDefaults = {},
     onCreated = async () => {},
     onClose = () => {},
     onToast = () => {},
@@ -42,30 +38,83 @@
   let formErrors = $state({});
   let errorMessage = $state('');
   let isSaving = $state(false);
+  let modelInheritLabel = $derived(inheritLabelForDefault('model'));
   let modelOptions = $derived(
     buildModelSelectOptions({
       models: availableModels,
       connections: availableConnections,
       selectedModelValue: formValues.model,
-      emptyLabel: t(
-        'agents.form.modelPlaceholder',
-        'Default (no model selected)',
-      ),
+      emptyLabel: modelInheritLabel,
       translate: t,
     }),
   );
   let modelSelectValue = $derived(
     selectModelValue(formValues.model, modelOptions),
   );
+  let selectedModelReasoning = $derived(
+    reasoningForModelValue(formValues.model, availableModels),
+  );
+  let effortDropdownDisabled = $derived(
+    selectedModelReasoning?.supported === false,
+  );
   let thinkingEffortOptions = $derived(
-    THINKING_EFFORT_OPTIONS.map((option) => ({
+    effortOptionsForReasoning(selectedModelReasoning).map((option) => ({
       value: option,
       label:
         option === ''
-          ? t('agents.form.thinkingEffortDefault', EMPTY_VALUE)
+          ? thinkingEffortInheritLabel()
           : t(`agents.form.thinkingEffortOption.${option}`, option),
     })),
   );
+
+  // The inherit-option label for a run field, derived from the global default
+  // (the modal's stand-in for "effective" — no agent exists yet). A present
+  // default → "Inherited: <value> (global default)"; absent → "Inherit (not
+  // configured)".
+  function inheritLabelForDefault(fieldName) {
+    const value = defaultValueText(fieldName);
+    if (value) {
+      return t(
+        'agents.form.inheritOption',
+        'Inherited: {value} (global default)',
+        {
+          value,
+        },
+      );
+    }
+    return t(
+      'agents.form.inheritOptionNotConfigured',
+      'Inherit (not configured)',
+    );
+  }
+
+  function thinkingEffortInheritLabel() {
+    const value = defaultValueText('thinking_effort');
+    if (value) {
+      return t(
+        'agents.form.inheritOption',
+        'Inherited: {value} (global default)',
+        {
+          value,
+        },
+      );
+    }
+    return t(
+      'agents.form.inheritOptionProviderDefault',
+      'Inherit (provider default)',
+    );
+  }
+
+  function defaultValueText(fieldName) {
+    const raw =
+      agentDefaults && typeof agentDefaults === 'object'
+        ? agentDefaults[fieldName]
+        : null;
+    if (raw === null || raw === undefined) {
+      return '';
+    }
+    return String(raw).trim();
+  }
 
   function close() {
     if (!isSaving) {
@@ -190,10 +239,7 @@
             id="agent-create-model"
             value={modelSelectValue}
             options={modelOptions}
-            placeholder={t(
-              'agents.form.modelPlaceholder',
-              'Default (no model selected)',
-            )}
+            placeholder={modelInheritLabel}
             searchPlaceholder={t(
               'agents.form.modelSearchPlaceholder',
               'Filter models…',
@@ -215,14 +261,25 @@
             id="agent-create-thinking-effort"
             value={formValues.thinking_effort}
             options={thinkingEffortOptions}
+            disabled={isSaving || effortDropdownDisabled}
             ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
-            disabled={isSaving}
             triggerClass="agents-view__dropdown"
             listClass="agents-view__thinking-list agents-view__modal-thinking-list"
             onValueChange={(selectedValue) => {
               formValues.thinking_effort = selectedValue;
             }}
           />
+          {#if effortDropdownDisabled}
+            <small
+              class="agents-view__field-help"
+              data-testid="create-thinking-effort-disabled-hint"
+            >
+              {t(
+                'agents.form.thinkingEffortUnsupported',
+                'This model does not support reasoning.',
+              )}
+            </small>
+          {/if}
         </label>
 
         <label class="modal-field">

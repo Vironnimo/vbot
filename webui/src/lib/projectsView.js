@@ -201,15 +201,32 @@ export function buildManageProjectPayload(formValues, project) {
 // excluded from a project whitelist — see `PROJECT_TOOL_WHITELIST_EXCLUDED`) with
 // whether it is in the project's current Tool Whitelist. The catalog is the
 // tool-catalog RPC's tool list, so new tools appear automatically. Rows are sorted by
-// name for a stable display.
+// name for a stable display. Each row carries the tool's readiness fields
+// (`ready`/`readiness_hint`/`extension`) so a not-ready tool renders the shared
+// "currently unavailable" notice (its toggle stays functional — the whitelist is
+// independent of readiness). A string catalog entry has no readiness metadata, so
+// it defaults to ready.
 export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
   const excluded = new Set(PROJECT_TOOL_WHITELIST_EXCLUDED);
   const enabled = new Set(normalizeStringList(allowedTools));
-  const names = (Array.isArray(catalog) ? catalog : [])
-    .map((tool) => asText(typeof tool === 'string' ? tool : tool?.name).trim())
-    .filter((name) => name.length > 0 && !excluded.has(name));
-  const unique = Array.from(new Set(names)).sort();
-  return unique.map((name) => ({ name, enabled: enabled.has(name) }));
+  const byName = new Map();
+  for (const tool of Array.isArray(catalog) ? catalog : []) {
+    const isObject = tool !== null && typeof tool === 'object';
+    const name = asText(isObject ? tool?.name : tool).trim();
+    if (name.length === 0 || excluded.has(name) || byName.has(name)) {
+      continue;
+    }
+    byName.set(name, {
+      name,
+      enabled: enabled.has(name),
+      ready: isObject ? tool.ready !== false : true,
+      readiness_hint: isObject ? (tool.readiness_hint ?? null) : null,
+      extension: isObject ? (tool.extension ?? null) : null,
+    });
+  }
+  return Array.from(byName.values()).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
 }
 
 // Build the skill toggle sections for the editor from a project's skill pool and

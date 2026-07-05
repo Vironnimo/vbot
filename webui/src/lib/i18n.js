@@ -236,6 +236,8 @@ export const englishCatalog = Object.freeze({
   'agents.form.memoryPromptMode': 'Memory',
   'agents.form.memoryPromptModeHelp':
     'Which memory notes are shown to the model: the agent’s own notes (MEMORY.md), or additionally what it knows about you (USER.md).',
+  'agents.form.memoryModeHelp':
+    'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
   'agents.form.fallbackModelHelp':
     'Used automatically when the primary model fails or is unavailable.',
   'agents.form.temperatureHelp':
@@ -250,7 +252,15 @@ export const englishCatalog = Object.freeze({
   'agents.form.modelUnavailableOption': 'Unavailable / custom: {model}',
   'agents.form.modelUnavailableConnectionOption':
     'Unavailable / custom: {model} ({connection})',
-  'agents.form.thinkingEffortDefault': '—',
+  'agents.form.inheritOption': 'Inherited: {value} (global default)',
+  'agents.form.inheritOptionNotConfigured': 'Inherit (not configured)',
+  'agents.form.inheritOptionProviderDefault': 'Inherit (provider default)',
+  'agents.form.inheritedHint': 'Inherited: {value} (global default)',
+  'agents.form.inheritedHintProviderDefault':
+    'Provider default — nothing is set here or in the global defaults.',
+  'agents.form.resetToInherit': 'Reset to inherited value',
+  'agents.form.editGlobalDefaults': 'Edit global defaults',
+  'agents.form.editAgentPrompt': "Edit this agent's prompt",
   'agents.form.thinkingEffortOption.none': 'none',
   'agents.form.thinkingEffortOption.minimal': 'minimal',
   'agents.form.thinkingEffortOption.low': 'low',
@@ -274,6 +284,7 @@ export const englishCatalog = Object.freeze({
   'agents.detail.identity': 'Identity',
   'agents.detail.model': 'Model',
   'agents.detail.systemPrompt': 'System Prompt',
+  'agents.detail.memory': 'Memory',
   'agents.detail.access': 'Access',
   'agents.detail.metadata': 'Metadata',
   'agents.detail.sessionId': 'Current session ID',
@@ -290,6 +301,16 @@ export const englishCatalog = Object.freeze({
   'agents.access.invalidSkillsTitle': 'Unavailable skills',
   'agents.access.unknownSkillName': 'Unknown skill',
   'agents.access.notLoadable': 'not loadable',
+  'agents.tools.memoryFollowsActive':
+    'Follows the Memory setting — currently available.',
+  'agents.tools.memoryFollowsOff':
+    'Follows the Memory setting — currently unavailable (Memory is off).',
+  'agents.tools.notReadyBadge': 'Currently unavailable',
+  'agents.tools.openExtensions': 'Open Extensions',
+  'agents.confirmDisableCustomPrompt.title': 'Disable custom system prompt?',
+  'agents.confirmDisableCustomPrompt.body':
+    'This agent has customized prompt blocks. They will be kept, but the agent stops using them and follows the Default scope again. Re-enabling brings them back.',
+  'agents.confirmDisableCustomPrompt.confirm': 'Disable custom prompt',
 
   'cron.eyebrow': 'Scheduled automation',
   'cron.title': 'Cron',

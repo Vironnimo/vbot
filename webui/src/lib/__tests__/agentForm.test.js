@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AGENT_FORM_MODE_EDIT,
+  THINKING_EFFORT_OPTIONS,
   createAgentFormValues,
+  effortOptionsForReasoning,
   normalizeAgentForm,
+  reasoningForModelValue,
   textToList,
 } from '../agentForm.js';
 
@@ -22,6 +25,74 @@ describe('agent form helpers', () => {
       allowed_skills: ['*'],
       custom_system_prompt_enabled: false,
     });
+  });
+
+  it('seeds the four inheritable fields from the raw config, not the baked values', () => {
+    // The top-level fields carry the baked (default-resolved) values; the four
+    // inheritable fields must bind to the raw own values (`agent.config`) so an
+    // empty raw value reads as the inherit state.
+    const values = createAgentFormValues({
+      id: 'coder',
+      name: 'Coder',
+      model: 'openai/gpt-5.2',
+      fallback_model: 'openai/gpt-5.2-mini',
+      temperature: 0.7,
+      thinking_effort: 'high',
+      config: {
+        model: '',
+        fallback_model: '',
+        temperature: null,
+        thinking_effort: null,
+      },
+    });
+
+    expect(values.model).toBe('');
+    expect(values.fallback_model).toBe('');
+    expect(values.temperature).toBe('');
+    expect(values.thinking_effort).toBe('');
+    // Non-inheritable fields still come from the top level.
+    expect(values.name).toBe('Coder');
+  });
+
+  it('falls back to the top-level values when no config block is present', () => {
+    const values = createAgentFormValues({
+      id: 'coder',
+      name: 'Coder',
+      model: 'openai/gpt-5.2',
+      temperature: 0.7,
+      thinking_effort: 'high',
+    });
+
+    expect(values.model).toBe('openai/gpt-5.2');
+    expect(values.temperature).toBe('0.7');
+    expect(values.thinking_effort).toBe('high');
+  });
+
+  it('preserves inherit payload semantics when seeding from raw config', () => {
+    // A raw-empty inheritable set round-trips to the inherit payload (empty
+    // strings / null) with no changed fields against its own baseline.
+    const initialValues = createAgentFormValues({
+      id: 'coder',
+      name: 'Coder',
+      workspace: 'C:/workspace-coder',
+      allowed_tools: ['*'],
+      allowed_skills: ['*'],
+      config: {
+        model: '',
+        fallback_model: '',
+        temperature: null,
+        thinking_effort: null,
+      },
+    });
+
+    const result = normalizeAgentForm(
+      { ...initialValues },
+      { mode: AGENT_FORM_MODE_EDIT, initialValues },
+    );
+
+    expect(result.isValid).toBe(true);
+    // Nothing changed, so only the id is present.
+    expect(result.payload).toEqual({ id: 'coder' });
   });
 
   it('maps an agent into editable form values with allowed tools as an array', () => {
@@ -405,5 +476,52 @@ describe('agent form helpers', () => {
 
   it('converts list text using one item per line', () => {
     expect(textToList('alpha\n\n beta \n')).toEqual(['alpha', 'beta']);
+  });
+
+  describe('reasoningForModelValue', () => {
+    const models = [
+      {
+        id: 'openai/gpt-5.2',
+        capabilities: {
+          reasoning: { supported: true, levels: ['high', 'xhigh'] },
+        },
+      },
+    ];
+
+    it('returns the reasoning block for a known model', () => {
+      expect(reasoningForModelValue('openai/gpt-5.2', models)).toEqual({
+        supported: true,
+        levels: ['high', 'xhigh'],
+      });
+    });
+
+    it('strips the connection suffix before matching', () => {
+      expect(reasoningForModelValue('openai/gpt-5.2::api-key', models)).toEqual(
+        { supported: true, levels: ['high', 'xhigh'] },
+      );
+    });
+
+    it('returns null for an empty value or an unknown model', () => {
+      expect(reasoningForModelValue('', models)).toBeNull();
+      expect(reasoningForModelValue('unknown/model', models)).toBeNull();
+    });
+  });
+
+  describe('effortOptionsForReasoning', () => {
+    it('keeps the full ladder when there is no published ladder', () => {
+      expect(effortOptionsForReasoning(null)).toEqual(THINKING_EFFORT_OPTIONS);
+      expect(effortOptionsForReasoning({ levels: [] })).toEqual(
+        THINKING_EFFORT_OPTIONS,
+      );
+    });
+
+    it('narrows to the empty option, none, and the model levels in order', () => {
+      expect(effortOptionsForReasoning({ levels: ['high', 'xhigh'] })).toEqual([
+        '',
+        'none',
+        'high',
+        'xhigh',
+      ]);
+    });
   });
 });
