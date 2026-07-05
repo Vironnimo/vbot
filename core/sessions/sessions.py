@@ -785,6 +785,28 @@ def is_skill_context_note(message: ChatMessage) -> bool:
     )
 
 
+def skill_context_note_name(message: ChatMessage) -> str | None:
+    """Return the skill name recorded in a skill-context note, or ``None``.
+
+    A skill activation is persisted as a ``[skill-context] ``-prefixed note whose
+    payload is the compact JSON ``{"name": ..., "content": ...}``. This exposes
+    just the activated skill's name for consumers (e.g. usage statistics) that
+    must not re-implement the prefix/JSON parse. Returns ``None`` for any message
+    that is not a skill-context note or whose payload is malformed or nameless, so
+    a corrupt line is skipped rather than raising.
+    """
+    if not is_skill_context_note(message) or not isinstance(message.content, str):
+        return None
+    try:
+        payload = json.loads(message.content.removeprefix(SKILL_CONTEXT_NOTE_PREFIX))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    name = payload.get("name")
+    return name if isinstance(name, str) and name else None
+
+
 def is_partial_thinking_note(message: ChatMessage) -> bool:
     """Return whether a note holds partial thinking from an interrupted run."""
     return (

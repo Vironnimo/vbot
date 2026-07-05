@@ -23,6 +23,7 @@ CHANNEL_DM_SCOPES = (
     "per_account_channel_peer",
 )
 CRON_STATUSES = ("active", "paused", "completed")
+STATISTICS_SECTIONS = ("overview", "usage", "runs", "errors", "tools", "skills")
 TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
@@ -42,6 +43,7 @@ AREA_HELP = {
     "skill": "Inspect skill availability and diagnostics",
     "extensions": "Inspect and toggle loaded extensions",
     "cron": "Inspect and manage scheduled cron jobs",
+    "statistics": "Inspect usage statistics computed from persisted sessions",
     "config": "Inspect and update raw settings",
     "debug": "Inspect debug mode state and stored traces",
     "doctor": "Run local configuration health checks",
@@ -119,6 +121,14 @@ CRON_HELP = {
     "enable": "Enable a cron job",
     "disable": "Disable a cron job",
 }
+STATISTICS_HELP = {
+    "overview": "Show the overview section: agents, sessions, runs, and message totals",
+    "usage": "Show the usage section: token totals and per-provider/model breakdowns",
+    "runs": "Show the runs section: counts, status rates, and durations",
+    "errors": "Show the errors section: totals and breakdowns by kind, provider, and agent",
+    "tools": "Show the tools section: call counts and per-tool success rates",
+    "skills": "Show the skills section: never-used skills and per-skill usage rates",
+}
 CONFIG_HELP = {
     "get": "Show one raw settings key",
     "set": "Set one raw settings key",
@@ -173,6 +183,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_skill_parsers(subparsers)
     _add_extensions_parsers(subparsers)
     _add_cron_parsers(subparsers)
+    _add_statistics_parsers(subparsers)
     _add_config_parsers(subparsers)
     _add_debug_parsers(subparsers)
     _add_doctor_parsers(subparsers)
@@ -943,6 +954,38 @@ def _add_cron_optional_arguments(parser: argparse.ArgumentParser) -> None:
         "--session",
         metavar="<session-id>",
         help="Run in this fixed session instead of a job-managed session",
+    )
+
+
+def _add_statistics_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    statistics_parser = subparsers.add_parser(
+        "statistics",
+        help=AREA_HELP["statistics"],
+        description=AREA_HELP["statistics"],
+    )
+    statistics_subparsers = statistics_parser.add_subparsers(dest="command", required=True)
+    for section in STATISTICS_SECTIONS:
+        section_parser = _add_command_parser(
+            statistics_subparsers,
+            section,
+            STATISTICS_HELP[section],
+            example=f"statistics {section} --since 2026-06-01",
+        )
+        _add_statistics_window_arguments(section_parser)
+
+
+def _add_statistics_window_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--since",
+        metavar="<iso-datetime>",
+        help="Only count activity at or after this ISO 8601 timestamp (server-validated)",
+    )
+    parser.add_argument(
+        "--until",
+        metavar="<iso-datetime>",
+        help="Only count activity at or before this ISO 8601 timestamp (server-validated)",
     )
 
 

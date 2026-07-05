@@ -88,6 +88,7 @@ from cli.session_management import (
     session_list,
 )
 from cli.skill_management import skill_list
+from cli.statistics_management import statistics_report
 from cli.task_model_management import (
     task_model_clear,
     task_model_list,
@@ -100,6 +101,19 @@ from cli.update_management import run_update
 
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
+
+
+def _statistics_report_adapter(
+    instance: ServerInstance, section: str, since: str | None, until: str | None
+) -> CommandResult:
+    """Adapt the keyword-only statistics report call to a positional signature.
+
+    ``statistics_report`` takes ``since``/``until`` as keyword-only options; the
+    dispatcher and its injected test double use a uniform positional signature,
+    so this thin adapter bridges the two.
+    """
+
+    return statistics_report(instance, section, since=since, until=until)
 
 
 def _launch_desktop(argv: Sequence[str]) -> None:
@@ -171,6 +185,9 @@ def run(
     list_models_fn: Callable[[ServerInstance], CommandResult] = model_list,
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
     list_skills_fn: Callable[[ServerInstance], CommandResult] = skill_list,
+    statistics_report_fn: Callable[
+        [ServerInstance, str, str | None, str | None], CommandResult
+    ] = _statistics_report_adapter,
     list_extensions_fn: Callable[[ServerInstance], CommandResult] = extensions_list,
     reload_extensions_fn: Callable[[ServerInstance], CommandResult] = extensions_reload,
     enable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_enable,
@@ -338,6 +355,13 @@ def run(
 
     if args.area == "cron":
         result = dispatch_cron_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "statistics":
+        result = dispatch_statistics_command(
+            args, instance, statistics_report_fn=statistics_report_fn
+        )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -882,6 +906,24 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if args.status is not None:
         changes["status"] = args.status
     return changes
+
+
+def dispatch_statistics_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    statistics_report_fn: Callable[
+        [ServerInstance, str, str | None, str | None], CommandResult
+    ] = _statistics_report_adapter,
+) -> CommandResult:
+    """Dispatch one parsed statistics command against the server RPC client.
+
+    The subcommand name is the report section; ``--since``/``--until`` pass
+    through verbatim (``None`` when the flag was omitted) so the server owns
+    their validation.
+    """
+
+    return statistics_report_fn(instance, args.command, args.since, args.until)
 
 
 def dispatch_debug_command(

@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure and operate vBot through the vbot CLI. Use when asked to start, stop, restart, or update the server, set up provider credentials (API key or OAuth), or list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, task-model bindings, prompts, extensions, or settings — or to inspect models, skills, tools, logs, and debug traces.
+description: Configure and operate vBot through the vbot CLI. Use when asked to start, stop, restart, or update the server, set up provider credentials (API key or OAuth), or list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, task-model bindings, prompts, extensions, or settings — or to inspect models, skills, tools, logs, debug traces, and usage statistics (tokens, runs, errors, tool and skill usage).
 ---
 
 # vBot CLI
@@ -49,6 +49,7 @@ Read the reference file before using an area's write commands — it has the exa
 | `extensions` | `list` `reload` `<name>` `<name> set` `enable` `disable` | `references/configuration.md` |
 | `log` | `list` `read` | `references/diagnostics.md` |
 | `debug` | `status` `probe` `traces` `trace` `clear` | `references/diagnostics.md` |
+| `statistics` | `overview` `usage` `runs` `errors` `tools` `skills` | `references/diagnostics.md` |
 | `skill` | `list` — loadable skills plus invalid-skill diagnostics | — |
 | `tool` | `list` — public tools exposed to agents | — |
 

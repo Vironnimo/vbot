@@ -32,6 +32,16 @@ from typing import Any, Protocol
 
 from core.chat.messages import ChatMessage
 from core.chat.model_resolution import parse_bare_model
+from core.sessions import skill_context_note_name
+from core.statistics.skills import (
+    SkillInventorySource,
+    SkillsSection,
+    SkillUsageAccumulator,
+    empty_inventory,
+    offered_skill_names,
+    resolve_inventory,
+)
+from core.statistics.timestamps import parse_timestamp
 from core.tools import is_tool_result_envelope
 
 JsonObject = dict[str, Any]
@@ -430,7 +440,7 @@ class ToolsSection:
 
 @dataclass(frozen=True)
 class StatisticsReport:
-    """Full statistics report covering all four Statistics sub-views."""
+    """Full statistics report covering every Statistics sub-view."""
 
     generated_at: str
     window: WindowInfo
@@ -439,6 +449,7 @@ class StatisticsReport:
     runs: RunsSection
     errors: ErrorsSection
     tools: ToolsSection
+    skills: SkillsSection
 
     def to_dict(self) -> JsonObject:
         """Return a JSON-serializable dictionary of the whole report."""
@@ -557,7 +568,7 @@ class _SessionCacheTracker:
             self._previous = None
             return
 
-        timestamp = _parse_timestamp(message.timestamp)
+        timestamp = parse_timestamp(message.timestamp)
         model_key = _provider_model_key(message.model)
         if facts.has_cache_data:
             self.cache_turns += 1
@@ -682,6 +693,13 @@ class _Aggregator:
         self._tool_by_agent: Counter[str] = Counter()
         self._tool_by_session: Counter[tuple[str, str]] = Counter()
 
+        self._skill_usage = SkillUsageAccumulator(since=since, until=until)
+        # Bare scope ids the scan actually visited, so the inventory join at build
+        # time enumerates only the agents/projects that own sessions — not the
+        # whole store.
+        self._scanned_agent_ids: set[str] = set()
+        self._scanned_project_ids: set[str] = set()
+
     # -- ingest ------------------------------------------------------------
 
     def register_agent(self, agent_id: str, summaries: list[JsonObject]) -> None:
@@ -695,8 +713,23 @@ class _Aggregator:
                 accumulator.last_activity = _max_timestamp(accumulator.last_activity, last_active)
                 self._last_activity = _max_timestamp(self._last_activity, last_active)
 
-    def process_session(self, agent_id: str, session_id: str, messages: list[ChatMessage]) -> None:
-        """Accumulate every aggregate for one session's in-window messages."""
+    def process_session(
+        self,
+        agent_id: str,
+        session_id: str,
+        messages: list[ChatMessage],
+        summary: JsonObject,
+    ) -> None:
+        """Accumulate every aggregate for one session.
+
+        ``agent_id`` is the report display key (bare id, or ``agent@projekt`` for
+        a project session). ``summary`` is the session's merged sidecar metadata
+        (from ``list_with_metadata``), carrying ``created_at`` and any
+        ``seen_skills``. All non-skills aggregates run over the in-window
+        messages; the skills tally is fed the full activation notes and applies
+        its own window (offered by session ``created_at``, activated by note
+        timestamp).
+        """
         agent = self._agent(agent_id)
         in_window = [message for message in messages if self._in_window(message.timestamp)]
 
@@ -736,6 +769,30 @@ class _Aggregator:
             self._session_cache_records.append(session_cache_record)
         self._cache_break_evaluated_turns += cache_tracker.evaluated_turns
         self._cache_break_incidents.extend(cache_tracker.incidents)
+
+        self._record_skill_usage(agent_id, summary, messages)
+
+    def _record_skill_usage(
+        self, display_key: str, summary: JsonObject, messages: list[ChatMessage]
+    ) -> None:
+        created_at = summary.get("created_at")
+        activations: list[tuple[str, str | None]] = [
+            (name, message.timestamp)
+            for message in messages
+            if (name := skill_context_note_name(message)) is not None
+        ]
+        self._skill_usage.observe_session(
+            display_key=display_key,
+            created_at=created_at if isinstance(created_at, str) else None,
+            offered_names=offered_skill_names(summary),
+            activations=activations,
+        )
+
+    def register_scope(self, *, agent_id: str, project_id: str | None) -> None:
+        """Record a scanned scope's bare ids for the inventory join at build time."""
+        self._scanned_agent_ids.add(agent_id)
+        if project_id is not None:
+            self._scanned_project_ids.add(project_id)
 
     # -- per-message accumulation -----------------------------------------
 
@@ -818,7 +875,7 @@ class _Aggregator:
             self._model(provider, model_key).errors += 1
             self._provider(provider).errors += 1
 
-        parsed = _parse_timestamp(message.timestamp)
+        parsed = parse_timestamp(message.timestamp)
         if parsed is not None:
             self._error_by_hour[parsed.hour] += 1
         if day is not None:
@@ -902,7 +959,7 @@ class _Aggregator:
 
     # -- build -------------------------------------------------------------
 
-    def build(self) -> StatisticsReport:
+    def build(self, skill_inventory: SkillInventorySource | None = None) -> StatisticsReport:
         return StatisticsReport(
             generated_at=datetime.now(UTC).isoformat(),
             window=WindowInfo(
@@ -914,7 +971,21 @@ class _Aggregator:
             runs=self._build_runs(),
             errors=self._build_errors(),
             tools=self._build_tools(),
+            skills=self._build_skills(skill_inventory),
         )
+
+    def _build_skills(self, skill_inventory: SkillInventorySource | None) -> SkillsSection:
+        # No inventory source (existing constructions/tests) → an empty inventory:
+        # the section still builds, every observed usage is dropped, and all
+        # counts are zero, so the report always carries a valid ``skills`` block.
+        if skill_inventory is None:
+            return self._skill_usage.build(empty_inventory())
+        inventory = resolve_inventory(
+            skill_inventory,
+            agent_ids=frozenset(self._scanned_agent_ids),
+            project_ids=frozenset(self._scanned_project_ids),
+        )
+        return self._skill_usage.build(inventory)
 
     def _build_overview(self) -> OverviewSection:
         durations = sorted(self._run_durations)
@@ -1227,7 +1298,7 @@ class _Aggregator:
     def _in_window(self, timestamp: str) -> bool:
         if self._since is None and self._until is None:
             return True
-        parsed = _parse_timestamp(timestamp)
+        parsed = parse_timestamp(timestamp)
         if parsed is None:
             return True
         if self._since is not None and parsed < self._since:
@@ -1239,10 +1310,10 @@ class StatisticsService:
     """Compute a full :class:`StatisticsReport` from persisted Sessions.
 
     Pure read side: the service only reads through the injected session source,
-    agent directory, and project directory, and writes nothing. One scan walks
-    every session scope — the global identity agents plus every project-scoped
-    agent that owns sessions under a project anchor — and visits each session's
-    messages exactly once.
+    agent directory, project directory, and (optionally) skill inventory, and
+    writes nothing. One scan walks every session scope — the global identity
+    agents plus every project-scoped agent that owns sessions under a project
+    anchor — and visits each session's messages exactly once.
 
     Project sessions feed the same report as identity sessions; a project agent
     appears under its outer address form ``agent@project`` so it stays distinct
@@ -1251,6 +1322,11 @@ class StatisticsService:
     the identity-only scan — project scopes live under a different anchor path,
     so the same session id under both scopes is two different files, never a
     double count.
+
+    The optional ``skill_inventory`` joins observed skill usage against the
+    current skill set (see ``core/statistics/skills.py``). When omitted, the
+    skills section still builds — against an empty inventory, so every observed
+    usage drops and all counts are zero — keeping existing constructions valid.
     """
 
     def __init__(
@@ -1258,10 +1334,12 @@ class StatisticsService:
         chat_sessions: SessionSource,
         agents: AgentDirectory,
         projects: ProjectDirectory | None = None,
+        skill_inventory: SkillInventorySource | None = None,
     ) -> None:
         self._sessions = chat_sessions
         self._agents = agents
         self._projects = projects
+        self._skill_inventory = skill_inventory
 
     def report(
         self, *, since: datetime | None = None, until: datetime | None = None
@@ -1275,7 +1353,7 @@ class StatisticsService:
             self._scan_scope(
                 aggregator, project_id=project_id, agent_id=agent_id, display_key=display_key
             )
-        return aggregator.build()
+        return aggregator.build(self._skill_inventory)
 
     def _project_scopes(self) -> list[tuple[str, str]]:
         """Return ``(project_id, agent_id)`` for every session-owning project agent."""
@@ -1299,10 +1377,11 @@ class StatisticsService:
         """Aggregate one session scope under its report display key."""
         summaries = self._sessions.list_with_metadata(agent_id, project_id)
         aggregator.register_agent(display_key, summaries)
+        aggregator.register_scope(agent_id=agent_id, project_id=project_id)
         for summary in summaries:
             session_id = str(summary["id"])
             messages = self._sessions.get(agent_id, session_id, project_id).load()
-            aggregator.process_session(display_key, session_id, messages)
+            aggregator.process_session(display_key, session_id, messages, summary)
 
 
 # ---------------------------------------------------------------------------
@@ -1410,29 +1489,16 @@ def _non_negative_int(value: Any) -> int:
     return value
 
 
-def _parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
 def _date_key(timestamp: str) -> str | None:
-    parsed = _parse_timestamp(timestamp)
+    parsed = parse_timestamp(timestamp)
     return parsed.date().isoformat() if parsed is not None else None
 
 
 def _max_timestamp(current: str | None, candidate: str) -> str:
     if current is None:
         return candidate
-    current_parsed = _parse_timestamp(current)
-    candidate_parsed = _parse_timestamp(candidate)
+    current_parsed = parse_timestamp(current)
+    candidate_parsed = parse_timestamp(candidate)
     if current_parsed is None:
         return candidate
     if candidate_parsed is None:
