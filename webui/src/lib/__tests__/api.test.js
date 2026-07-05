@@ -17,7 +17,8 @@ import {
   addProject,
   cancelRun,
   cancelToolCall,
-  clearModelOverride,
+  clearPin,
+  setPin,
   createRpcEnvelope,
   listProjects,
   removeProject,
@@ -446,7 +447,7 @@ describe('project.* wrappers', () => {
     );
   });
 
-  it('clears a model pin through project.clear_pin', async () => {
+  it('sets a per-agent pin through project.set_pin', async () => {
     const fetchFunction = vi.fn().mockResolvedValue(
       jsonResponse({
         ok: true,
@@ -454,7 +455,68 @@ describe('project.* wrappers', () => {
       }),
     );
 
-    await clearModelOverride('demo', 'builder', { fetch: fetchFunction });
+    await setPin('demo', 'builder', 'model', 'openai/gpt-mini', {
+      fetch: fetchFunction,
+    });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'project.set_pin',
+      params: {
+        project_id: 'demo',
+        agent_id: 'builder',
+        field: 'model',
+        value: 'openai/gpt-mini',
+      },
+    });
+  });
+
+  it('sets a numeric temperature pin value verbatim', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { project: { project_id: 'demo' }, scan: { team: [] } },
+      }),
+    );
+
+    await setPin('demo', 'builder', 'temperature', 0, {
+      fetch: fetchFunction,
+    });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body).params.value).toBe(
+      0,
+    );
+  });
+
+  it('rejects a missing id or field before sending set_pin', () => {
+    expect(() => setPin('', 'builder', 'model', 'x')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.set_pin',
+      }),
+    );
+    expect(() => setPin('demo', '', 'model', 'x')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.set_pin',
+      }),
+    );
+    expect(() => setPin('demo', 'builder', '', 'x')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.set_pin',
+      }),
+    );
+  });
+
+  it('clears one pinned field through project.clear_pin', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { project: { project_id: 'demo' }, scan: { team: [] } },
+      }),
+    );
+
+    await clearPin('demo', 'builder', 'model', { fetch: fetchFunction });
 
     expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
       method: 'project.clear_pin',
@@ -462,14 +524,20 @@ describe('project.* wrappers', () => {
     });
   });
 
-  it('rejects an empty project or agent id before sending clear_pin', () => {
-    expect(() => clearModelOverride('', 'builder')).toThrow(
+  it('rejects a missing id or field before sending clear_pin', () => {
+    expect(() => clearPin('', 'builder', 'model')).toThrow(
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
         method: 'project.clear_pin',
       }),
     );
-    expect(() => clearModelOverride('demo', '')).toThrow(
+    expect(() => clearPin('demo', '', 'model')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.clear_pin',
+      }),
+    );
+    expect(() => clearPin('demo', 'builder', '')).toThrow(
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
         method: 'project.clear_pin',

@@ -529,18 +529,11 @@
     // → the provider default falls through.
     if (option === '') {
       if (inheritSource('thinking_effort') === 'global_default') {
-        return t(
-          'agents.form.inheritOption',
-          'Inherited: {value} (global default)',
-          {
-            value: inheritDisplayValue('thinking_effort'),
-          },
-        );
+        return t('inherit.option', 'Inherited: {value} (global default)', {
+          value: inheritDisplayValue('thinking_effort'),
+        });
       }
-      return t(
-        'agents.form.inheritOptionProviderDefault',
-        'Inherit (provider default)',
-      );
+      return t('inherit.optionProviderDefault', 'Inherit (provider default)');
     }
 
     return t(`agents.form.thinkingEffortOption.${option}`, option);
@@ -551,18 +544,11 @@
   // unconfigured model shows "Inherit (not configured)".
   function inheritModelLabel(fieldName) {
     if (inheritSource(fieldName) === 'global_default') {
-      return t(
-        'agents.form.inheritOption',
-        'Inherited: {value} (global default)',
-        {
-          value: inheritDisplayValue(fieldName),
-        },
-      );
+      return t('inherit.option', 'Inherited: {value} (global default)', {
+        value: inheritDisplayValue(fieldName),
+      });
     }
-    return t(
-      'agents.form.inheritOptionNotConfigured',
-      'Inherit (not configured)',
-    );
+    return t('inherit.optionNotConfigured', 'Inherit (not configured)');
   }
 
   function inheritSource(fieldName) {
@@ -709,7 +695,7 @@
       class="agents-view__inherit-link"
       onClick={navigateToAgentDefaults}
     >
-      {t('agents.form.editGlobalDefaults', 'Edit global defaults')}
+      {t('inherit.editGlobalDefaults', 'Edit global defaults')}
     </Button>
   {/if}
 {/snippet}
@@ -935,12 +921,9 @@
               <Button
                 variant="tertiary"
                 class="agents-view__reset-inherit"
-                title={t(
-                  'agents.form.resetToInherit',
-                  'Reset to inherited value',
-                )}
+                title={t('inherit.resetToInherit', 'Reset to inherited value')}
                 ariaLabel={t(
-                  'agents.form.resetToInherit',
+                  'inherit.resetToInherit',
                   'Reset to inherited value',
                 )}
                 onClick={clearTemperature}
@@ -958,16 +941,14 @@
           {#if temperatureIsInherit}
             {#if inheritSource('temperature') === 'global_default'}
               <small class="agents-view__field-help agents-view__inherit-hint">
-                {t(
-                  'agents.form.inheritedHint',
-                  'Inherited: {value} (global default)',
-                  { value: inheritDisplayValue('temperature') },
-                )}
+                {t('inherit.hint', 'Inherited: {value} (global default)', {
+                  value: inheritDisplayValue('temperature'),
+                })}
               </small>
             {:else}
               <small class="agents-view__field-help agents-view__inherit-hint">
                 {t(
-                  'agents.form.inheritedHintProviderDefault',
+                  'inherit.hintProviderDefault',
                   'Provider default — nothing is set here or in the global defaults.',
                 )}
               </small>
