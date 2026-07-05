@@ -3,6 +3,7 @@
 
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Modal from './ui/Modal.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import TextField from './ui/TextField.svelte';
@@ -50,6 +51,9 @@
   let formErrorMessage = $state('');
   let submittingForm = $state(false);
   let mutatingJobId = $state('');
+  // The cron job awaiting delete confirmation (null = dialog closed). The delete
+  // only runs once the confirm dialog resolves.
+  let deleteConfirmJob = $state(null);
 
   // Project teams power the project-agent options in the cron dropdown. They are
   // loaded lazily the first time the modal opens and cached for the lifetime of
@@ -336,22 +340,21 @@
     }
   }
 
-  async function deleteJob(job) {
+  function deleteJob(job) {
     if (!job?.id) {
       return;
     }
+    deleteConfirmJob = job;
+  }
 
-    const confirmDelete =
-      typeof globalThis.confirm === 'function'
-        ? globalThis.confirm(
-            t(
-              'cron.deleteConfirm',
-              'Delete this job permanently? It will no longer run.',
-            ),
-          )
-        : true;
+  function cancelDeleteJob() {
+    deleteConfirmJob = null;
+  }
 
-    if (!confirmDelete) {
+  async function confirmDeleteJob() {
+    const job = deleteConfirmJob;
+    deleteConfirmJob = null;
+    if (!job?.id) {
       return;
     }
 
@@ -752,6 +755,19 @@
         </form>
       {/snippet}
     </Modal>
+  {/if}
+
+  {#if deleteConfirmJob}
+    <ConfirmDialog
+      title={t('cron.deleteConfirmTitle', 'Delete cron job')}
+      body={t(
+        'cron.deleteConfirm',
+        'Delete this job permanently? It will no longer run.',
+      )}
+      confirmLabel={t('common.delete', 'Delete')}
+      onConfirm={confirmDeleteJob}
+      onCancel={cancelDeleteJob}
+    />
   {/if}
 </section>
 

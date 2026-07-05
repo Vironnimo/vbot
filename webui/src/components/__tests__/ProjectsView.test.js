@@ -661,7 +661,6 @@ describe('ProjectsView', () => {
       code: 'project_busy',
       message: 'busy',
     });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
@@ -676,6 +675,11 @@ describe('ProjectsView', () => {
       document.querySelector('[data-testid="project-remove-demo"]'),
     );
     buttonByTestId('project-remove-demo').click();
+    flushSync();
+
+    // The row action opens the shared ConfirmDialog; removal only runs on
+    // confirm.
+    confirmDialog('Remove');
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
     await waitForCondition(() =>
@@ -692,7 +696,6 @@ describe('ProjectsView', () => {
       code: 'project_in_use',
       message: 'in use',
     });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
@@ -707,6 +710,11 @@ describe('ProjectsView', () => {
       document.querySelector('[data-testid="project-remove-demo"]'),
     );
     buttonByTestId('project-remove-demo').click();
+    flushSync();
+
+    // The row action opens the shared ConfirmDialog; removal only runs on
+    // confirm.
+    confirmDialog('Remove');
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
     await waitForCondition(() =>
@@ -763,6 +771,17 @@ function buttonByTestId(testId) {
   const button = document.querySelector(`[data-testid="${testId}"]`);
   expect(button, testId).toBeTruthy();
   return button;
+}
+
+// Clicks a button in the open ConfirmDialog by its label (Remove / Cancel).
+function confirmDialog(label) {
+  const footer = document.querySelector('.modal-footer');
+  expect(footer, 'confirm dialog not open').toBeTruthy();
+  const button = Array.from(footer.querySelectorAll('button')).find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(button, `confirm button not found: ${label}`).toBeTruthy();
+  button.click();
 }
 
 // The list row and a modal can share a label (e.g. "Add project", "Re-point"),

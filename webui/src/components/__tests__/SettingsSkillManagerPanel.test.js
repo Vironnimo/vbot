@@ -43,6 +43,17 @@ function buttonByText(text) {
   );
 }
 
+// Clicks a button in the open ConfirmDialog by its label (Delete / Cancel).
+function confirmDialog(label) {
+  const footer = document.body.querySelector('.modal-footer');
+  expect(footer, 'confirm dialog not open').toBeTruthy();
+  const button = [...footer.querySelectorAll('button')].find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(button, `confirm button not found: ${label}`).toBeTruthy();
+  button.click();
+}
+
 async function flushAsync() {
   await Promise.resolve();
   await Promise.resolve();
@@ -129,16 +140,39 @@ describe('SettingsSkillManagerPanel', () => {
     expect(call[1]).toMatchObject({ scope: 'global', name: 'deploy' });
   });
 
-  it('deletes a skill', async () => {
+  it('deletes a skill after confirming the dialog', async () => {
     await mountPanel();
 
     buttonByText('Delete').click();
+    await flushAsync();
+
+    // The row action opens the shared ConfirmDialog; skill.delete only fires
+    // once it is confirmed.
+    expect(
+      rpcMock.mock.calls.some((entry) => entry[0] === 'skill.delete'),
+    ).toBe(false);
+    confirmDialog('Delete');
     await flushAsync();
 
     const call = rpcMock.mock.calls.find(
       (entry) => entry[0] === 'skill.delete',
     );
     expect(call).toEqual(['skill.delete', { scope: 'global', name: 'deploy' }]);
+  });
+
+  it('does not delete a skill when the dialog is cancelled', async () => {
+    await mountPanel();
+
+    buttonByText('Delete').click();
+    await flushAsync();
+
+    confirmDialog('Cancel');
+    await flushAsync();
+
+    expect(
+      rpcMock.mock.calls.some((entry) => entry[0] === 'skill.delete'),
+    ).toBe(false);
+    expect(document.body.querySelector('.modal-footer')).toBeNull();
   });
 
   it('surfaces a create error from the RPC diagnostics', async () => {

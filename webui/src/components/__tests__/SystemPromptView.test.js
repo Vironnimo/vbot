@@ -46,7 +46,6 @@ describe('SystemPromptView', () => {
     listProjectsMock.mockResolvedValue({ projects: [] });
     showProjectMock.mockResolvedValue({ project: {}, scan: { team: [] } });
     mountedComponent = null;
-    window.confirm = vi.fn(() => true);
     window.prompt = vi.fn(() => null);
   });
 
@@ -263,12 +262,15 @@ describe('SystemPromptView', () => {
     resetButton.click();
     flushSync();
 
+    // The ConfirmDialog gates the reset; confirming it fires the RPC.
+    confirmDialog('Reset');
+    flushSync();
+
     await waitForCondition(
       () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.reset'),
       100,
     );
 
-    expect(window.confirm).toHaveBeenCalledOnce();
     expect(lastCall('prompt.reset')[1]).toMatchObject({ id: 'core:intro' });
 
     await waitForCondition(
@@ -479,13 +481,16 @@ describe('SystemPromptView', () => {
     removeButton.click();
     flushSync();
 
+    // The ConfirmDialog gates the removal; confirming it fires the RPC.
+    confirmDialog('Remove');
+    flushSync();
+
     await waitForCondition(
       () =>
         rpcMock.mock.calls.some((call) => call[0] === 'prompt.remove_block'),
       100,
     );
 
-    expect(window.confirm).toHaveBeenCalledOnce();
     expect(lastCall('prompt.remove_block')[1]).toMatchObject({
       id: 'user:my-note',
     });
@@ -505,13 +510,15 @@ describe('SystemPromptView', () => {
     clickToolbarButton('Reset order & visibility');
     flushSync();
 
+    // The ConfirmDialog gates the layout reset; confirming it fires the RPC.
+    confirmDialog('Reset');
+    flushSync();
+
     await waitForCondition(
       () =>
         rpcMock.mock.calls.some((call) => call[0] === 'prompt.reset_layout'),
       100,
     );
-
-    expect(window.confirm).toHaveBeenCalledOnce();
   });
 
   it('shows the inherited badge in an agent scope and edits with the scope', async () => {
@@ -778,15 +785,18 @@ describe('SystemPromptView', () => {
       'systemPrompt.fragmentEditor.modifiedHint',
       'systemPrompt.fragmentEditor.resetConfirm',
       'systemPrompt.fragmentEditor.resetAgentConfirm',
+      'systemPrompt.fragmentEditor.resetConfirmTitle',
       'systemPrompt.blockList.intro',
       'systemPrompt.blockList.newBlock',
       'systemPrompt.blockList.newBlockPrompt',
       'systemPrompt.blockList.invalidSlug',
       'systemPrompt.blockList.createFailed',
       'systemPrompt.blockList.removeConfirm',
+      'systemPrompt.blockList.removeConfirmTitle',
       'systemPrompt.blockList.removeFailed',
       'systemPrompt.blockList.resetLayout',
       'systemPrompt.blockList.resetLayoutConfirm',
+      'systemPrompt.blockList.resetLayoutConfirmTitle',
       'systemPrompt.blockList.customBadge',
       'systemPrompt.blockList.dataBadge',
       'systemPrompt.blockList.dataHint',
@@ -990,6 +1000,19 @@ function clickToolbarButton(label) {
     document.body.querySelectorAll('.sp-blocklist-toolbar-actions button'),
   ).find((item) => item.textContent.trim() === label);
   expect(button, `toolbar button not found: ${label}`).toBeTruthy();
+  button.click();
+}
+
+// Clicks the confirm button in the open ConfirmDialog, identified by its label.
+// The dialog renders inside a `.modal-footer` (Modal shell) with a cancel and a
+// confirm Button; the confirm button carries the action verb.
+function confirmDialog(label) {
+  const footer = document.body.querySelector('.modal-footer');
+  expect(footer, 'confirm dialog not open').toBeTruthy();
+  const button = Array.from(footer.querySelectorAll('button')).find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(button, `confirm button not found: ${label}`).toBeTruthy();
   button.click();
 }
 
