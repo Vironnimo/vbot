@@ -19,6 +19,8 @@
     onAgentsChanged,
     onAgentSelected,
     onToast = noop,
+    onNavigateToSettingsPanel = noop,
+    onNavigateToAgentPrompt = noop,
     modelsRefreshToken = 0,
   } = $props();
 
@@ -33,6 +35,10 @@
   let availableTools = $state([]);
   let availableSkills = $state([]);
   let invalidSkills = $state([]);
+  // The global agent defaults, fetched once when the create modal opens so it can
+  // label its inherit options from the live global default (an agent's
+  // "effective" does not exist yet at create time). Empty object on failure.
+  let createModalAgentDefaults = $state({});
   // A live model reload fetches in the background but holds the visible option
   // swap while a model picker in the editor is open, so an open selection is
   // never disturbed (the chosen value lives in the editor's form state).
@@ -202,6 +208,22 @@
     }
   }
 
+  async function openCreateModal() {
+    // Fetch the global agent defaults so the modal can label its inherit options.
+    // Best-effort: an empty object (fetch failure) makes the modal render the
+    // absent-case labels.
+    createModalAgentDefaults = {};
+    isCreateModalOpen = true;
+    try {
+      const result = await rpc('settings.get');
+      const defaults = result?.defaults?.agent;
+      createModalAgentDefaults =
+        defaults && typeof defaults === 'object' ? defaults : {};
+    } catch {
+      createModalAgentDefaults = {};
+    }
+  }
+
   async function handleAgentCreated(agentId) {
     isCreateModalOpen = false;
     await loadAgents({ preferredAgentId: agentId });
@@ -231,9 +253,7 @@
       {selectedAgentId}
       {isLoading}
       onSelect={selectAgent}
-      onCreate={() => {
-        isCreateModalOpen = true;
-      }}
+      onCreate={openCreateModal}
     />
 
     {#key selectedAgent?.id ?? 'new-agent'}
@@ -250,6 +270,8 @@
         onAgentCreated={handleAgentCreated}
         onAgentDeleted={handleAgentDeleted}
         {onToast}
+        {onNavigateToSettingsPanel}
+        {onNavigateToAgentPrompt}
         onModelDropdownOpenChange={trackModelDropdownOpen}
       />
     {/key}
@@ -259,6 +281,7 @@
     <AgentCreateModal
       {availableModels}
       {availableConnections}
+      agentDefaults={createModalAgentDefaults}
       onCreated={handleAgentCreated}
       onClose={() => {
         isCreateModalOpen = false;

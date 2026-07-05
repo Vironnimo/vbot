@@ -20,7 +20,19 @@
   const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
   const noop = () => {};
 
-  let { onToast = noop } = $props();
+  let {
+    onToast = noop,
+    // Scope deep-link (from the Agents editor's "Edit this agent's prompt"): a
+    // target agent id + a fresh request id per request. When the request id
+    // changes, this view selects that agent's scope after scopes have loaded,
+    // falling back silently to the default scope when the target scope is absent.
+    targetScopeAgentId = '',
+    targetScopeRequestId = 0,
+  } = $props();
+
+  // The last handled deep-link request id, so a repeated request to the same
+  // agent still re-selects (a new request id) but a re-render does not re-fire.
+  let handledScopeRequestId = -1;
 
   // Blocks come from `prompt.list` in layout order. Each block is keyed by its
   // stable `id` (never an array index), so autosave timers and DnD identity
@@ -111,6 +123,28 @@
     return () => {
       clearAutoSaveTimers();
     };
+  });
+
+  // Apply a scope deep-link once (per request id) and only after scopes have
+  // loaded, so the target agent scope actually exists in `promptScopes`. An
+  // absent target scope falls back silently to the default scope.
+  $effect(() => {
+    if (targetScopeRequestId === handledScopeRequestId || isLoadingData) {
+      return;
+    }
+    // Wait until the initial scope list is available before consuming the request.
+    if (promptScopes.length === 0) {
+      return;
+    }
+    handledScopeRequestId = targetScopeRequestId;
+    if (!targetScopeAgentId) {
+      return;
+    }
+    const targetKey = `agent:${targetScopeAgentId}`;
+    const nextKey = promptScopes.some((scope) => scope.key === targetKey)
+      ? targetKey
+      : 'default';
+    void selectScope(nextKey);
   });
 
   async function loadData() {

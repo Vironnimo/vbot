@@ -463,7 +463,10 @@ class SystemPromptManager:
 
         ``default`` plus every Agent with ``custom_system_prompt_enabled`` (the
         Agent owns its own layout/overrides for that scope). With no agent store
-        the default scope is the only scope.
+        the default scope is the only scope. Each agent-scope entry carries
+        ``has_customizations``: true when that scope owns a saved layout and/or at
+        least one block text override, so the editor can warn before the custom
+        prompt is disabled. The default scope carries no such flag.
         """
         scopes: list[JsonObject] = [{"type": "default", "label": "Default"}]
         if self._agent_store is None:
@@ -471,8 +474,35 @@ class SystemPromptManager:
         for agent in sorted(self._agent_store.list(), key=lambda item: item.id):
             if not agent.custom_system_prompt_enabled:
                 continue
-            scopes.append({"type": "agent", "agent_id": agent.id, "label": agent.name or agent.id})
+            scopes.append(
+                {
+                    "type": "agent",
+                    "agent_id": agent.id,
+                    "label": agent.name or agent.id,
+                    "has_customizations": self._agent_scope_has_customizations(agent),
+                }
+            )
         return scopes
+
+    def _agent_scope_has_customizations(self, agent: PromptAgent) -> bool:
+        """Return whether an agent scope owns any persisted prompt customization.
+
+        True when the scope has a saved layout (its own order/on-off) and/or at
+        least one editable block carries an agent-scope text override — both read
+        straight off the injected :class:`BlockStore`, the same reads the block
+        list uses. A custom ``user:`` block shows up through the saved layout (its
+        existence is a layout entry), so a non-empty layout already catches it.
+        """
+        prompt_scope = PromptScope(type="agent", agent_id=agent.id)
+        scope_key = self._scope_key(prompt_scope)
+        if self._block_store.read_layout(scope_key):
+            return True
+        for definition in self._listing_block_definitions(prompt_scope):
+            if not definition.editable:
+                continue
+            if self._block_store.read_block_override(scope_key, definition.id) is not None:
+                return True
+        return False
 
     def validate_scope(self, scope: Any = None) -> PromptScope:
         """Resolve and validate a public prompt scope payload (RPC edge helper)."""

@@ -9,6 +9,7 @@
   import StatusChip from './ui/StatusChip.svelte';
   import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
+  import ToolReadinessNotice from './ui/ToolReadinessNotice.svelte';
   import {
     addProject,
     clearModelOverride,
@@ -57,7 +58,11 @@
 
   const noop = () => {};
 
-  let { onToast = noop, modelsRefreshToken = 0 } = $props();
+  let {
+    onToast = noop,
+    onNavigateToSettingsPanel = noop,
+    modelsRefreshToken = 0,
+  } = $props();
 
   let projects = $state([]);
   let loadingProjects = $state(false);
@@ -564,6 +569,11 @@
       enabled,
     );
     editError = '';
+  }
+
+  // A not-ready tool row's "Open Extensions" link jumps to Settings → Extensions.
+  function navigateToExtensions(_extensionName) {
+    onNavigateToSettingsPanel('extensions');
   }
 
   function toggleProjectSkill(name, active) {
@@ -1202,10 +1212,22 @@
                     {#if toolToggleRows.length > 0}
                       <ul class="projects-view__file-list">
                         {#each toolToggleRows as tool (tool.name)}
-                          <li class="projects-view__file-row">
-                            <span class="projects-view__file-name">
-                              {tool.name}
-                            </span>
+                          <li
+                            class="projects-view__file-row"
+                            class:projects-view__file-row--not-ready={tool.ready ===
+                              false}
+                          >
+                            <div class="projects-view__tool-copy">
+                              <span class="projects-view__file-name">
+                                {tool.name}
+                              </span>
+                              <ToolReadinessNotice
+                                ready={tool.ready}
+                                readinessHint={tool.readiness_hint}
+                                extension={tool.extension}
+                                onOpenExtensions={navigateToExtensions}
+                              />
+                            </div>
                             <Toggle
                               size="sm"
                               checked={tool.enabled}
@@ -1824,6 +1846,22 @@
     font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Tool-whitelist row copy: the name plus the shared not-ready notice, stacked
+     so the "currently unavailable" badge/hint sit under the tool name. */
+  .projects-view__tool-copy {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  /* A not-ready tool row is greyed but its toggle stays interactive (the
+     whitelist is independent of readiness). */
+  .projects-view__file-row--not-ready .projects-view__file-name {
+    opacity: 0.55;
   }
 
   .projects-view__file-remove {
