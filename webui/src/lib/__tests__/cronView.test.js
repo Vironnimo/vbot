@@ -4,8 +4,12 @@ import {
   buildCreateCronPayload,
   buildCronAgentDropdownOptions,
   buildCronAgentOptions,
+  buildCronPresetOptions,
   buildUpdateCronPayload,
   createCronFormValues,
+  CRON_PRESET_CUSTOM,
+  cronPresetExpression,
+  cronPresetForExpression,
   describeCronExpression,
   visibleCronJobs,
 } from '../cronView.js';
@@ -107,6 +111,61 @@ describe('cron job target normalization (project-aware)', () => {
     form.prompt = 'do work';
     expect(buildCreateCronPayload(form).agent_id).toBe('researcher');
     expect(buildUpdateCronPayload(form).agent_id).toBe('researcher');
+  });
+});
+
+describe('cron schedule presets', () => {
+  it('lists the Custom fallback first, then every named preset', () => {
+    const options = buildCronPresetOptions((key) => `label:${key}`);
+    expect(options.map((option) => option.value)).toEqual([
+      CRON_PRESET_CUSTOM,
+      'every15Minutes',
+      'hourly',
+      'dailyMorning',
+      'weekdayMornings',
+      'mondayMornings',
+      'monthlyFirst',
+    ]);
+    expect(options[0].label).toBe('label:custom');
+    expect(options[1].label).toBe('label:every15Minutes');
+  });
+
+  it('fills the exact expression of a named preset', () => {
+    expect(cronPresetExpression('every15Minutes')).toBe('*/15 * * * *');
+    expect(cronPresetExpression('hourly')).toBe('0 * * * *');
+    expect(cronPresetExpression('dailyMorning')).toBe('0 9 * * *');
+    expect(cronPresetExpression('weekdayMornings')).toBe('0 9 * * 1-5');
+    expect(cronPresetExpression('mondayMornings')).toBe('0 9 * * 1');
+    expect(cronPresetExpression('monthlyFirst')).toBe('0 9 1 * *');
+  });
+
+  it('fills nothing for the Custom preset or an unknown key', () => {
+    expect(cronPresetExpression(CRON_PRESET_CUSTOM)).toBe('');
+    expect(cronPresetExpression('not-a-preset')).toBe('');
+  });
+
+  it('derives the matching preset from an expression by exact match', () => {
+    expect(cronPresetForExpression('0 9 * * 1-5')).toBe('weekdayMornings');
+    expect(cronPresetForExpression('  */15 * * * *  ')).toBe('every15Minutes');
+  });
+
+  it('flips to Custom when the expression matches no preset', () => {
+    expect(cronPresetForExpression('0 9 * * 2')).toBe(CRON_PRESET_CUSTOM);
+    expect(cronPresetForExpression('')).toBe(CRON_PRESET_CUSTOM);
+    expect(cronPresetForExpression('   ')).toBe(CRON_PRESET_CUSTOM);
+  });
+
+  it('round-trips a filled expression back to its preset', () => {
+    for (const key of [
+      'every15Minutes',
+      'hourly',
+      'dailyMorning',
+      'weekdayMornings',
+      'mondayMornings',
+      'monthlyFirst',
+    ]) {
+      expect(cronPresetForExpression(cronPresetExpression(key))).toBe(key);
+    }
   });
 });
 

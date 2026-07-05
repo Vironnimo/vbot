@@ -4,7 +4,6 @@
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
-  import Modal from './ui/Modal.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
@@ -25,12 +24,16 @@
     buildCreateCronPayload,
     buildCronAgentDropdownOptions,
     buildCronAgentOptions,
+    buildCronPresetOptions,
     buildUpdateCronPayload,
     createCronFormValues,
     createCronViewState,
+    CRON_PRESET_CUSTOM,
     CRON_SCHEDULE_TYPE_CRON,
     CRON_SCHEDULE_TYPE_ONCE,
     CRON_STATUS_ACTIVE,
+    cronPresetExpression,
+    cronPresetForExpression,
     describeCronExpression,
     projectIdsFromList,
     projectTeamEntry,
@@ -38,27 +41,31 @@
   } from '$lib/cronView.js';
   import { t } from '$lib/i18n.js';
 
-  const FORM_MODE_CREATE = 'create';
-  const FORM_MODE_EDIT = 'edit';
+  const noop = () => {};
+
+  let { onToast = noop } = $props();
 
   let viewState = $state(createCronViewState());
+
+  // The detail pane edits either an existing job (a selected id) or a fresh
+  // create draft (`isCreating`). Its form + validation state is panel-local; the
+  // list is the master. Selecting a row, or "New job", reseeds these.
+  let selectedJobId = $state('');
+  let isCreating = $state(false);
   let formValues = $state(createCronFormValues());
-  let cronExpressionPreview = $derived(
-    describeCronExpression(formValues.cron_expression),
-  );
-  let formMode = $state(FORM_MODE_CREATE);
-  let isModalOpen = $state(false);
+  let selectedPreset = $state(CRON_PRESET_CUSTOM);
   let formErrorMessage = $state('');
   let submittingForm = $state(false);
+  // The id of the job whose enable/disable/delete mutation is in flight, so its
+  // controls disable without freezing the whole pane.
   let mutatingJobId = $state('');
-  // The cron job awaiting delete confirmation (null = dialog closed). The delete
-  // only runs once the confirm dialog resolves.
+  // The cron job awaiting delete confirmation (null = dialog closed).
   let deleteConfirmJob = $state(null);
 
   // Project teams power the project-agent options in the cron dropdown. They are
-  // loaded lazily the first time the modal opens and cached for the lifetime of
-  // the view, so the N+1 `project.show` scan (one per project) never runs on
-  // every render — only once, on demand (plan risk mitigation).
+  // loaded lazily the first time the detail pane renders a form and cached for
+  // the lifetime of the view, so the N+1 `project.show` scan (one per project)
+  // never runs on every render — only once, on demand.
   let projectTeams = $state([]);
   let projectTeamsLoaded = false;
   let projectTeamsRequestId = 0;
@@ -70,13 +77,26 @@
   let hasAgents = $derived(viewState.agents.length > 0);
   let isLoading = $derived(viewState.loadingAgents || viewState.loadingJobs);
   let jobs = $derived(visibleCronJobs(viewState.jobs));
+  let selectedJob = $derived(
+    jobs.find((job) => job.id === selectedJobId) ?? null,
+  );
+  // The detail form is shown when creating, or when a real job is selected.
+  let showDetailForm = $derived(isCreating || Boolean(selectedJob));
   let isCronSchedule = $derived(
     formValues.schedule_type === CRON_SCHEDULE_TYPE_CRON,
   );
-  let modalTitle = $derived(
-    formMode === FORM_MODE_CREATE
-      ? t('cron.modal.createTitle', 'Create cron job')
-      : t('cron.modal.editTitle', 'Edit cron job'),
+  let cronExpressionPreview = $derived(
+    describeCronExpression(formValues.cron_expression),
+  );
+  let detailTitle = $derived(
+    isCreating
+      ? t('cron.detail.createTitle', 'Create cron job')
+      : t('cron.detail.editTitle', 'Edit cron job'),
+  );
+  let presetOptions = $derived(
+    buildCronPresetOptions((key) =>
+      t(`cron.presets.${key}`, key === CRON_PRESET_CUSTOM ? 'Custom' : key),
+    ),
   );
   // Identity agents (bare ids, unchanged) plus project agents addressed as
   // `agent@projekt`. A project option's value IS the address, so saving sends it
@@ -89,7 +109,7 @@
     }),
   );
   // Map every selectable option value (bare id or address) to its label so the
-  // job table can render a readable target. Built from the header-free options so
+  // job list can render a readable target. Built from the header-free options so
   // the group separators never enter the map; an identity agent maps to its name
   // as before, a project agent to its `agent@projekt` address.
   let agentLabelByValue = $derived(
@@ -106,13 +126,21 @@
 
     return () => {
       destroyed = true;
-      isModalOpen = false;
-      formErrorMessage = '';
     };
   });
 
+  // Auto-select the first job once the list loads, unless the user is mid-create
+  // or already has a selection that still exists.
+  $effect(() => {
+    if (isCreating || jobs.length === 0) {
+      return;
+    }
+    if (!jobs.some((job) => job.id === selectedJobId)) {
+      selectJob(jobs[0]);
+    }
+  });
+
   async function loadInitialData() {
-    viewState.errorMessage = '';
     await Promise.all([loadAgents(), loadJobs()]);
   }
 
@@ -128,15 +156,19 @@
       }
 
       applyAgentListResponse(viewState, result);
-      if (!formValues.agent_id && viewState.agents.length > 0) {
-        formValues.agent_id = viewState.agents[0].id;
-      }
     } catch (error) {
       if (destroyed || requestId !== agentsRequestId) {
         return;
       }
 
-      viewState.errorMessage = `${t('cron.errors.loadAgents', 'Agents could not be loaded for cron jobs.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
+      showToast(
+        t(
+          'cron.errors.loadAgents',
+          'Agents could not be loaded for cron jobs.',
+        ),
+        'error',
+        error,
+      );
     } finally {
       if (!destroyed && requestId === agentsRequestId) {
         viewState.loadingAgents = false;
@@ -164,7 +196,11 @@
         return;
       }
 
-      viewState.errorMessage = `${t('cron.errors.loadJobs', 'Cron jobs could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
+      showToast(
+        t('cron.errors.loadJobs', 'Cron jobs could not be loaded.'),
+        'error',
+        error,
+      );
     } finally {
       if (!destroyed && requestId === jobsRequestId) {
         viewState.loadingJobs = false;
@@ -172,10 +208,11 @@
     }
   }
 
-  // Lazily scan project teams the first time the cron modal opens (and cache the
-  // result), so the dropdown can offer project agents as `agent@projekt` without
-  // an N+1 `project.show` per render. A failure is non-fatal: the dropdown still
-  // shows identity agents, and the team scan can be retried on the next open.
+  // Lazily scan project teams the first time the cron detail form renders (and
+  // cache the result), so the dropdown can offer project agents as
+  // `agent@projekt` without an N+1 `project.show` per render. A failure is
+  // non-fatal: the dropdown still shows identity agents, and the team scan can
+  // be retried on the next render.
   async function loadProjectTeams() {
     if (projectTeamsLoaded) {
       return;
@@ -206,40 +243,48 @@
       projectTeamsLoaded = true;
     } catch {
       // Identity agents remain available; leave projectTeams empty and allow a
-      // retry on the next modal open (projectTeamsLoaded stays false).
+      // retry on the next render (projectTeamsLoaded stays false).
       if (!destroyed && requestId === projectTeamsRequestId) {
         projectTeams = [];
       }
     }
   }
 
-  function openCreateModal() {
-    formMode = FORM_MODE_CREATE;
-    formValues = createCronFormValues();
-    formValues.agent_id = viewState.agents[0]?.id ?? '';
-    formErrorMessage = '';
-    isModalOpen = true;
-    loadProjectTeams();
-  }
-
-  function openEditModal(job) {
-    formMode = FORM_MODE_EDIT;
+  function selectJob(job) {
+    if (!job?.id) {
+      return;
+    }
+    isCreating = false;
+    selectedJobId = job.id;
     formValues = createCronFormValues(job);
     if (!formValues.agent_id) {
       formValues.agent_id = viewState.agents[0]?.id ?? '';
     }
+    selectedPreset = cronPresetForExpression(formValues.cron_expression);
     formErrorMessage = '';
-    isModalOpen = true;
     loadProjectTeams();
   }
 
-  function closeModal() {
+  function startCreate() {
+    isCreating = true;
+    formValues = createCronFormValues();
+    formValues.agent_id = viewState.agents[0]?.id ?? '';
+    selectedPreset = CRON_PRESET_CUSTOM;
+    formErrorMessage = '';
+    loadProjectTeams();
+  }
+
+  // Cancel a create draft and return to the previously selected job (if any).
+  function cancelCreate() {
     if (submittingForm) {
       return;
     }
-
-    isModalOpen = false;
-    formErrorMessage = '';
+    isCreating = false;
+    if (selectedJob) {
+      selectJob(selectedJob);
+    } else if (jobs.length > 0) {
+      selectJob(jobs[0]);
+    }
   }
 
   function setScheduleType(scheduleType) {
@@ -249,6 +294,28 @@
 
   function updateFormField(fieldName, value) {
     formValues[fieldName] = value;
+    formErrorMessage = '';
+  }
+
+  // Selecting a preset fills its expression; the field stays editable and the
+  // live preview keeps working. Custom (or an unknown key) fills nothing.
+  function applyPreset(presetKey) {
+    selectedPreset = presetKey;
+    if (presetKey === CRON_PRESET_CUSTOM) {
+      return;
+    }
+    const expression = cronPresetExpression(presetKey);
+    if (expression) {
+      formValues.cron_expression = expression;
+    }
+    formErrorMessage = '';
+  }
+
+  // Hand-editing the expression re-derives the preset selection, flipping it to
+  // Custom when the text no longer matches the chosen preset.
+  function updateCronExpression(value) {
+    formValues.cron_expression = value;
+    selectedPreset = cronPresetForExpression(value);
     formErrorMessage = '';
   }
 
@@ -275,36 +342,40 @@
   async function submitForm(event) {
     event.preventDefault();
 
-    if (!validateFormValues()) {
+    if (submittingForm || !validateFormValues()) {
       return;
     }
 
+    const creating = isCreating;
     submittingForm = true;
     formErrorMessage = '';
-    viewState.errorMessage = '';
-    viewState.statusMessage = '';
 
     try {
-      if (formMode === FORM_MODE_CREATE) {
-        await createCronJob(buildCreateCronPayload(formValues));
-        viewState.statusMessage = t(
-          'cron.messages.created',
-          'Cron job created.',
-        );
+      let targetJobId = selectedJobId;
+      if (creating) {
+        const created = await createCronJob(buildCreateCronPayload(formValues));
+        targetJobId = typeof created?.id === 'string' ? created.id : '';
+        showToast(t('cron.messages.created', 'Cron job created.'));
       } else {
         await updateCronJob(buildUpdateCronPayload(formValues));
-        viewState.statusMessage = t(
-          'cron.messages.updated',
-          'Cron job updated.',
-        );
+        showToast(t('cron.messages.updated', 'Cron job updated.'));
       }
 
-      isModalOpen = false;
+      if (destroyed) {
+        return;
+      }
+
+      isCreating = false;
+      if (targetJobId) {
+        selectedJobId = targetJobId;
+      }
       await loadJobs({ silent: true });
     } catch (error) {
       formErrorMessage = `${t('cron.errors.save', 'Cron job could not be saved.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
     } finally {
-      submittingForm = false;
+      if (!destroyed) {
+        submittingForm = false;
+      }
     }
   }
 
@@ -314,27 +385,23 @@
     }
 
     mutatingJobId = job.id;
-    viewState.errorMessage = '';
-    viewState.statusMessage = '';
 
     try {
       if (job.status === CRON_STATUS_ACTIVE) {
         await disableCronJob(job.id);
-        viewState.statusMessage = t(
-          'cron.messages.disabled',
-          'Cron job disabled.',
-        );
+        showToast(t('cron.messages.disabled', 'Cron job disabled.'));
       } else {
         await enableCronJob(job.id);
-        viewState.statusMessage = t(
-          'cron.messages.enabled',
-          'Cron job enabled.',
-        );
+        showToast(t('cron.messages.enabled', 'Cron job enabled.'));
       }
 
       await loadJobs({ silent: true });
     } catch (error) {
-      viewState.errorMessage = `${t('cron.errors.toggle', 'Cron job status could not be updated.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
+      showToast(
+        t('cron.errors.toggle', 'Cron job status could not be updated.'),
+        'error',
+        error,
+      );
     } finally {
       mutatingJobId = '';
     }
@@ -359,15 +426,20 @@
     }
 
     mutatingJobId = job.id;
-    viewState.errorMessage = '';
-    viewState.statusMessage = '';
 
     try {
       await deleteCronJob(job.id);
-      viewState.statusMessage = t('cron.messages.deleted', 'Cron job deleted.');
+      showToast(t('cron.messages.deleted', 'Cron job deleted.'));
+      if (selectedJobId === job.id) {
+        selectedJobId = '';
+      }
       await loadJobs({ silent: true });
     } catch (error) {
-      viewState.errorMessage = `${t('cron.errors.delete', 'Cron job could not be deleted.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
+      showToast(
+        t('cron.errors.delete', 'Cron job could not be deleted.'),
+        'error',
+        error,
+      );
     } finally {
       mutatingJobId = '';
     }
@@ -385,10 +457,6 @@
 
   function displayValue(value) {
     return value || t('cron.notAvailable', '—');
-  }
-
-  function timezoneLabel(job) {
-    return job.timezone || t('cron.systemDefault', 'System default');
   }
 
   function statusLabel(status) {
@@ -423,6 +491,17 @@
     return 'neutral';
   }
 
+  // Route a message to the app-level toast stack. Error toasts are sticky by
+  // default at the app level; when an error object is passed its message is
+  // appended so transport failures stay diagnosable.
+  function showToast(title, variant = 'success', error = null) {
+    const message =
+      variant === 'error' && error
+        ? errorMessageText(error, t('common.unknown', 'Unknown'))
+        : '';
+    onToast({ title, message, variant });
+  }
+
   function errorMessageText(error, fallback) {
     if (typeof error?.message === 'string' && error.message.trim()) {
       return error.message.trim();
@@ -436,326 +515,355 @@
   }
 </script>
 
-<section class="cron-view view active" aria-labelledby="cron-title">
-  <header class="cron-view__header">
-    <div>
-      <p class="cron-view__eyebrow">
-        {t('cron.eyebrow', 'Scheduled automation')}
-      </p>
-      <h2 id="cron-title" class="cron-view__title">
-        {t('cron.title', 'Cron')}
-      </h2>
-      <p class="cron-view__subtitle">
-        {t(
-          'cron.subtitle',
-          'Manage scheduled agent runs. Completed jobs are hidden from this list.',
-        )}
-      </p>
-    </div>
+<section class="cron-view view active" aria-labelledby="cron-list-title">
+  <div class="cron-layout">
+    <aside class="cron-list-pane" aria-labelledby="cron-list-title">
+      <div class="pane-header">
+        <span id="cron-list-title" class="pane-title">
+          {t('cron.title', 'Cron')}
+        </span>
+        <div class="pane-header-actions">
+          <Button variant="secondary" onClick={() => loadJobs()}>
+            {t('common.refresh', 'Refresh')}
+          </Button>
+          <Button variant="primary" disabled={!hasAgents} onClick={startCreate}>
+            <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
+              <path d="M7 1v12M1 7h12" />
+            </svg>
+            {t('cron.newJob', 'New job')}
+          </Button>
+        </div>
+      </div>
 
-    <div class="cron-view__header-actions">
-      <Button variant="secondary" onClick={() => loadJobs()}>
-        {t('common.refresh', 'Refresh')}
-      </Button>
-      <Button variant="primary" disabled={!hasAgents} onClick={openCreateModal}>
-        <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
-          <path d="M7 1v12M1 7h12" />
-        </svg>
-        {t('cron.newJob', 'New job')}
-      </Button>
-    </div>
-  </header>
+      <div class="cron-list-scroll">
+        {#if !hasAgents}
+          <p class="cron-list-state cron-list-state--warn" role="status">
+            {t('cron.noAgents', 'Create an agent before adding cron jobs.')}
+          </p>
+        {/if}
 
-  {#if !hasAgents}
-    <p class="cron-view__notice cron-view__notice--warn" role="status">
-      {t('cron.noAgents', 'Create an agent before adding cron jobs.')}
-    </p>
-  {/if}
+        {#if isLoading}
+          <p class="cron-list-state" role="status">
+            {t('cron.loading', 'Loading cron jobs…')}
+          </p>
+        {:else if jobs.length === 0}
+          <div class="cron-empty-list">
+            <p class="cron-empty-title">
+              {t('cron.emptyTitle', 'No scheduled jobs')}
+            </p>
+            <p class="cron-empty-sub">
+              {t(
+                'cron.emptySubtitle',
+                'Create a job to run an agent prompt on a schedule.',
+              )}
+            </p>
+          </div>
+        {:else}
+          <ul
+            class="cron-list"
+            aria-label={t('cron.list.ariaLabel', 'Cron jobs')}
+          >
+            {#each jobs as job (job.id)}
+              <li>
+                <button
+                  type="button"
+                  class="cron-item"
+                  class:active={!isCreating && job.id === selectedJobId}
+                  data-testid={`cron-item-${job.id}`}
+                  onclick={() => selectJob(job)}
+                >
+                  <span class="cron-bar"></span>
+                  <span class="cron-item-inner">
+                    <span class="cron-item-head">
+                      <span class="cron-item-name">
+                        {agentLabel(job.agent_id)}
+                      </span>
+                      <StatusChip variant={statusChipVariant(job.status)}>
+                        {statusLabel(job.status)}
+                      </StatusChip>
+                    </span>
+                    <span
+                      class="cron-item-schedule"
+                      title={describeCronExpression(job.cron_expression)}
+                    >
+                      {displayValue(job.schedule_description)}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    </aside>
 
-  {#if viewState.errorMessage}
-    <p class="cron-view__notice cron-view__notice--error" role="alert">
-      {viewState.errorMessage}
-    </p>
-  {/if}
+    {#if !showDetailForm}
+      <div class="cron-detail-pane">
+        <p class="cron-detail-empty">
+          {#if !hasAgents}
+            {t('cron.noAgents', 'Create an agent before adding cron jobs.')}
+          {:else}
+            {t(
+              'cron.emptySubtitle',
+              'Create a job to run an agent prompt on a schedule.',
+            )}
+          {/if}
+        </p>
+      </div>
+    {:else}
+      {#key isCreating ? 'cron-create' : selectedJobId}
+        <div class="cron-detail-pane">
+          <form class="cron-detail-scroll" onsubmit={submitForm}>
+            <div class="detail-top">
+              <div>
+                <div class="detail-heading">{detailTitle}</div>
+                {#if !isCreating && selectedJob}
+                  <div class="detail-sub">{selectedJob.id}</div>
+                {/if}
+              </div>
 
-  {#if viewState.statusMessage}
-    <p class="cron-view__notice" role="status">{viewState.statusMessage}</p>
-  {/if}
-
-  {#if isLoading}
-    <div class="cron-view__state">
-      <p class="cron-view__state-title">
-        {t('cron.loading', 'Loading cron jobs…')}
-      </p>
-    </div>
-  {:else if jobs.length === 0}
-    <div class="cron-view__state">
-      <p class="cron-view__state-title">
-        {t('cron.emptyTitle', 'No scheduled jobs')}
-      </p>
-      <p class="cron-view__state-subtitle">
-        {t(
-          'cron.emptySubtitle',
-          'Create a job to run an agent prompt on a schedule.',
-        )}
-      </p>
-    </div>
-  {:else}
-    <div class="cron-view__table-wrap">
-      <table
-        class="cron-view__table"
-        aria-label={t('cron.table.caption', 'Cron jobs')}
-      >
-        <thead>
-          <tr>
-            <th>{t('cron.table.agent', 'Agent')}</th>
-            <th>{t('cron.table.prompt', 'Prompt')}</th>
-            <th>{t('cron.table.schedule', 'Schedule')}</th>
-            <th>{t('cron.table.timezone', 'Timezone')}</th>
-            <th>{t('cron.table.status', 'Status')}</th>
-            <th>{t('cron.table.lastFired', 'Last fired')}</th>
-            <th>{t('cron.table.nextFire', 'Next fire')}</th>
-            <th>{t('cron.table.actions', 'Actions')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each jobs as job (job.id)}
-            <tr>
-              <td class="cron-view__mono">{agentLabel(job.agent_id)}</td>
-              <td class="cron-view__prompt" title={job.prompt}>{job.prompt}</td>
-              <td
-                class="cron-view__mono"
-                title={describeCronExpression(job.cron_expression)}
-              >
-                {displayValue(job.schedule_description)}
-              </td>
-              <td class="cron-view__mono">{timezoneLabel(job)}</td>
-              <td>
-                <StatusChip variant={statusChipVariant(job.status)}>
-                  {statusLabel(job.status)}
-                </StatusChip>
-              </td>
-              <td class="cron-view__mono">
-                {displayValue(job.last_fired_at_display)}
-              </td>
-              <td class="cron-view__mono">
-                {displayValue(job.next_fire_at_display)}
-              </td>
-              <td>
-                <div class="cron-view__actions">
+              <div class="detail-btns">
+                {#if !isCreating && selectedJob}
                   <Toggle
-                    checked={job.status === CRON_STATUS_ACTIVE}
-                    ariaLabel={job.status === CRON_STATUS_ACTIVE
+                    checked={selectedJob.status === CRON_STATUS_ACTIVE}
+                    ariaLabel={selectedJob.status === CRON_STATUS_ACTIVE
                       ? t('cron.actions.disableJob', 'Disable job {id}', {
-                          id: job.id,
+                          id: selectedJob.id,
                         })
                       : t('cron.actions.enableJob', 'Enable job {id}', {
-                          id: job.id,
+                          id: selectedJob.id,
                         })}
-                    disabled={submittingForm || mutatingJobId === job.id}
-                    data-testid={`cron-toggle-${job.id}`}
-                    onChange={() => toggleJob(job)}
+                    disabled={submittingForm ||
+                      mutatingJobId === selectedJob.id}
+                    data-testid={`cron-toggle-${selectedJob.id}`}
+                    onChange={() => toggleJob(selectedJob)}
                   />
-                  <Button
-                    variant="secondary"
-                    ariaLabel={t('cron.actions.editJob', 'Edit job {id}', {
-                      id: job.id,
-                    })}
-                    data-testid={`cron-edit-${job.id}`}
-                    disabled={submittingForm || mutatingJobId === job.id}
-                    onClick={() => openEditModal(job)}
-                  >
-                    {t('common.edit', 'Edit')}
-                  </Button>
                   <Button
                     variant="danger"
                     ariaLabel={t('cron.actions.deleteJob', 'Delete job {id}', {
-                      id: job.id,
+                      id: selectedJob.id,
                     })}
-                    data-testid={`cron-delete-${job.id}`}
-                    disabled={submittingForm || mutatingJobId === job.id}
-                    onClick={() => deleteJob(job)}
+                    data-testid={`cron-delete-${selectedJob.id}`}
+                    disabled={submittingForm ||
+                      mutatingJobId === selectedJob.id}
+                    onClick={() => deleteJob(selectedJob)}
                   >
                     {t('common.delete', 'Delete')}
                   </Button>
-                </div>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
-
-  {#if isModalOpen}
-    <Modal
-      title={modalTitle}
-      labelledById="cron-modal-title"
-      class="cron-view__modal"
-      onClose={closeModal}
-    >
-      {#snippet body()}
-        <form onsubmit={submitForm}>
-          <div class="modal-body">
-            <label class="modal-field">
-              <span class="modal-label">{t('cron.form.agent', 'Agent')}</span>
-              <Dropdown
-                id="cron-form-agent"
-                value={formValues.agent_id}
-                options={agentOptions}
-                placeholder={t('cron.form.agentPlaceholder', 'Select an agent')}
-                ariaLabel={t('cron.form.agent', 'Agent')}
-                disabled={!hasAgents || submittingForm}
-                triggerClass="cron-view__dropdown"
-                listClass="cron-view__dropdown-list"
-                onValueChange={(value) => updateFormField('agent_id', value)}
-              />
-            </label>
-
-            <label class="modal-field">
-              <span class="modal-label">{t('cron.form.prompt', 'Prompt')}</span>
-              <textarea
-                id="cron-job-prompt"
-                class="s-input cron-view__textarea"
-                value={formValues.prompt}
-                placeholder={t(
-                  'cron.form.promptPlaceholder',
-                  'Describe the run to schedule…',
-                )}
-                disabled={submittingForm}
-                oninput={(event) =>
-                  updateFormField('prompt', event.currentTarget.value)}
-              ></textarea>
-            </label>
-
-            <fieldset class="modal-field cron-view__radio-fieldset">
-              <legend class="modal-label">
-                {t('cron.form.scheduleType', 'Schedule type')}
-              </legend>
-              <div class="cron-view__radio-group">
-                <label class="cron-view__radio-option">
-                  <input
-                    type="radio"
-                    name="cron-schedule-type"
-                    value={CRON_SCHEDULE_TYPE_CRON}
-                    checked={isCronSchedule}
-                    disabled={submittingForm}
-                    onchange={() => setScheduleType(CRON_SCHEDULE_TYPE_CRON)}
-                  />
-                  <span>{t('cron.form.scheduleType.cron', 'Cron')}</span>
-                </label>
-                <label class="cron-view__radio-option">
-                  <input
-                    type="radio"
-                    name="cron-schedule-type"
-                    value={CRON_SCHEDULE_TYPE_ONCE}
-                    checked={!isCronSchedule}
-                    disabled={submittingForm}
-                    onchange={() => setScheduleType(CRON_SCHEDULE_TYPE_ONCE)}
-                  />
-                  <span>{t('cron.form.scheduleType.once', 'Once')}</span>
-                </label>
+                {/if}
               </div>
-            </fieldset>
+            </div>
 
-            {#if isCronSchedule}
-              <label class="modal-field">
-                <span class="modal-label"
-                  >{t('cron.form.cronExpression', 'Cron expression')}</span
-                >
-                <TextField
-                  id="cron-job-expression"
-                  value={formValues.cron_expression}
+            {#if !isCreating && selectedJob}
+              <div class="cron-info-rows">
+                <div class="cron-info-row">
+                  <span class="cron-info-label">
+                    {t('cron.detail.status', 'Status')}
+                  </span>
+                  <StatusChip variant={statusChipVariant(selectedJob.status)}>
+                    {statusLabel(selectedJob.status)}
+                  </StatusChip>
+                </div>
+                <div class="cron-info-row">
+                  <span class="cron-info-label">
+                    {t('cron.detail.lastFired', 'Last fired')}
+                  </span>
+                  <span class="cron-info-value">
+                    {displayValue(selectedJob.last_fired_at_display)}
+                  </span>
+                </div>
+                <div class="cron-info-row">
+                  <span class="cron-info-label">
+                    {t('cron.detail.nextFire', 'Next fire')}
+                  </span>
+                  <span class="cron-info-value">
+                    {displayValue(selectedJob.next_fire_at_display)}
+                  </span>
+                </div>
+              </div>
+            {/if}
+
+            <div class="cron-fields">
+              <label class="cron-field">
+                <span class="cron-label">{t('cron.form.agent', 'Agent')}</span>
+                <Dropdown
+                  id="cron-form-agent"
+                  value={formValues.agent_id}
+                  options={agentOptions}
                   placeholder={t(
-                    'cron.form.cronExpressionPlaceholder',
-                    '0 9 * * 1-5',
+                    'cron.form.agentPlaceholder',
+                    'Select an agent',
+                  )}
+                  ariaLabel={t('cron.form.agent', 'Agent')}
+                  disabled={!hasAgents || submittingForm}
+                  triggerClass="cron-dropdown"
+                  listClass="cron-dropdown-list"
+                  onValueChange={(value) => updateFormField('agent_id', value)}
+                />
+              </label>
+
+              <label class="cron-field">
+                <span class="cron-label">{t('cron.form.prompt', 'Prompt')}</span
+                >
+                <textarea
+                  id="cron-job-prompt"
+                  class="s-input cron-textarea"
+                  value={formValues.prompt}
+                  placeholder={t(
+                    'cron.form.promptPlaceholder',
+                    'Describe the run to schedule…',
                   )}
                   disabled={submittingForm}
-                  onInput={(next) => updateFormField('cron_expression', next)}
-                />
-                {#if cronExpressionPreview}
-                  <span class="cron-view__expression-preview">
-                    {cronExpressionPreview}
+                  oninput={(event) =>
+                    updateFormField('prompt', event.currentTarget.value)}
+                ></textarea>
+              </label>
+
+              <fieldset class="cron-field cron-radio-fieldset">
+                <legend class="cron-label">
+                  {t('cron.form.scheduleType', 'Schedule type')}
+                </legend>
+                <div class="cron-radio-group">
+                  <label class="cron-radio-option">
+                    <input
+                      type="radio"
+                      name="cron-schedule-type"
+                      value={CRON_SCHEDULE_TYPE_CRON}
+                      checked={isCronSchedule}
+                      disabled={submittingForm}
+                      onchange={() => setScheduleType(CRON_SCHEDULE_TYPE_CRON)}
+                    />
+                    <span>{t('cron.form.scheduleType.cron', 'Cron')}</span>
+                  </label>
+                  <label class="cron-radio-option">
+                    <input
+                      type="radio"
+                      name="cron-schedule-type"
+                      value={CRON_SCHEDULE_TYPE_ONCE}
+                      checked={!isCronSchedule}
+                      disabled={submittingForm}
+                      onchange={() => setScheduleType(CRON_SCHEDULE_TYPE_ONCE)}
+                    />
+                    <span>{t('cron.form.scheduleType.once', 'Once')}</span>
+                  </label>
+                </div>
+              </fieldset>
+
+              {#if isCronSchedule}
+                <label class="cron-field">
+                  <span class="cron-label">
+                    {t('cron.form.preset', 'Schedule preset')}
                   </span>
-                {/if}
-              </label>
-            {:else}
-              <label class="modal-field">
-                <span class="modal-label">{t('cron.form.runAt', 'Run at')}</span
-                >
+                  <Dropdown
+                    id="cron-job-preset"
+                    value={selectedPreset}
+                    options={presetOptions}
+                    ariaLabel={t('cron.form.preset', 'Schedule preset')}
+                    disabled={submittingForm}
+                    triggerClass="cron-dropdown"
+                    listClass="cron-dropdown-list"
+                    onValueChange={applyPreset}
+                  />
+                </label>
+
+                <label class="cron-field">
+                  <span class="cron-label">
+                    {t('cron.form.cronExpression', 'Cron expression')}
+                  </span>
+                  <TextField
+                    id="cron-job-expression"
+                    value={formValues.cron_expression}
+                    placeholder={t(
+                      'cron.form.cronExpressionPlaceholder',
+                      '0 9 * * 1-5',
+                    )}
+                    disabled={submittingForm}
+                    onInput={(next) => updateCronExpression(next)}
+                  />
+                  {#if cronExpressionPreview}
+                    <span class="cron-expression-preview">
+                      {cronExpressionPreview}
+                    </span>
+                  {/if}
+                </label>
+              {:else}
+                <label class="cron-field">
+                  <span class="cron-label"
+                    >{t('cron.form.runAt', 'Run at')}</span
+                  >
+                  <TextField
+                    id="cron-job-run-at"
+                    type="datetime-local"
+                    value={formValues.run_at}
+                    disabled={submittingForm}
+                    onInput={(next) => updateFormField('run_at', next)}
+                  />
+                </label>
+              {/if}
+
+              <label class="cron-field">
+                <span class="cron-label">
+                  {t('cron.form.timezone', 'Timezone')}
+                </span>
                 <TextField
-                  id="cron-job-run-at"
-                  type="datetime-local"
-                  value={formValues.run_at}
+                  id="cron-job-timezone"
+                  value={formValues.timezone}
+                  placeholder={t(
+                    'cron.form.timezonePlaceholder',
+                    'System default',
+                  )}
                   disabled={submittingForm}
-                  onInput={(next) => updateFormField('run_at', next)}
+                  onInput={(next) => updateFormField('timezone', next)}
                 />
               </label>
-            {/if}
 
-            <label class="modal-field">
-              <span class="modal-label"
-                >{t('cron.form.timezone', 'Timezone')}</span
-              >
-              <TextField
-                id="cron-job-timezone"
-                value={formValues.timezone}
-                placeholder={t(
-                  'cron.form.timezonePlaceholder',
-                  'System default',
-                )}
-                disabled={submittingForm}
-                onInput={(next) => updateFormField('timezone', next)}
-              />
-            </label>
+              <label class="cron-field">
+                <span class="cron-label">
+                  {t('cron.form.sessionId', 'Session ID')}
+                </span>
+                <TextField
+                  id="cron-job-session"
+                  value={formValues.session_id}
+                  placeholder={t('cron.form.sessionIdPlaceholder', 'Optional')}
+                  disabled={submittingForm}
+                  onInput={(next) => updateFormField('session_id', next)}
+                />
+                <span class="cron-field-help">
+                  {t(
+                    'cron.form.sessionIdHelp',
+                    'Optional: run inside one fixed existing session instead of a new one. Leave empty to let each run use its own.',
+                  )}
+                </span>
+              </label>
 
-            <label class="modal-field">
-              <span class="modal-label"
-                >{t('cron.form.sessionId', 'Session ID')}</span
-              >
-              <TextField
-                id="cron-job-session"
-                value={formValues.session_id}
-                placeholder={t('cron.form.sessionIdPlaceholder', 'Optional')}
-                disabled={submittingForm}
-                onInput={(next) => updateFormField('session_id', next)}
-              />
-              <span class="cron-view__field-help">
-                {t(
-                  'cron.form.sessionIdHelp',
-                  'Optional: run inside one fixed existing session instead of a new one. Leave empty to let each run use its own.',
-                )}
-              </span>
-            </label>
+              {#if formErrorMessage}
+                <p class="cron-notice cron-notice--error" role="alert">
+                  {formErrorMessage}
+                </p>
+              {/if}
+            </div>
 
-            {#if formErrorMessage}
-              <p
-                class="cron-view__notice cron-view__notice--error"
-                role="alert"
-              >
-                {formErrorMessage}
-              </p>
-            {/if}
-          </div>
-
-          <div class="modal-footer">
-            <Button
-              variant="secondary"
-              disabled={submittingForm}
-              onClick={closeModal}
-            >
-              {t('common.cancel', 'Cancel')}
-            </Button>
-            <Button variant="primary" type="submit" disabled={submittingForm}>
-              {submittingForm
-                ? t('common.saving', 'Saving…')
-                : t('common.save', 'Save')}
-            </Button>
-          </div>
-        </form>
-      {/snippet}
-    </Modal>
-  {/if}
+            <div class="cron-detail-footer">
+              {#if isCreating}
+                <Button
+                  variant="secondary"
+                  disabled={submittingForm}
+                  onClick={cancelCreate}
+                >
+                  {t('common.cancel', 'Cancel')}
+                </Button>
+              {/if}
+              <Button variant="primary" type="submit" disabled={submittingForm}>
+                {submittingForm
+                  ? t('common.saving', 'Saving…')
+                  : t('common.save', 'Save')}
+              </Button>
+            </div>
+          </form>
+        </div>
+      {/key}
+    {/if}
+  </div>
 
   {#if deleteConfirmJob}
     <ConfirmDialog
@@ -770,273 +878,3 @@
     />
   {/if}
 </section>
-
-<style>
-  .cron-view__expression-preview {
-    margin-top: 4px;
-    color: var(--text-med);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
-  .cron-view__field-help {
-    margin-top: 4px;
-    color: var(--text-lo);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
-  .cron-view {
-    display: flex;
-    min-width: 0;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 14px;
-    overflow: hidden;
-    padding: 24px 28px 28px;
-    background: var(--bg);
-  }
-
-  .cron-view__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
-  .cron-view__eyebrow {
-    margin: 0 0 6px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .cron-view__title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 20px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    line-height: 1.2;
-  }
-
-  .cron-view__subtitle {
-    max-width: 760px;
-    margin: 6px 0 0;
-    color: var(--text-med);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .cron-view__header-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 10px;
-  }
-
-  .cron-view__notice {
-    margin: 0;
-    padding: 11px 14px;
-    border: 1px solid var(--border-2);
-    border-left: 2px solid var(--green);
-    border-radius: var(--r-md);
-    color: var(--text-med);
-    font-size: 12.5px;
-    line-height: 1.4;
-    background: var(--surface);
-  }
-
-  .cron-view__notice--error {
-    border-left-color: var(--red);
-    color: var(--red);
-  }
-
-  .cron-view__notice--warn {
-    border-left-color: var(--amber);
-    color: var(--amber);
-  }
-
-  .cron-view__state {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    gap: 8px;
-    padding: 28px;
-    border: 1px dashed var(--border);
-    border-radius: var(--r-lg);
-    background: rgba(255, 255, 255, 0.02);
-    text-align: center;
-  }
-
-  .cron-view__state-title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 15px;
-    font-weight: 600;
-  }
-
-  .cron-view__state-subtitle {
-    max-width: 560px;
-    margin: 0;
-    color: var(--text-med);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .cron-view__table-wrap {
-    min-height: 0;
-    flex: 1;
-    overflow: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: var(--surface);
-  }
-
-  .cron-view__table {
-    width: 100%;
-    min-width: 1020px;
-    border-collapse: separate;
-    border-spacing: 0;
-  }
-
-  .cron-view__table th,
-  .cron-view__table td {
-    padding: 9px 12px;
-    border-bottom: 1px solid var(--border);
-    text-align: left;
-    vertical-align: middle;
-  }
-
-  .cron-view__table th {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    color: var(--text-lo);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .cron-view__table tbody tr:hover {
-    background: rgba(232, 135, 10, 0.05);
-  }
-
-  .cron-view__table tbody tr:last-child td {
-    border-bottom: 0;
-  }
-
-  .cron-view__mono,
-  .cron-view__prompt {
-    color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 12px;
-  }
-
-  .cron-view__prompt {
-    display: inline-block;
-    max-width: 300px;
-    overflow: hidden;
-    color: var(--text-hi);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .cron-view__actions {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .cron-view__actions :global(.btn-secondary),
-  .cron-view__actions :global(.btn-danger) {
-    padding: 4px 10px;
-    font-size: 11.5px;
-  }
-
-  :global(.cron-view__modal) {
-    width: 560px;
-    max-width: calc(100vw - 40px);
-  }
-
-  .cron-view__textarea {
-    min-height: 92px;
-    resize: vertical;
-  }
-
-  .cron-view__radio-fieldset {
-    border: 0;
-    padding: 0;
-    margin: 0;
-  }
-
-  .cron-view__radio-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 16px;
-    padding: 10px 12px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-  }
-
-  .cron-view__radio-option {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--text-med);
-    font-size: 12.5px;
-  }
-
-  .cron-view__radio-option input {
-    accent-color: var(--accent);
-  }
-
-  :global(.cron-view__dropdown),
-  :global(.cron-view__dropdown-list) {
-    width: 100%;
-    min-width: 0;
-  }
-
-  :global(.cron-view__dropdown .dropdown-primitive__trigger),
-  :global(.cron-view__dropdown .dropdown-primitive__option) {
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-  }
-
-  :global(.cron-view__dropdown-list) {
-    max-height: 220px;
-    overflow-y: auto;
-  }
-
-  @media (max-width: 960px) {
-    .cron-view {
-      padding: 20px;
-    }
-
-    .cron-view__header,
-    .cron-view__header-actions {
-      align-items: stretch;
-      flex-direction: column;
-    }
-
-    .cron-view__header-actions {
-      justify-content: flex-start;
-    }
-
-    .cron-view__table {
-      min-width: 900px;
-    }
-  }
-</style>
