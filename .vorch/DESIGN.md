@@ -263,7 +263,7 @@ No view stretches edge-to-edge on a wide monitor. Each scroll area fills its ful
 - `--chat-measure` is the live chat measure. It defaults to `--chat-measure-comfortable` and is overridden by `[data-chat-width]` on `.chat-view`: `wide` → `--chat-measure-wide`, `full` → `none` (edge-to-edge, the old behavior). The active value is user-selectable in **Appearance** settings (`appearance.chat_width`, persisted) and applied app-wide.
 - `--content-max-narrow: 920px` — settings/forms and label↔control rows. `--content-max-wide: 1180px` — detail/wide panels (Agents detail, System Prompt). These are fixed, not user-configurable.
 
-Wide data tables and log rows (Logs, Cron, Debug) are **not** force-capped — they keep their own horizontal scroll rather than squishing.
+Wide data tables and log rows (Logs, Debug) are **not** force-capped — they keep their own horizontal scroll rather than squishing.
 
 ### Breakpoints
 

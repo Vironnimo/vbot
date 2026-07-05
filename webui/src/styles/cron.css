@@ -1,0 +1,419 @@
+/* Cron tab — master-detail layout mirroring the Agents/Projects tabs (list pane
+   left, detail scroll right). Structural and visual language follows agents.css
+   and projects.css so the configuration surfaces read the same. Everything is
+   scoped under `.cron-view` and referenced from CronView.svelte's markup. */
+
+.cron-view {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-hi);
+  background: var(--bg);
+}
+
+.cron-view .cron-layout {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── List pane (left) ─────────────────────────────────────────────────────── */
+
+.cron-view .cron-list-pane {
+  display: flex;
+  min-height: 0;
+  width: 260px;
+  min-width: 260px;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.cron-view .pane-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cron-view .pane-title {
+  color: var(--text-hi);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.cron-view .pane-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.cron-view .cron-list-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 0;
+  scrollbar-gutter: stable;
+}
+
+.cron-view .cron-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cron-view .cron-item {
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.cron-view .cron-item:hover,
+.cron-view .cron-item:focus-visible {
+  background: var(--surface-2);
+}
+
+.cron-view .cron-item:focus-visible {
+  outline: 1px solid rgba(232, 135, 10, 0.4);
+  outline-offset: -1px;
+}
+
+.cron-view .cron-item.active {
+  background: var(--accent-dim);
+}
+
+.cron-view .cron-bar {
+  width: 2px;
+  flex-shrink: 0;
+  background: transparent;
+}
+
+.cron-view .cron-item.active .cron-bar {
+  background: var(--accent);
+}
+
+.cron-view .cron-item-inner {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px 8px 10px;
+}
+
+.cron-view .cron-item-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.cron-view .cron-item-name {
+  overflow: hidden;
+  color: var(--text-hi);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-view .cron-item.active .cron-item-name {
+  color: var(--accent);
+}
+
+.cron-view .cron-item-schedule {
+  overflow: hidden;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-view .cron-list-state {
+  margin: 0;
+  padding: 12px 16px;
+  color: var(--text-lo);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.cron-view .cron-list-state--warn {
+  color: var(--amber);
+}
+
+.cron-view .cron-empty-list {
+  display: flex;
+  min-height: 200px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 22px 18px;
+  text-align: center;
+}
+
+.cron-view .cron-empty-title {
+  color: var(--text-hi);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.cron-view .cron-empty-sub {
+  color: var(--text-med);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ── Detail pane (right) ──────────────────────────────────────────────────── */
+
+.cron-view .cron-detail-pane {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cron-view .cron-detail-scroll {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 26px 30px;
+  scrollbar-gutter: stable;
+}
+
+/* Cap the detail content to the wide content measure and center it; the scroll
+   container itself stays full-width so the scrollbar stays at the pane edge. */
+.cron-view .cron-detail-scroll > * {
+  width: 100%;
+  max-width: var(--content-max-wide);
+  margin-inline: auto;
+}
+
+.cron-view .cron-detail-empty {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-lo);
+  font-size: 13px;
+  text-align: center;
+}
+
+.cron-view .detail-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+
+.cron-view .detail-heading {
+  color: var(--text-hi);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.cron-view .detail-sub {
+  margin-top: 4px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.cron-view .detail-btns {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── Read-only info rows ──────────────────────────────────────────────────── */
+
+.cron-view .cron-info-rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.cron-view .cron-info-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cron-view .cron-info-label {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cron-view .cron-info-value {
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* ── Form fields ──────────────────────────────────────────────────────────── */
+
+.cron-view .cron-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cron-view .cron-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cron-view .cron-label {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.cron-view .cron-field-help {
+  color: var(--text-lo);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cron-view .cron-expression-preview {
+  color: var(--text-med);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cron-view .cron-textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.cron-view .cron-radio-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cron-view .cron-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.cron-view .cron-radio-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-med);
+  font-size: 12.5px;
+}
+
+.cron-view .cron-radio-option input {
+  accent-color: var(--accent);
+}
+
+.cron-view .cron-dropdown,
+.cron-view .cron-dropdown-list {
+  width: 100%;
+  min-width: 0;
+}
+
+.cron-view :global(.cron-dropdown .dropdown-primitive__trigger),
+.cron-view :global(.cron-dropdown .dropdown-primitive__option) {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.cron-view :global(.cron-dropdown-list) {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.cron-view .cron-notice {
+  margin: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--border-2);
+  border-left: 2px solid var(--green);
+  border-radius: var(--r-md);
+  color: var(--text-med);
+  font-size: 12.5px;
+  line-height: 1.4;
+  background: var(--surface);
+}
+
+.cron-view .cron-notice--error {
+  border-left-color: var(--red);
+  color: var(--red);
+}
+
+.cron-view .cron-detail-footer {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 0 4px;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 960px) {
+  .cron-view .cron-layout,
+  .cron-view .detail-top {
+    flex-direction: column;
+  }
+
+  .cron-view .cron-list-pane {
+    width: 100%;
+    min-width: 0;
+    max-height: min(240px, 35vh);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cron-view .cron-detail-scroll {
+    padding: 22px 18px;
+  }
+}
