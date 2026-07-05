@@ -9,7 +9,6 @@ The `vbot` CLI is the automation surface for configuring and operating a vBot in
 
 ## Rules
 
-- Use the installed `vbot` command, never `python cli/main.py`.
 - Primary identifiers are positional (`vbot agent show assistant`); secondary parameters are flags. `vbot <area> <command> --help` shows exact flags plus a usage example.
 - Only `server start|stop|restart|status`, `desktop`, `update`, `autostart`, and `doctor` work without a running server. Everything else needs one: check `vbot server status` first, start with `vbot server start` if needed.
 - Non-default instance: add `--host`, `--port`, `--data-dir` to every command.
