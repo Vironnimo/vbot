@@ -335,11 +335,14 @@ describe('SettingsView', () => {
 
     expect(document.body.textContent).toContain('Recall backend');
     expect(getSimpleTrigger('settings-recall-backend').textContent).toContain(
-      'JSONL scan',
+      'Simple scan — exact keyword match, no index',
     );
 
     openSimpleDropdown('settings-recall-backend');
-    selectSimpleOption('settings-recall-backend', 'SQLite FTS');
+    selectSimpleOption(
+      'settings-recall-backend',
+      'Full-text search — fast keyword search with an index',
+    );
 
     getButton('Save').click();
     await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
@@ -688,7 +691,7 @@ describe('SettingsView', () => {
 
     expect(buttonByText('Voice')).toBeTruthy();
 
-    buttonByText('General').click();
+    buttonByText('Server info').click();
     flushSync();
 
     await waitForCondition(() =>
@@ -1002,7 +1005,10 @@ describe('SettingsView', () => {
     expect(document.body.textContent).toContain('Recall backend');
     openSimpleDropdown('settings-recall-backend');
     await waitForCondition(() => getSimpleList() !== null);
-    selectSimpleOption('settings-recall-backend', 'Semantic (vector)');
+    selectSimpleOption(
+      'settings-recall-backend',
+      'Semantic — finds matches by meaning, needs an embedding model',
+    );
 
     getButton('Save').click();
     await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
@@ -1058,7 +1064,7 @@ describe('SettingsView', () => {
     // and the dropdown is in the DOM.
     expect(document.body.textContent).toContain('Embedding model');
     expect(document.body.textContent).toContain(
-      'Used for semantic session recall when the vector recall backend is enabled.',
+      'Turns text into numeric vectors for meaning-based search. Required when Recall is set to Semantic.',
     );
     expect(
       rpcMock.mock.calls.some(
@@ -1157,8 +1163,8 @@ async function openWebSearchPanel() {
 }
 
 async function openDefaultsPanel() {
-  await waitForCondition(() => buttonByText('Defaults'));
-  buttonByText('Defaults').click();
+  await waitForCondition(() => buttonByText('Agent defaults'));
+  buttonByText('Agent defaults').click();
   flushSync();
   await waitForCondition(() =>
     document.body.textContent.includes('Fallback model'),

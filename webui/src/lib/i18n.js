@@ -497,8 +497,9 @@ export const englishCatalog = Object.freeze({
   'settings.loadError': 'Settings could not be loaded.',
   'settings.saveError': 'Settings could not be saved.',
   'settings.sections': 'Settings sections',
-  'settings.general.title': 'General',
-  'settings.general.subtitle': 'Bind address and application data directory.',
+  'settings.general.title': 'Server info',
+  'settings.general.subtitle':
+    'Server address, data directory, and connected clients.',
   'settings.general.serverHost': 'Server host',
   'settings.general.serverHostDescription':
     'Address and port the vBot server listens on.',
@@ -518,9 +519,9 @@ export const englishCatalog = Object.freeze({
   'settings.general.clients.accessor.desktop': 'Desktop',
   'settings.general.clients.accessor.unknown': 'Unknown',
   'settings.general.clients.status.connected': 'Connected',
-  'settings.defaults.title': 'Defaults',
+  'settings.defaults.title': 'Agent defaults',
   'settings.defaults.subtitle':
-    'Fallback values for agent fields that are not explicitly set.',
+    'Model, temperature, and thinking effort used when an agent leaves them unset.',
   'settings.defaults.model': 'Model',
   'settings.defaults.modelDescription': 'Used when an agent model is empty.',
   'settings.defaults.fallbackModel': 'Fallback model',
@@ -535,8 +536,7 @@ export const englishCatalog = Object.freeze({
   'settings.defaults.noThinkingEffort': '— (no default)',
   'settings.defaults.saveSuccess': 'Agent defaults updated.',
   'settings.skills.title': 'Skills',
-  'settings.skills.subtitle':
-    'Additional directories scanned for local skills.',
+  'settings.skills.subtitle': 'Manage skill files and skill scan directories.',
   'settings.skills.defaultDirectory': 'Default skill directory',
   'settings.skills.defaultDirectoryDescription':
     'Always scanned from the vBot data directory and kept read-only here.',
@@ -583,30 +583,34 @@ export const englishCatalog = Object.freeze({
     'Maximum wait time for foreground sub-agent calls before they fail.',
   'settings.subagents.saveSuccess': 'Sub-agent settings updated.',
   'settings.compaction.title': 'Compaction',
-  'settings.compaction.subtitle': 'Automatic context window management.',
+  'settings.compaction.subtitle':
+    'Automatic summarizing when a conversation nears the model context limit.',
   'settings.compaction.auto': 'Auto-compact',
   'settings.compaction.autoDescription':
-    'Automatically compact when the context threshold is reached.',
+    'When the conversation reaches the threshold, older messages are automatically summarized; the summary plus the most recent messages stay in context.',
   'settings.compaction.threshold': 'Threshold',
   'settings.compaction.thresholdDescription':
-    'Compact when context usage exceeds this fraction (0–1).',
+    'Fraction of the context window that triggers compaction, between 0 and 1 — e.g. 0.8 compacts when the context is 80% full.',
   'settings.compaction.tailTokens': 'Tail tokens',
   'settings.compaction.tailTokensDescription':
-    'Number of tokens preserved verbatim at the end of context.',
+    'Amount of recent conversation that is always kept word-for-word instead of summarized, measured in tokens.',
   'settings.compaction.summaryModel': 'Summary model',
   'settings.compaction.summaryModelDescription':
     'Model used for summarization. Leave blank to use the active agent model.',
-  'settings.compaction.save': 'Save',
   'settings.compaction.saved': 'Compaction settings saved.',
   'settings.recall.title': 'Recall',
-  'settings.recall.subtitle': 'Session search backend.',
+  'settings.recall.subtitle': 'How agents search past conversations.',
   'settings.recall.backend': 'Recall backend',
   'settings.recall.backendDescription':
-    'Backend used by session_search for stored Session recall.',
-  'settings.recall.backends.jsonl_scan': 'JSONL scan',
-  'settings.recall.backends.sqlite_fts': 'SQLite FTS',
-  'settings.recall.backends.vector': 'Semantic (vector)',
-  'settings.recall.save': 'Save',
+    'How the session search looks through stored conversations.',
+  'settings.recall.backends.jsonl_scan':
+    'Simple scan — exact keyword match, no index',
+  'settings.recall.backends.sqlite_fts':
+    'Full-text search — fast keyword search with an index',
+  'settings.recall.backends.vector':
+    'Semantic — finds matches by meaning, needs an embedding model',
+  'settings.recall.vectorHint':
+    'Semantic search requires an embedding model — configure it under Specialized Models.',
   'settings.recall.saveSuccess': 'Recall backend updated.',
   'settings.webSearch.title': 'Web Search',
   'settings.webSearch.subtitle': 'Provider used by the web_search tool.',
@@ -617,8 +621,7 @@ export const englishCatalog = Object.freeze({
   'settings.webSearch.providers.searxng': 'SearXNG',
   'settings.webSearch.searxngBaseUrl': 'SearXNG base URL',
   'settings.webSearch.searxngBaseUrlDescription':
-    'Base URL of the local or remote SearXNG instance.',
-  'settings.webSearch.save': 'Save',
+    'Address of the SearXNG instance to use. SearXNG is a self-hosted metasearch engine — you need to run one yourself or point this at a reachable instance.',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
   'settings.specializedModels.subtitle':
@@ -641,7 +644,7 @@ export const englishCatalog = Object.freeze({
     'Used for image generation requests.',
   'settings.specializedModels.embeddingModel': 'Embedding model',
   'settings.specializedModels.embeddingModelDescription':
-    'Used for semantic session recall when the vector recall backend is enabled.',
+    'Turns text into numeric vectors for meaning-based search. Required when Recall is set to Semantic.',
   'settings.specializedModels.noTarget': 'Not configured',
   'settings.specializedModels.customTarget': 'Custom target: {target}',
   'settings.specializedModels.noOptions':
@@ -660,11 +663,6 @@ export const englishCatalog = Object.freeze({
   'settings.providers.description.modelCount': '{count} models available.',
   'settings.providers.description.none':
     'Provider metadata is not available yet.',
-  'settings.providers.customEndpoint': 'Custom endpoint',
-  'settings.providers.customEndpointDescription':
-    'OpenAI-compatible custom endpoints remain placeholder-only in this phase.',
-  'settings.providers.customEndpointStatus': 'Placeholder',
-  'settings.providers.configure': 'Configure…',
   'settings.providers.refreshModels': 'Update Model DB',
   'settings.providers.refreshingModels': 'Updating…',
   'settings.providers.refreshSuccess':
@@ -758,6 +756,8 @@ export const englishCatalog = Object.freeze({
   'settings.channels.dm_scope.per_account_channel_peer':
     'Per account + channel + peer',
   'settings.channels.token_env_var': 'Token env var',
+  'settings.channels.token_env_var.help':
+    'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
   'settings.channels.allowed_chat_ids': 'Allowed chat IDs (inbound)',
   'settings.channels.allowed_chat_ids.placeholder': '12345, -1009876543210',
   'settings.channels.allowed_chat_ids.none': 'None',
@@ -774,7 +774,7 @@ export const englishCatalog = Object.freeze({
   'settings.channels.deleteSuccess': 'Channel deleted.',
   'settings.extensions.title': 'Extensions',
   'settings.extensions.subtitle':
-    'Loaded extensions and their capabilities. Toggles apply after restart.',
+    'Loaded extensions and their capabilities. Toggles take effect immediately.',
   'settings.extensions.empty': 'No extensions discovered.',
   'settings.extensions.statusLoaded': 'Loaded',
   'settings.extensions.statusFailed': 'Failed',
@@ -880,7 +880,6 @@ export const englishCatalog = Object.freeze({
 
   'debug.settings': 'Debug',
   'debug.enabled': 'Enable debug mode',
-  'debug.save': 'Save',
   'debug.traceLimit': 'Trace limit',
   'debug.localWarning':
     'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',

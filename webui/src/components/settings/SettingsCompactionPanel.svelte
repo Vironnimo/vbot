@@ -264,7 +264,7 @@
     <div class="s-row-desc">
       {t(
         'settings.compaction.autoDescription',
-        'Automatically compact when the context threshold is reached.',
+        'When the conversation reaches the threshold, older messages are automatically summarized; the summary plus the most recent messages stay in context.',
       )}
     </div>
   </div>
@@ -285,7 +285,7 @@
     <div class="s-row-desc">
       {t(
         'settings.compaction.thresholdDescription',
-        'Compact when context usage exceeds this fraction (0–1).',
+        'Fraction of the context window that triggers compaction, between 0 and 1 — e.g. 0.8 compacts when the context is 80% full.',
       )}
     </div>
   </div>
@@ -307,7 +307,7 @@
     <div class="s-row-desc">
       {t(
         'settings.compaction.tailTokensDescription',
-        'Number of tokens preserved verbatim at the end of context.',
+        'Amount of recent conversation that is always kept word-for-word instead of summarized, measured in tokens.',
       )}
     </div>
   </div>
@@ -364,8 +364,6 @@
     class="s-save-button s-save-button--inline"
     onClick={handleManualCompactionSettingsSave}
   >
-    {saving
-      ? t('common.saving', 'Saving…')
-      : t('settings.compaction.save', 'Save')}
+    {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
   </Button>
 </div>
