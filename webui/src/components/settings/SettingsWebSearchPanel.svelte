@@ -174,7 +174,7 @@
       <div class="s-row-desc">
         {t(
           'settings.webSearch.searxngBaseUrlDescription',
-          'Base URL of the local or remote SearXNG instance.',
+          'Address of the SearXNG instance to use. SearXNG is a self-hosted metasearch engine — you need to run one yourself or point this at a reachable instance.',
         )}
       </div>
     </div>
@@ -197,8 +197,6 @@
     class="s-save-button s-save-button--inline"
     onClick={handleManualWebSearchSettingsSave}
   >
-    {saving
-      ? t('common.saving', 'Saving…')
-      : t('settings.webSearch.save', 'Save')}
+    {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
   </Button>
 </div>

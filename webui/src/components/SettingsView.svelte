@@ -40,49 +40,40 @@
     providersPanel?.handleProviderAuthCompleted(event);
   }
 
+  // Panel order is deliberate: setup (providers) → model behavior → skills &
+  // limits → integrations → personal preferences → diagnostics/read-only.
   let panels = $derived([
     {
-      id: 'general',
-      labelKey: 'settings.general.title',
-      labelFallback: 'General',
-      label: () => t('settings.general.title', 'General'),
+      id: 'providers',
+      labelKey: 'settings.providers.title',
+      labelFallback: 'Providers',
+      label: () => t('settings.providers.title', 'Providers'),
       subtitle: () =>
         t(
-          'settings.general.subtitle',
-          'Bind address and application data directory.',
+          'settings.providers.subtitle',
+          'Connected providers and their credentials.',
         ),
     },
     {
       id: 'defaults',
       labelKey: 'settings.defaults.title',
-      labelFallback: 'Defaults',
-      label: () => t('settings.defaults.title', 'Defaults'),
+      labelFallback: 'Agent defaults',
+      label: () => t('settings.defaults.title', 'Agent defaults'),
       subtitle: () =>
         t(
           'settings.defaults.subtitle',
-          'Fallback values for agent fields that are not explicitly set.',
+          'Model, temperature, and thinking effort used when an agent leaves them unset.',
         ),
     },
     {
-      id: 'skills',
-      labelKey: 'settings.skills.title',
-      labelFallback: 'Skills',
-      label: () => t('settings.skills.title', 'Skills'),
+      id: 'specialized_models',
+      labelKey: 'settings.specializedModels.title',
+      labelFallback: 'Specialized Models',
+      label: () => t('settings.specializedModels.title', 'Specialized Models'),
       subtitle: () =>
         t(
-          'settings.skills.subtitle',
-          'Additional directories scanned for local skills.',
-        ),
-    },
-    {
-      id: 'subagents',
-      labelKey: 'settings.subagents.title',
-      labelFallback: 'Sub-Agents',
-      label: () => t('settings.subagents.title', 'Sub-Agents'),
-      subtitle: () =>
-        t(
-          'settings.subagents.subtitle',
-          'Depth, fan-out, and timeout limits for spawned agent sessions.',
+          'settings.specializedModels.subtitle',
+          'Task-specific model bindings for speech, image, and embedding tools.',
         ),
     },
     {
@@ -93,7 +84,7 @@
       subtitle: () =>
         t(
           'settings.compaction.subtitle',
-          'Automatic context window management.',
+          'Automatic summarizing when a conversation nears the model context limit.',
         ),
     },
     {
@@ -101,7 +92,8 @@
       labelKey: 'settings.recall.title',
       labelFallback: 'Recall',
       label: () => t('settings.recall.title', 'Recall'),
-      subtitle: () => t('settings.recall.subtitle', 'Session search backend.'),
+      subtitle: () =>
+        t('settings.recall.subtitle', 'How agents search past conversations.'),
     },
     {
       id: 'web_search',
@@ -115,36 +107,25 @@
         ),
     },
     {
-      id: 'debug',
-      labelKey: 'debug.settings',
-      labelFallback: 'Debug',
-      label: () => t('debug.settings', 'Debug'),
+      id: 'skills',
+      labelKey: 'settings.skills.title',
+      labelFallback: 'Skills',
+      label: () => t('settings.skills.title', 'Skills'),
       subtitle: () =>
         t(
-          'debug.settingsSubtitle',
-          'Control debug tracing of provider requests and responses.',
+          'settings.skills.subtitle',
+          'Manage skill files and skill scan directories.',
         ),
     },
     {
-      id: 'specialized_models',
-      labelKey: 'settings.specializedModels.title',
-      labelFallback: 'Specialized Models',
-      label: () => t('settings.specializedModels.title', 'Specialized Models'),
+      id: 'subagents',
+      labelKey: 'settings.subagents.title',
+      labelFallback: 'Sub-Agents',
+      label: () => t('settings.subagents.title', 'Sub-Agents'),
       subtitle: () =>
         t(
-          'settings.specializedModels.subtitle',
-          'Task-specific model bindings for speech and future media tools.',
-        ),
-    },
-    {
-      id: 'providers',
-      labelKey: 'settings.providers.title',
-      labelFallback: 'Providers',
-      label: () => t('settings.providers.title', 'Providers'),
-      subtitle: () =>
-        t(
-          'settings.providers.subtitle',
-          'Connected providers and their credentials.',
+          'settings.subagents.subtitle',
+          'Depth, fan-out, and timeout limits for spawned agent sessions.',
         ),
     },
     {
@@ -166,7 +147,7 @@
       subtitle: () =>
         t(
           'settings.extensions.subtitle',
-          'Loaded extensions and their capabilities. Toggles apply after restart.',
+          'Loaded extensions and their capabilities. Toggles take effect immediately.',
         ),
     },
     ...(desktopCapabilities?.wakeword
@@ -189,11 +170,34 @@
       labelKey: 'settings.appearance.title',
       labelFallback: 'Appearance',
       label: () => t('settings.appearance.title', 'Appearance'),
-      subtitle: () => t('settings.appearance.subtitle', 'Language preference.'),
+      subtitle: () =>
+        t('settings.appearance.subtitle', 'Language and chat reading width.'),
+    },
+    {
+      id: 'debug',
+      labelKey: 'debug.settings',
+      labelFallback: 'Debug',
+      label: () => t('debug.settings', 'Debug'),
+      subtitle: () =>
+        t(
+          'debug.settingsSubtitle',
+          'Control debug tracing of provider requests and responses.',
+        ),
+    },
+    {
+      id: 'general',
+      labelKey: 'settings.general.title',
+      labelFallback: 'Server info',
+      label: () => t('settings.general.title', 'Server info'),
+      subtitle: () =>
+        t(
+          'settings.general.subtitle',
+          'Server address, data directory, and connected clients.',
+        ),
     },
   ]);
 
-  let activePanelId = $state('general');
+  let activePanelId = $state('providers');
   let settings = $state(null);
   let loading = $state(true);
   let loadError = $state('');
