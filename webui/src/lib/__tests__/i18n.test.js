@@ -278,7 +278,7 @@ describe('i18n t()', () => {
       'settings.recall.backends.jsonl_scan',
       'settings.recall.backends.sqlite_fts',
       'settings.recall.backends.vector',
-      'settings.recall.save',
+      'settings.recall.vectorHint',
       'settings.recall.saveSuccess',
       'settings.specializedModels.embeddingModel',
       'settings.specializedModels.embeddingModelDescription',
@@ -309,10 +309,6 @@ describe('i18n t()', () => {
       'settings.providers.add.saveKey',
       'settings.providers.add.keyError',
       'settings.providers.add.oauthIntro',
-      'settings.providers.customEndpoint',
-      'settings.providers.customEndpointDescription',
-      'settings.providers.customEndpointStatus',
-      'settings.providers.configure',
       'settings.appearance.title',
       'settings.appearance.subtitle',
       'settings.appearance.language',
@@ -327,13 +323,31 @@ describe('i18n t()', () => {
     ];
 
     expectCatalogKeys(requiredKeys);
-    expect(t('settings.recall.backends.vector')).toBe('Semantic (vector)');
+    expect(t('settings.recall.backends.vector')).toBe(
+      'Semantic — finds matches by meaning, needs an embedding model',
+    );
+    expect(t('settings.recall.vectorHint')).toContain('embedding model');
     expect(t('settings.specializedModels.embeddingModel')).toBe(
       'Embedding model',
     );
     expect(t('settings.specializedModels.embeddingModelDescription')).toContain(
-      'semantic session recall',
+      'meaning-based search',
     );
+    // The consolidated Save key replaced the per-panel bespoke variants.
+    expect(englishCatalog['settings.recall.save']).toBeUndefined();
+    expect(englishCatalog['settings.compaction.save']).toBeUndefined();
+    expect(englishCatalog['settings.webSearch.save']).toBeUndefined();
+    expect(englishCatalog['debug.save']).toBeUndefined();
+    expect(t('common.save')).toBe('Save');
+    // The dead custom-endpoint placeholder row and its keys were removed.
+    expect(englishCatalog['settings.providers.customEndpoint']).toBeUndefined();
+    expect(
+      englishCatalog['settings.providers.customEndpointDescription'],
+    ).toBeUndefined();
+    expect(
+      englishCatalog['settings.providers.customEndpointStatus'],
+    ).toBeUndefined();
+    expect(englishCatalog['settings.providers.configure']).toBeUndefined();
     expect(englishCatalog['settings.placeholderNote']).toBeUndefined();
     expect(englishCatalog['settings.general.autoScroll']).toBeUndefined();
     expect(

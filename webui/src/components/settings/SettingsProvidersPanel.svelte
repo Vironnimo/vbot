@@ -497,30 +497,6 @@
     {/each}
   {/if}
 
-  <div class="s-row">
-    <div class="s-row-info">
-      <div class="s-row-label">
-        {t('settings.providers.customEndpoint', 'Custom endpoint')}
-      </div>
-      <div class="s-row-desc">
-        {t(
-          'settings.providers.customEndpointDescription',
-          'OpenAI-compatible custom endpoints remain placeholder-only in this phase.',
-        )}
-      </div>
-    </div>
-    <div class="s-row-control">
-      <div class="s-row-actions">
-        <StatusChip variant="info">
-          {t('settings.providers.customEndpointStatus', 'Placeholder')}
-        </StatusChip>
-        <Button variant="secondary" disabled>
-          {t('settings.providers.configure', 'Configure…')}
-        </Button>
-      </div>
-    </div>
-  </div>
-
   {#if modalScope}
     <ProviderConnectModal
       providers={addProviderCandidates}

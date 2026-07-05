@@ -410,6 +410,12 @@
           disabled={channelBusy}
           onInput={(next) => setChannelFormField('token_env_var', next)}
         />
+        <span class="s-field-help">
+          {t(
+            'settings.channels.token_env_var.help',
+            'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
+          )}
+        </span>
       </label>
 
       <label class="s-field s-field--full" for="channel-allowed-chat-ids-input">
