@@ -212,6 +212,15 @@ describe('i18n t()', () => {
       'agents.form.modelPlaceholder',
       'agents.form.modelUnavailableOption',
       'agents.form.customSystemPrompt',
+      'agents.form.customPromptHelp',
+      'agents.form.memoryPromptModeHelp',
+      'agents.form.fallbackModelHelp',
+      'agents.form.temperatureHelp',
+      'agents.form.thinkingEffortHelp',
+      'agents.form.wildcardNote',
+      'agents.form.memoryPromptModeOption.off',
+      'agents.form.memoryPromptModeOption.agent',
+      'agents.form.memoryPromptModeOption.agent_user',
       'agents.access.noSkills',
       'agents.access.toggleTool',
       'agents.access.toggleSkill',
@@ -221,6 +230,13 @@ describe('i18n t()', () => {
     expect(t('agents.detail.idValue', undefined, { id: 'alpha' })).toBe(
       'id: alpha',
     );
+    expect(t('agents.form.memoryPromptModeOption.agent')).toBe(
+      'Agent notes (MEMORY.md)',
+    );
+    expect(t('agents.form.memoryPromptModeOption.agent_user')).toBe(
+      'Agent + user notes (MEMORY.md + USER.md)',
+    );
+    expect(t('agents.form.customPromptHelp')).toContain('System Prompt tab');
     expect(
       t('agents.form.modelUnavailableOption', undefined, {
         model: 'custom/provider-model',
@@ -236,8 +252,14 @@ describe('i18n t()', () => {
       'systemPrompt.fragmentEditor.reset',
       'systemPrompt.fragmentEditor.dirtyIndicator',
       'systemPrompt.fragmentEditor.modifiedIndicator',
+      'systemPrompt.fragmentEditor.modifiedHint',
       'systemPrompt.fragmentEditor.resetConfirm',
       'systemPrompt.fragmentEditor.resetAgentConfirm',
+      'systemPrompt.blockList.intro',
+      'systemPrompt.blockList.newBlockPrompt',
+      'systemPrompt.blockList.invalidSlug',
+      'systemPrompt.blockList.dataBadge',
+      'systemPrompt.blockList.dataHint',
       'systemPrompt.preview.heading',
       'systemPrompt.preview.refresh',
       'systemPrompt.preview.copy',
@@ -256,6 +278,28 @@ describe('i18n t()', () => {
     expect(t('systemPrompt.preview.tokenCount', undefined, { count: 42 })).toBe(
       '~42 tokens',
     );
+    // The reworded intro now explains where an agent scope comes from.
+    expect(t('systemPrompt.blockList.intro')).toContain('Custom system prompt');
+    // Reset confirms speak of "block", never the retired "fragment" term.
+    expect(t('systemPrompt.fragmentEditor.resetConfirm')).toBe(
+      'Reset this block to its default? This cannot be undone.',
+    );
+    expect(t('systemPrompt.fragmentEditor.resetAgentConfirm')).toBe(
+      'Reset this Agent block to the current Default content? This cannot be undone.',
+    );
+    expect(t('systemPrompt.fragmentEditor.resetConfirm')).not.toContain(
+      'fragment',
+    );
+    expect(t('systemPrompt.fragmentEditor.resetAgentConfirm')).not.toContain(
+      'fragment',
+    );
+    // The new-block copy no longer uses the jargon "slug".
+    expect(t('systemPrompt.blockList.newBlockPrompt')).not.toContain('slug');
+    expect(t('systemPrompt.blockList.invalidSlug')).toMatch(/^Invalid name —/u);
+    expect(t('systemPrompt.fragmentEditor.modifiedHint')).toBe(
+      'Edited — differs from the built-in default.',
+    );
+    expect(t('systemPrompt.blockList.dataHint')).toContain('Generated content');
   });
 
   it('contains Toasted design labels for Settings sections', () => {

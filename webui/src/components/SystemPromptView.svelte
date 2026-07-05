@@ -709,7 +709,10 @@
 
   async function createCustomBlock() {
     const slug = window.prompt(
-      t('systemPrompt.blockList.newBlockPrompt', 'New block slug'),
+      t(
+        'systemPrompt.blockList.newBlockPrompt',
+        'Name for the new block (letters, digits, “-” or “_”):',
+      ),
     );
     if (slug === null) {
       return;
@@ -722,7 +725,7 @@
       showToast(
         t(
           'systemPrompt.blockList.invalidSlug',
-          'Invalid slug — use letters, digits, “-” or “_”, starting with a letter or digit.',
+          'Invalid name — use letters, digits, “-” or “_”, starting with a letter or digit.',
         ),
         'error',
       );
@@ -862,7 +865,7 @@
           <span class="sp-blocklist-hint">
             {t(
               'systemPrompt.blockList.intro',
-              'Reorder, toggle, and edit the blocks that build the system prompt.',
+              'Reorder, toggle, and edit the blocks that build the system prompt. The Default scope applies to every agent; an agent gets its own scope here once “Custom system prompt” is enabled in the Agents tab.',
             )}
           </span>
           <div class="sp-blocklist-toolbar-actions">
@@ -932,7 +935,13 @@
                       </span>
                     {/if}
                     {#if block.kind === 'data'}
-                      <span class="sp-badge sp-badge--data">
+                      <span
+                        class="sp-badge sp-badge--data"
+                        title={t(
+                          'systemPrompt.blockList.dataHint',
+                          'Generated content — rebuilt automatically, not editable.',
+                        )}
+                      >
                         {t('systemPrompt.blockList.dataBadge', 'auto')}
                       </span>
                     {/if}
@@ -953,8 +962,8 @@
                       <span
                         class="sp-badge sp-badge--modified"
                         title={t(
-                          'systemPrompt.fragmentEditor.modifiedIndicator',
-                          'User copy — differs from bundled default',
+                          'systemPrompt.fragmentEditor.modifiedHint',
+                          'Edited — differs from the built-in default.',
                         )}
                       >
                         {t(
