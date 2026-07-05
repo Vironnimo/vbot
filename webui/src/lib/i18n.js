@@ -607,7 +607,7 @@ export const englishCatalog = Object.freeze({
   'settings.general.clients.status.connected': 'Connected',
   'settings.defaults.title': 'Agent defaults',
   'settings.defaults.subtitle':
-    'Model, temperature, and thinking effort used when an agent leaves them unset.',
+    'Model, temperature, and thinking effort used when an agent or project leaves them unset — shown there as "Inherited: … (global default)".',
   'settings.defaults.model': 'Model',
   'settings.defaults.modelDescription': 'Used when an agent model is empty.',
   'settings.defaults.fallbackModel': 'Fallback model',
@@ -684,7 +684,7 @@ export const englishCatalog = Object.freeze({
     'Amount of recent conversation that is always kept word-for-word instead of summarized, measured in tokens.',
   'settings.compaction.summaryModel': 'Summary model',
   'settings.compaction.summaryModelDescription':
-    'Model used for summarization. Leave blank to use the active agent model.',
+    'Model used for summarization. Leave blank to use the active agent model. This binding is independent of agent and project defaults.',
   'settings.compaction.saved': 'Compaction settings saved.',
   'settings.recall.title': 'Recall',
   'settings.recall.subtitle': 'How agents search past conversations.',
@@ -713,7 +713,7 @@ export const englishCatalog = Object.freeze({
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
   'settings.specializedModels.subtitle':
-    'Task-specific model bindings for speech, image, and embedding tools.',
+    'Task-specific model bindings for speech, image, and embedding tools. These bindings are independent of agent and project defaults.',
   'settings.specializedModels.loading': 'Loading specialized model targets…',
   'settings.specializedModels.loadError':
     'Specialized model targets could not be loaded.',
