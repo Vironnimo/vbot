@@ -1,0 +1,71 @@
+# Providers, Models, Task Models
+
+## Inspect
+
+```bash
+vbot provider list
+vbot provider status <provider-id> [--connection <provider:connection-id>]
+```
+
+`provider list` shows every connection with its accounts, usable state, and credential source — run it before model or agent configuration work.
+
+## API-key credentials
+
+```bash
+vbot provider set-key <provider-id> <api-key> [--connection <provider:connection-id>] [--account <account-id>] [--refresh-models]
+vbot provider unset-key <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
+```
+
+- `set-key` writes the key to the target data-dir `.env` via server RPC, reloads provider credentials live (no restart), and prints only the connection and env-key name. Never echo the key back.
+- `--connection` is required only when the provider has more than one API-key connection.
+- Add `--refresh-models` when the user wants the provider's models usable right away.
+- `unset-key` removes only data-dir `.env` keys; a credential set in the process environment is out of its reach and stays usable.
+
+## OAuth device flow
+
+OAuth/subscription connections use the device flow instead of `set-key` (`set-key` rejects OAuth connections, `connect` rejects API-key connections):
+
+```bash
+vbot provider connect <provider-id> --connection <provider:connection-id> [--account <account-id>]
+vbot provider connect-status <provider-id> --connection <provider:connection-id> [--account <account-id>]
+vbot provider disconnect <provider-id> --connection <provider:connection-id> [--account <account-id>]
+```
+
+`connect` prints a user code, a verification URL, and the expiry; the server polls in the background. Relay the code and URL to the user, then check `connect-status` until it reports `connected=yes`.
+
+## Accounts — multiple credentials per connection
+
+- A connection holds named credential slots; the default slot is `default`. Account ids are 1-32 characters of lowercase letters, digits, or underscores.
+- `--account <account-id>` works on all five credential commands. Named API-key accounts persist under the derived env key `<BASE>__<ACCOUNT>` (e.g. `OPENAI_API_KEY__WORK`).
+- A model pins an account with the suffix `<provider>/<model>::<connection>:<account>`.
+
+## Models
+
+```bash
+vbot model list
+vbot model refresh [<provider-id>]
+```
+
+- `refresh` fetches provider model catalogs from the network (needs a credential for provider catalogs); omitting the provider id refreshes all refreshable providers.
+- Hand-edits to model override files need no refresh — they take effect on the next load (registry reload / server restart).
+
+## Task models
+
+Bind a specialized task to a model target. Task types: `image_generation`, `speech_to_text`, `text_embedding`, `text_to_speech`, `video_generation`.
+
+```bash
+vbot task-model list
+vbot task-model targets <task-type>
+vbot task-model options <task-type> <target-id>
+vbot task-model set <task-type> <target-id> [--options '<json-object>']
+vbot task-model clear <task-type>
+```
+
+- Read target ids from `targets` (`<provider>/<model>::<connection>` or `local/<id>`) instead of constructing them by hand. `targets` lists connection-level ids — append a trailing `:<account-id>` yourself to pin a credential account.
+- Check `options` for the valid keys before passing `--options`; it must be one JSON object as a single shell argument.
+- `set` changes only the given task type; other bindings stay untouched.
+
+```bash
+vbot task-model set text_to_speech openai/gpt-4o-mini-tts::api-key --options '{"voice": "alloy"}'
+vbot task-model set text_embedding openai/text-embedding-3-small::api-key
+```
