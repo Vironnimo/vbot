@@ -1,4 +1,5 @@
 <script>
+  import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import { listClients } from '$lib/api.js';
@@ -10,7 +11,13 @@
     getDataDirectoryValue,
   } from '$lib/settingsView.js';
 
-  let { settings = null, clientsRefreshToken = 0 } = $props();
+  const noop = () => {};
+
+  let {
+    settings = null,
+    clientsRefreshToken = 0,
+    onOpenSetupGuide = noop,
+  } = $props();
 
   let serverHostValue = $derived(
     formatServerHost(settings?.general?.server, t),
@@ -132,6 +139,25 @@
   </div>
   <div class="s-row-control s-row-control--input">
     <TextField readonly value={dataDirectoryValue} />
+  </div>
+</div>
+
+<div class="s-row">
+  <div class="s-row-info">
+    <div class="s-row-label">
+      {t('settings.general.setupGuide', 'Setup guide')}
+    </div>
+    <div class="s-row-desc">
+      {t(
+        'settings.general.setupGuideDescription',
+        'Reopen the guided first-run setup to connect a provider and assign a model.',
+      )}
+    </div>
+  </div>
+  <div class="s-row-control">
+    <Button variant="secondary" onClick={onOpenSetupGuide}>
+      {t('settings.general.setupGuideAction', 'Open setup guide')}
+    </Button>
   </div>
 </div>
 
