@@ -4,46 +4,55 @@
       id: 'chat',
       labelKey: 'navigation.chat',
       labelFallback: 'Chat',
+      section: 'work',
     },
     {
       id: 'agents',
       labelKey: 'navigation.agents',
       labelFallback: 'Agents',
+      section: 'work',
     },
     {
       id: 'projects',
       labelKey: 'navigation.projects',
       labelFallback: 'Projects',
-    },
-    {
-      id: 'cron',
-      labelKey: 'navigation.cron',
-      labelFallback: 'Cron',
-    },
-    {
-      id: 'system-prompt',
-      labelKey: 'navigation.systemPrompt',
-      labelFallback: 'System Prompt',
+      section: 'work',
     },
     {
       id: 'settings',
       labelKey: 'navigation.settings',
       labelFallback: 'Settings',
+      section: 'configure',
     },
     {
-      id: 'logs',
-      labelKey: 'navigation.logs',
-      labelFallback: 'Logs',
+      id: 'system-prompt',
+      labelKey: 'navigation.systemPrompt',
+      labelFallback: 'System Prompt',
+      section: 'configure',
+    },
+    {
+      id: 'cron',
+      labelKey: 'navigation.cron',
+      labelFallback: 'Cron',
+      section: 'configure',
     },
     {
       id: 'statistics',
       labelKey: 'navigation.statistics',
       labelFallback: 'Statistics',
+      section: 'insights',
+    },
+    {
+      id: 'logs',
+      labelKey: 'navigation.logs',
+      labelFallback: 'Logs',
+      section: 'insights',
     },
     {
       id: 'debug',
       labelKey: 'navigation.debug',
       labelFallback: 'Debug',
+      section: 'insights',
     },
   ]);
 </script>

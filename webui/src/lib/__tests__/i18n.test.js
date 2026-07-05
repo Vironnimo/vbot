@@ -134,6 +134,19 @@ describe('i18n t()', () => {
     expect(englishCatalog['navigation.components']).toBeUndefined();
   });
 
+  it('contains the grouped sidebar navigation section labels', () => {
+    const requiredKeys = [
+      'nav.section.work',
+      'nav.section.configure',
+      'nav.section.insights',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(t('nav.section.work')).toBe('Work');
+    expect(t('nav.section.configure')).toBe('Configure');
+    expect(t('nav.section.insights')).toBe('Insights');
+  });
+
   it('contains the interrupted assistant turn marker', () => {
     expect(englishCatalog['chat.interrupted']).toBeTruthy();
     expect(t('chat.interrupted')).toBe(englishCatalog['chat.interrupted']);
