@@ -318,6 +318,29 @@ async def test_completed_run_forwards_final_assistant_output(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_inbound_message_logs_routed_line(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="final reply"))
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    with caplog.at_level(logging.INFO, logger="vbot.channels.engine"):
+        await engine.handle_inbound_text(make_conversation(), "hello")
+        await drain(engine, 12345)
+
+    routed_line = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("Channel message routed")
+    )
+    assert "target=12345" in routed_line
+    assert f"session={SESSION_ID}" in routed_line
+    assert "internal" not in routed_line
+    await engine.stop()
+
+
+@pytest.mark.asyncio
 async def test_completed_run_without_output_sends_empty_reply(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_empty_completed_run())
     engine, _sessions, _trigger, transport = make_engine(tmp_path, trigger_run=trigger_mock)

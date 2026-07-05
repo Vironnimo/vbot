@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -216,6 +217,7 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
 async def test_run_once_job_fires_and_marks_completed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Arrange
     service, trigger_service = make_service(tmp_path)
@@ -228,12 +230,20 @@ async def test_run_once_job_fires_and_marks_completed(
     monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
 
     # Act
-    await service._run_once_job(job)
+    with caplog.at_level(logging.INFO, logger="vbot.automation.cron"):
+        await service._run_once_job(job)
 
     # Assert
     trigger_service.trigger_run.assert_awaited_once_with(
         "agent-one", "Once prompt", None, project_id=None
     )
+    fired_line = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("Cron job fired")
+    )
+    assert f"job={job.id}" in fired_line
+    assert "agent=agent-one" in fired_line
     updated = service.get_job(job.id)
     assert updated.status == "completed"
     assert updated.last_fired_at is not None
