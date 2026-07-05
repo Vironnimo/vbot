@@ -4,7 +4,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 
 ## Overview
 
-`webui/` owns the browser interface. It imports no Python/core code, does not talk to providers directly, and treats the server as the source of truth for agents, sessions, runs, queues, settings, logs, channels, prompts, and debug data. The UI is an Agent-first app shell with Chat, Agents, Projects, Cron, System Prompt, Settings, Logs, and a Debug tab gated by `debug.enabled`; Voice controls are visible only inside the Desktop accessor when the pywebview bridge reports wakeword support. Built assets are emitted to `webui/dist`, which FastAPI serves when present.
+`webui/` owns the browser interface. It imports no Python/core code, does not talk to providers directly, and treats the server as the source of truth for agents, sessions, runs, queues, settings, logs, channels, prompts, and debug data. The UI is an Agent-first app shell with Chat, Agents, Projects, Cron, System Prompt, Settings, Statistics, Logs, and a Debug tab gated by `debug.enabled`; Voice controls are visible only inside the Desktop accessor when the pywebview bridge reports wakeword support. Built assets are emitted to `webui/dist`, which FastAPI serves when present.
 
 The per-file breakdown of what each view/helper/primitive owns, and the deep per-feature runtime behavior, are task-gated — see References. This map keeps only the orientation, transport contracts, conventions, and invariants an agent needs before touching *anything* here.
 
