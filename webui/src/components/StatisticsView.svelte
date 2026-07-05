@@ -585,6 +585,12 @@
     </div>
     <p class="stats-note">
       {t(
+        'statistics.usage.cacheIntro',
+        'Cache metrics track provider-side prompt caching: cached input tokens are billed at a much lower rate, so a higher hit rate means cheaper runs.',
+      )}
+    </p>
+    <p class="stats-note">
+      {t(
         'statistics.estimatedHint',
         'Estimated tokens are approximated, not provider-reported.',
       )}
