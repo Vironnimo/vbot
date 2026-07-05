@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from core.skills import project_skill_origin, scan_skill_names
 from core.statistics import StatisticsService
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -66,6 +67,35 @@ def _parse_iso_utc(value: str) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+class _RuntimeSkillInventory:
+    """Thin ``SkillInventorySource`` adapter over the runtime for the skills join.
+
+    Wiring only: it reads the current skill inventory live from the runtime so
+    "never used" is authoritative against the same registry every accessor sees.
+    Global (bundled+global) skills carry the runtime-tagged origin; a project's
+    own skills are tagged ``project:<display-name>`` here (the runtime scan
+    returns them untagged); an agent's private home yields its bare skill names.
+    """
+
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+
+    def global_skills(self) -> list[tuple[str, str | None]]:
+        return [
+            (skill.name, skill.origin) for skill in self._runtime.skills_for(None, None).list_all()
+        ]
+
+    def agent_skill_names(self, agent_id: str) -> frozenset[str]:
+        skills_dir = self._runtime.agent_skills_dir(agent_id)
+        if not skills_dir.is_dir():
+            return frozenset()
+        return scan_skill_names(skills_dir)
+
+    def project_skills(self, project_id: str) -> list[tuple[str, str | None]]:
+        origin = project_skill_origin(self._runtime.projects.get(project_id).display_name)
+        return [(skill.name, origin) for skill in self._runtime.project_own_skills(project_id)]
+
+
 def _statistics_service(state: Any) -> StatisticsService:
     service = getattr(state, "statistics_service", None)
     if service is not None:
@@ -74,6 +104,7 @@ def _statistics_service(state: Any) -> StatisticsService:
         state.runtime.chat_sessions,
         state.runtime.agents,
         state.runtime.projects,
+        _RuntimeSkillInventory(state.runtime),
     )
     state.statistics_service = service
     return service

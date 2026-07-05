@@ -19,9 +19,10 @@ import pytest
 from core.chat.messages import ChatMessage
 from core.projects import ProjectStore
 from core.sessions import ChatSessionManager
+from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
-from server.rpc.statistics_methods import _statistics_report
+from server.rpc.statistics_methods import _RuntimeSkillInventory, _statistics_report
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -39,6 +40,43 @@ class _FakeAgents:
         return list(self._agents)
 
 
+class _FakeSkillRegistry:
+    """Stand-in for the runtime's global skill registry (``skills_for`` result)."""
+
+    def __init__(self, skills: list) -> None:
+        self._skills = skills
+
+    def list_all(self) -> list:
+        return list(self._skills)
+
+
+class _RuntimeStub:
+    """A runtime with the skill-inventory surface the RPC adapter reads.
+
+    The default ``StatisticsService`` wiring in ``_statistics_service`` now builds
+    a ``_RuntimeSkillInventory`` over the runtime, so the fake runtime must answer
+    ``skills_for`` / ``agent_skills_dir`` / ``project_own_skills``. Empty by
+    default (no skills), so pre-existing assertions on the other sections stay
+    valid while the skills section builds cleanly.
+    """
+
+    def __init__(self, data_dir: Path, manager: ChatSessionManager, agent_ids: list[str]) -> None:
+        self._data_dir = data_dir
+        self.chat_sessions = manager
+        self.agents = _FakeAgents(agent_ids)
+        self.projects = ProjectStore(data_dir)
+        self.global_skills: list = []
+
+    def skills_for(self, project_id, agent_id=None) -> _FakeSkillRegistry:
+        return _FakeSkillRegistry(self.global_skills)
+
+    def agent_skills_dir(self, agent_id: str) -> Path:
+        return self._data_dir / "agents" / agent_id / "skills"
+
+    def project_own_skills(self, project_id: str) -> list:
+        return []
+
+
 def _timing(start: datetime, duration_ms: int) -> dict:
     return {
         "started_at": start.isoformat(),
@@ -49,11 +87,7 @@ def _timing(start: datetime, duration_ms: int) -> dict:
 
 def _state(tmp_path: Path, agent_ids: list[str]) -> tuple[SimpleNamespace, ChatSessionManager]:
     manager = ChatSessionManager(tmp_path)
-    runtime = SimpleNamespace(
-        chat_sessions=manager,
-        agents=_FakeAgents(agent_ids),
-        projects=ProjectStore(tmp_path),
-    )
+    runtime = _RuntimeStub(tmp_path, manager, agent_ids)
     return SimpleNamespace(runtime=runtime), manager
 
 
@@ -83,7 +117,16 @@ def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
 
     result = _statistics_report(state, {})
 
-    assert set(result) == {"generated_at", "window", "overview", "usage", "runs", "errors", "tools"}
+    assert set(result) == {
+        "generated_at",
+        "window",
+        "overview",
+        "usage",
+        "runs",
+        "errors",
+        "tools",
+        "skills",
+    }
     assert result["overview"]["total_agents"] == 1
     assert result["overview"]["total_runs"] == 1
     assert result["usage"]["totals"]["measured_input_tokens"] == 30
@@ -174,6 +217,74 @@ def test_report_includes_project_sessions_under_address_form(tmp_path: Path) -> 
     agent_ids = {agent["agent_id"] for agent in result["overview"]["agents"]}
     assert agent_ids == {"main", "builder@vbot"}
     assert result["overview"]["total_runs"] == 2
+
+
+def _skill(name: str, origin: str | None = None) -> SimpleNamespace:
+    return SimpleNamespace(name=name, origin=origin)
+
+
+def test_runtime_skill_inventory_reads_global_agent_and_project_scopes(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    runtime = _RuntimeStub(tmp_path, manager, ["assistant"])
+    runtime.global_skills = [_skill("deploy", "bundled"), _skill("teach", "global")]
+    # An agent private skills home on disk.
+    agent_home = runtime.agent_skills_dir("assistant")
+    (agent_home / "private").mkdir(parents=True)
+    (agent_home / "private" / "SKILL.md").write_text(
+        "---\nname: private\ndescription: A private skill.\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    # A registered project with its own skills.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime.projects.create("vbot", "vBot", repo)
+    runtime.project_own_skills = lambda project_id: [_skill("proj")]  # type: ignore[assignment]
+
+    inventory = _RuntimeSkillInventory(runtime)
+
+    assert inventory.global_skills() == [("deploy", "bundled"), ("teach", "global")]
+    assert inventory.agent_skill_names("assistant") == frozenset({"private"})
+    # Missing agent home → empty set (no crash).
+    assert inventory.agent_skill_names("nobody") == frozenset()
+    # Project skills tagged with the project display name.
+    assert inventory.project_skills("vbot") == [("proj", "project:vBot")]
+
+
+def test_report_skills_section_joins_usage_against_inventory(tmp_path: Path) -> None:
+    state, manager = _state(tmp_path, ["main"])
+    state.runtime.global_skills = [_skill("deploy", "bundled"), _skill("teach", "global")]
+    session = manager.create("main")
+    session.append(ChatMessage.user("hi", timestamp=BASE))
+    session.append(
+        ChatMessage.note(
+            SKILL_CONTEXT_NOTE_PREFIX + '{"name":"deploy","content":"body"}',
+            timestamp=BASE + timedelta(seconds=1),
+        )
+    )
+    manager.set_metadata("main", session.id, {"seen_skills": ["deploy", "teach"]})
+
+    result = _statistics_report(state, {})
+    skills = result["skills"]
+    by_name = {row["name"]: row for row in skills["skills"]}
+
+    assert skills["total_skills"] == 2
+    assert skills["used_skills"] == 1
+    assert skills["never_used_skills"] == 1
+    assert by_name["deploy"]["offered_sessions"] == 1
+    assert by_name["deploy"]["activated_sessions"] == 1
+    assert by_name["deploy"]["usage_rate"] == 1.0
+    assert by_name["deploy"]["by_agent"] == [{"key": "main", "count": 1}]
+    assert by_name["teach"]["activated_sessions"] == 0
+
+
+def test_report_skills_section_empty_when_no_inventory_skills(tmp_path: Path) -> None:
+    state, manager = _state(tmp_path, ["main"])
+    _seed_session(manager, "main")
+
+    result = _statistics_report(state, {})
+
+    assert result["skills"]["skills"] == []
+    assert result["skills"]["total_skills"] == 0
 
 
 def test_statistics_report_is_registered() -> None:

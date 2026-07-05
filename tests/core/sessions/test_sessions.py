@@ -14,7 +14,9 @@ from core.sessions import (
     ChatSession,
     ChatSessionError,
     ChatSessionManager,
+    skill_context_note_name,
 )
+from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX, _skill_context_note_content
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 
@@ -264,6 +266,34 @@ class TestChatSession:
 
         assert not session.path.exists()
         assert not session.sidecar_path.exists()
+
+
+class TestSkillContextNoteName:
+    def test_returns_name_from_valid_skill_context_note(self):
+        note = ChatMessage.note(_skill_context_note_content("deploy", "Ship it."))
+
+        assert skill_context_note_name(note) == "deploy"
+
+    def test_returns_none_for_non_skill_context_note(self):
+        assert skill_context_note_name(ChatMessage.note("[channel-message] hi")) is None
+        assert skill_context_note_name(ChatMessage.user("hello")) is None
+
+    def test_returns_none_for_malformed_json_payload(self):
+        broken = ChatMessage.note(SKILL_CONTEXT_NOTE_PREFIX + "{not-json")
+
+        assert skill_context_note_name(broken) is None
+
+    def test_returns_none_when_payload_lacks_name(self):
+        nameless = ChatMessage.note(SKILL_CONTEXT_NOTE_PREFIX + json.dumps({"content": "body"}))
+
+        assert skill_context_note_name(nameless) is None
+
+    def test_returns_none_when_name_is_empty_or_non_string(self):
+        empty = ChatMessage.note(SKILL_CONTEXT_NOTE_PREFIX + json.dumps({"name": ""}))
+        non_string = ChatMessage.note(SKILL_CONTEXT_NOTE_PREFIX + json.dumps({"name": 7}))
+
+        assert skill_context_note_name(empty) is None
+        assert skill_context_note_name(non_string) is None
 
 
 class TestChatSessionManager:

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from core.statistics.skills import (
+    SkillByAgentCount,
+    SkillInventorySource,
+    SkillsSection,
+    SkillUsageStat,
+)
 from core.statistics.statistics import (
     AgentActivity,
     AgentDirectory,
@@ -58,6 +64,10 @@ __all__ = [
     "SessionCacheUsage",
     "SessionRunCount",
     "SessionSource",
+    "SkillByAgentCount",
+    "SkillInventorySource",
+    "SkillUsageStat",
+    "SkillsSection",
     "StatisticsReport",
     "StatisticsService",
     "SuspectedCacheBreaks",
