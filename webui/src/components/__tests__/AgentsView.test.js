@@ -418,11 +418,11 @@ describe('AgentsView', () => {
     openSimpleDropdown('agent-memory-prompt-mode');
     expect(simpleOptionLabels('agent-memory-prompt-mode')).toEqual([
       'Off',
-      'MEMORY.md',
-      'MEMORY.md + USER.md',
+      'Agent notes (MEMORY.md)',
+      'Agent + user notes (MEMORY.md + USER.md)',
     ]);
 
-    selectSimpleOption('agent-memory-prompt-mode', 'MEMORY.md');
+    selectSimpleOption('agent-memory-prompt-mode', 'Agent notes (MEMORY.md)');
     submitAgentForm();
     await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
 
