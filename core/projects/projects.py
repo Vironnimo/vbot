@@ -62,9 +62,9 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "skill",
 )
 
-# The optional fields a per-agent Pin may carry. Each maps to the top tier of the
-# matching config-agent resolver chain (model / temperature / thinking effort).
-PIN_FIELDS: frozenset[str] = frozenset({"model", "temperature", "thinking_effort"})
+# The optional fields a per-agent override may carry. Each maps to the top tier of
+# the matching config-agent resolver chain (model / temperature / thinking effort).
+OVERRIDE_FIELDS: frozenset[str] = frozenset({"model", "temperature", "thinking_effort"})
 
 # The tool-neutral project-instruction convention (the agents.md standard). Seeded
 # as the first ``auto_load`` entry when a project is created
@@ -135,15 +135,16 @@ class Project:
     skills_bundled_enabled: list[str] = field(default_factory=list)
     skills_global_enabled: list[str] = field(default_factory=list)
     skills_project_disabled: list[str] = field(default_factory=list)
-    # Per-agent Pins keyed by scanned ``agent_id`` → a pin object with optional
-    # ``model`` (user-facing ``<provider>/<model-id>[::connection]``), ``temperature``
-    # (number), and ``thinking_effort`` (effort string, ``""`` = force provider
-    # default). The vBot-owned per-agent override layer (GLOSSARY → Model): data-dir
-    # only (never the repo); the resolver applies each pinned field as the **top**
-    # tier of the matching config-agent chain, so a pin wins over the repo-declared
-    # value. Empty by default. Set/cleared per field through the store
-    # (``set_pin`` / ``clear_pin``), not the generic ``project.set`` field surface.
-    pins: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Per-agent overrides keyed by scanned ``agent_id`` → an override object with
+    # optional ``model`` (user-facing ``<provider>/<model-id>[::connection]``),
+    # ``temperature`` (number), and ``thinking_effort`` (effort string, ``""`` = force
+    # provider default). The vBot-owned per-agent override layer (GLOSSARY → Model):
+    # data-dir only (never the repo); the resolver applies each override field as the
+    # **top** tier of the matching config-agent chain, so an override wins over the
+    # repo-declared value. Empty by default. Set/cleared per field through the store
+    # (``set_override`` / ``clear_override``), not the generic ``project.set`` field
+    # surface.
+    overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable mapping persisted to ``project.json``."""
@@ -160,7 +161,9 @@ class Project:
             "skills_bundled_enabled": list(self.skills_bundled_enabled),
             "skills_global_enabled": list(self.skills_global_enabled),
             "skills_project_disabled": list(self.skills_project_disabled),
-            "pins": {agent_id: dict(pin) for agent_id, pin in self.pins.items()},
+            "overrides": {
+                agent_id: dict(override) for agent_id, override in self.overrides.items()
+            },
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -180,7 +183,7 @@ def build_project(
     skills_bundled_enabled: list[str] | None = None,
     skills_global_enabled: list[str] | None = None,
     skills_project_disabled: list[str] | None = None,
-    pins: dict[str, dict[str, Any]] | None = None,
+    overrides: dict[str, dict[str, Any]] | None = None,
     created_at: str | None = None,
     updated_at: str | None = None,
 ) -> Project:
@@ -209,7 +212,7 @@ def build_project(
     validated_skills_disabled = _validate_string_list(
         "skills_project_disabled", skills_project_disabled
     )
-    validated_pins = _validate_pins(pins)
+    validated_overrides = _validate_overrides(overrides)
     now = _utc_now()
     return Project(
         project_id=validated_id,
@@ -224,7 +227,7 @@ def build_project(
         skills_bundled_enabled=validated_skills_bundled,
         skills_global_enabled=validated_skills_global,
         skills_project_disabled=validated_skills_disabled,
-        pins=validated_pins,
+        overrides=validated_overrides,
         created_at=created_at or now,
         updated_at=updated_at or now,
     )
@@ -252,7 +255,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
         skills_global_enabled=list(cast("list[str]", data.get("skills_global_enabled") or [])),
         skills_project_disabled=list(cast("list[str]", data.get("skills_project_disabled") or [])),
-        pins=_pins_from_data(data.get("pins")),
+        overrides=_overrides_from_data(data.get("overrides")),
         created_at=data["created_at"],
         updated_at=data["updated_at"],
     )
@@ -363,90 +366,90 @@ def _validate_string_list(field_name: str, values: list[str] | None) -> list[str
     return list(values)
 
 
-def _validate_pins(value: dict[str, dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
-    """Validate the per-agent Pin map; ``None`` → ``{}``.
+def _validate_overrides(value: dict[str, dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    """Validate the per-agent override map; ``None`` → ``{}``.
 
-    Each key is a non-empty ``agent_id`` string; each value is a pin object with any
-    of the optional fields in :data:`PIN_FIELDS`. ``model`` is a non-empty model
-    string (shape only, exactly like ``default_model`` — the model's *configured-ness*
-    is the ``/model`` set-time gate, not a file-load concern, so a credential going
-    away never makes an existing ``project.json`` fail to load). ``temperature`` and
-    ``thinking_effort`` reuse the canonical agent field validators, so their ranges
-    and effort ladder can never drift from an agent's; ``thinking_effort = ""`` is a
-    real value meaning "force provider default". An empty pin object (no fields) is
-    rejected — a pin with no field carries nothing.
+    Each key is a non-empty ``agent_id`` string; each value is an override object with
+    any of the optional fields in :data:`OVERRIDE_FIELDS`. ``model`` is a non-empty
+    model string (shape only, exactly like ``default_model`` — the model's
+    *configured-ness* is the ``/model`` set-time gate, not a file-load concern, so a
+    credential going away never makes an existing ``project.json`` fail to load).
+    ``temperature`` and ``thinking_effort`` reuse the canonical agent field validators,
+    so their ranges and effort ladder can never drift from an agent's;
+    ``thinking_effort = ""`` is a real value meaning "force provider default". An empty
+    override object (no fields) is rejected — an override with no field carries nothing.
     """
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise ProjectError("pins must be an object")
+        raise ProjectError("overrides must be an object")
     validated: dict[str, dict[str, Any]] = {}
-    for agent_id, pin in value.items():
+    for agent_id, override in value.items():
         if not isinstance(agent_id, str) or not agent_id.strip():
-            raise ProjectError("pins keys must be non-empty agent id strings")
-        validated[agent_id] = _validate_pin(agent_id, pin)
+            raise ProjectError("overrides keys must be non-empty agent id strings")
+        validated[agent_id] = _validate_override(agent_id, override)
     return validated
 
 
-def _validate_pin(agent_id: str, pin: Any) -> dict[str, Any]:
-    """Validate one agent's pin object, returning a normalized copy."""
-    if not isinstance(pin, dict):
-        raise ProjectError(f"pins[{agent_id!r}] must be an object")
-    unknown = sorted(set(pin) - PIN_FIELDS)
+def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
+    """Validate one agent's override object, returning a normalized copy."""
+    if not isinstance(override, dict):
+        raise ProjectError(f"overrides[{agent_id!r}] must be an object")
+    unknown = sorted(set(override) - OVERRIDE_FIELDS)
     if unknown:
-        raise ProjectError(f"pins[{agent_id!r}] has unknown fields: {', '.join(unknown)}")
-    if not pin:
-        raise ProjectError(f"pins[{agent_id!r}] must set at least one field")
+        raise ProjectError(f"overrides[{agent_id!r}] has unknown fields: {', '.join(unknown)}")
+    if not override:
+        raise ProjectError(f"overrides[{agent_id!r}] must set at least one field")
     validated: dict[str, Any] = {}
-    if "model" in pin:
-        model = pin["model"]
+    if "model" in override:
+        model = override["model"]
         if not isinstance(model, str) or not model.strip():
-            raise ProjectError(f"pins[{agent_id!r}].model must be a non-empty model string")
+            raise ProjectError(f"overrides[{agent_id!r}].model must be a non-empty model string")
         validated["model"] = model
-    if "temperature" in pin:
-        validated["temperature"] = _validate_pin_temperature(agent_id, pin["temperature"])
-    if "thinking_effort" in pin:
-        validated["thinking_effort"] = _validate_pin_thinking_effort(
-            agent_id, pin["thinking_effort"]
+    if "temperature" in override:
+        validated["temperature"] = _validate_override_temperature(agent_id, override["temperature"])
+    if "thinking_effort" in override:
+        validated["thinking_effort"] = _validate_override_thinking_effort(
+            agent_id, override["thinking_effort"]
         )
     return validated
 
 
-def _validate_pin_temperature(agent_id: str, value: Any) -> float:
-    """Validate a pin ``temperature`` via the canonical rule (``None`` is not a pin)."""
+def _validate_override_temperature(agent_id: str, value: Any) -> float:
+    """Validate an override ``temperature`` via the canonical rule (``None`` is not one)."""
     try:
         temperature = validate_temperature(
-            value, label=f"pins[{agent_id!r}].temperature", allow_none=False
+            value, label=f"overrides[{agent_id!r}].temperature", allow_none=False
         )
     except SettingsValidationError as exc:
         raise ProjectError(str(exc)) from exc
     return cast("float", temperature)
 
 
-def _validate_pin_thinking_effort(agent_id: str, value: Any) -> str:
-    """Validate a pin ``thinking_effort`` via the canonical rule (``""`` allowed)."""
+def _validate_override_thinking_effort(agent_id: str, value: Any) -> str:
+    """Validate an override ``thinking_effort`` via the canonical rule (``""`` allowed)."""
     try:
         effort = validate_thinking_effort(
-            value, label=f"pins[{agent_id!r}].thinking_effort", allow_none=False
+            value, label=f"overrides[{agent_id!r}].thinking_effort", allow_none=False
         )
     except SettingsValidationError as exc:
         raise ProjectError(str(exc)) from exc
     return cast("str", effort)
 
 
-def _pins_from_data(value: Any) -> dict[str, dict[str, Any]]:
-    """Return the persisted pin map from validated data, normalizing shapes.
+def _overrides_from_data(value: Any) -> dict[str, dict[str, Any]]:
+    """Return the persisted override map from validated data, normalizing shapes.
 
     Validation runs before this (central validator), so a malformed value is
-    already rejected; this only copies each pin object. A missing field defaults to
-    an empty map.
+    already rejected; this only copies each override object. A missing field defaults
+    to an empty map.
     """
     if not isinstance(value, dict):
         return {}
     return {
-        agent_id: dict(cast("dict[str, Any]", pin))
-        for agent_id, pin in value.items()
-        if isinstance(pin, dict)
+        agent_id: dict(cast("dict[str, Any]", override))
+        for agent_id, override in value.items()
+        if isinstance(override, dict)
     }
 
 

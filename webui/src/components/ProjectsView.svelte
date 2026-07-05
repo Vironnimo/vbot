@@ -12,11 +12,11 @@
   import ToolReadinessNotice from './ui/ToolReadinessNotice.svelte';
   import {
     addProject,
-    clearPin,
+    clearOverride,
     listProjects,
     removeProject,
     rpc,
-    setPin,
+    setOverride,
     setProject,
     showProject,
   } from '$lib/api.js';
@@ -30,15 +30,15 @@
     buildSkillToggleSections,
     buildToolToggleList,
     hasManageChanges,
-    memberFieldIsPinned,
+    memberFieldIsOverridden,
     needsRePoint,
-    normalizePinTemperature,
+    normalizeOverrideTemperature,
     normalizeProject,
     normalizeProjects,
     normalizeScanReport,
     normalizeScanSkills,
     projectTeam,
-    seedTeamPinDraft,
+    seedTeamOverrideDraft,
     setListMembership,
   } from '$lib/projectsView.js';
   import {
@@ -64,7 +64,7 @@
   // plus the explicit Save button for users who prefer to commit manually.
   const AUTO_SAVE_DEBOUNCE_MS = 800;
 
-  // Maps each effective/pin field to its section-header label key and the empty
+  // Maps each effective/override field to its section-header label key and the empty
   // wording (a null model reads "not configured", a null temperature/thinking
   // reads "provider default").
   const EFFECTIVE_FIELD_META = Object.freeze({
@@ -101,7 +101,7 @@
   let listError = $state('');
   let statusMessage = $state('');
 
-  // Model/connection catalogs feed the default-model / model-pin searchable
+  // Model/connection catalogs feed the default-model / model-override searchable
   // dropdowns (the same picker the Agents tab uses, see modelSelection.js).
   let availableModels = $state([]);
   let availableConnections = $state([]);
@@ -141,12 +141,12 @@
   let removeConfirmProject = $state(null);
 
   // Which team-member rows are expanded (keyed agent id → true), plus each
-  // member's pin draft and the in-flight pin field, so a row's expand state and
-  // controls persist while the detail is open. Reset when the project changes.
+  // member's override draft and the in-flight override field, so a row's expand state
+  // and controls persist while the detail is open. Reset when the project changes.
   let expandedMembers = $state({});
-  let pinDrafts = $state({});
+  let overrideDrafts = $state({});
   // The `${agentId}:${field}` currently being written, so its buttons disable.
-  let pinBusyKey = $state('');
+  let overrideBusyKey = $state('');
 
   // The toggleable tool catalog and the base Tool Whitelist (reset target), both
   // from the tool-catalog RPC so new tools appear without hardcoding names.
@@ -583,8 +583,8 @@
     activeReport = null;
     activeScanSkills = { project: [], bundled: [], global: [] };
     expandedMembers = {};
-    pinDrafts = {};
-    pinBusyKey = '';
+    overrideDrafts = {};
+    overrideBusyKey = '';
 
     if (scan) {
       applyScan(scan);
@@ -598,19 +598,19 @@
     activeTeam = projectTeam(scan);
     activeReport = normalizeScanReport(scan?.report);
     activeScanSkills = normalizeScanSkills(scan);
-    seedPinDrafts();
+    seedOverrideDrafts();
   }
 
-  // Seed each team member's pin draft from its current pin/effective values, only
-  // for members that have no draft yet (an open control's typed text is kept).
-  function seedPinDrafts() {
-    const next = { ...pinDrafts };
+  // Seed each team member's override draft from its current override/effective values,
+  // only for members that have no draft yet (an open control's typed text is kept).
+  function seedOverrideDrafts() {
+    const next = { ...overrideDrafts };
     for (const member of activeTeam) {
       if (!next[member.agent_id]) {
-        next[member.agent_id] = seedTeamPinDraft(member);
+        next[member.agent_id] = seedTeamOverrideDraft(member);
       }
     }
-    pinDrafts = next;
+    overrideDrafts = next;
   }
 
   async function loadScan(projectId) {
@@ -779,23 +779,27 @@
     };
   }
 
-  function pinDraft(agentId) {
+  function overrideDraft(agentId) {
     return (
-      pinDrafts[agentId] ?? { model: '', temperature: '', thinking_effort: '' }
+      overrideDrafts[agentId] ?? {
+        model: '',
+        temperature: '',
+        thinking_effort: '',
+      }
     );
   }
 
-  function updatePinDraft(agentId, field, value) {
-    pinDrafts = {
-      ...pinDrafts,
-      [agentId]: { ...pinDraft(agentId), [field]: value },
+  function updateOverrideDraft(agentId, field, value) {
+    overrideDrafts = {
+      ...overrideDrafts,
+      [agentId]: { ...overrideDraft(agentId), [field]: value },
     };
     editError = '';
   }
 
-  function updatePinModelSelection(agentId, selectedValue) {
+  function updateOverrideModelSelection(agentId, selectedValue) {
     const selection = parseModelSelectionValue(selectedValue);
-    updatePinDraft(
+    updateOverrideDraft(
       agentId,
       'model',
       modelSelectionValue(selection.model, selection.connectionLocalId),
@@ -820,8 +824,8 @@
 
   function sourceLabel(source) {
     switch (source) {
-      case 'pin':
-        return t('projects.team.sourcePin', 'pin');
+      case 'override':
+        return t('projects.team.sourceOverride', 'override');
       case 'agent':
         return t('projects.team.sourceAgentFile', 'agent file (repo)');
       case 'project_default':
@@ -833,12 +837,14 @@
     }
   }
 
-  // The thinking-effort pin options, gated by the member's effective model via
+  // The thinking-effort override options, gated by the member's effective model via
   // the shared agentForm helpers (mirrors the agent editor). The empty option is
-  // the "provider default" pin value.
-  function pinEffortOptions(member) {
+  // the "provider default" override value.
+  function overrideEffortOptions(member) {
     const reasoning = reasoningForModelValue(
-      pinDraft(member.agent_id).model || member?.effective?.model?.value || '',
+      overrideDraft(member.agent_id).model ||
+        member?.effective?.model?.value ||
+        '',
       availableModels,
     );
     return effortOptionsForReasoning(reasoning).map((option) => ({
@@ -853,77 +859,77 @@
     }));
   }
 
-  // The model-pin picker options for one member (its own draft as the selected
-  // value so a saved/pinned value stays visible even if unavailable).
-  function pinModelOptions(member) {
+  // The model-override picker options for one member (its own draft as the selected
+  // value so a saved/overridden value stays visible even if unavailable).
+  function overrideModelOptions(member) {
     return buildModelSelectOptions({
       models: availableModels,
       connections: availableConnections,
-      selectedModelValue: pinDraft(member.agent_id).model,
-      emptyLabel: t('projects.team.pinModelPlaceholder', 'No pin'),
+      selectedModelValue: overrideDraft(member.agent_id).model,
+      emptyLabel: t('projects.team.overrideModelPlaceholder', 'No override'),
       translate: t,
     });
   }
 
-  function pinKey(agentId, field) {
+  function overrideKey(agentId, field) {
     return `${agentId}:${field}`;
   }
 
-  function isPinBusy(agentId, field) {
-    return pinBusyKey === pinKey(agentId, field);
+  function isOverrideBusy(agentId, field) {
+    return overrideBusyKey === overrideKey(agentId, field);
   }
 
-  // Whether the Set-pin button is enabled: not busy and the draft carries a real
-  // value for the field (a pin must have a value; clearing is a separate action).
-  function canSetPin(agentId, field) {
-    if (pinBusyKey) {
+  // Whether the Set-override button is enabled: not busy and the draft carries a real
+  // value for the field (an override must have a value; clearing is a separate action).
+  function canSetOverride(agentId, field) {
+    if (overrideBusyKey) {
       return false;
     }
-    const draft = pinDraft(agentId);
+    const draft = overrideDraft(agentId);
     if (field === 'model') {
       return typeof draft.model === 'string' && draft.model.trim().length > 0;
     }
     if (field === 'temperature') {
-      return normalizePinTemperature(draft.temperature) !== null;
+      return normalizeOverrideTemperature(draft.temperature) !== null;
     }
-    // thinking_effort: a level or '' (provider default) is a valid pin value.
+    // thinking_effort: a level or '' (provider default) is a valid override value.
     return typeof draft.thinking_effort === 'string';
   }
 
-  // The value sent to project.set_pin for a field, from that field's draft.
-  function pinValueForField(agentId, field) {
-    const draft = pinDraft(agentId);
+  // The value sent to project.set_override for a field, from that field's draft.
+  function overrideValueForField(agentId, field) {
+    const draft = overrideDraft(agentId);
     if (field === 'model') {
       return draft.model.trim();
     }
     if (field === 'temperature') {
-      return normalizePinTemperature(draft.temperature);
+      return normalizeOverrideTemperature(draft.temperature);
     }
     return draft.thinking_effort;
   }
 
-  async function applySetPin(agentId, field) {
+  async function applySetOverride(agentId, field) {
     const project = selectedProject;
-    if (!project || pinBusyKey || !canSetPin(agentId, field)) {
+    if (!project || overrideBusyKey || !canSetOverride(agentId, field)) {
       return;
     }
 
-    pinBusyKey = pinKey(agentId, field);
+    overrideBusyKey = overrideKey(agentId, field);
     editError = '';
 
     try {
-      const result = await setPin(
+      const result = await setOverride(
         project.project_id,
         agentId,
         field,
-        pinValueForField(agentId, field),
+        overrideValueForField(agentId, field),
       );
       if (destroyed) {
         return;
       }
       refreshTeamFromScan(result?.scan);
       onToast({
-        title: t('projects.team.pinSaved', 'Pin saved.'),
+        title: t('projects.team.overrideSaved', 'Override saved.'),
         variant: 'success',
       });
     } catch (error) {
@@ -931,34 +937,34 @@
         return;
       }
       onToast({
-        title: `${t('projects.team.pinError', 'The pin could not be saved.')} ${errorText(error)}`,
+        title: `${t('projects.team.overrideError', 'The override could not be saved.')} ${errorText(error)}`,
         variant: 'error',
         sticky: true,
       });
     } finally {
       if (!destroyed) {
-        pinBusyKey = '';
+        overrideBusyKey = '';
       }
     }
   }
 
-  async function applyClearPin(agentId, field) {
+  async function applyClearOverride(agentId, field) {
     const project = selectedProject;
-    if (!project || pinBusyKey) {
+    if (!project || overrideBusyKey) {
       return;
     }
 
-    pinBusyKey = pinKey(agentId, field);
+    overrideBusyKey = overrideKey(agentId, field);
     editError = '';
 
     try {
-      const result = await clearPin(project.project_id, agentId, field);
+      const result = await clearOverride(project.project_id, agentId, field);
       if (destroyed) {
         return;
       }
       refreshTeamFromScan(result?.scan);
       onToast({
-        title: t('projects.team.pinCleared', 'Pin cleared.'),
+        title: t('projects.team.overrideCleared', 'Override cleared.'),
         variant: 'success',
       });
     } catch (error) {
@@ -966,28 +972,28 @@
         return;
       }
       onToast({
-        title: `${t('projects.team.pinClearError', 'The pin could not be cleared.')} ${errorText(error)}`,
+        title: `${t('projects.team.overrideClearError', 'The override could not be cleared.')} ${errorText(error)}`,
         variant: 'error',
         sticky: true,
       });
     } finally {
       if (!destroyed) {
-        pinBusyKey = '';
+        overrideBusyKey = '';
       }
     }
   }
 
-  // Re-seed the team/report/skills from a pin RPC's returned scan, then refresh
-  // the affected members' pin drafts so the controls reflect the new pin state.
+  // Re-seed the team/report/skills from an override RPC's returned scan, then refresh
+  // the affected members' override drafts so the controls reflect the new state.
   function refreshTeamFromScan(scan) {
     activeTeam = projectTeam(scan);
     activeReport = normalizeScanReport(scan?.report);
     activeScanSkills = normalizeScanSkills(scan);
     const next = {};
     for (const member of activeTeam) {
-      next[member.agent_id] = seedTeamPinDraft(member);
+      next[member.agent_id] = seedTeamOverrideDraft(member);
     }
-    pinDrafts = next;
+    overrideDrafts = next;
   }
 
   // ── Remove / re-point ────────────────────────────────────────────────────
@@ -1389,10 +1395,10 @@
                         'Default temperature',
                       )}
                     </span>
-                    <div class="projects-pin-controls">
+                    <div class="projects-override-controls">
                       <TextField
                         id="project-edit-temperature"
-                        class="projects-pin-input"
+                        class="projects-override-input"
                         inputmode="decimal"
                         value={editForm.default_temperature}
                         disabled={editSaving}
@@ -1689,27 +1695,25 @@
                               {/each}
                             </ul>
 
-                            <div class="projects-pins">
-                              <!-- Model pin -->
-                              <div class="projects-pin-row">
+                            <div class="projects-overrides">
+                              <!-- Model override -->
+                              <div class="projects-override-row">
                                 <span class="projects-label">
-                                  {t('projects.team.pinLabel', 'Pin')} · {t(
-                                    'projects.team.effectiveModel',
-                                    'Model',
-                                  )}
+                                  {t('projects.team.overrideLabel', 'Override')} ·
+                                  {t('projects.team.effectiveModel', 'Model')}
                                 </span>
-                                <div class="projects-pin-controls">
-                                  <div class="projects-pin-input">
+                                <div class="projects-override-controls">
+                                  <div class="projects-override-input">
                                     <SearchableDropdown
-                                      id={`project-pin-model-${member.agent_id}`}
+                                      id={`project-override-model-${member.agent_id}`}
                                       value={selectModelValue(
-                                        pinDraft(member.agent_id).model,
-                                        pinModelOptions(member),
+                                        overrideDraft(member.agent_id).model,
+                                        overrideModelOptions(member),
                                       )}
-                                      options={pinModelOptions(member)}
+                                      options={overrideModelOptions(member)}
                                       placeholder={t(
-                                        'projects.team.pinModelPlaceholder',
-                                        'No pin',
+                                        'projects.team.overrideModelPlaceholder',
+                                        'No override',
                                       )}
                                       searchPlaceholder={t(
                                         'projects.manage.modelSearchPlaceholder',
@@ -1723,7 +1727,7 @@
                                         'projects.team.effectiveModel',
                                         'Model',
                                       )}
-                                      disabled={isPinBusy(
+                                      disabled={isOverrideBusy(
                                         member.agent_id,
                                         'model',
                                       )}
@@ -1731,7 +1735,7 @@
                                       panelClass="projects-view__search-panel"
                                       onOpenChange={trackModelDropdownOpen}
                                       onValueChange={(value) =>
-                                        updatePinModelSelection(
+                                        updateOverrideModelSelection(
                                           member.agent_id,
                                           value,
                                         )}
@@ -1739,53 +1743,66 @@
                                   </div>
                                   <Button
                                     variant="secondary"
-                                    data-testid={`project-pin-set-model-${member.agent_id}`}
-                                    disabled={!canSetPin(
+                                    data-testid={`project-override-set-model-${member.agent_id}`}
+                                    disabled={!canSetOverride(
                                       member.agent_id,
                                       'model',
                                     )}
                                     onClick={() =>
-                                      applySetPin(member.agent_id, 'model')}
+                                      applySetOverride(
+                                        member.agent_id,
+                                        'model',
+                                      )}
                                   >
-                                    {t('projects.team.setPin', 'Set pin')}
+                                    {t(
+                                      'projects.team.setOverride',
+                                      'Set override',
+                                    )}
                                   </Button>
-                                  {#if memberFieldIsPinned(member, 'model')}
+                                  {#if memberFieldIsOverridden(member, 'model')}
                                     <Button
                                       variant="tertiary"
-                                      data-testid={`project-pin-clear-model-${member.agent_id}`}
-                                      disabled={isPinBusy(
+                                      data-testid={`project-override-clear-model-${member.agent_id}`}
+                                      disabled={isOverrideBusy(
                                         member.agent_id,
                                         'model',
                                       )}
                                       onClick={() =>
-                                        applyClearPin(member.agent_id, 'model')}
+                                        applyClearOverride(
+                                          member.agent_id,
+                                          'model',
+                                        )}
                                     >
-                                      {t('projects.team.clearPin', 'Clear pin')}
+                                      {t(
+                                        'projects.team.clearOverride',
+                                        'Clear override',
+                                      )}
                                     </Button>
                                   {/if}
                                 </div>
                               </div>
 
-                              <!-- Temperature pin -->
-                              <div class="projects-pin-row">
+                              <!-- Temperature override -->
+                              <div class="projects-override-row">
                                 <span class="projects-label">
-                                  {t('projects.team.pinLabel', 'Pin')} · {t(
+                                  {t('projects.team.overrideLabel', 'Override')} ·
+                                  {t(
                                     'projects.team.effectiveTemperature',
                                     'Temperature',
                                   )}
                                 </span>
-                                <div class="projects-pin-controls">
+                                <div class="projects-override-controls">
                                   <TextField
-                                    id={`project-pin-temperature-${member.agent_id}`}
-                                    class="projects-pin-input"
+                                    id={`project-override-temperature-${member.agent_id}`}
+                                    class="projects-override-input"
                                     inputmode="decimal"
-                                    value={pinDraft(member.agent_id)
+                                    value={overrideDraft(member.agent_id)
                                       .temperature}
                                     placeholder={t(
-                                      'projects.team.pinTemperaturePlaceholder',
+                                      'projects.team.overrideTemperaturePlaceholder',
                                       'e.g. 0.7',
                                     )}
-                                    disabled={isPinBusy(
+                                    disabled={isOverrideBusy(
                                       member.agent_id,
                                       'temperature',
                                     )}
@@ -1794,7 +1811,7 @@
                                       'Temperature',
                                     )}
                                     onInput={(next) =>
-                                      updatePinDraft(
+                                      updateOverrideDraft(
                                         member.agent_id,
                                         'temperature',
                                         next,
@@ -1802,65 +1819,72 @@
                                   />
                                   <Button
                                     variant="secondary"
-                                    data-testid={`project-pin-set-temperature-${member.agent_id}`}
-                                    disabled={!canSetPin(
+                                    data-testid={`project-override-set-temperature-${member.agent_id}`}
+                                    disabled={!canSetOverride(
                                       member.agent_id,
                                       'temperature',
                                     )}
                                     onClick={() =>
-                                      applySetPin(
+                                      applySetOverride(
                                         member.agent_id,
                                         'temperature',
                                       )}
                                   >
-                                    {t('projects.team.setPin', 'Set pin')}
+                                    {t(
+                                      'projects.team.setOverride',
+                                      'Set override',
+                                    )}
                                   </Button>
-                                  {#if memberFieldIsPinned(member, 'temperature')}
+                                  {#if memberFieldIsOverridden(member, 'temperature')}
                                     <Button
                                       variant="tertiary"
-                                      data-testid={`project-pin-clear-temperature-${member.agent_id}`}
-                                      disabled={isPinBusy(
+                                      data-testid={`project-override-clear-temperature-${member.agent_id}`}
+                                      disabled={isOverrideBusy(
                                         member.agent_id,
                                         'temperature',
                                       )}
                                       onClick={() =>
-                                        applyClearPin(
+                                        applyClearOverride(
                                           member.agent_id,
                                           'temperature',
                                         )}
                                     >
-                                      {t('projects.team.clearPin', 'Clear pin')}
+                                      {t(
+                                        'projects.team.clearOverride',
+                                        'Clear override',
+                                      )}
                                     </Button>
                                   {/if}
                                 </div>
                               </div>
 
-                              <!-- Thinking-effort pin -->
-                              <div class="projects-pin-row">
+                              <!-- Thinking-effort override -->
+                              <div class="projects-override-row">
                                 <span class="projects-label">
-                                  {t('projects.team.pinLabel', 'Pin')} · {t(
+                                  {t('projects.team.overrideLabel', 'Override')} ·
+                                  {t(
                                     'projects.team.effectiveThinkingEffort',
                                     'Thinking effort',
                                   )}
                                 </span>
-                                <div class="projects-pin-controls">
-                                  <div class="projects-pin-input">
+                                <div class="projects-override-controls">
+                                  <div class="projects-override-input">
                                     <Dropdown
-                                      id={`project-pin-thinking-${member.agent_id}`}
-                                      value={pinDraft(member.agent_id)
+                                      id={`project-override-thinking-${member.agent_id}`}
+                                      value={overrideDraft(member.agent_id)
                                         .thinking_effort}
-                                      options={pinEffortOptions(member)}
+                                      options={overrideEffortOptions(member)}
                                       ariaLabel={t(
                                         'projects.team.effectiveThinkingEffort',
                                         'Thinking effort',
                                       )}
-                                      disabled={isPinBusy(
+                                      disabled={isOverrideBusy(
                                         member.agent_id,
                                         'thinking_effort',
                                       )}
                                       triggerClass="projects-dropdown"
                                       onValueChange={(value) =>
-                                        updatePinDraft(
+                                        updateOverrideDraft(
                                           member.agent_id,
                                           'thinking_effort',
                                           value,
@@ -1869,43 +1893,49 @@
                                   </div>
                                   <Button
                                     variant="secondary"
-                                    data-testid={`project-pin-set-thinking-${member.agent_id}`}
-                                    disabled={!canSetPin(
+                                    data-testid={`project-override-set-thinking-${member.agent_id}`}
+                                    disabled={!canSetOverride(
                                       member.agent_id,
                                       'thinking_effort',
                                     )}
                                     onClick={() =>
-                                      applySetPin(
+                                      applySetOverride(
                                         member.agent_id,
                                         'thinking_effort',
                                       )}
                                   >
-                                    {t('projects.team.setPin', 'Set pin')}
+                                    {t(
+                                      'projects.team.setOverride',
+                                      'Set override',
+                                    )}
                                   </Button>
-                                  {#if memberFieldIsPinned(member, 'thinking_effort')}
+                                  {#if memberFieldIsOverridden(member, 'thinking_effort')}
                                     <Button
                                       variant="tertiary"
-                                      data-testid={`project-pin-clear-thinking-${member.agent_id}`}
-                                      disabled={isPinBusy(
+                                      data-testid={`project-override-clear-thinking-${member.agent_id}`}
+                                      disabled={isOverrideBusy(
                                         member.agent_id,
                                         'thinking_effort',
                                       )}
                                       onClick={() =>
-                                        applyClearPin(
+                                        applyClearOverride(
                                           member.agent_id,
                                           'thinking_effort',
                                         )}
                                     >
-                                      {t('projects.team.clearPin', 'Clear pin')}
+                                      {t(
+                                        'projects.team.clearOverride',
+                                        'Clear override',
+                                      )}
                                     </Button>
                                   {/if}
                                 </div>
                               </div>
 
-                              <p class="projects-pin-help">
+                              <p class="projects-override-help">
                                 {t(
-                                  'projects.team.pinHelp',
-                                  'A pin overrides the agent file and all defaults for this agent in this project. The model pin can also be set with /model in chat.',
+                                  'projects.team.overrideHelp',
+                                  'An override replaces the agent file and all defaults for this agent in this project. The model override can also be set with /model in chat.',
                                 )}
                               </p>
                             </div>

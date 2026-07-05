@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.projects.projects import (
-    PIN_FIELDS,
+    OVERRIDE_FIELDS,
     PROJECT_DEFAULT_ALLOWED_TOOLS,
     InvalidProjectIdError,
     Project,
@@ -43,7 +43,7 @@ def test_build_project_minimal_just_cwd_defaults_optionals(tmp_path: Path) -> No
     assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     assert project.skills_bundled_enabled == []
     assert project.skills_project_disabled == []
-    assert project.pins == {}
+    assert project.overrides == {}
 
 
 def test_build_project_keeps_explicit_empty_allowed_tools(tmp_path: Path) -> None:
@@ -91,16 +91,16 @@ def test_build_project_rejects_non_list_skills_global(tmp_path: Path) -> None:
         build_project("vbot", "vBot", tmp_path, skills_global_enabled="pdf")  # type: ignore[arg-type]
 
 
-def test_pin_fields_constant_is_the_three_pinnable_fields() -> None:
-    assert frozenset({"model", "temperature", "thinking_effort"}) == PIN_FIELDS
+def test_override_fields_constant_is_the_three_overridable_fields() -> None:
+    assert frozenset({"model", "temperature", "thinking_effort"}) == OVERRIDE_FIELDS
 
 
-def test_build_project_accepts_pins(tmp_path: Path) -> None:
+def test_build_project_accepts_overrides(tmp_path: Path) -> None:
     project = build_project(
         "vbot",
         "vBot",
         tmp_path,
-        pins={
+        overrides={
             "builder": {
                 "model": "openai/gpt-5",
                 "temperature": 0.4,
@@ -110,7 +110,7 @@ def test_build_project_accepts_pins(tmp_path: Path) -> None:
         },
     )
 
-    assert project.pins == {
+    assert project.overrides == {
         "builder": {
             "model": "openai/gpt-5",
             "temperature": 0.4,
@@ -120,12 +120,12 @@ def test_build_project_accepts_pins(tmp_path: Path) -> None:
     }
 
 
-def test_build_project_pins_survive_to_dict_round_trip(tmp_path: Path) -> None:
+def test_build_project_overrides_survive_to_dict_round_trip(tmp_path: Path) -> None:
     project = build_project(
         "vbot",
         "vBot",
         tmp_path,
-        pins={
+        overrides={
             "builder": {
                 "model": "openai/gpt-5",
                 "temperature": 0.4,
@@ -135,68 +135,70 @@ def test_build_project_pins_survive_to_dict_round_trip(tmp_path: Path) -> None:
     )
 
     payload = project.to_dict()
-    assert payload["pins"] == {
+    assert payload["overrides"] == {
         "builder": {
             "model": "openai/gpt-5",
             "temperature": 0.4,
             "thinking_effort": "high",
         }
     }
-    assert project_from_dict(payload).pins == project.pins
+    assert project_from_dict(payload).overrides == project.overrides
 
 
-def test_build_project_accepts_pin_temperature_zero(tmp_path: Path) -> None:
-    # 0.0 is a real value (the sampling floor), a valid pinned temperature.
-    project = build_project("vbot", "vBot", tmp_path, pins={"builder": {"temperature": 0.0}})
+def test_build_project_accepts_override_temperature_zero(tmp_path: Path) -> None:
+    # 0.0 is a real value (the sampling floor), a valid overridden temperature.
+    project = build_project("vbot", "vBot", tmp_path, overrides={"builder": {"temperature": 0.0}})
 
-    assert project.pins == {"builder": {"temperature": 0.0}}
-
-
-def test_build_project_accepts_pin_thinking_effort_empty_string(tmp_path: Path) -> None:
-    # "" = force provider default; a real value, a valid pinned thinking effort.
-    project = build_project("vbot", "vBot", tmp_path, pins={"builder": {"thinking_effort": ""}})
-
-    assert project.pins == {"builder": {"thinking_effort": ""}}
+    assert project.overrides == {"builder": {"temperature": 0.0}}
 
 
-def test_build_project_rejects_non_dict_pins(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError, match="pins must be an object"):
-        build_project("vbot", "vBot", tmp_path, pins=["builder"])  # type: ignore[arg-type]
+def test_build_project_accepts_override_thinking_effort_empty_string(tmp_path: Path) -> None:
+    # "" = force provider default; a real value, a valid overridden thinking effort.
+    project = build_project(
+        "vbot", "vBot", tmp_path, overrides={"builder": {"thinking_effort": ""}}
+    )
+
+    assert project.overrides == {"builder": {"thinking_effort": ""}}
 
 
-def test_build_project_rejects_empty_pin_key(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError, match="pins keys must be non-empty agent id strings"):
-        build_project("vbot", "vBot", tmp_path, pins={"  ": {"model": "openai/gpt-5"}})
+def test_build_project_rejects_non_dict_overrides(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError, match="overrides must be an object"):
+        build_project("vbot", "vBot", tmp_path, overrides=["builder"])  # type: ignore[arg-type]
 
 
-def test_build_project_rejects_non_dict_pin_value(tmp_path: Path) -> None:
+def test_build_project_rejects_empty_override_key(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError, match="overrides keys must be non-empty agent id strings"):
+        build_project("vbot", "vBot", tmp_path, overrides={"  ": {"model": "openai/gpt-5"}})
+
+
+def test_build_project_rejects_non_dict_override_value(tmp_path: Path) -> None:
     with pytest.raises(ProjectError, match="must be an object"):
-        build_project("vbot", "vBot", tmp_path, pins={"builder": "openai/gpt-5"})  # type: ignore[dict-item]
+        build_project("vbot", "vBot", tmp_path, overrides={"builder": "openai/gpt-5"})  # type: ignore[dict-item]
 
 
-def test_build_project_rejects_empty_pin_object(tmp_path: Path) -> None:
+def test_build_project_rejects_empty_override_object(tmp_path: Path) -> None:
     with pytest.raises(ProjectError, match="must set at least one field"):
-        build_project("vbot", "vBot", tmp_path, pins={"builder": {}})
+        build_project("vbot", "vBot", tmp_path, overrides={"builder": {}})
 
 
-def test_build_project_rejects_unknown_pin_field(tmp_path: Path) -> None:
+def test_build_project_rejects_unknown_override_field(tmp_path: Path) -> None:
     with pytest.raises(ProjectError, match="unknown fields"):
-        build_project("vbot", "vBot", tmp_path, pins={"builder": {"nope": "x"}})
+        build_project("vbot", "vBot", tmp_path, overrides={"builder": {"nope": "x"}})
 
 
-def test_build_project_rejects_empty_pin_model_value(tmp_path: Path) -> None:
+def test_build_project_rejects_empty_override_model_value(tmp_path: Path) -> None:
     with pytest.raises(ProjectError, match="model must be a non-empty model string"):
-        build_project("vbot", "vBot", tmp_path, pins={"builder": {"model": "  "}})
+        build_project("vbot", "vBot", tmp_path, overrides={"builder": {"model": "  "}})
 
 
-def test_build_project_rejects_out_of_range_pin_temperature(tmp_path: Path) -> None:
+def test_build_project_rejects_out_of_range_override_temperature(tmp_path: Path) -> None:
     with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, pins={"builder": {"temperature": 3.0}})
+        build_project("vbot", "vBot", tmp_path, overrides={"builder": {"temperature": 3.0}})
 
 
-def test_build_project_rejects_unknown_pin_thinking_effort(tmp_path: Path) -> None:
+def test_build_project_rejects_unknown_override_thinking_effort(tmp_path: Path) -> None:
     with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, pins={"builder": {"thinking_effort": "ultra"}})
+        build_project("vbot", "vBot", tmp_path, overrides={"builder": {"thinking_effort": "ultra"}})
 
 
 def test_build_project_accepts_default_temperature_and_thinking(tmp_path: Path) -> None:
@@ -294,7 +296,7 @@ def test_to_dict_round_trips_through_project_from_dict(tmp_path: Path) -> None:
         allowed_tools=["read", "grep"],
         skills_bundled_enabled=["frontend-design"],
         skills_project_disabled=["debugging"],
-        pins={"builder": {"model": "openai/gpt-mini"}},
+        overrides={"builder": {"model": "openai/gpt-mini"}},
     )
 
     restored = project_from_dict(project.to_dict())
@@ -318,7 +320,7 @@ def test_to_dict_has_stable_field_set(tmp_path: Path) -> None:
         "skills_bundled_enabled",
         "skills_global_enabled",
         "skills_project_disabled",
-        "pins",
+        "overrides",
         "created_at",
         "updated_at",
     }
@@ -345,8 +347,8 @@ def test_project_from_dict_defaults_optional_fields() -> None:
     assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     assert project.skills_bundled_enabled == []
     assert project.skills_project_disabled == []
-    # An old project.json without pins loads at the empty map.
-    assert project.pins == {}
+    # An old project.json without overrides loads at the empty map.
+    assert project.overrides == {}
 
 
 def test_project_from_dict_preserves_explicit_empty_allowed_tools() -> None:
