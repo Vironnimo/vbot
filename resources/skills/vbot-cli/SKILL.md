@@ -285,6 +285,10 @@ vbot channel remove tg-main
 
 Use `channel update` for partial config changes. Omitted fields remain unchanged; `--allow` replaces the full allowlist.
 
+For first-time Telegram setup — creating the bot with BotFather, storing the token, discovering chat ids, group privacy mode — follow `references/telegram-setup.md`.
+
+To discover a chat id, have the user message the bot once and read the denied inbound chats from `vbot channel status <channel-id>`; then allow the listed id with `channel update --allow` (pass the full list).
+
 Discord uses the same commands with Discord channel ids:
 
 ```bash

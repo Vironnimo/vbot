@@ -382,6 +382,8 @@ vbot channel status tg-main
 
 `channel update` is a partial update: omitted fields remain unchanged. Passing `--allow` replaces the full allowed chat-id list. Use `--enabled true` or `--enabled false` for config-level enabled state; use `channel enable` and `channel disable` for the common on/off operation.
 
+`channel status` reports enabled/running/failed state plus the channel's recently denied inbound chats — chats that messaged the bot but are not on the allowlist — with chat id, kind, name, and last-seen time. This is the chat-id discovery flow: have the user message the bot, read the id from status, then allow it with `channel update --allow`. The denied list is in-memory (cleared on channel restart, most recent 20 chats). See `telegram-setup.md` for the full first-time Telegram walkthrough.
+
 Telegram allowlist entries are chat ids. Discord entries are channel/thread ids, not guild ids; enable the Message Content Intent in the Discord Developer Portal before starting the channel.
 
 Supported `--dm-scope` values:
