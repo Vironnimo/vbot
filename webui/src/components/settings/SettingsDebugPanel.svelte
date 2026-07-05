@@ -235,6 +235,6 @@
     class="s-save-button s-save-button--inline"
     onClick={handleManualDebugSettingsSave}
   >
-    {saving ? t('common.saving', 'Saving…') : t('debug.save', 'Save')}
+    {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
   </Button>
 </div>

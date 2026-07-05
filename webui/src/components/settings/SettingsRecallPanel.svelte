@@ -129,7 +129,7 @@
     <div class="s-row-desc">
       {t(
         'settings.recall.backendDescription',
-        'Backend used by session_search for stored Session recall.',
+        'How the session search looks through stored conversations.',
       )}
     </div>
   </div>
@@ -146,12 +146,25 @@
   </div>
 </div>
 
+{#if recallSettings.backend === 'vector'}
+  <div class="s-row s-row--stacked">
+    <div class="s-row-info">
+      <div class="s-row-desc">
+        {t(
+          'settings.recall.vectorHint',
+          'Semantic search requires an embedding model — configure it under Specialized Models.',
+        )}
+      </div>
+    </div>
+  </div>
+{/if}
+
 <div class="s-footer">
   <Button
     variant="primary"
     class="s-save-button s-save-button--inline"
     onClick={handleManualRecallSettingsSave}
   >
-    {saving ? t('common.saving', 'Saving…') : t('settings.recall.save', 'Save')}
+    {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
   </Button>
 </div>

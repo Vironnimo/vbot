@@ -72,7 +72,7 @@ const TEXT_EMBEDDING_TASK_ROWS = Object.freeze([
     titleFallback: 'Embedding model',
     descriptionKey: 'settings.specializedModels.embeddingModelDescription',
     descriptionFallback:
-      'Used for semantic session recall when the vector recall backend is enabled.',
+      'Turns text into numeric vectors for meaning-based search. Required when Recall is set to Semantic.',
   },
 ]);
 

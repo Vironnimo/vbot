@@ -95,9 +95,18 @@ describe('SettingsView', () => {
     );
     expect(document.body.textContent).toContain('Loading settings…');
 
-    await waitForText('0.0.0.0:9001');
+    // Providers is the default panel, so its content is the settings-loaded
+    // signal now that General is no longer shown first.
+    await waitForText('Add provider');
 
     expect(rpcMock).toHaveBeenCalledWith('settings.get');
+    expect(document.body.textContent).toContain('OpenAI');
+    expect(document.body.textContent).toContain('Connected');
+    expect(document.body.textContent).not.toContain('Anthropic');
+    expect(document.body.textContent).toContain('Add provider');
+
+    clickButton('Server info');
+
     expect(document.body.textContent).toContain('Server host');
     expect(document.body.textContent).toContain('0.0.0.0:9001');
     expect(document.body.textContent).toContain('Data directory');
@@ -106,15 +115,6 @@ describe('SettingsView', () => {
       /show[_ -]?token[_ -]?counts/i,
     );
     expect(document.body.textContent).not.toMatch(/token count/i);
-
-    clickButton('Providers');
-
-    expect(document.body.textContent).toContain('OpenAI');
-    expect(document.body.textContent).toContain('Connected');
-    expect(document.body.textContent).not.toContain('Anthropic');
-    expect(document.body.textContent).toContain('Add provider');
-    expect(document.body.textContent).toContain('Custom endpoint');
-    expect(document.body.textContent).toContain('Placeholder');
   });
 
   it('adds, removes, and saves skill directories', async () => {
@@ -146,7 +146,7 @@ describe('SettingsView', () => {
     });
     flushSync();
 
-    await waitForText('0.0.0.0:9001');
+    await waitForText('Add provider');
     clickButton('Skills');
 
     expect(document.body.textContent).toContain('Default skill directory');
@@ -198,7 +198,7 @@ describe('SettingsView', () => {
     });
     flushSync();
 
-    await waitForText('0.0.0.0:9001');
+    await waitForText('Add provider');
     clickButton('Sub-Agents');
 
     expect(document.body.textContent).toContain('Max sub-agent depth');
@@ -257,7 +257,7 @@ describe('SettingsView', () => {
     });
     flushSync();
 
-    await waitForText('0.0.0.0:9001');
+    await waitForText('Add provider');
     clickButton('Recall');
 
     expect(document.body.textContent).toContain('Recall backend');
@@ -269,7 +269,11 @@ describe('SettingsView', () => {
 
     const sqliteOption = Array.from(
       document.body.querySelectorAll('.dropdown-option'),
-    ).find((option) => option.textContent.trim() === 'SQLite FTS');
+    ).find(
+      (option) =>
+        option.textContent.trim() ===
+        'Full-text search — fast keyword search with an index',
+    );
     expect(sqliteOption).toBeTruthy();
     sqliteOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
@@ -311,7 +315,7 @@ describe('SettingsView', () => {
     });
     flushSync();
 
-    await waitForText('0.0.0.0:9001');
+    await waitForText('Add provider');
     clickButton('Web Search');
 
     expect(document.body.textContent).toContain('Search provider');
@@ -377,9 +381,10 @@ describe('SettingsView', () => {
     expect(rpcMock).toHaveBeenNthCalledWith(1, 'settings.get');
     expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.get');
 
-    await waitForText('0.0.0.0:9001');
+    // A successful retry lands on the default Providers panel.
+    await waitForText('Add provider');
 
-    expect(document.body.textContent).toContain('0.0.0.0:9001');
+    expect(document.body.textContent).toContain('Add provider');
     expect(document.body.textContent).not.toContain('server offline');
   });
 
@@ -402,7 +407,7 @@ describe('SettingsView', () => {
     });
     flushSync();
 
-    await waitForText('0.0.0.0:9001');
+    await waitForText('Add provider');
 
     clickButton('Appearance');
 
