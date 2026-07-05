@@ -39,7 +39,6 @@
     onToast = noop,
     onError = noop,
     onReloadSettings = noop,
-    onHeaderActionChange = noop,
     modelsRefreshToken = 0,
   } = $props();
 
@@ -91,20 +90,6 @@
       pendingSettingsReload = false;
       void onReloadSettings();
     }
-  });
-
-  $effect(() => {
-    if (!visible || !hasRefreshEligibleProvider) {
-      onHeaderActionChange(null);
-      return;
-    }
-
-    onHeaderActionChange({
-      refreshing: refreshingModels,
-      refresh: refreshModelDatabase,
-    });
-
-    return () => onHeaderActionChange(null);
   });
 
   function providerAppearsRefreshEligible(provider) {
@@ -344,6 +329,17 @@
 
 {#if visible}
   <div class="s-providers-toolbar">
+    {#if hasRefreshEligibleProvider}
+      <Button
+        variant="secondary"
+        disabled={refreshingModels}
+        onClick={refreshModelDatabase}
+      >
+        {refreshingModels
+          ? t('settings.providers.refreshingModels', 'Updating…')
+          : t('settings.providers.refreshModels', 'Update Model DB')}
+      </Button>
+    {/if}
     <Button variant="primary" onClick={openAddProviderModal}>
       {t('settings.providers.add.button', 'Add provider')}
     </Button>
