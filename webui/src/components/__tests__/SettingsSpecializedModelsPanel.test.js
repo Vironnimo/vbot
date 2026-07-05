@@ -68,12 +68,78 @@ describe('SettingsSpecializedModelsPanel', () => {
 
     expect(listTaskModelTargetsMock.mock.calls.length).toBeGreaterThan(before);
   });
+
+  it('auto-saves after a boolean option toggle is flipped', async () => {
+    // The boolean option field is the shared Toggle (role="switch"); flipping it
+    // must arm the same autosave flow as the other option controls.
+    listTaskModelTargetsMock.mockImplementation((taskType) =>
+      Promise.resolve({
+        targets:
+          taskType === 'speech_to_text'
+            ? [
+                {
+                  id: 'openai:api-key/whisper-1',
+                  label: 'Whisper',
+                  kind: 'model',
+                },
+              ]
+            : [],
+      }),
+    );
+    getTaskModelOptionsMock.mockImplementation((taskType) =>
+      Promise.resolve({
+        fields:
+          taskType === 'speech_to_text'
+            ? [
+                {
+                  name: 'translate',
+                  type: 'boolean',
+                  label: 'Translate',
+                  default: false,
+                },
+              ]
+            : [],
+      }),
+    );
+
+    const props = reactiveProps({
+      settings: {
+        model_tasks: {
+          speech_to_text: { target: 'openai:api-key/whisper-1', options: {} },
+        },
+      },
+      modelsRefreshToken: 0,
+    });
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.body.querySelector('button[role="switch"]') !== null,
+    );
+
+    const toggle = document.body.querySelector('button[role="switch"]');
+    toggle.click();
+    flushSync();
+
+    // The autosave debounce is 800 ms of real time, so poll with a delay that
+    // spans it (20 × 100 ms) rather than the default near-instant cadence.
+    await waitForCondition(
+      () => updateTaskModelSettingsMock.mock.calls.length >= 1,
+      20,
+      100,
+    );
+
+    const payload = updateTaskModelSettingsMock.mock.calls[0][0];
+    expect(payload.speech_to_text.options.translate).toBe(true);
+  });
 });
 
-async function waitForCondition(check, attempts = 20) {
+async function waitForCondition(check, attempts = 20, delayMs = 0) {
   for (let index = 0; index < attempts; index += 1) {
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
     flushSync();
     if (check()) {
       return;

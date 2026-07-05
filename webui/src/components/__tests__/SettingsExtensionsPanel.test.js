@@ -290,6 +290,49 @@ describe('SettingsExtensionsPanel', () => {
     vi.useRealTimers();
   });
 
+  it('auto-saves after a schema toggle is flipped', async () => {
+    // The boolean schema field is the shared Toggle (role="switch"); flipping it
+    // must feed the same autosave path as any other non-secret config edit.
+    const withToggle = {
+      ...extensionsResult().extensions[0],
+      settings_schema: [
+        { key: 'verbose', type: 'toggle', label: 'Verbose', default: false },
+      ],
+    };
+    rpcMock.mockImplementation((method) => {
+      if (method === 'extensions.list') {
+        return Promise.resolve({ extensions: [withToggle] });
+      }
+      return Promise.resolve({});
+    });
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+
+    vi.useFakeTimers();
+
+    const toggle = document.body.querySelector('button[role="switch"]');
+    expect(toggle).toBeTruthy();
+    toggle.click();
+    flushSync();
+
+    vi.advanceTimersByTime(800);
+    await flushAsync();
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'settings.update',
+    );
+    expect(updateCall).toBeTruthy();
+    expect(updateCall[1].extensions.config.guard_bash).toEqual({
+      verbose: true,
+    });
+
+    vi.useRealTimers();
+  });
+
   it('shows Already saved when Save config is clicked with no changes', async () => {
     const toastMock = vi.fn();
     rpcMock.mockImplementation((method) => {
