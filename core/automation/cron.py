@@ -508,6 +508,13 @@ class CronService:
         self._remove_once_fire_claim(job_id)
 
     async def _trigger_job_run(self, job: CronJob) -> bool:
+        _LOGGER.info(
+            "Cron job fired (job=%s agent=%s session=%s%s)",
+            job.id,
+            job.agent_id,
+            job.session_id,
+            f" project={job.project_id}" if job.project_id else "",
+        )
         try:
             await self._trigger_service.trigger_run(
                 job.agent_id,

@@ -138,6 +138,7 @@ class _EmittingToolRegistry(ToolRegistry):
         allowed_tools: Sequence[str] | None = None,
     ) -> JsonObject:
         self._run.raise_if_cancelled()
+        self._run.tool_call_count += 1
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
         try:
@@ -219,6 +220,13 @@ class _EmittingToolRegistry(ToolRegistry):
 
             timing = _timing_payload(started_at, started_perf)
             self._tool_timings[context.tool_call_id] = timing
+            _LOGGER.debug(
+                "Tool %s completed (run=%s duration_ms=%s ok=%s)",
+                context.tool_name,
+                self._run.id,
+                timing["duration_ms"],
+                result.get("ok"),
+            )
             # Do not discard a completed tool result when the run is
             # cancelled: the executor already returned the result, the
             # per-tool cancel callback was the proper signal to interrupt

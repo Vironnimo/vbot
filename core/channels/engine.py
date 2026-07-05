@@ -670,6 +670,14 @@ class ChannelConversationEngine:
         sender: MessageSender | None = None,
         internal: bool = False,
     ) -> None:
+        _LOGGER.info(
+            "Channel message routed (channel=%s target=%s agent=%s session=%s%s)",
+            reply_plan.channel_id,
+            reply_plan.platform_target,
+            route.agent_id,
+            route.session_id,
+            " internal" if internal else "",
+        )
         try:
             # An internal run persists the content as a kernel note instead of a
             # visible user message; it never carries a sender.

@@ -719,6 +719,39 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_send_logs_run_start_and_end_lines(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "reasoning": None, "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with caplog.at_level("INFO", logger="vbot.chat"):
+        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    log_messages = [record.getMessage() for record in caplog.records]
+    start_line = next(
+        message for message in log_messages if message.startswith(f"Run {run.id} started")
+    )
+    assert "agent=coder" in start_line
+    assert "session=session-one" in start_line
+    assert "model=openrouter/anthropic/claude-sonnet-4" in start_line
+    assert "connection=openrouter:api-key" in start_line
+    end_line = next(
+        message for message in log_messages if message.startswith(f"Run {run.id} completed")
+    )
+    assert "agent=coder" in end_line
+    assert "session=session-one" in end_line
+    assert "duration_ms=" in end_line
+    assert "model_steps=1" in end_line
+    assert "tool_calls=0" in end_line
+    assert "input_tokens=" in end_line
+    assert "output_tokens=" in end_line
+
+
+@pytest.mark.asyncio
 async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
     class EmptySystemPrompts(StubPrompts):
         def build_system_prompt(
@@ -1298,6 +1331,7 @@ async def test_compaction_resolves_floor_for_null_window_model(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_messages(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([])
@@ -1329,16 +1363,28 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     messages = await loop._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
-    rebuilt = await loop._maybe_auto_compact(
-        agent,
-        adapter,
-        "gpt-5.2",
-        session,
-        messages,
-        usage={"input_tokens": 90},
-        run=run,
-    )
+    with caplog.at_level("INFO", logger="vbot.chat"):
+        rebuilt = await loop._maybe_auto_compact(
+            agent,
+            adapter,
+            "gpt-5.2",
+            session,
+            messages,
+            usage={"input_tokens": 90},
+            run=run,
+        )
 
+    log_messages = [record.getMessage() for record in caplog.records]
+    triggered_line = next(
+        message for message in log_messages if message.startswith("Auto-compaction triggered")
+    )
+    assert "input_tokens=90" in triggered_line
+    assert "context_window=100" in triggered_line
+    completed_line = next(
+        message for message in log_messages if message.startswith("Auto-compaction completed")
+    )
+    assert "session=session-one" in completed_line
+    assert "estimated_tokens_after=" in completed_line
     assert persisted_roles(session.load()) == [
         "user",
         "assistant",

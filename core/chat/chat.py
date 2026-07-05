@@ -238,6 +238,16 @@ def _connection_local_id(provider_id: str, connection_id: str) -> str | None:
     return remainder.split(":", 1)[0] or None
 
 
+def _usage_token_count(usage: Any, key: str) -> int:
+    """Return one non-negative token count from a usage payload, else 0."""
+    if not isinstance(usage, dict):
+        return 0
+    value = usage.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 def _read_media_text_note(filename: str, media_type: str) -> JsonObject:
     """Plain-text fallback when a read-media image cannot be shown to the model."""
     return {
@@ -609,6 +619,22 @@ class ChatLoop:
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
+        start_line_extras = ""
+        if project_id is not None:
+            start_line_extras += f" project={project_id}"
+        if internal:
+            start_line_extras += " internal"
+        if retry:
+            start_line_extras += " retry"
+        _LOGGER.info(
+            "Run %s started (agent=%s session=%s model=%s connection=%s%s)",
+            run.id,
+            run.agent_id,
+            run.session_id,
+            agent.model,
+            connection_id,
+            start_line_extras,
+        )
 
         try:
             extension_registry = self._runtime.extensions
@@ -689,6 +715,12 @@ class ChatLoop:
                             _persist_run_error(run, session, construction_exc)
                             raise
                         run.add_cancel_callback(lambda: _close_adapter(fallback_adapter))
+                        _LOGGER.info(
+                            "Model fallback activated (run=%s from=%s to=%s)",
+                            run.id,
+                            agent.model,
+                            fallback_model_str,
+                        )
                         run.emit(
                             MODEL_FALLBACK_ACTIVATED_EVENT,
                             {"from_model": agent.model, "to_model": fallback_model_str},
@@ -744,13 +776,28 @@ class ChatLoop:
                 outcome = "success"
             else:
                 outcome = "error"
+            run_status = {"success": "completed", "error": "failed", "cancelled": "cancelled"}[
+                outcome
+            ]
+            run_timing = _timing_payload(run_timing_started_at, run_timing_started_perf)
+            _LOGGER.info(
+                "Run %s %s (agent=%s session=%s duration_ms=%s model_steps=%d "
+                "tool_calls=%d input_tokens=%d output_tokens=%d)",
+                run.id,
+                run_status,
+                run.agent_id,
+                run.session_id,
+                run_timing["duration_ms"],
+                run.model_step_count,
+                run.tool_call_count,
+                run.input_token_total,
+                run.output_token_total,
+            )
             session.append(
                 ChatMessage.run_summary(
                     run_id=run.id,
-                    status={"success": "completed", "error": "failed", "cancelled": "cancelled"}[
-                        outcome
-                    ],
-                    timing=_timing_payload(run_timing_started_at, run_timing_started_perf),
+                    status=run_status,
+                    timing=run_timing,
                 )
             )
             # Session usage totals ride every terminal event so accessors can
@@ -1170,6 +1217,15 @@ class ChatLoop:
                         iteration_number=iteration_number,
                     )
                 )
+            run.model_step_count += 1
+            _LOGGER.debug(
+                "Model step %d requested (run=%s model=%s messages=%d)",
+                iteration_number,
+                run.id,
+                model_id,
+                len(messages_for_request),
+            )
+            step_started_perf = time.perf_counter()
             assistant_message = await self._send_assistant_request(
                 agent,
                 adapter,
@@ -1189,6 +1245,18 @@ class ChatLoop:
                 run.raise_if_cancelled()
             if assistant_message.usage is None:
                 assistant_message = _apply_usage_estimation(assistant_message, messages)
+            run.input_token_total += _usage_token_count(assistant_message.usage, "input_tokens")
+            run.output_token_total += _usage_token_count(assistant_message.usage, "output_tokens")
+            _LOGGER.debug(
+                "Model step %d completed (run=%s duration_ms=%d input_tokens=%d "
+                "output_tokens=%d tool_calls=%d)",
+                iteration_number,
+                run.id,
+                round((time.perf_counter() - step_started_perf) * 1000),
+                _usage_token_count(assistant_message.usage, "input_tokens"),
+                _usage_token_count(assistant_message.usage, "output_tokens"),
+                len(assistant_message.tool_calls or ()),
+            )
             # Hold the per-session append lock from the assistant tool-call
             # message through its tool results so a writer on another accessor
             # (a channel observed note, session.link_channel) cannot land between
@@ -1385,6 +1453,16 @@ class ChatLoop:
         ):
             return messages
 
+        _LOGGER.info(
+            "Auto-compaction triggered (run=%s agent=%s session=%s input_tokens=%d "
+            "context_window=%d threshold=%s)",
+            run.id,
+            run.agent_id,
+            run.session_id,
+            input_tokens,
+            context_window,
+            settings.threshold,
+        )
         summary_adapter, summary_model_id = self._resolve_summary_adapter(
             agent,
             adapter,
@@ -1424,6 +1502,12 @@ class ChatLoop:
             skill_catalog=self._pinned_skill_catalog(
                 run.agent_id, run.session_id, agent, compaction_skill_registry, project_id
             ),
+        )
+        _LOGGER.info(
+            "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",
+            run.id,
+            run.session_id,
+            self._compaction_service.estimate_messages_tokens(rebuilt_messages),
         )
         return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)
 

@@ -1409,7 +1409,8 @@ class Runtime:
         self.invalidate_project_skills()
         invalid_skill_count = len(self._skills.invalid_diagnostics())
         if self.logger is not None:
-            self.logger.info("Reloaded skill registry")
+            # Routine cache maintenance (fires on every project open), not an event.
+            self.logger.debug("Reloaded skill registry")
             if invalid_skill_count > 0:
                 self.logger.warning(
                     "Reloaded skills with %s invalid skill directories; "
