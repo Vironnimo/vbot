@@ -255,6 +255,16 @@ class Tool:
     # (its persisted permissions survive) but is filtered out of the model-facing
     # surfaces and returns a clean failure envelope on a direct dispatch.
     ready: ToolReadinessPredicate | None = None
+    # Optional human-readable hint explaining what makes this tool ready — shown by
+    # the ``tool.list`` RPC so an accessor can tell the user why a not-ready tool is
+    # unavailable (e.g. "set the extension's token"). Server-delivered English text
+    # like the description, never frontend i18n. ``None`` when the tool has no
+    # readiness precondition to explain.
+    readiness_hint: str | None = None
+    # The name of the extension that registered this tool, or ``None`` for a
+    # built-in tool. Set at extension-tool apply time so ``tool.list`` can attribute
+    # a tool to its owning extension.
+    extension: str | None = None
 
 
 def tool_is_ready(tool: Tool) -> bool:
@@ -360,12 +370,17 @@ class ToolRegistry:
         internal: bool = False,
         display: ToolDisplay | None = None,
         ready: ToolReadinessPredicate | None = None,
+        readiness_hint: str | None = None,
+        extension: str | None = None,
     ) -> Tool:
         """Register a tool and return its immutable definition.
 
         ``ready`` is an optional zero-arg readiness predicate (see :class:`Tool`):
         a not-ready tool stays registered but is filtered out of the model-facing
         surfaces and returns a failure envelope on a direct dispatch.
+        ``readiness_hint`` is optional English text explaining the readiness
+        precondition (surfaced by ``tool.list``); ``extension`` names the owning
+        extension (``None`` for a built-in), set at extension-tool apply time.
         """
         self._validate_tool(name, description, parameters, handler, display, ready)
         if name in self._tools:
@@ -379,6 +394,8 @@ class ToolRegistry:
             internal=internal,
             display=display or ToolDisplay(),
             ready=ready,
+            readiness_hint=readiness_hint,
+            extension=extension,
         )
         self._tools[name] = tool
         return tool

@@ -172,6 +172,24 @@ class AgentStore:
         raw_agent = self._load_raw_agent(agent_path)
         return self._apply_defaults(raw_agent, self._agent_defaults())
 
+    def get_raw(self, agent_id: str) -> Agent:
+        """Load an agent with its **un-baked** persisted values (no defaults applied).
+
+        Same load path as :meth:`get` (workspace seeding, current-session
+        normalization) but **without** the ``defaults.agent`` injection, so the
+        returned Agent carries the raw ``model``/``fallback_model`` ("" when unset)
+        and raw ``temperature``/``thinking_effort`` (``None`` when unset). This is the
+        provenance seam the resolver's identity ``effective_config`` reads to tell an
+        own persisted value from a baked global default; ``get``/``list``/``update``
+        keep baking for every other consumer.
+        """
+        self._validate_agent_id(agent_id)
+        agent_path = self._agent_path(agent_id)
+        if not agent_path.exists():
+            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+
+        return self._load_raw_agent(agent_path)
+
     def list(self) -> list[Agent]:
         """Return all persisted agents sorted by ID."""
         agents_dir = self._data_dir / "agents"

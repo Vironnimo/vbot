@@ -19,11 +19,11 @@ def _list_tools(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "tool.list does not accept params")
     try:
-        # ``ready_only=True``: the picker and Project Tool Whitelist editor offer
-        # only tools that can actually run right now. A not-ready tool (e.g. an
-        # unconfigured extension's) is hidden here; persisted allowlist entries
-        # naming it stay harmlessly inert and re-apply once it becomes ready.
-        tools = state.runtime.tools.list_tools(ready_only=True)
+        # All registered tools (readiness default off): the picker and Project Tool
+        # Whitelist editor see every tool and style a not-ready one from the per-tool
+        # ``ready``/``readiness_hint`` fields, rather than the tool vanishing. The
+        # model-facing surfaces (provider/prompt definitions) still filter readiness.
+        tools = state.runtime.tools.list_tools()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # ``default_project_tools`` is the project Tool Whitelist base list — the editor

@@ -57,7 +57,7 @@ from server.rpc.runtime_access import (
     _streaming_chat_loop,
 )
 from server.rpc.validation import (
-    _ensure_model_connection_supported,
+    _ensure_model_usable,
     _optional_chat_input_origin,
     _optional_positive_integer,
     _optional_string,
@@ -397,9 +397,9 @@ def _handle_set_model_command(
     A case-insensitive ``reset`` clears the selection; any other text is a model
     value validated against actually-usable models. Routing follows the session
     kind: an identity session writes the agent's own ``model`` field (empty on
-    reset → the global default), a project session writes/clears a per-agent
-    override in ``project.json`` (the top model-chain tier). The change takes effect
-    on the next run, so there is no busy-guard.
+    reset → the global default), a project session sets/clears the agent's **model
+    pin** in ``project.json`` (the top model-chain tier). The change takes effect on
+    the next run, so there is no busy-guard.
     """
     raw = (argument or "").strip()
     is_reset = raw.lower() == _MODEL_RESET_TOKEN
@@ -411,9 +411,9 @@ def _handle_set_model_command(
         if project_id is None:
             state.runtime.agents.update(agent_id, model=model)
         elif is_reset:
-            state.runtime.projects.clear_model_override(project_id, agent_id)
+            state.runtime.projects.clear_pin(project_id, agent_id, "model")
         else:
-            state.runtime.projects.set_model_override(project_id, agent_id, model)
+            state.runtime.projects.set_pin(project_id, agent_id, "model", model)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -425,24 +425,6 @@ def _handle_set_model_command(
         ),
         output="toast",
     )
-
-
-def _ensure_model_usable(state: Any, model: str) -> None:
-    """Reject a ``/model`` value that is not actually usable in this instance.
-
-    Two gates, both surfaced as ``invalid_request``: the model must be configured
-    here (provider registered, in catalog, usable credential — the resolver's
-    public ``is_model_configured`` seam, the same rule behind the scan's BAD_MODEL
-    finding), and a pinned ``::connection`` suffix must be allowed by the model's
-    connection allowlist (the same save-time guard the ``agent.*`` RPC uses).
-    """
-    if not state.runtime.agent_resolver.is_model_configured(model):
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"model {model!r} is not usable in this instance "
-            "(unknown provider/model or no usable credential)",
-        )
-    _ensure_model_connection_supported(state.runtime.models, "model", model)
 
 
 def _build_handoff_prompt(base_instruction: str, instruction: str | None) -> str:

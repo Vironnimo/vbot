@@ -516,6 +516,12 @@ async def _handle_call_service(
 _HASS_TOKEN_ENV_KEY = "HASS_TOKEN"
 _URL_CONFIG_KEY = "url"
 
+# Shown by tool.list for the four not-ready HA tools until the token is set.
+# Server-delivered English text (plain ASCII), like a tool description — not i18n.
+_HASS_READINESS_HINT = (
+    "Requires a Home Assistant connection - set the server URL and token in Settings -> Extensions."
+)
+
 
 def _resolve_token(api: Any) -> str:
     """Resolve the HA token live (process env, then data-dir ``.env``)."""
@@ -609,6 +615,7 @@ def register(api: Any) -> None:
         HA_LIST_ENTITIES_PARAMETERS,
         list_entities_handler,
         ready=_is_ready,
+        readiness_hint=_HASS_READINESS_HINT,
     )
     api.register_tool(
         HA_GET_STATE_NAME,
@@ -617,6 +624,7 @@ def register(api: Any) -> None:
         get_state_handler,
         display=ToolDisplay(summary_fields=("entity_id",)),
         ready=_is_ready,
+        readiness_hint=_HASS_READINESS_HINT,
     )
     api.register_tool(
         HA_LIST_SERVICES_NAME,
@@ -624,6 +632,7 @@ def register(api: Any) -> None:
         HA_LIST_SERVICES_PARAMETERS,
         list_services_handler,
         ready=_is_ready,
+        readiness_hint=_HASS_READINESS_HINT,
     )
     api.register_tool(
         HA_CALL_SERVICE_NAME,
@@ -632,4 +641,5 @@ def register(api: Any) -> None:
         call_service_handler,
         display=ToolDisplay(summary_fields=("domain", "service", "entity_id")),
         ready=_is_ready,
+        readiness_hint=_HASS_READINESS_HINT,
     )

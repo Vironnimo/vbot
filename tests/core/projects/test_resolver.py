@@ -448,13 +448,13 @@ def test_unconfigured_agent_model_falls_through_to_default(
 # ---------------------------------------------------------------------------
 
 
-def test_model_override_wins_over_repo_model(
+def test_model_pin_wins_over_repo_model(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # The repo declares gpt-5.2; a vBot-owned override pins gpt-mini → override wins.
+    # The repo declares gpt-5.2; a vBot-owned pin sets gpt-mini → the pin wins.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    projects.set_model_override("vbot", "builder", "openai/gpt-mini")
+    projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
     resolver = _resolver(agents, projects, _openai_configured())
 
     runtime_agent = resolver.resolve_agent("vbot", "builder")
@@ -462,28 +462,28 @@ def test_model_override_wins_over_repo_model(
     assert runtime_agent.model == "openai/gpt-mini"
 
 
-def test_model_override_applies_only_to_its_agent(
+def test_model_pin_applies_only_to_its_agent(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # An override keyed on builder must not bleed onto another agent.
+    # A pin keyed on builder must not bleed onto another agent.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _write_agent(repo, "planner.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    projects.set_model_override("vbot", "builder", "openai/gpt-mini")
+    projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
     resolver = _resolver(agents, projects, _openai_configured())
 
     assert resolver.resolve_agent("vbot", "builder").model == "openai/gpt-mini"
     assert resolver.resolve_agent("vbot", "planner").model == "openai/gpt-5.2"
 
 
-def test_unconfigured_override_degrades_to_repo_model(
+def test_unconfigured_model_pin_degrades_to_repo_model(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # An override that is not configured in this instance (e.g. credential removed)
+    # A pin that is not configured in this instance (e.g. credential removed)
     # falls through the same is_configured gate to the repo-declared model.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    projects.set_model_override("vbot", "builder", "openai/ghost-model")
+    projects.set_pin("vbot", "builder", "model", "openai/ghost-model")
     resolver = _resolver(agents, projects, _openai_configured())
 
     runtime_agent = resolver.resolve_agent("vbot", "builder")
@@ -867,3 +867,340 @@ def test_resolve_prompt_project_none_for_empty_workspace(tmp_path: Path) -> None
     store.create("vbot", "vBot", repo)
 
     assert resolve_prompt_project(store, None, _ws_agent("")) is None
+
+
+# ---------------------------------------------------------------------------
+# effective_config — config agent: per-tier value + source (never raises for a
+# fallen-through model). Same chain as resolve_agent, so the two cannot drift.
+# ---------------------------------------------------------------------------
+
+
+def test_effective_config_model_pin_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["model"] == {"value": "openai/gpt-mini", "source": "pin"}
+
+
+def test_effective_config_model_agent_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["model"] == {"value": "openai/gpt-5.2", "source": "agent"}
+
+
+def test_effective_config_model_project_default_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "writer.md", model="")
+    _project(projects, repo, default_model="openai/gpt-mini")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    result = resolver.effective_config("vbot", "writer")
+
+    assert result["model"] == {"value": "openai/gpt-mini", "source": "project_default"}
+
+
+def test_effective_config_model_global_default_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "writer.md", model="")
+    _project(projects, repo, default_model="")
+    resolver = _resolver(agents, projects, _openai_configured(), global_default="openai/gpt-5.2")
+
+    result = resolver.effective_config("vbot", "writer")
+
+    assert result["model"] == {"value": "openai/gpt-5.2", "source": "global_default"}
+
+
+def test_effective_config_model_fell_through_returns_none_without_raising(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # A fully-fallen-through model chain does NOT raise here (unlike resolve_agent);
+    # it reports {"value": None, "source": None}.
+    _write_agent(repo, "writer.md", model="")
+    _project(projects, repo, default_model="")
+    resolver = _resolver(agents, projects, _openai_configured(), global_default="")
+
+    result = resolver.effective_config("vbot", "writer")
+
+    assert result["model"] == {"value": None, "source": None}
+
+
+def test_effective_config_unconfigured_model_pin_skipped_falls_to_agent(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # An unconfigured pinned model is skipped by the is_configured gate for BOTH
+    # resolve_agent and effective_config — the chain falls to the repo-declared model.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    projects.set_pin("vbot", "builder", "model", "openai/ghost-model")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    assert resolver.resolve_agent("vbot", "builder").model == "openai/gpt-5.2"
+    assert resolver.effective_config("vbot", "builder")["model"] == {
+        "value": "openai/gpt-5.2",
+        "source": "agent",
+    }
+
+
+def test_effective_config_temperature_pin_zero_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # A temperature pin of 0.0 (a real value) is the top tier and wins.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=0.7)
+    _project(projects, repo, default_temperature=0.2)
+    projects.set_pin("vbot", "builder", "temperature", 0.0)
+    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["temperature"] == {"value": 0.0, "source": "pin"}
+
+
+def test_effective_config_temperature_agent_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=0.7)
+    _project(projects, repo, default_temperature=0.2)
+    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["temperature"] == {"value": 0.7, "source": "agent"}
+
+
+def test_effective_config_temperature_project_default_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
+    _project(projects, repo, default_temperature=0.2)
+    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["temperature"] == {"value": 0.2, "source": "project_default"}
+
+
+def test_effective_config_temperature_global_default_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
+    _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["temperature"] == {"value": 0.9, "source": "global_default"}
+
+
+def test_effective_config_thinking_pin_empty_string_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # A thinking_effort pin of "" (force provider default, a real value) wins.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", reasoning_effort="high")
+    _project(projects, repo, default_thinking_effort="low")
+    projects.set_pin("vbot", "builder", "thinking_effort", "")
+    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["thinking_effort"] == {"value": "", "source": "pin"}
+
+
+def test_effective_config_thinking_agent_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", reasoning_effort="high")
+    _project(projects, repo, default_thinking_effort="low")
+    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["thinking_effort"] == {"value": "high", "source": "agent"}
+
+
+def test_effective_config_thinking_project_default_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo, default_thinking_effort="low")
+    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["thinking_effort"] == {"value": "low", "source": "project_default"}
+
+
+def test_effective_config_thinking_global_default_wins(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
+
+    result = resolver.effective_config("vbot", "builder")
+
+    assert result["thinking_effort"] == {"value": "medium", "source": "global_default"}
+
+
+def test_effective_config_unknown_project_raises(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    with pytest.raises(AgentResolutionError):
+        resolver.effective_config("missing", "builder")
+
+
+def test_effective_config_unknown_agent_raises(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    with pytest.raises(AgentResolutionError):
+        resolver.effective_config("vbot", "ghost")
+
+
+def test_effective_config_for_member_matches_effective_config(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # The scanned-member seam runs the same per-tier chain as effective_config,
+    # so a team listing never re-scans yet reports the identical result.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=0.7)
+    project = _project(projects, repo)
+    projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
+    resolver = _resolver(agents, projects, _openai_configured())
+    result = resolver.scan_project_report(project)
+    member = next(m for m in result.team if m.agent_id == "builder")
+
+    from_member = resolver.effective_config_for_member(projects.get("vbot"), member)
+
+    assert from_member == resolver.effective_config("vbot", "builder")
+    assert from_member["model"] == {"value": "openai/gpt-mini", "source": "pin"}
+
+
+# ---------------------------------------------------------------------------
+# effective_config — identity agent: own value vs. baked global default. No
+# is_configured gating; mirrors AgentStore._apply_defaults exactly.
+# ---------------------------------------------------------------------------
+
+
+def test_identity_effective_config_reports_own_value_as_agent(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    agents.create(
+        "orchestrator",
+        "Orchestrator",
+        model="openai/gpt-5.2",
+        fallback_model="openai/gpt-mini",
+        temperature=0.3,
+        thinking_effort="high",
+    )
+    resolver = _resolver(agents, projects, _openai_configured(), global_default="openai/ghost")
+
+    result = resolver.effective_config(None, "orchestrator")
+
+    assert result["model"] == {"value": "openai/gpt-5.2", "source": "agent"}
+    assert result["fallback_model"] == {"value": "openai/gpt-mini", "source": "agent"}
+    assert result["temperature"] == {"value": 0.3, "source": "agent"}
+    assert result["thinking_effort"] == {"value": "high", "source": "agent"}
+
+
+def test_identity_effective_config_reports_global_default_when_own_empty(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # No own model/temperature/thinking → the global default is the source, exactly
+    # as AgentStore.get would bake it. get_raw is what lets the resolver see the "".
+    agents.create("orchestrator", "Orchestrator")
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        global_default="openai/gpt-5.2",
+        global_temperature=0.9,
+        global_thinking_effort="medium",
+    )
+
+    result = resolver.effective_config(None, "orchestrator")
+
+    assert result["model"] == {"value": "openai/gpt-5.2", "source": "global_default"}
+    assert result["temperature"] == {"value": 0.9, "source": "global_default"}
+    assert result["thinking_effort"] == {"value": "medium", "source": "global_default"}
+
+
+def test_identity_effective_config_reports_none_when_neither(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    agents.create("orchestrator", "Orchestrator")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    result = resolver.effective_config(None, "orchestrator")
+
+    assert result["model"] == {"value": None, "source": None}
+    assert result["fallback_model"] == {"value": None, "source": None}
+    assert result["temperature"] == {"value": None, "source": None}
+    assert result["thinking_effort"] == {"value": None, "source": None}
+
+
+def test_identity_effective_config_own_zero_temperature_is_agent(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # A present own value including 0.0 temperature and "" thinking effort stops the
+    # chain at "agent", never falling to the global default.
+    agents.create("orchestrator", "Orchestrator", temperature=0.0, thinking_effort="")
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        global_temperature=0.9,
+        global_thinking_effort="medium",
+    )
+
+    result = resolver.effective_config(None, "orchestrator")
+
+    assert result["temperature"] == {"value": 0.0, "source": "agent"}
+    assert result["thinking_effort"] == {"value": "", "source": "agent"}
+
+
+def test_identity_effective_config_unknown_agent_raises(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    with pytest.raises(AgentResolutionError):
+        resolver.effective_config(None, "missing-agent")
+
+
+def test_get_bakes_global_default_but_get_raw_does_not(
+    agents: AgentStore, projects: ProjectStore, repo: Path, data_dir: Path, template_dir: Path
+) -> None:
+    # The get/get_raw seam the identity effective_config relies on: with a global
+    # default set, get() bakes it in while get_raw() returns the unbaked "" / None.
+    baking_store = AgentStore(
+        data_dir,
+        template_dir=template_dir,
+        defaults_provider=lambda: {"model": "openai/gpt-5.2", "temperature": 0.9},
+    )
+    baking_store.create("orchestrator", "Orchestrator")
+
+    baked = baking_store.get("orchestrator")
+    raw = baking_store.get_raw("orchestrator")
+
+    assert baked.model == "openai/gpt-5.2"
+    assert baked.temperature == 0.9
+    assert raw.model == ""
+    assert raw.temperature is None

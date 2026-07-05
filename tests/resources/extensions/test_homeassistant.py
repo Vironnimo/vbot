@@ -175,6 +175,21 @@ def test_all_four_tools_registered_without_token() -> None:
         assert tool.ready is not None
 
 
+def test_ha_tools_carry_readiness_hint_and_extension_attribution() -> None:
+    # tool.list surfaces these: the four tools are attributed to the extension and
+    # carry the concrete hint explaining what makes them ready.
+    state = _State()
+    _, tools = _load_registry(state)
+
+    for name in _HA_TOOL_NAMES:
+        tool = tools.get(name)
+        assert tool.extension == _EXTENSION_NAME
+        assert tool.readiness_hint == (
+            "Requires a Home Assistant connection - set the server URL and token "
+            "in Settings -> Extensions."
+        )
+
+
 def test_not_ready_tools_absent_from_provider_definitions_without_token() -> None:
     state = _State()  # no token
     _, tools = _load_registry(state)

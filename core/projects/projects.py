@@ -62,6 +62,10 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "skill",
 )
 
+# The optional fields a per-agent Pin may carry. Each maps to the top tier of the
+# matching config-agent resolver chain (model / temperature / thinking effort).
+PIN_FIELDS: frozenset[str] = frozenset({"model", "temperature", "thinking_effort"})
+
 # The tool-neutral project-instruction convention (the agents.md standard). Seeded
 # as the first ``auto_load`` entry when a project is created
 # (:func:`seed_default_auto_load`, used by ``ProjectStore.create``), then treated
@@ -131,13 +135,15 @@ class Project:
     skills_bundled_enabled: list[str] = field(default_factory=list)
     skills_global_enabled: list[str] = field(default_factory=list)
     skills_project_disabled: list[str] = field(default_factory=list)
-    # Per-agent model overrides keyed by scanned ``agent_id`` → user-facing
-    # ``<provider>/<model-id>[::connection]`` (GLOSSARY → Model). vBot-owned and
-    # data-dir-only (never the repo); the resolver applies it as the **top** tier of
-    # a config agent's model chain, so it wins over the repo-declared model. Empty by
-    # default. Set/cleared per entry through the store (``set_model_override`` /
-    # ``clear_model_override``), not the generic ``project.set`` field surface.
-    model_overrides: dict[str, str] = field(default_factory=dict)
+    # Per-agent Pins keyed by scanned ``agent_id`` → a pin object with optional
+    # ``model`` (user-facing ``<provider>/<model-id>[::connection]``), ``temperature``
+    # (number), and ``thinking_effort`` (effort string, ``""`` = force provider
+    # default). The vBot-owned per-agent override layer (GLOSSARY → Model): data-dir
+    # only (never the repo); the resolver applies each pinned field as the **top**
+    # tier of the matching config-agent chain, so a pin wins over the repo-declared
+    # value. Empty by default. Set/cleared per field through the store
+    # (``set_pin`` / ``clear_pin``), not the generic ``project.set`` field surface.
+    pins: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable mapping persisted to ``project.json``."""
@@ -154,7 +160,7 @@ class Project:
             "skills_bundled_enabled": list(self.skills_bundled_enabled),
             "skills_global_enabled": list(self.skills_global_enabled),
             "skills_project_disabled": list(self.skills_project_disabled),
-            "model_overrides": dict(self.model_overrides),
+            "pins": {agent_id: dict(pin) for agent_id, pin in self.pins.items()},
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -174,7 +180,7 @@ def build_project(
     skills_bundled_enabled: list[str] | None = None,
     skills_global_enabled: list[str] | None = None,
     skills_project_disabled: list[str] | None = None,
-    model_overrides: dict[str, str] | None = None,
+    pins: dict[str, dict[str, Any]] | None = None,
     created_at: str | None = None,
     updated_at: str | None = None,
 ) -> Project:
@@ -203,7 +209,7 @@ def build_project(
     validated_skills_disabled = _validate_string_list(
         "skills_project_disabled", skills_project_disabled
     )
-    validated_model_overrides = _validate_model_overrides(model_overrides)
+    validated_pins = _validate_pins(pins)
     now = _utc_now()
     return Project(
         project_id=validated_id,
@@ -218,7 +224,7 @@ def build_project(
         skills_bundled_enabled=validated_skills_bundled,
         skills_global_enabled=validated_skills_global,
         skills_project_disabled=validated_skills_disabled,
-        model_overrides=validated_model_overrides,
+        pins=validated_pins,
         created_at=created_at or now,
         updated_at=updated_at or now,
     )
@@ -246,7 +252,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
         skills_global_enabled=list(cast("list[str]", data.get("skills_global_enabled") or [])),
         skills_project_disabled=list(cast("list[str]", data.get("skills_project_disabled") or [])),
-        model_overrides=dict(cast("dict[str, str]", data.get("model_overrides") or {})),
+        pins=_pins_from_data(data.get("pins")),
         created_at=data["created_at"],
         updated_at=data["updated_at"],
     )
@@ -357,26 +363,91 @@ def _validate_string_list(field_name: str, values: list[str] | None) -> list[str
     return list(values)
 
 
-def _validate_model_overrides(value: dict[str, str] | None) -> dict[str, str]:
-    """Validate the per-agent model-override map; ``None`` → ``{}``.
+def _validate_pins(value: dict[str, dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    """Validate the per-agent Pin map; ``None`` → ``{}``.
 
-    Shape-only, exactly like ``default_model``: each key is a non-empty ``agent_id``
-    string and each value a non-empty model string. The model's *configured-ness*
-    (provider registered, in catalog, usable credential) is deliberately **not**
-    checked here — that is the set-time gate in the ``/model`` command path, not a
-    file-load concern, so a credential going away never makes an existing
-    ``project.json`` fail to load.
+    Each key is a non-empty ``agent_id`` string; each value is a pin object with any
+    of the optional fields in :data:`PIN_FIELDS`. ``model`` is a non-empty model
+    string (shape only, exactly like ``default_model`` — the model's *configured-ness*
+    is the ``/model`` set-time gate, not a file-load concern, so a credential going
+    away never makes an existing ``project.json`` fail to load). ``temperature`` and
+    ``thinking_effort`` reuse the canonical agent field validators, so their ranges
+    and effort ladder can never drift from an agent's; ``thinking_effort = ""`` is a
+    real value meaning "force provider default". An empty pin object (no fields) is
+    rejected — a pin with no field carries nothing.
     """
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise ProjectError("model_overrides must be an object")
-    for agent_id, model in value.items():
+        raise ProjectError("pins must be an object")
+    validated: dict[str, dict[str, Any]] = {}
+    for agent_id, pin in value.items():
         if not isinstance(agent_id, str) or not agent_id.strip():
-            raise ProjectError("model_overrides keys must be non-empty agent id strings")
+            raise ProjectError("pins keys must be non-empty agent id strings")
+        validated[agent_id] = _validate_pin(agent_id, pin)
+    return validated
+
+
+def _validate_pin(agent_id: str, pin: Any) -> dict[str, Any]:
+    """Validate one agent's pin object, returning a normalized copy."""
+    if not isinstance(pin, dict):
+        raise ProjectError(f"pins[{agent_id!r}] must be an object")
+    unknown = sorted(set(pin) - PIN_FIELDS)
+    if unknown:
+        raise ProjectError(f"pins[{agent_id!r}] has unknown fields: {', '.join(unknown)}")
+    if not pin:
+        raise ProjectError(f"pins[{agent_id!r}] must set at least one field")
+    validated: dict[str, Any] = {}
+    if "model" in pin:
+        model = pin["model"]
         if not isinstance(model, str) or not model.strip():
-            raise ProjectError("model_overrides values must be non-empty model strings")
-    return dict(value)
+            raise ProjectError(f"pins[{agent_id!r}].model must be a non-empty model string")
+        validated["model"] = model
+    if "temperature" in pin:
+        validated["temperature"] = _validate_pin_temperature(agent_id, pin["temperature"])
+    if "thinking_effort" in pin:
+        validated["thinking_effort"] = _validate_pin_thinking_effort(
+            agent_id, pin["thinking_effort"]
+        )
+    return validated
+
+
+def _validate_pin_temperature(agent_id: str, value: Any) -> float:
+    """Validate a pin ``temperature`` via the canonical rule (``None`` is not a pin)."""
+    try:
+        temperature = validate_temperature(
+            value, label=f"pins[{agent_id!r}].temperature", allow_none=False
+        )
+    except SettingsValidationError as exc:
+        raise ProjectError(str(exc)) from exc
+    return cast("float", temperature)
+
+
+def _validate_pin_thinking_effort(agent_id: str, value: Any) -> str:
+    """Validate a pin ``thinking_effort`` via the canonical rule (``""`` allowed)."""
+    try:
+        effort = validate_thinking_effort(
+            value, label=f"pins[{agent_id!r}].thinking_effort", allow_none=False
+        )
+    except SettingsValidationError as exc:
+        raise ProjectError(str(exc)) from exc
+    return cast("str", effort)
+
+
+def _pins_from_data(value: Any) -> dict[str, dict[str, Any]]:
+    """Return the persisted pin map from validated data, normalizing shapes.
+
+    Validation runs before this (central validator), so a malformed value is
+    already rejected; this only copies each pin object. A missing field defaults to
+    an empty map.
+    """
+    if not isinstance(value, dict):
+        return {}
+    return {
+        agent_id: dict(cast("dict[str, Any]", pin))
+        for agent_id, pin in value.items()
+        if isinstance(pin, dict)
+    }
 
 
 def _utc_now() -> str:

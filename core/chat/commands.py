@@ -64,6 +64,21 @@ CommandHandler = Callable[[str, str, "str | None", "str | None"], "CommandHandle
 _LOGGER = get_logger("chat.commands")
 
 STATUS_PLACEHOLDER = "—"
+# Plain-English origin wording for the /model reply, keyed by the provenance
+# ``source`` tier from ``AgentResolver.effective_config``. Chat output, not i18n.
+# Identity and project sessions read the same tiers differently, so they have
+# separate maps; a missing/None source falls back to "not configured".
+_MODEL_ORIGIN_NOT_CONFIGURED = "not configured"
+_IDENTITY_MODEL_ORIGINS: dict[str | None, str] = {
+    "agent": "agent configuration",
+    "global_default": "global default",
+}
+_PROJECT_MODEL_ORIGINS: dict[str | None, str] = {
+    "pin": "pin (set via /model)",
+    "agent": "agent file in repo",
+    "project_default": "project default",
+    "global_default": "global default",
+}
 # Reported "actual" reasoning state for a model steered by a thinking toggle or a
 # token budget rather than an effort ladder: there is no effort level to show, so
 # ``/status`` reports whether reasoning is on or off for the selection.
@@ -447,17 +462,21 @@ class CommandDispatcher:
     def _build_model_summary(self, agent_id: str, project_id: str | None) -> str:
         """Describe the session's current model and where it resolves from.
 
-        Cheap, fresh reads only (no model-chain replication): the resolved model is
-        what the next run would use (already post-override), and the origin is read
-        straight off the project's override map. None-guarded like ``/status`` so a
-        minimally constructed dispatcher degrades to a placeholder instead of
-        crashing.
+        Reads the resolver's provenance seam once (``effective_config``): the model
+        value is what the next run would use (already post-pin), and its source names
+        the winning tier. None-guarded like ``/status`` so a minimally constructed
+        dispatcher degrades to a placeholder instead of crashing; a resolver error is
+        logged and degrades to placeholder + "not configured".
         """
         model = STATUS_PLACEHOLDER
+        source: str | None = None
         if self._agent_resolver is not None:
             try:
-                model = self._agent_resolver.resolve_agent(project_id, agent_id).model.strip()
-                model = model or STATUS_PLACEHOLDER
+                effective = self._agent_resolver.effective_config(project_id, agent_id)
+                model_field = effective.get("model", {})
+                value = model_field.get("value")
+                model = (value or "").strip() or STATUS_PLACEHOLDER
+                source = model_field.get("source")
             except Exception as error:
                 log = (
                     _LOGGER.warning
@@ -469,30 +488,19 @@ class CommandDispatcher:
                     agent_id,
                     exc_info=True,
                 )
-        return f"Current model: {model}\nSource: {self._model_origin(agent_id, project_id)}"
+        return f"Current model: {model}\nSource: {self._model_origin(project_id, source)}"
 
-    def _model_origin(self, agent_id: str, project_id: str | None) -> str:
+    def _model_origin(self, project_id: str | None, source: str | None) -> str:
         """Return where the session's current model comes from, in plain English.
 
-        Identity session (``project_id is None``) → the agent's own configuration.
-        Project session → a per-agent local override when one is pinned (the top
-        model-chain tier), otherwise the project configuration (the repo-declared
-        model or a project/global default). None-guarded; an unreadable project
-        degrades to the project-configuration label.
+        Maps the provenance ``source`` tier (from ``effective_config``) onto the
+        wire wording, keyed by session kind so identity and project sessions read
+        differently. A ``None`` source (chain fully fell through) reports "not
+        configured".
         """
         if project_id is None:
-            return "agent configuration"
-        if self._projects is not None:
-            try:
-                if self._projects.get(project_id).model_overrides.get(agent_id):
-                    return "local override"
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to load project %r while building /model reply",
-                    project_id,
-                    exc_info=True,
-                )
-        return "project configuration"
+            return _IDENTITY_MODEL_ORIGINS.get(source, _MODEL_ORIGIN_NOT_CONFIGURED)
+        return _PROJECT_MODEL_ORIGINS.get(source, _MODEL_ORIGIN_NOT_CONFIGURED)
 
     def _handle_help(
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
