@@ -573,12 +573,15 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.blockList.reorderHandle': 'Reorder {id} (use arrow keys)',
   'systemPrompt.blockList.reorderAnnouncement':
     'Moved to position {position} of {total}',
-  'systemPrompt.blockList.appearsWhen': 'appears when: {owner}',
-  'systemPrompt.blockList.owner.always': 'always',
-  'systemPrompt.blockList.owner.memory': 'memory',
-  'systemPrompt.blockList.owner.channel': 'channels',
-  'systemPrompt.blockList.owner.tool': 'tool: {name}',
-  'systemPrompt.blockList.owner.extension': 'extension: {name}',
+  'systemPrompt.blockList.ownerHint.always': 'Always included.',
+  'systemPrompt.blockList.ownerHint.tool':
+    'Included only while the {name} tool is active.',
+  'systemPrompt.blockList.ownerHint.extension':
+    'Included only while the {name} extension is active.',
+  'systemPrompt.blockList.ownerHint.memory':
+    'Included only while the memory tool is on.',
+  'systemPrompt.blockList.ownerHint.channel':
+    'Included only while the agent has an active channel.',
 
   'settings.title': 'Settings',
   'settings.loading': 'Loading settings…',
