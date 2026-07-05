@@ -259,6 +259,93 @@ def test_channel_status_posts_status_rpc(tmp_path: Path, monkeypatch: pytest.Mon
     ]
 
 
+def test_channel_status_lists_denied_chats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "id": "tg-assistant",
+                    "enabled": True,
+                    "running": True,
+                    "failed": False,
+                    "failure_reason": None,
+                    "denied_chats": [
+                        {
+                            "chat_id": "99999",
+                            "kind": "direct",
+                            "display_name": "Julian B.",
+                            "last_seen_at": "2026-07-05T12:00:00+00:00",
+                            "count": 3,
+                        },
+                        {
+                            "chat_id": "-10001",
+                            "kind": "group",
+                            "display_name": None,
+                            "last_seen_at": "2026-07-05T11:00:00+00:00",
+                            "count": 1,
+                        },
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr(channel_management.httpx, "post", fake_post)
+
+    result = channel_management.channel_status(instance, "tg-assistant")
+
+    assert result.ok is True
+    lines = result.message.splitlines()
+    assert lines[0] == "tg-assistant: enabled=yes running=yes failed=no"
+    assert lines[1] == ("denied inbound chats (messaged the bot but are not in the allowlist):")
+    assert lines[2] == (
+        "- chat_id=99999 kind=direct name=Julian B. last_seen=2026-07-05T12:00:00+00:00 messages=3"
+    )
+    assert lines[3] == (
+        "- chat_id=-10001 kind=group last_seen=2026-07-05T11:00:00+00:00 messages=1"
+    )
+    assert "vbot channel update tg-assistant --allow" in lines[4]
+
+
+def test_channel_status_omits_denied_chat_block_when_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "id": "tg-assistant",
+                    "enabled": True,
+                    "running": True,
+                    "failed": False,
+                    "failure_reason": None,
+                    "denied_chats": [],
+                },
+            },
+        )
+
+    monkeypatch.setattr(channel_management.httpx, "post", fake_post)
+
+    result = channel_management.channel_status(instance, "tg-assistant")
+
+    assert result == CommandResult(
+        ok=True,
+        message="tg-assistant: enabled=yes running=yes failed=no",
+        instance=instance,
+    )
+
+
 def test_channel_update_posts_update_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []

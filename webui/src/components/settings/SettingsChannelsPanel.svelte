@@ -270,6 +270,35 @@
     });
   }
 
+  async function allowDeniedChat(channel, chatId) {
+    await runChannelAction(channel.id, async () => {
+      const allowedChatIds = Array.isArray(channel.allowed_chat_ids)
+        ? channel.allowed_chat_ids.map((value) => String(value))
+        : [];
+      if (!allowedChatIds.includes(chatId)) {
+        allowedChatIds.push(chatId);
+      }
+
+      await rpc('channel.update', {
+        id: channel.id,
+        allowed_chat_ids: allowedChatIds,
+      });
+      onToast({
+        title: t('settings.channels.denied.allowSuccess', 'Chat allowed.'),
+        variant: 'success',
+      });
+    });
+  }
+
+  function deniedChatLabel(entry) {
+    const kindLabel =
+      entry.kind === 'group'
+        ? t('settings.channels.denied.group', 'Group')
+        : t('settings.channels.denied.direct', 'Direct');
+    const namePart = entry.display_name ? `${entry.display_name} · ` : '';
+    return `${namePart}${kindLabel} · ID ${entry.chat_id}`;
+  }
+
   function deleteChannel(channel) {
     deleteConfirmChannel = channel;
   }
@@ -566,6 +595,36 @@
             </div>
           </div>
         </div>
+
+        {#if channel.denied_chats?.length}
+          <div class="s-channel-denied">
+            <div class="s-channel-denied-title">
+              {t(
+                'settings.channels.denied.title',
+                'Recent requests from chats not on the allowlist',
+              )}
+            </div>
+            {#each channel.denied_chats as deniedChat (deniedChat.chat_id)}
+              <div class="s-channel-denied-row">
+                <span class="s-channel-denied-info">
+                  {deniedChatLabel(deniedChat)}
+                </span>
+                <Button
+                  variant="secondary"
+                  disabled={rowBusy}
+                  ariaLabel={t(
+                    'settings.channels.denied.allowAria',
+                    'Allow chat {id}',
+                    { id: deniedChat.chat_id },
+                  )}
+                  onClick={() => allowDeniedChat(channel, deniedChat.chat_id)}
+                >
+                  {t('settings.channels.denied.allow', 'Allow')}
+                </Button>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/each}
   </div>

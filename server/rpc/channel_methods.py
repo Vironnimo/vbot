@@ -207,6 +207,7 @@ def _channel_status(state: Any, params: JsonObject) -> JsonObject:
         running = bool(channel_service.is_running(channel_id))
         failed = bool(channel_service.is_failed(channel_id))
         failure_reason = channel_service.failure_reason(channel_id)
+        denied_chats = [entry.to_dict() for entry in channel_service.denied_chats(channel_id)]
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {
@@ -217,6 +218,7 @@ def _channel_status(state: Any, params: JsonObject) -> JsonObject:
         "failure_reason": (
             failure_reason if isinstance(failure_reason, str) and failure_reason else None
         ),
+        "denied_chats": denied_chats,
     }
 
 

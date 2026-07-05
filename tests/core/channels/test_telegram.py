@@ -412,6 +412,61 @@ async def test_allowed_chat_ids_enforced(
 
 
 @pytest.mark.asyncio
+async def test_denied_group_chat_is_recorded_with_chat_title(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=-10099, title="Team Chat"),
+        effective_user=SimpleNamespace(id=50),
+        effective_message=SimpleNamespace(text="hi", message_thread_id=None),
+    )
+    await adapter._handle_inbound_message(update, SimpleNamespace())
+    await adapter._handle_inbound_message(update, SimpleNamespace())
+
+    trigger_mock.assert_not_awaited()
+    entries = adapter.denied_chats()
+    assert len(entries) == 1
+    assert entries[0].chat_id == "-10099"
+    assert entries[0].kind == "group"
+    assert entries[0].display_name == "Team Chat"
+    assert entries[0].count == 2
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_denied_direct_chat_is_recorded_with_sender_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=99999),
+        effective_user=SimpleNamespace(id=99999, full_name="Julian B."),
+        effective_message=SimpleNamespace(text="hi", message_thread_id=None),
+    )
+    await adapter._handle_inbound_message(update, SimpleNamespace())
+
+    entries = adapter.denied_chats()
+    assert len(entries) == 1
+    assert entries[0].chat_id == "99999"
+    assert entries[0].kind == "direct"
+    assert entries[0].display_name == "Julian B."
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_system_reminder_written_once_for_new_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
