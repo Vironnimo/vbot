@@ -4,18 +4,35 @@ import { englishCatalog } from '../i18n.js';
 import { NAVIGATION_ITEMS } from '../../App.svelte';
 
 describe('app navigation surface', () => {
-  it('ships only the live navigation views', () => {
+  it('ships only the live navigation views in grouped order', () => {
     expect(NAVIGATION_ITEMS.map((item) => item.id)).toEqual([
       'chat',
       'agents',
       'projects',
-      'cron',
-      'system-prompt',
       'settings',
-      'logs',
+      'system-prompt',
+      'cron',
       'statistics',
+      'logs',
       'debug',
     ]);
+  });
+
+  it('assigns every navigation item to its cadence section', () => {
+    const sectionById = Object.fromEntries(
+      NAVIGATION_ITEMS.map((item) => [item.id, item.section]),
+    );
+    expect(sectionById).toEqual({
+      chat: 'work',
+      agents: 'work',
+      projects: 'work',
+      settings: 'configure',
+      'system-prompt': 'configure',
+      cron: 'configure',
+      statistics: 'insights',
+      logs: 'insights',
+      debug: 'insights',
+    });
   });
 
   it('does not expose a Components navigation entry', () => {
