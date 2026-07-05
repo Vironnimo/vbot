@@ -203,7 +203,6 @@
   let loading = $state(true);
   let loadError = $state('');
   let providersPanel = $state(null);
-  let providerHeaderAction = $state(null);
   let handledTargetPanelRequestId = -1;
 
   let activePanel = $derived(
@@ -273,10 +272,6 @@
       loading = false;
     }
   }
-
-  function updateProviderHeaderAction(action) {
-    providerHeaderAction = action;
-  }
 </script>
 
 <section class={SETTINGS_LAYOUT_CLASS} aria-labelledby="settings-title">
@@ -308,19 +303,6 @@
           </h2>
           <p class="s-panel-sub">{activePanel.subtitle()}</p>
         </div>
-
-        {#if activePanelId === 'providers' && !loading && !loadError && providerHeaderAction}
-          <Button
-            variant="primary"
-            class="s-refresh-button"
-            disabled={providerHeaderAction.refreshing}
-            onClick={() => providerHeaderAction?.refresh()}
-          >
-            {providerHeaderAction.refreshing
-              ? t('settings.providers.refreshingModels', 'Updating…')
-              : t('settings.providers.refreshModels', 'Update Model DB')}
-          </Button>
-        {/if}
       </div>
 
       {#if loading}
@@ -346,7 +328,6 @@
           {onToast}
           onError={(message) => reportSettingsError(message)}
           onReloadSettings={loadSettings}
-          onHeaderActionChange={updateProviderHeaderAction}
           {modelsRefreshToken}
         />
 

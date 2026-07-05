@@ -508,6 +508,7 @@
 .s-providers-toolbar {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
   padding: 14px 0;
   border-bottom: 1px solid var(--border);
 }
@@ -627,10 +628,6 @@
 
 .s-directory-remove {
   flex-shrink: 0;
-}
-
-.s-refresh-button {
-  white-space: nowrap;
 }
 
 .s-debug-warning {
