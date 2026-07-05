@@ -371,7 +371,7 @@ describe('projectTeam', () => {
             thinking_effort: 'high',
             source_format: 'opencode',
             source_path: '.opencode/agents/builder.md',
-            model_override: 'openai/gpt-mini',
+            pins: { model: 'openai/gpt-mini' },
           },
           { agent_id: 'planner' },
         ],

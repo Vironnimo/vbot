@@ -141,22 +141,46 @@ def test_unresolvable_agent_maps_to_rpc_error() -> None:
         _list_commands(state, {"agent_id": "ghost@vbot"})
 
 
+def _tool_stub(
+    name: str,
+    *,
+    ready: Any = None,
+    readiness_hint: str | None = None,
+    extension: str | None = None,
+) -> SimpleNamespace:
+    """A tool stub exposing the fields ``_tool_response`` reads.
+
+    ``ready`` is a zero-arg predicate (``lambda: bool``) or ``None`` (always ready),
+    mirroring ``Tool.ready`` — the response calls ``tool_is_ready``, which invokes it.
+    """
+    return SimpleNamespace(
+        name=name,
+        description=f"{name} description",
+        ready=ready,
+        readiness_hint=readiness_hint,
+        extension=extension,
+    )
+
+
 class _ToolRegistry:
-    """Minimal registry: ``ready_only`` drops any name in ``not_ready``."""
+    """Minimal registry: ``list_tools`` returns ALL tools (readiness not filtered).
 
-    def __init__(self, names: list[str], not_ready: set[str] | None = None) -> None:
-        self._names = names
-        self._not_ready = not_ready or set()
+    ``tool.list`` no longer passes ``ready_only`` — every registered tool is
+    returned and a not-ready one is styled from its ``ready``/``readiness_hint``
+    fields rather than hidden. The stub still accepts (and ignores) any kwargs so a
+    stray ``ready_only`` would surface as an unexpected pass rather than silently
+    filtering.
+    """
 
-    def list_tools(self, *_args: Any, ready_only: bool = False, **_kwargs: Any) -> list[Any]:
-        names = self._names
-        if ready_only:
-            names = [name for name in names if name not in self._not_ready]
-        return [SimpleNamespace(name=name, description=f"{name} description") for name in names]
+    def __init__(self, tools: list[SimpleNamespace]) -> None:
+        self._tools = tools
+
+    def list_tools(self, *_args: Any, **_kwargs: Any) -> list[Any]:
+        return list(self._tools)
 
 
 def test_tool_list_exposes_default_project_tools() -> None:
-    runtime = SimpleNamespace(tools=_ToolRegistry(["read", "edit"]))
+    runtime = SimpleNamespace(tools=_ToolRegistry([_tool_stub("read"), _tool_stub("edit")]))
     state = SimpleNamespace(runtime=runtime)
 
     result = _list_tools(state, {})
@@ -166,14 +190,59 @@ def test_tool_list_exposes_default_project_tools() -> None:
     assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 
-def test_tool_list_hides_not_ready_tools_without_changing_default_project_tools() -> None:
+def test_tool_list_returns_not_ready_tools_with_ready_false() -> None:
+    # tool.list now RETURNS the not-ready tool (no more hiding) — the picker styles
+    # it from ``ready: false`` while the ready tools report ``ready: true``.
     runtime = SimpleNamespace(
-        tools=_ToolRegistry(["read", "edit", "ha_call_service"], not_ready={"ha_call_service"})
+        tools=_ToolRegistry(
+            [
+                _tool_stub("read"),
+                _tool_stub("edit"),
+                _tool_stub("ha_call_service", ready=lambda: False),
+            ]
+        )
     )
     state = SimpleNamespace(runtime=runtime)
 
     result = _list_tools(state, {})
 
-    # The not-ready tool is absent from the picker feed; the base whitelist is unchanged.
-    assert [tool["name"] for tool in result["tools"]] == ["read", "edit"]
+    ready_by_name = {tool["name"]: tool["ready"] for tool in result["tools"]}
+    # The not-ready tool IS present, flagged ready == False; the ready ones True.
+    assert ready_by_name == {"read": True, "edit": True, "ha_call_service": False}
     assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+
+
+def test_tool_list_surfaces_ready_hint_and_extension_fields() -> None:
+    # A tool with a readiness hint + owning extension surfaces both; a default tool
+    # reports null for each. A RAISING ready predicate is treated as ready == False.
+    runtime = SimpleNamespace(
+        tools=_ToolRegistry(
+            [
+                _tool_stub(
+                    "ha_call_service",
+                    ready=lambda: False,
+                    readiness_hint="hint",
+                    extension="homeassistant",
+                ),
+                _tool_stub("read"),
+                _tool_stub("boom", ready=_raise_ready),
+            ]
+        )
+    )
+    state = SimpleNamespace(runtime=runtime)
+
+    result = _list_tools(state, {})
+
+    by_name = {tool["name"]: tool for tool in result["tools"]}
+    assert by_name["ha_call_service"]["ready"] is False
+    assert by_name["ha_call_service"]["readiness_hint"] == "hint"
+    assert by_name["ha_call_service"]["extension"] == "homeassistant"
+    assert by_name["read"]["ready"] is True
+    assert by_name["read"]["readiness_hint"] is None
+    assert by_name["read"]["extension"] is None
+    # A predicate that raises counts as not-ready, never crashing the feed.
+    assert by_name["boom"]["ready"] is False
+
+
+def _raise_ready() -> bool:
+    raise RuntimeError("readiness probe blew up")

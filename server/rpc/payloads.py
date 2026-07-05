@@ -7,6 +7,7 @@ from typing import Any, cast
 from core.chat import ChatMessage, parse_bare_model
 from core.providers.providers import resolve_context_window
 from core.runs import QueuedRunItem, Run
+from core.tools import tool_is_ready
 
 JsonObject = dict[str, Any]
 
@@ -95,9 +96,32 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
         "current_session_id": agent.current_session_id,
         "context_window": _resolve_context_window(state, agent.model),
+        # Raw own values (pre-default-bake), so the editor can distinguish an
+        # explicit per-agent value from an inherited global default. Top-level keys
+        # above keep today's baked semantics unchanged.
+        "config": _agent_raw_config(state, agent.id),
+        # Per-field effective value + winning tier ("agent"/"global_default"/null),
+        # the provenance seam shared with the resolver.
+        "effective": _agent_effective(state, agent.id),
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
     }
+
+
+def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
+    """Return an identity agent's raw own values (``""``/``None`` preserved)."""
+    raw = state.runtime.agents.get_raw(agent_id)
+    return {
+        "model": raw.model,
+        "fallback_model": raw.fallback_model,
+        "temperature": raw.temperature,
+        "thinking_effort": raw.thinking_effort,
+    }
+
+
+def _agent_effective(state: Any, agent_id: str) -> JsonObject:
+    """Return an identity agent's per-field effective value + source map."""
+    return cast(JsonObject, state.runtime.agent_resolver.effective_config(None, agent_id))
 
 
 def _model_response(provider_id: str, model: Any) -> JsonObject:
@@ -130,6 +154,14 @@ def _tool_response(tool: Any) -> JsonObject:
     return {
         "name": tool.name,
         "description": tool.description,
+        # Whether the tool can run right now (its readiness predicate, a raising
+        # predicate counting as false); the picker/whitelist editor styles a
+        # not-ready tool instead of hiding it.
+        "ready": tool_is_ready(tool),
+        # Optional English hint explaining the readiness precondition, or null.
+        "readiness_hint": getattr(tool, "readiness_hint", None),
+        # The owning extension name, or null for a built-in tool.
+        "extension": getattr(tool, "extension", None),
     }
 
 
