@@ -249,6 +249,8 @@ Section headers in the Components tab and pane titles use Mono in all-caps with 
 
 The app shell is a fixed sidebar (210px) plus a fluid main content area. The sidebar never shrinks or grows. The main area holds views that each fill the full remaining width and height.
 
+Sidebar navigation is grouped by usage cadence into Work / Configure / Insights, each group introduced by a mono-xs uppercase section label (`--text-lo`, no divider lines); on mobile (≤640px) the groups collapse to a single scrolling top-bar row and the labels hide.
+
 Within views, two-pane splits (Agents: 240px list + fluid detail; Settings: 168px nav + fluid panel) use a thin `border` divider with no gap. Padding inside panels is 20–32px depending on context.
 
 In scrollable edit surfaces, the primary save action belongs at the bottom of the scroll region in a sticky footer, not in the panel header. This keeps the action visually near the edited fields and available after long scrolls.
