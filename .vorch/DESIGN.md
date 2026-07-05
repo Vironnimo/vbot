@@ -324,7 +324,7 @@ Each variant emits exactly **one** canonical class (the historical aliases `btn-
 
 Primary save buttons inside long editor panels stay enabled even when the form is already clean. When nothing changed, the interaction should confirm trust via lightweight success feedback instead of disabling the control.
 
-**Save model for settings/config surfaces:** every settings-style panel auto-saves changes with a short debounce (800ms) *and* keeps an explicit Save button at the bottom of the panel for users who do not trust auto-save. Clicking Save on a clean form shows an "Already saved" success toast. This is the general scheme for all settings/config surfaces in the app; only entity create/edit forms (agents, channels, cron jobs) stay explicit-save-only, because half-typed entities must not persist.
+**Save model for settings/config surfaces:** every settings-style panel auto-saves changes with a short debounce (800ms) *and* keeps an explicit Save button at the bottom of the panel for users who do not trust auto-save. Clicking Save on a clean form shows an "Already saved" success toast. This is the general scheme for all settings/config surfaces in the app; only entity create/edit forms (agents, channels, cron jobs) stay explicit-save-only, because half-typed entities must not persist. The Extensions panel follows this scheme for an extension's non-secret config (schema form or raw-JSON config): it autosaves with the same 800ms debounce and keeps the explicit Save button. Secrets are the deliberate exception — they are never autosaved and keep an explicit per-secret Save flow.
 
 ### Copy button
 
@@ -402,6 +402,8 @@ If we use inline SVGs without explicit `width` and `height`, they can suddenly r
 ### Toasts
 
 Slide in from the right (bottom-right stack). `surface` background, `border-2` border, 6px radius, dark shadow. Left border only — 2px colored stripe indicates type: green (success), red (error), amber (warn), accent (info). No icons — the stripe carries all semantic weight.
+
+Error toasts persist until the user manually dismisses them (via the × button) — a transport/server failure the user must acknowledge; success, info, and warn toasts auto-dismiss after a short delay. A caller may override this per toast, but the default is derived from the variant.
 
 ### Command output (toast & transient card)
 

@@ -842,6 +842,19 @@ describe('i18n t()', () => {
     );
   });
 
+  it('contains the Extensions header-action disambiguation help', () => {
+    expectCatalogKeys([
+      'settings.extensions.refreshHelp',
+      'settings.extensions.reloadHelp',
+    ]);
+    expect(t('settings.extensions.refreshHelp')).toBe(
+      'Re-reads the extension list and current status from the server.',
+    );
+    expect(t('settings.extensions.reloadHelp')).toBe(
+      'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
+    );
+  });
+
   it('does not expose Components showcase labels in the live catalog', () => {
     expect(englishCatalog['components.title']).toBeUndefined();
     expect(englishCatalog['components.toast.errorMessage']).toBeUndefined();

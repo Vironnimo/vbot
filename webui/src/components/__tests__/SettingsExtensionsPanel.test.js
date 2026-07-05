@@ -242,6 +242,81 @@ describe('SettingsExtensionsPanel', () => {
     expect(listCallsAfter).toBeGreaterThan(listCallsBefore);
   });
 
+  it('auto-saves non-secret config 800 ms after the last edit', async () => {
+    rpcMock.mockImplementation((method) => {
+      if (method === 'extensions.list') {
+        return Promise.resolve(extensionsResult());
+      }
+      return Promise.resolve({});
+    });
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+
+    vi.useFakeTimers();
+
+    const textarea = document.body.querySelector('textarea');
+    textarea.value = '{"level": "warn"}';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    // No save before the debounce elapses.
+    expect(
+      rpcMock.mock.calls.some((call) => call[0] === 'settings.update'),
+    ).toBe(false);
+
+    vi.advanceTimersByTime(799);
+    await flushAsync();
+    expect(
+      rpcMock.mock.calls.some((call) => call[0] === 'settings.update'),
+    ).toBe(false);
+
+    vi.advanceTimersByTime(1);
+    await flushAsync();
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'settings.update',
+    );
+    expect(updateCall).toBeTruthy();
+    // The edited extension's non-secret config is persisted through the shared
+    // settings.update payload shape.
+    expect(updateCall[1].extensions.config.guard_bash).toEqual({
+      level: 'warn',
+    });
+
+    vi.useRealTimers();
+  });
+
+  it('shows Already saved when Save config is clicked with no changes', async () => {
+    const toastMock = vi.fn();
+    rpcMock.mockImplementation((method) => {
+      if (method === 'extensions.list') {
+        return Promise.resolve(extensionsResult());
+      }
+      return Promise.resolve({});
+    });
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
+    flushSync();
+    await flushAsync();
+
+    buttonByText('Save config').click();
+    await flushAsync();
+
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Already saved', variant: 'success' }),
+    );
+    expect(
+      rpcMock.mock.calls.some((call) => call[0] === 'settings.update'),
+    ).toBe(false);
+  });
+
   it('rejects invalid config JSON without calling settings.update', async () => {
     rpcMock.mockResolvedValue(extensionsResult());
 

@@ -78,7 +78,8 @@ describe('SettingsView', () => {
     expect(buttonsByText('Update Model DB')).toHaveLength(0);
   });
 
-  it('refreshes the global model database, shows loading and success, and reloads model list', async () => {
+  it('refreshes the global model database, toasts success, and reloads model list', async () => {
+    const toastMock = vi.fn();
     let resolveRefresh;
     const refreshPromise = new Promise((resolve) => {
       resolveRefresh = resolve;
@@ -90,7 +91,10 @@ describe('SettingsView', () => {
       }),
     );
 
-    mountedComponent = mount(SettingsView, { target: document.body });
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
     await openProvidersPanel();
 
@@ -121,15 +125,20 @@ describe('SettingsView', () => {
       refreshed_count: 2,
       model_count: 5,
     });
+    // The refresh result is now a success toast (auto-dismiss), not inline
+    // text — an inline result would flash and vanish when the settings reload
+    // briefly unmounts the panel.
     await waitForCondition(() =>
-      document.body.textContent.includes('5 models'),
+      toastMock.mock.calls.some(
+        ([toast]) =>
+          toast?.variant === 'success' &&
+          toast?.title === 'Model DB updated: 2 providers, 5 models available.',
+      ),
     );
 
-    expect(document.body.textContent).toContain(
-      'Model DB updated: 2 providers, 5 models available.',
-    );
-    expect(providerRow('OpenRouter').textContent).toContain(
-      '2 models available.',
+    // The updated per-provider model counts still land in the provider rows.
+    await waitForCondition(() =>
+      providerRow('OpenRouter').textContent.includes('2 models available.'),
     );
     expect(providerRow('Groq').textContent).toContain('3 models available.');
     expect(rpcMock.mock.calls.some((call) => call[0] === 'model.list')).toBe(
@@ -137,7 +146,8 @@ describe('SettingsView', () => {
     );
   });
 
-  it('updates provider counts from the compatible single-provider refresh shape', async () => {
+  it('toasts the compatible single-provider refresh result and updates counts', async () => {
+    const toastMock = vi.fn();
     rpcMock.mockImplementation(
       createSettingsRpcMock({
         refreshResult: {
@@ -148,42 +158,53 @@ describe('SettingsView', () => {
       }),
     );
 
-    mountedComponent = mount(SettingsView, { target: document.body });
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
     await openProvidersPanel();
 
     buttonByText('Update Model DB').click();
     await waitForCondition(() =>
-      document.body.textContent.includes('2 models'),
+      toastMock.mock.calls.some(
+        ([toast]) =>
+          toast?.variant === 'success' &&
+          toast?.title === 'Model DB updated: 1 providers, 2 models available.',
+      ),
     );
 
-    expect(document.body.textContent).toContain(
-      'Model DB updated: 1 providers, 2 models available.',
-    );
     expect(rpcMock.mock.calls.some((call) => call[0] === 'model.list')).toBe(
       true,
     );
   });
 
-  it('shows refresh errors and skips model list reload on failure', async () => {
+  it('toasts refresh errors and skips model list reload on failure', async () => {
+    const toastMock = vi.fn();
     rpcMock.mockImplementation(
       createSettingsRpcMock({
         refreshError: new Error('fetch failed'),
       }),
     );
 
-    mountedComponent = mount(SettingsView, { target: document.body });
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
     await openProvidersPanel();
 
     buttonByText('Update Model DB').click();
+    // The failure is a sticky error toast (routed through the unified settings
+    // error seam), carrying the server detail as the toast message.
     await waitForCondition(() =>
-      document.body.textContent.includes('fetch failed'),
+      toastMock.mock.calls.some(
+        ([toast]) =>
+          toast?.variant === 'error' &&
+          toast?.message === 'Model DB could not be updated. fetch failed',
+      ),
     );
 
-    expect(document.body.textContent).toContain(
-      'Model DB could not be updated. fetch failed',
-    );
     expect(rpcMock.mock.calls.some((call) => call[0] === 'model.list')).toBe(
       false,
     );
