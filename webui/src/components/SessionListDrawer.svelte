@@ -1,5 +1,6 @@
 <script>
   import Button from './ui/Button.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import { deleteSession, listSessions, renameSession } from '$lib/api.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
@@ -42,6 +43,9 @@
   // example a busy session, #4) and an in-flight guard against double-clicks.
   let actionError = $state(null);
   let deleting = $state(false);
+  // The session awaiting delete confirmation (null = dialog closed). The delete
+  // only runs once the confirm dialog resolves.
+  let deleteConfirmSession = $state(null);
 
   const SESSION_TITLE_MAX_LENGTH = 200;
 
@@ -192,19 +196,28 @@
     }
   };
 
-  // Delete (archive) a session from the row menu. A confirmation dialog guards
-  // the click (#3); for a channel-bound session the message also notes it will
-  // resume empty on the next inbound message (#5a). The server returns where to
-  // land, which ChatView uses to navigate if it was viewing the removed session.
-  const requestDelete = async (session) => {
+  // Delete (archive) a session from the row menu. The shared ConfirmDialog
+  // guards the click (#3); for a channel-bound session the body also notes it
+  // will resume empty on the next inbound message (#5a). The server returns
+  // where to land, which ChatView uses to navigate if it was viewing the
+  // removed session.
+  const requestDelete = (session) => {
     closeMenu();
     const targetAgentId = asText(agentId);
     if (!targetAgentId || deleting) {
       return;
     }
+    deleteConfirmSession = session;
+  };
 
+  // The confirm body reflects whether the pending session is channel-bound.
+  let deleteConfirmMessage = $derived.by(() => {
+    const session = deleteConfirmSession;
+    if (!session) {
+      return '';
+    }
     const name = session.display_name || sessionDisplayName(session);
-    const message = session.is_channel_session
+    return session.is_channel_session
       ? t(
           'sessions.delete_confirm_channel',
           'Delete session "{name}"? It is archived and can be restored. The channel ' +
@@ -216,11 +229,17 @@
           'Delete session "{name}"? It is archived and can be restored.',
           { name },
         );
-    const confirmed =
-      typeof globalThis.confirm === 'function'
-        ? globalThis.confirm(message)
-        : true;
-    if (!confirmed) {
+  });
+
+  const cancelDelete = () => {
+    deleteConfirmSession = null;
+  };
+
+  const confirmDelete = async () => {
+    const session = deleteConfirmSession;
+    deleteConfirmSession = null;
+    const targetAgentId = asText(agentId);
+    if (!session || !targetAgentId || deleting) {
       return;
     }
 
@@ -482,6 +501,16 @@
     </ul>
   {/if}
 </aside>
+
+{#if deleteConfirmSession}
+  <ConfirmDialog
+    title={t('sessions.delete_confirm_title', 'Delete session')}
+    body={deleteConfirmMessage}
+    confirmLabel={t('common.delete', 'Delete')}
+    onConfirm={confirmDelete}
+    onCancel={cancelDelete}
+  />
+{/if}
 
 <style>
   .session-drawer {

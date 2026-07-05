@@ -187,11 +187,7 @@ describe('SessionListDrawer', () => {
     expect(renameSessionMock).not.toHaveBeenCalled();
   });
 
-  it('deletes a session through the row menu after confirmation', async () => {
-    vi.stubGlobal(
-      'confirm',
-      vi.fn(() => true),
-    );
+  it('deletes a session through the row menu after confirming the dialog', async () => {
     const onSessionDeleted = vi.fn();
     mountedComponent = mount(SessionListDrawer, {
       target: document.body,
@@ -213,6 +209,12 @@ describe('SessionListDrawer', () => {
     document.querySelector('.session-row__menu-item--danger').click();
     flushSync();
 
+    // The row action opens the shared ConfirmDialog; nothing is deleted until
+    // the dialog is confirmed.
+    expect(deleteSessionMock).not.toHaveBeenCalled();
+    confirmDialog('Delete');
+    flushSync();
+
     // Wait on the downstream callback so the delete promise has resolved (the
     // mock's call count flips the moment it is invoked, before onSessionDeleted).
     await waitForCondition(() => onSessionDeleted.mock.calls.length === 1);
@@ -227,11 +229,7 @@ describe('SessionListDrawer', () => {
     );
   });
 
-  it('does not delete when the confirmation is declined', async () => {
-    vi.stubGlobal(
-      'confirm',
-      vi.fn(() => false),
-    );
+  it('does not delete when the dialog is cancelled', async () => {
     const onSessionDeleted = vi.fn();
     mountedComponent = mount(SessionListDrawer, {
       target: document.body,
@@ -252,15 +250,15 @@ describe('SessionListDrawer', () => {
     document.querySelector('.session-row__menu-item--danger').click();
     flushSync();
 
+    confirmDialog('Cancel');
+    flushSync();
+
     expect(deleteSessionMock).not.toHaveBeenCalled();
     expect(onSessionDeleted).not.toHaveBeenCalled();
+    expect(document.querySelector('.modal-footer')).toBeNull();
   });
 
   it('surfaces a delete failure as an inline error', async () => {
-    vi.stubGlobal(
-      'confirm',
-      vi.fn(() => true),
-    );
     deleteSessionMock.mockRejectedValueOnce(
       new Error('cannot delete session with an active or queued run'),
     );
@@ -282,6 +280,9 @@ describe('SessionListDrawer', () => {
     document.querySelector('.session-row__menu-item--danger').click();
     flushSync();
 
+    confirmDialog('Delete');
+    flushSync();
+
     await waitForCondition(
       () => document.querySelector('.session-drawer__state--error') !== null,
     );
@@ -290,7 +291,7 @@ describe('SessionListDrawer', () => {
     ).toContain('active or queued run');
   });
 
-  it('warns that a channel session resumes empty in the confirm prompt', async () => {
+  it('warns that a channel session resumes empty in the confirm dialog', async () => {
     listSessionsMock.mockResolvedValue({
       sessions: [
         {
@@ -301,8 +302,6 @@ describe('SessionListDrawer', () => {
         },
       ],
     });
-    const confirmSpy = vi.fn(() => false);
-    vi.stubGlobal('confirm', confirmSpy);
     mountedComponent = mount(SessionListDrawer, {
       target: document.body,
       props: {
@@ -321,8 +320,10 @@ describe('SessionListDrawer', () => {
     document.querySelector('.session-row__menu-item--danger').click();
     flushSync();
 
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy.mock.calls[0][0]).toContain('channel');
+    // The channel-session dialog body warns the conversation resumes empty.
+    const body = document.querySelector('.modal-body');
+    expect(body, 'confirm dialog not open').toBeTruthy();
+    expect(body.textContent).toContain('channel');
   });
 
   it('renders the Fork badge only for forked sessions', async () => {
@@ -371,4 +372,15 @@ async function waitForCondition(check, attempts = 50) {
     flushSync();
   }
   throw new Error('Condition was not met in time');
+}
+
+// Clicks a button in the open ConfirmDialog by its label (Delete / Cancel).
+function confirmDialog(label) {
+  const footer = document.querySelector('.modal-footer');
+  expect(footer, 'confirm dialog not open').toBeTruthy();
+  const button = Array.from(footer.querySelectorAll('button')).find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(button, `confirm button not found: ${label}`).toBeTruthy();
+  button.click();
 }

@@ -4,6 +4,7 @@
   import Dropdown from './Dropdown.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
   import Button from './ui/Button.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Modal from './ui/Modal.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import TextField from './ui/TextField.svelte';
@@ -96,6 +97,9 @@
   let activeScanSkills = $state({ project: [], bundled: [], global: [] });
   let scanLoading = $state(false);
   let removingProjectId = $state('');
+  // The project awaiting remove confirmation (null = dialog closed). The remove
+  // only runs once the confirm dialog resolves.
+  let removeConfirmProject = $state(null);
   // The team agent whose model override is being cleared, so its `x` disables
   // while the clear RPC is in flight (empty = none clearing). Setting an override
   // is command-only (/model); the tab only clears.
@@ -708,19 +712,18 @@
     }
   }
 
-  async function removeOne(project) {
-    const confirmRemove =
-      typeof globalThis.confirm === 'function'
-        ? globalThis.confirm(
-            t(
-              'projects.remove.confirm',
-              'Remove project {name}? The project is archived and can be restored; the repository on disk is never touched.',
-              { name: project.display_name || project.project_id },
-            ),
-          )
-        : true;
+  function removeOne(project) {
+    removeConfirmProject = project;
+  }
 
-    if (!confirmRemove) {
+  function cancelRemove() {
+    removeConfirmProject = null;
+  }
+
+  async function confirmRemove() {
+    const project = removeConfirmProject;
+    removeConfirmProject = null;
+    if (!project) {
       return;
     }
 
@@ -1637,6 +1640,24 @@
         </form>
       {/snippet}
     </Modal>
+  {/if}
+
+  {#if removeConfirmProject}
+    <ConfirmDialog
+      title={t('projects.remove.confirmTitle', 'Remove project')}
+      body={t(
+        'projects.remove.confirm',
+        'Remove project {name}? The project is archived and can be restored; the repository on disk is never touched.',
+        {
+          name:
+            removeConfirmProject.display_name ||
+            removeConfirmProject.project_id,
+        },
+      )}
+      confirmLabel={t('common.remove', 'Remove')}
+      onConfirm={confirmRemove}
+      onCancel={cancelRemove}
+    />
   {/if}
 </section>
 
