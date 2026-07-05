@@ -1,0 +1,746 @@
+/* Projects tab — master-detail layout mirroring the Agents tab (list pane left,
+   detail scroll right). Structural and visual language follows agents.css so the
+   two configuration surfaces read the same. Everything is scoped under
+   `.projects-view` and referenced from ProjectsView.svelte's markup. */
+
+.projects-view {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-hi);
+  background: var(--bg);
+}
+
+.projects-view .projects-layout {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── List pane (left) ─────────────────────────────────────────────────────── */
+
+.projects-view .project-list-pane {
+  display: flex;
+  min-height: 0;
+  width: 260px;
+  min-width: 260px;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.projects-view .pane-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.projects-view .pane-title {
+  color: var(--text-hi);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.projects-view .pane-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.projects-view .project-list-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 0;
+  scrollbar-gutter: stable;
+}
+
+.projects-view .project-item {
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.projects-view .project-item:hover,
+.projects-view .project-item:focus-visible {
+  background: var(--surface-2);
+}
+
+.projects-view .project-item:focus-visible {
+  outline: 1px solid rgba(232, 135, 10, 0.4);
+  outline-offset: -1px;
+}
+
+.projects-view .project-item.active {
+  background: var(--accent-dim);
+}
+
+.projects-view .project-bar {
+  width: 2px;
+  flex-shrink: 0;
+  background: transparent;
+}
+
+.projects-view .project-item.active .project-bar {
+  background: var(--accent);
+}
+
+.projects-view .project-item-inner {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px 8px 10px;
+}
+
+.projects-view .project-item-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.projects-view .project-item-name {
+  overflow: hidden;
+  color: var(--text-hi);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-view .project-item.active .project-item-name {
+  color: var(--accent);
+}
+
+.projects-view .project-item-cwd {
+  overflow: hidden;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-view .project-list-state {
+  margin: 0;
+  padding: 12px 16px;
+  color: var(--text-lo);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.projects-view .project-empty-list {
+  display: flex;
+  min-height: 200px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 22px 18px;
+  text-align: center;
+}
+
+.projects-view .project-empty-title {
+  color: var(--text-hi);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.projects-view .project-empty-sub {
+  color: var(--text-med);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ── Detail pane (right) ──────────────────────────────────────────────────── */
+
+.projects-view .project-detail-pane {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.projects-view .project-detail-scroll {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 26px 30px;
+  scrollbar-gutter: stable;
+}
+
+.projects-view .project-detail-scroll > * {
+  width: 100%;
+  max-width: var(--content-max-wide);
+  margin-inline: auto;
+}
+
+.projects-view .project-detail-empty {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-lo);
+  font-size: 13px;
+}
+
+.projects-view .detail-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+
+.projects-view .detail-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.projects-view .detail-heading {
+  color: var(--text-hi);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.projects-view .detail-sub {
+  margin-top: 4px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.projects-view .detail-btns {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.projects-view .projects-save-row {
+  justify-content: flex-end;
+}
+
+/* ── Section cards ────────────────────────────────────────────────────────── */
+
+.projects-view .detail-section {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+/* Sections that host dropdowns must not clip the portaled panel. */
+.projects-view .detail-section--overflow {
+  overflow: visible;
+}
+
+.projects-view .detail-section-title {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  color: var(--text-hi);
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--surface);
+}
+
+.projects-view .detail-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.projects-view .projects-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.projects-view .projects-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.projects-view .projects-field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.projects-view .projects-label {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.projects-view .projects-sublabel {
+  margin-top: 4px;
+  color: var(--text-lo);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.projects-view .projects-help {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.projects-view .projects-inherit-hint {
+  margin: 0;
+  color: var(--text-med);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+/* The jump link to Settings → Agent defaults, sized to sit under a field. */
+.projects-view .projects-inherit-link {
+  align-self: flex-start;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.projects-view .projects-dropdown {
+  width: 100%;
+}
+
+.projects-view .projects-notice {
+  margin: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--border-2);
+  border-left: 2px solid var(--green);
+  border-radius: var(--r-md);
+  color: var(--text-med);
+  font-size: 12.5px;
+  line-height: 1.4;
+  background: var(--surface);
+}
+
+.projects-view .projects-notice--error {
+  border-left-color: var(--red);
+  color: var(--red);
+}
+
+.projects-view .projects-notice--warn {
+  border-left-color: var(--amber);
+  color: var(--amber);
+}
+
+.projects-view .projects-view__eyebrow {
+  margin: 0 0 6px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ── Auto-load / whitelist file lists ─────────────────────────────────────── */
+
+.projects-view .projects-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.projects-view .projects-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.projects-view .projects-file-name {
+  overflow: hidden;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-view .projects-tool-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.projects-view .projects-file-row--not-ready .projects-file-name {
+  opacity: 0.55;
+}
+
+.projects-view .projects-file-remove {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-med);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.projects-view .projects-file-remove:hover:not(:disabled) {
+  background: rgba(252, 129, 129, 0.12);
+  color: var(--red);
+}
+
+.projects-view .projects-file-remove:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.projects-view .projects-file-empty {
+  margin: 0;
+  color: var(--text-med);
+  font-size: 12px;
+}
+
+.projects-view .projects-file-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.projects-view .projects-file-add :global(.projects-file-input) {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Team rows ────────────────────────────────────────────────────────────── */
+
+.projects-view .projects-scan-loading {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: 12px;
+}
+
+.projects-view .projects-team-empty {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.projects-view .projects-team {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.projects-view .projects-team-member {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.projects-view .projects-team-member--expanded {
+  border-color: rgba(232, 135, 10, 0.32);
+}
+
+.projects-view .projects-team-header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.projects-view .projects-team-header:hover {
+  background: var(--surface-2);
+}
+
+.projects-view .projects-team-chevron {
+  flex-shrink: 0;
+  fill: none;
+  stroke: var(--text-med);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.18s ease;
+}
+
+.projects-view .projects-team-chevron--open {
+  transform: rotate(90deg);
+}
+
+.projects-view .projects-team-headline {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.projects-view .projects-team-name {
+  color: var(--text-hi);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.projects-view .projects-team-description {
+  overflow: hidden;
+  color: var(--text-lo);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-view .projects-team-summary {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-view .projects-team-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 14px 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* Effective-value lines: one row per field, value + provenance badge. */
+.projects-view .projects-effective-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-top: 10px;
+}
+
+.projects-view .projects-effective-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.projects-view .projects-effective-label {
+  min-width: 108px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.projects-view .projects-effective-value {
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.projects-view .projects-effective-value--muted {
+  color: var(--text-med);
+  font-style: italic;
+}
+
+.projects-view .projects-effective-source {
+  color: var(--text-lo);
+  font-size: 11px;
+}
+
+/* Pin controls: a labeled block per field with a control + set/clear actions. */
+.projects-view .projects-pins {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.projects-view .projects-pin-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.projects-view .projects-pin-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.projects-view .projects-pin-input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.projects-view .projects-pin-input :global(.projects-dropdown) {
+  width: 100%;
+}
+
+.projects-view .projects-pin-help {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.projects-view .projects-tools-line,
+.projects-view .projects-source-line {
+  margin: 0;
+  color: var(--text-med);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.projects-view .projects-source-line {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.projects-view .projects-tools-follow {
+  margin: 2px 0 0;
+  color: var(--text-lo);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ── Scan report ──────────────────────────────────────────────────────────── */
+
+.projects-view .projects-finding-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.projects-view .projects-finding-title {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.projects-view .projects-findings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.projects-view .projects-finding {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-2);
+  border-left: 2px solid var(--amber);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.projects-view .projects-finding-detail {
+  color: var(--text-med);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.projects-view .projects-finding-meta {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ── Modals ───────────────────────────────────────────────────────────────── */
+
+.projects-view :global(.projects-view__modal),
+:global(.projects-view__modal) {
+  width: 480px;
+  max-width: calc(100vw - 40px);
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 960px) {
+  .projects-view .projects-layout {
+    flex-direction: column;
+  }
+
+  .projects-view .project-list-pane {
+    width: 100%;
+    min-width: 0;
+    max-height: min(240px, 35vh);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .projects-view .project-detail-scroll {
+    padding: 22px 18px;
+  }
+
+  .projects-view .detail-top {
+    flex-direction: column;
+  }
+}

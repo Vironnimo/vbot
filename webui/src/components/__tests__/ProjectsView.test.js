@@ -11,7 +11,8 @@ const listProjectsMock = vi.fn();
 const showProjectMock = vi.fn();
 const setProjectMock = vi.fn();
 const removeProjectMock = vi.fn();
-const clearModelOverrideMock = vi.fn();
+const setPinMock = vi.fn();
+const clearPinMock = vi.fn();
 const rpcMock = vi.fn();
 
 vi.mock('svelte', async () => {
@@ -24,7 +25,8 @@ vi.mock('$lib/api.js', () => ({
   showProject: (...args) => showProjectMock(...args),
   setProject: (...args) => setProjectMock(...args),
   removeProject: (...args) => removeProjectMock(...args),
-  clearModelOverride: (...args) => clearModelOverrideMock(...args),
+  setPin: (...args) => setPinMock(...args),
+  clearPin: (...args) => clearPinMock(...args),
   rpc: (...args) => rpcMock(...args),
 }));
 
@@ -47,7 +49,8 @@ describe('ProjectsView', () => {
     showProjectMock.mockReset();
     setProjectMock.mockReset();
     removeProjectMock.mockReset();
-    clearModelOverrideMock.mockReset();
+    setPinMock.mockReset();
+    clearPinMock.mockReset();
     rpcMock.mockReset();
 
     rpcMock.mockImplementation((method) => {
@@ -56,6 +59,9 @@ describe('ProjectsView', () => {
       }
       if (method === 'connection.list') {
         return Promise.resolve({ connections: [] });
+      }
+      if (method === 'settings.get') {
+        return Promise.resolve({ defaults: { agent: {} } });
       }
       return Promise.resolve({});
     });
@@ -74,7 +80,11 @@ describe('ProjectsView', () => {
       scan: { team: [], report: { clean: true, findings: [] } },
     });
     removeProjectMock.mockResolvedValue({ project_id: 'demo', archived: true });
-    clearModelOverrideMock.mockResolvedValue({
+    setPinMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: { team: [], report: { clean: true, findings: [] } },
+    });
+    clearPinMock.mockResolvedValue({
       project: project({ project_id: 'demo' }),
       scan: { team: [], report: { clean: true, findings: [] } },
     });
@@ -89,8 +99,38 @@ describe('ProjectsView', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows the master-detail empty prompt until a project is selected', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-toggle-demo"]'),
+    );
+    // The list renders but the detail pane starts on its empty prompt.
+    expect(document.body.textContent).toContain('Select a project to view');
+    expect(
+      document.querySelector('[data-testid="project-panel-demo"]'),
+    ).toBeFalsy();
+
+    // Selecting the list row opens the detail pane with the ordered sections.
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-panel-demo"]'),
+    );
+    expectSectionOrder([
+      'Project settings',
+      'Auto-load files',
+      'Team',
+      'Tools',
+      'Skills',
+    ]);
+  });
+
   it('adds a project from the modal and reviews its team and report', async () => {
-    // After add the list reload returns the new project so its panel can render.
     listProjectsMock.mockResolvedValueOnce({ projects: [] }).mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -98,11 +138,11 @@ describe('ProjectsView', () => {
       project: project({ project_id: 'demo', display_name: 'Demo' }),
       scan: {
         team: [
-          {
+          member({
             agent_id: 'builder',
             display_name: 'Builder',
             model: 'openai/gpt-5.2',
-          },
+          }),
         ],
         report: {
           clean: false,
@@ -136,7 +176,7 @@ describe('ProjectsView', () => {
 
     await waitForCondition(() => document.body.textContent.includes('Builder'));
     expect(document.body.textContent).toContain('Builder');
-    // A non-clean report surfaces its findings (add-then-review surface).
+    // A non-clean report surfaces its findings at the top of the Team section.
     expect(document.body.textContent).toContain('model not configured');
   });
 
@@ -163,7 +203,7 @@ describe('ProjectsView', () => {
     });
   });
 
-  it('expands a project and treats a clean empty repo as healthy, not an error', async () => {
+  it('treats a clean empty repo as healthy, not an error', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -175,18 +215,8 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
-    await waitForCondition(() => showProjectMock.mock.calls.length === 1);
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-panel-demo"]'),
-    );
-    // The team section renders its empty-state copy once the scan settles; no
-    // findings, no alert.
     await waitForCondition(() =>
       document.body.textContent.includes('No agents discovered'),
     );
@@ -211,11 +241,7 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
     await waitForCondition(() => inputById('project-edit-name'));
     setInputValue('project-edit-name', 'Renamed');
@@ -226,6 +252,61 @@ describe('ProjectsView', () => {
     expect(setProjectMock).toHaveBeenCalledWith('demo', {
       display_name: 'Renamed',
     });
+  });
+
+  it('labels the project default inherit options from the global defaults', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    rpcMock.mockImplementation((method) => {
+      if (method === 'model.list') {
+        return Promise.resolve({ models: [] });
+      }
+      if (method === 'connection.list') {
+        return Promise.resolve({ connections: [] });
+      }
+      if (method === 'settings.get') {
+        return Promise.resolve({
+          defaults: { agent: { model: 'openai/gpt-5.2', temperature: 0.7 } },
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() => document.getElementById('project-edit-model'));
+    await waitForCondition(() =>
+      document.body.textContent.includes(
+        'Inherited: openai/gpt-5.2 (global default)',
+      ),
+    );
+    // The temperature inherit hint reflects the present global default.
+    expect(document.body.textContent).toContain(
+      'Inherited: 0.7 (global default)',
+    );
+  });
+
+  it('shows the not-configured inherit label when no global default exists', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() => document.getElementById('project-edit-model'));
+    // No global model default → "Inherit (not configured)" on the model select.
+    await waitForCondition(() =>
+      document.body.textContent.includes('Inherit (not configured)'),
+    );
+    // No global temperature default → the provider-default hint.
+    expect(document.body.textContent).toContain(
+      'Provider default — nothing is set here',
+    );
   });
 
   it('toggles a tool into the whitelist and persists it via project.set', async () => {
@@ -247,7 +328,7 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await expandDemo();
+    await selectDemo();
     await waitForCondition(() => toggleByAriaLabel('Toggle tool edit'));
     toggleByAriaLabel('Toggle tool edit').click();
     buttonByTestId('project-save-demo').click();
@@ -280,6 +361,9 @@ describe('ProjectsView', () => {
       if (method === 'connection.list') {
         return Promise.resolve({ connections: [] });
       }
+      if (method === 'settings.get') {
+        return Promise.resolve({ defaults: { agent: {} } });
+      }
       if (method === 'tool.list') {
         return Promise.resolve({
           tools: [
@@ -304,13 +388,11 @@ describe('ProjectsView', () => {
     });
     flushSync();
 
-    await expandDemo();
+    await selectDemo();
     await waitForCondition(() =>
       toggleByAriaLabel('Toggle tool home_assistant'),
     );
 
-    // The not-ready badge and the server hint (verbatim) both render, and the
-    // whitelist toggle stays interactive.
     expect(document.body.textContent).toContain('Currently unavailable');
     expect(document.body.textContent).toContain(
       'Set the Home Assistant token first.',
@@ -319,7 +401,6 @@ describe('ProjectsView', () => {
       false,
     );
 
-    // The extensions link jumps to Settings → Extensions.
     const openExtensions = Array.from(document.querySelectorAll('button')).find(
       (button) => button.textContent.trim() === 'Open Extensions',
     );
@@ -351,7 +432,7 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await expandDemo();
+    await selectDemo();
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-tools-reset"]'),
     );
@@ -381,9 +462,8 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await expandDemo();
+    await selectDemo();
     await waitForCondition(() => toggleByAriaLabel('Toggle skill debugging'));
-    // Project skill is on by default; bundled skill is off by default.
     expect(
       toggleByAriaLabel('Toggle skill debugging').getAttribute('aria-checked'),
     ).toBe('true');
@@ -391,7 +471,6 @@ describe('ProjectsView', () => {
       toggleByAriaLabel('Toggle skill pdf').getAttribute('aria-checked'),
     ).toBe('false');
 
-    // Turning the project skill off records it as a disabled exception.
     toggleByAriaLabel('Toggle skill debugging').click();
     buttonByTestId('project-save-demo').click();
 
@@ -418,14 +497,12 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await expandDemo();
+    await selectDemo();
     await waitForCondition(() => toggleByAriaLabel('Toggle skill deploy'));
-    // A global skill is off by default (opt-in).
     expect(
       toggleByAriaLabel('Toggle skill deploy').getAttribute('aria-checked'),
     ).toBe('false');
 
-    // Turning it on records it as a global opt-in.
     toggleByAriaLabel('Toggle skill deploy').click();
     buttonByTestId('project-save-demo').click();
 
@@ -435,7 +512,7 @@ describe('ProjectsView', () => {
     });
   });
 
-  it('re-scans the expanded project on refresh to pick up disk changes', async () => {
+  it('re-scans the selected project on refresh to pick up disk changes', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -448,13 +525,11 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await expandDemo();
+    await selectDemo();
     await waitForCondition(() => showProjectMock.mock.calls.length === 1);
 
     buttonByTestId('projects-refresh').click();
 
-    // The refresh re-scans the expanded project (project.show), which reloads the
-    // global skill registry on the backend so disk drops surface in the pool.
     await waitForCondition(() => showProjectMock.mock.calls.length === 2);
   });
 
@@ -473,11 +548,7 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
     await waitForCondition(() => inputById('project-edit-temperature'));
     expect(inputById('project-edit-temperature').value).toBe('0.4');
@@ -494,11 +565,7 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
     await waitForCondition(() => inputById('project-edit-temperature'));
     setInputValue('project-edit-temperature', '0.2');
@@ -519,16 +586,11 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
     await waitForCondition(() =>
       document.getElementById('project-edit-thinking-effort'),
     );
-    // Open the dropdown and pick the "low" effort level.
     document.getElementById('project-edit-thinking-effort').click();
     flushSync();
     await waitForCondition(() => optionByText('low'));
@@ -557,20 +619,13 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
-    // Add a file through the text input + Add button.
     await waitForCondition(() => inputById('project-edit-auto-load'));
     setInputValue('project-edit-auto-load', 'docs/guide.md');
     buttonByTestId('project-auto-load-add').click();
     flushSync();
 
-    // The list now shows both entries; remove the seeded AGENTS.md (row 0) so only
-    // the added file survives, proving per-row removal and order are preserved.
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-auto-load-remove-1"]'),
     );
@@ -586,8 +641,6 @@ describe('ProjectsView', () => {
   });
 
   it('auto-saves edited fields after the debounce without a Save click', async () => {
-    // The reload after the auto-save returns the renamed project so the form
-    // reads clean again and the debounce does not re-fire.
     listProjectsMock
       .mockResolvedValueOnce({
         projects: [project({ project_id: 'demo', display_name: 'Demo' })],
@@ -603,17 +656,11 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
     await waitForCondition(() => inputById('project-edit-name'));
     setInputValue('project-edit-name', 'Renamed');
 
-    // No Save click: wait out the 800ms auto-save debounce, then let the request
-    // settle. The edit persists on its own through the same sparse project.set.
     await wait(AUTO_SAVE_WAIT_MS);
     flushSync();
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);
@@ -623,7 +670,9 @@ describe('ProjectsView', () => {
     });
   });
 
-  it('shows a model-override badge and clears it through project.clear_pin', async () => {
+  // ── Team rows: effective values, source badges, pins ─────────────────────
+
+  it('expands a team member and shows effective values with source badges', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -631,27 +680,19 @@ describe('ProjectsView', () => {
       project: project({ project_id: 'demo' }),
       scan: {
         team: [
-          {
+          member({
             agent_id: 'builder',
             display_name: 'Builder',
-            model: 'openai/gpt-5.2',
+            description: 'Builds things',
+            source_format: 'opencode',
+            source_path: '.opencode/agents/builder.md',
+            effective: {
+              model: { value: 'openai/gpt-mini', source: 'pin' },
+              temperature: { value: 0.2, source: 'agent' },
+              thinking_effort: { value: 'high', source: 'project_default' },
+            },
             pins: { model: 'openai/gpt-mini' },
-          },
-        ],
-        report: { clean: true, findings: [] },
-      },
-    });
-    // After clearing, the refreshed scan drops the pin so the badge vanishes.
-    clearModelOverrideMock.mockResolvedValue({
-      project: project({ project_id: 'demo' }),
-      scan: {
-        team: [
-          {
-            agent_id: 'builder',
-            display_name: 'Builder',
-            model: 'openai/gpt-5.2',
-            pins: null,
-          },
+          }),
         ],
         report: { clean: true, findings: [] },
       },
@@ -660,29 +701,433 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await expandDemo();
+    await selectDemo();
     await waitForCondition(() =>
-      document.body.textContent.includes('Model override'),
+      document.querySelector('[data-testid="project-team-toggle-builder"]'),
     );
+    // Description one-liner and the effective model summary render on the row.
+    expect(document.body.textContent).toContain('Builds things');
+
+    buttonByTestId('project-team-toggle-builder').click();
+    flushSync();
+    await waitForCondition(() =>
+      document.body.textContent.includes('from pin'),
+    );
+
+    // Every source badge renders with its value.
+    expect(document.body.textContent).toContain('from pin');
+    expect(document.body.textContent).toContain('from agent file (repo)');
+    expect(document.body.textContent).toContain('from project default');
     expect(document.body.textContent).toContain('openai/gpt-mini');
+    // The source line names the file and the format.
+    expect(document.body.textContent).toContain(
+      'Source: .opencode/agents/builder.md (opencode)',
+    );
+  });
+
+  it('renders global-default source and null (not configured / provider default) values', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          member({
+            agent_id: 'planner',
+            display_name: 'Planner',
+            effective: {
+              model: { value: null, source: null },
+              temperature: { value: 0.5, source: 'global_default' },
+              thinking_effort: { value: null, source: null },
+            },
+          }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-team-toggle-planner"]'),
+    );
+    buttonByTestId('project-team-toggle-planner').click();
+    flushSync();
+    await waitForCondition(() =>
+      document.body.textContent.includes('from global default'),
+    );
+
+    // A null model reads "not configured"; a null thinking reads "provider
+    // default"; neither shows a source badge.
+    expect(document.body.textContent).toContain('not configured');
+    expect(document.body.textContent).toContain('provider default');
+    expect(document.body.textContent).toContain('from global default');
+  });
+
+  it('sets a model pin through project.set_pin and refreshes from the scan', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          member({
+            agent_id: 'builder',
+            display_name: 'Builder',
+            effective: {
+              model: { value: 'openai/gpt-5.2', source: 'agent' },
+              temperature: { value: null, source: null },
+              thinking_effort: { value: null, source: null },
+            },
+          }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    rpcMock.mockImplementation((method) => {
+      if (method === 'model.list') {
+        return Promise.resolve({
+          models: [
+            { id: 'openai/gpt-5.2', name: 'GPT-5.2', capabilities: {} },
+            { id: 'openai/gpt-mini', name: 'GPT-mini', capabilities: {} },
+          ],
+        });
+      }
+      if (method === 'connection.list') {
+        return Promise.resolve({ connections: [] });
+      }
+      if (method === 'settings.get') {
+        return Promise.resolve({ defaults: { agent: {} } });
+      }
+      return Promise.resolve({});
+    });
+    setPinMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          member({
+            agent_id: 'builder',
+            display_name: 'Builder',
+            pins: { model: 'openai/gpt-5.2' },
+            effective: {
+              model: { value: 'openai/gpt-5.2', source: 'pin' },
+              temperature: { value: null, source: null },
+              thinking_effort: { value: null, source: null },
+            },
+          }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-team-toggle-builder"]'),
+    );
+    buttonByTestId('project-team-toggle-builder').click();
+    flushSync();
+
+    // The draft is seeded from the effective model (openai/gpt-5.2), so Set is
+    // enabled without picking anything.
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-pin-set-model-builder"]'),
+    );
+    buttonByTestId('project-pin-set-model-builder').click();
+
+    await waitForCondition(() => setPinMock.mock.calls.length === 1);
+    expect(setPinMock).toHaveBeenCalledWith(
+      'demo',
+      'builder',
+      'model',
+      'openai/gpt-5.2',
+    );
+    // After the pin, the model row reads "from pin" and a Clear pin appears.
+    await waitForCondition(() =>
+      document.body.textContent.includes('from pin'),
+    );
+    expect(
+      document.querySelector('[data-testid="project-pin-clear-model-builder"]'),
+    ).toBeTruthy();
+  });
+
+  it('sets a temperature pin with the comma-tolerant value', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [member({ agent_id: 'builder', display_name: 'Builder' })],
+        report: { clean: true, findings: [] },
+      },
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-team-toggle-builder"]'),
+    );
+    buttonByTestId('project-team-toggle-builder').click();
+    flushSync();
+
+    await waitForCondition(() => inputById('project-pin-temperature-builder'));
+    setInputValue('project-pin-temperature-builder', '0,3');
+    buttonByTestId('project-pin-set-temperature-builder').click();
+
+    await waitForCondition(() => setPinMock.mock.calls.length === 1);
+    expect(setPinMock).toHaveBeenCalledWith(
+      'demo',
+      'builder',
+      'temperature',
+      0.3,
+    );
+  });
+
+  it('clears a pin through project.clear_pin', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          member({
+            agent_id: 'builder',
+            display_name: 'Builder',
+            pins: { model: 'openai/gpt-mini' },
+            effective: {
+              model: { value: 'openai/gpt-mini', source: 'pin' },
+              temperature: { value: null, source: null },
+              thinking_effort: { value: null, source: null },
+            },
+          }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    clearPinMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          member({
+            agent_id: 'builder',
+            display_name: 'Builder',
+            effective: {
+              model: { value: 'openai/gpt-5.2', source: 'agent' },
+              temperature: { value: null, source: null },
+              thinking_effort: { value: null, source: null },
+            },
+          }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-team-toggle-builder"]'),
+    );
+    buttonByTestId('project-team-toggle-builder').click();
+    flushSync();
 
     await waitForCondition(() =>
-      document.querySelector(
-        '[data-testid="project-model-override-clear-builder"]',
+      document.querySelector('[data-testid="project-pin-clear-model-builder"]'),
+    );
+    buttonByTestId('project-pin-clear-model-builder').click();
+
+    await waitForCondition(() => clearPinMock.mock.calls.length === 1);
+    expect(clearPinMock).toHaveBeenCalledWith('demo', 'builder', 'model');
+    // The refreshed scan drops the pin — the Clear-pin control disappears.
+    await waitForCondition(
+      () =>
+        !document.querySelector(
+          '[data-testid="project-pin-clear-model-builder"]',
+        ),
+    );
+  });
+
+  it('surfaces a sticky error toast when a pin cannot be saved', async () => {
+    const toastMock = vi.fn();
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          member({
+            agent_id: 'builder',
+            display_name: 'Builder',
+            effective: {
+              model: { value: 'openai/gpt-5.2', source: 'agent' },
+              temperature: { value: null, source: null },
+              thinking_effort: { value: null, source: null },
+            },
+          }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    setPinMock.mockRejectedValue({ message: 'model not usable' });
+
+    mountedComponent = mount(ProjectsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-team-toggle-builder"]'),
+    );
+    buttonByTestId('project-team-toggle-builder').click();
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-pin-set-model-builder"]'),
+    );
+    buttonByTestId('project-pin-set-model-builder').click();
+
+    await waitForCondition(() => setPinMock.mock.calls.length === 1);
+    await waitForCondition(() =>
+      toastMock.mock.calls.some(
+        (call) => call[0]?.variant === 'error' && call[0]?.sticky === true,
       ),
     );
-    buttonByTestId('project-model-override-clear-builder').click();
+    const errorToast = toastMock.mock.calls
+      .map((call) => call[0])
+      .find((toast) => toast?.variant === 'error');
+    expect(errorToast.sticky).toBe(true);
+    expect(errorToast.title).toContain('could not be saved');
+  });
 
-    await waitForCondition(
-      () => clearModelOverrideMock.mock.calls.length === 1,
-    );
-    expect(clearModelOverrideMock).toHaveBeenCalledWith('demo', 'builder');
+  it('gates the thinking-effort pin options by the member effective model', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          member({
+            agent_id: 'builder',
+            display_name: 'Builder',
+            effective: {
+              model: { value: 'openai/reasoner', source: 'agent' },
+              temperature: { value: null, source: null },
+              thinking_effort: { value: null, source: null },
+            },
+          }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    rpcMock.mockImplementation((method) => {
+      if (method === 'model.list') {
+        return Promise.resolve({
+          models: [
+            {
+              id: 'openai/reasoner',
+              name: 'Reasoner',
+              capabilities: {
+                reasoning: { supported: true, levels: ['low', 'high'] },
+              },
+            },
+          ],
+        });
+      }
+      if (method === 'connection.list') {
+        return Promise.resolve({ connections: [] });
+      }
+      if (method === 'settings.get') {
+        return Promise.resolve({ defaults: { agent: {} } });
+      }
+      return Promise.resolve({});
+    });
 
-    // The refreshed team drops the badge (the row falls back to its repo model).
-    await waitForCondition(
-      () => !document.body.textContent.includes('Model override'),
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-team-toggle-builder"]'),
     );
-    expect(document.body.textContent).not.toContain('Model override');
+    buttonByTestId('project-team-toggle-builder').click();
+    flushSync();
+
+    await waitForCondition(() =>
+      document.getElementById('project-pin-thinking-builder'),
+    );
+    document.getElementById('project-pin-thinking-builder').click();
+    flushSync();
+    await waitForCondition(() => optionByText('low'));
+
+    // The model's ladder is low/high — medium/max are gated out; the provider
+    // default ('') and none always apply.
+    const optionLabels = Array.from(
+      document.querySelectorAll('[role="option"]'),
+    ).map((item) => item.textContent?.trim());
+    expect(optionLabels).toContain('low');
+    expect(optionLabels).toContain('high');
+    expect(optionLabels).toContain('none');
+    expect(optionLabels).not.toContain('medium');
+    expect(optionLabels).not.toContain('max');
+  });
+
+  it('renders the denied-tools lines for a member with and without denials', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [
+          member({
+            agent_id: 'restricted',
+            display_name: 'Restricted',
+            denied_tools: ['bash', 'process'],
+          }),
+          member({ agent_id: 'open', display_name: 'Open', denied_tools: [] }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-team-toggle-restricted"]'),
+    );
+    buttonByTestId('project-team-toggle-restricted').click();
+    buttonByTestId('project-team-toggle-open').click();
+    flushSync();
+    await waitForCondition(() =>
+      document.body.textContent.includes('Denied by the agent file'),
+    );
+
+    expect(document.body.textContent).toContain(
+      'Denied by the agent file: bash, process',
+    );
+    expect(document.body.textContent).toContain(
+      'All other tools follow the project tool whitelist.',
+    );
+    expect(document.body.textContent).toContain(
+      'No tool denials — follows the project tool whitelist.',
+    );
   });
 
   it('re-points a project with a missing cwd through project.set with the new cwd', async () => {
@@ -699,11 +1144,7 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-repoint-demo"]'),
@@ -736,11 +1177,7 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-remove-demo"]'),
@@ -748,8 +1185,6 @@ describe('ProjectsView', () => {
     buttonByTestId('project-remove-demo').click();
     flushSync();
 
-    // The row action opens the shared ConfirmDialog; removal only runs on
-    // confirm.
     confirmDialog('Remove');
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
@@ -771,11 +1206,7 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
-    );
-    buttonByTestId('project-toggle-demo').click();
-    flushSync();
+    await selectDemo();
 
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-remove-demo"]'),
@@ -783,8 +1214,6 @@ describe('ProjectsView', () => {
     buttonByTestId('project-remove-demo').click();
     flushSync();
 
-    // The row action opens the shared ConfirmDialog; removal only runs on
-    // confirm.
     confirmDialog('Remove');
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
@@ -838,13 +1267,34 @@ function project(overrides = {}) {
   };
 }
 
+// A scan team member with the step-1/2 payload shape (effective + pins).
+function member(overrides = {}) {
+  return {
+    agent_id: 'agent',
+    display_name: 'Agent',
+    description: '',
+    model: '',
+    temperature: null,
+    thinking_effort: null,
+    source_format: 'opencode',
+    source_path: '.opencode/agents/agent.md',
+    denied_tools: [],
+    pins: null,
+    effective: {
+      model: { value: null, source: null },
+      temperature: { value: null, source: null },
+      thinking_effort: { value: null, source: null },
+    },
+    ...overrides,
+  };
+}
+
 function buttonByTestId(testId) {
   const button = document.querySelector(`[data-testid="${testId}"]`);
   expect(button, testId).toBeTruthy();
   return button;
 }
 
-// Clicks a button in the open ConfirmDialog by its label (Remove / Cancel).
 function confirmDialog(label) {
   const footer = document.querySelector('.modal-footer');
   expect(footer, 'confirm dialog not open').toBeTruthy();
@@ -855,8 +1305,6 @@ function confirmDialog(label) {
   button.click();
 }
 
-// The list row and a modal can share a label (e.g. "Add project", "Re-point"),
-// so target the submit button inside the open dialog specifically.
 function submitButtonInDialog(label) {
   const dialog = document.querySelector('[role="dialog"]');
   expect(dialog, 'open dialog').toBeTruthy();
@@ -874,12 +1322,18 @@ function inputById(id) {
   return document.getElementById(id);
 }
 
-// Dropdown options are portaled to the body as role="option" buttons; match by
-// the exact trimmed label text.
 function optionByText(text) {
   return Array.from(document.querySelectorAll('[role="option"]')).find(
     (item) => item.textContent?.trim() === text,
   );
+}
+
+// The ordered detail-section titles must appear in the given sequence.
+function expectSectionOrder(titles) {
+  const rendered = Array.from(
+    document.querySelectorAll('.detail-section-title'),
+  ).map((node) => node.textContent.trim());
+  expect(rendered).toEqual(titles);
 }
 
 function setInputValue(id, value) {
@@ -907,7 +1361,7 @@ async function waitForCondition(condition, maxAttempts = 20) {
 }
 
 // Stub the tool-catalog RPC for the whitelist editor while keeping the model/
-// connection catalogs the default-model picker needs.
+// connection/defaults catalogs the settings form needs.
 function mockToolCatalog(toolNames, defaultProjectTools) {
   rpcMock.mockImplementation((method) => {
     if (method === 'model.list') {
@@ -915,6 +1369,9 @@ function mockToolCatalog(toolNames, defaultProjectTools) {
     }
     if (method === 'connection.list') {
       return Promise.resolve({ connections: [] });
+    }
+    if (method === 'settings.get') {
+      return Promise.resolve({ defaults: { agent: {} } });
     }
     if (method === 'tool.list') {
       return Promise.resolve({
@@ -926,8 +1383,8 @@ function mockToolCatalog(toolNames, defaultProjectTools) {
   });
 }
 
-// Expand the inline edit panel for the `demo` project.
-async function expandDemo() {
+// Select the `demo` project in the list pane, opening its detail pane.
+async function selectDemo() {
   await waitForCondition(() =>
     document.querySelector('[data-testid="project-toggle-demo"]'),
   );

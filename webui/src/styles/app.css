@@ -2,6 +2,7 @@
 @import './settings.css';
 @import './chat-timeline.css';
 @import './agents.css';
+@import './projects.css';
 
 *,
 *::before,
