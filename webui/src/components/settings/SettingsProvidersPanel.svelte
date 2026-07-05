@@ -48,9 +48,6 @@
   }
 
   let refreshingModels = $state(false);
-  let modelRefreshMessage = $state('');
-  let modelRefreshWarning = $state('');
-  let modelRefreshError = $state('');
   let modalScope = $state(null);
   let forwardedAuthEvent = $state(null);
   // A provider change elsewhere is mirrored here through a settings reload, but
@@ -234,32 +231,42 @@
     }
 
     refreshingModels = true;
-    modelRefreshMessage = '';
-    modelRefreshWarning = '';
-    modelRefreshError = '';
+    onError('');
 
     try {
       const result = await rpc('model.refresh_db');
       applyProviderRefreshResult(result);
       await rpc('model.list');
-      modelRefreshMessage = t(
-        'settings.providers.refreshSuccess',
-        'Model DB updated: {providerCount} providers, {count} models available.',
-        refreshSummaryValues(result),
-      );
+      // Success is a toast, not inline text: the refresh triggers a settings
+      // reload (resource_changed → onReloadSettings) that briefly unmounts this
+      // panel, so an inline result would flash and vanish. The app-level toast
+      // survives that reload.
+      onToast({
+        title: t(
+          'settings.providers.refreshSuccess',
+          'Model DB updated: {providerCount} providers, {count} models available.',
+          refreshSummaryValues(result),
+        ),
+        variant: 'success',
+      });
       const failedProviders = getRefreshFailures(result);
       if (failedProviders.length > 0) {
-        modelRefreshWarning = t(
-          'settings.providers.refreshPartial',
-          'Some providers could not be reached and were skipped: {providers}.',
-          { providers: failedProviders.join(', ') },
-        );
+        onToast({
+          title: t(
+            'settings.providers.refreshPartial',
+            'Some providers could not be reached and were skipped: {providers}.',
+            { providers: failedProviders.join(', ') },
+          ),
+          variant: 'warn',
+        });
       }
     } catch (error) {
-      modelRefreshError = `${t(
-        'settings.providers.refreshError',
-        'Model DB could not be updated.',
-      )} ${error.message}`;
+      onError(
+        `${t(
+          'settings.providers.refreshError',
+          'Model DB could not be updated.',
+        )} ${error.message}`,
+      );
     } finally {
       refreshingModels = false;
     }
@@ -336,17 +343,6 @@
 </script>
 
 {#if visible}
-  {#if modelRefreshError}
-    <div class="s-feedback s-feedback--error">{modelRefreshError}</div>
-  {:else if modelRefreshMessage}
-    <div class="s-feedback s-feedback--success">
-      {modelRefreshMessage}
-    </div>
-  {/if}
-  {#if modelRefreshWarning}
-    <div class="s-feedback s-feedback--warning">{modelRefreshWarning}</div>
-  {/if}
-
   <div class="s-providers-toolbar">
     <Button variant="primary" onClick={openAddProviderModal}>
       {t('settings.providers.add.button', 'Add provider')}

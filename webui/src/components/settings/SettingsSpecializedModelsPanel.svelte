@@ -47,7 +47,6 @@
   let taskModelSchemasByType = $state({});
   let taskModelLoading = $state(false);
   let taskModelSaving = $state(false);
-  let taskModelError = $state('');
   // Per-field JSON parse errors keyed by `${taskType}::${field.name}`.
   // Empty string means "no error / not yet typed". The binding is never
   // updated with an invalid value; this map only drives the inline error
@@ -137,7 +136,7 @@
     }
 
     taskModelLoading = true;
-    taskModelError = '';
+    onError('');
 
     try {
       const targetEntries = await Promise.all(
@@ -155,7 +154,9 @@
         }
       }
     } catch (error) {
-      taskModelError = `${t('settings.specializedModels.loadError', 'Specialized model targets could not be loaded.')} ${error.message}`;
+      onError(
+        `${t('settings.specializedModels.loadError', 'Specialized model targets could not be loaded.')} ${error.message}`,
+      );
     } finally {
       taskModelLoading = false;
     }
@@ -207,7 +208,6 @@
     }
 
     taskModelSaving = true;
-    taskModelError = '';
     onError('');
 
     try {
@@ -229,14 +229,16 @@
         variant: 'success',
       });
     } catch (error) {
-      taskModelError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
     } finally {
       taskModelSaving = false;
     }
   }
 
   async function handleTaskModelTargetChange(taskType, target) {
-    taskModelError = '';
+    onError('');
     autoSaveArmed = true;
     taskModelBindings = {
       ...taskModelBindings,
@@ -249,7 +251,9 @@
     try {
       await loadTaskModelSchema(taskType, target);
     } catch (error) {
-      taskModelError = `${t('settings.specializedModels.optionsLoadError', 'Model options could not be loaded.')} ${error.message}`;
+      onError(
+        `${t('settings.specializedModels.optionsLoadError', 'Model options could not be loaded.')} ${error.message}`,
+      );
     }
   }
 
@@ -285,7 +289,7 @@
         },
       },
     };
-    taskModelError = '';
+    onError('');
     autoSaveArmed = true;
   }
 
@@ -391,10 +395,6 @@
       'Loading specialized model targets…',
     )}
   </div>
-{/if}
-
-{#if taskModelError}
-  <div class="s-feedback s-feedback--error">{taskModelError}</div>
 {/if}
 
 <div class="s-task-model-list">

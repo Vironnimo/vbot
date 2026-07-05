@@ -25,6 +25,10 @@
     mergeChannelStatuses,
   } from '$lib/settingsView.js';
 
+  const noop = () => {};
+
+  let { onToast = noop, onError = noop } = $props();
+
   let channelPanelState = $state(createChannelPanelState());
   let channelAgents = $state([]);
   let channelFormVisible = $state(false);
@@ -32,8 +36,10 @@
   let channelFormValues = $state(createChannelFormValues());
   let channelBusy = $state(false);
   let channelActionChannelId = $state('');
-  let channelNotice = $state('');
-  let channelError = $state('');
+  // Local form-validation message only (e.g. "select an agent"). Operation and
+  // server errors go to `onError` (a sticky error toast); success feedback goes
+  // to `onToast`.
+  let channelFormError = $state('');
   // The channel awaiting delete confirmation (null = dialog closed). The delete
   // only runs once the confirm dialog resolves.
   let deleteConfirmChannel = $state(null);
@@ -70,8 +76,8 @@
   });
 
   function clearChannelFeedback() {
-    channelError = '';
-    channelNotice = '';
+    channelFormError = '';
+    onError('');
   }
 
   function startCreateChannel() {
@@ -201,7 +207,7 @@
 
     if (!channelFormValues.agent_id) {
       clearChannelFeedback();
-      channelError = t(
+      channelFormError = t(
         'settings.channels.agent.required',
         'Select an agent before saving.',
       );
@@ -217,19 +223,19 @@
           'channel.create',
           buildChannelCreatePayload(channelFormValues),
         );
-        channelNotice = t(
-          'settings.channels.createSuccess',
-          'Channel created.',
-        );
+        onToast({
+          title: t('settings.channels.createSuccess', 'Channel created.'),
+          variant: 'success',
+        });
       } else {
         await rpc(
           'channel.update',
           buildChannelUpdatePayload(channelFormValues),
         );
-        channelNotice = t(
-          'settings.channels.updateSuccess',
-          'Channel updated.',
-        );
+        onToast({
+          title: t('settings.channels.updateSuccess', 'Channel updated.'),
+          variant: 'success',
+        });
       }
 
       channelFormVisible = false;
@@ -237,7 +243,9 @@
       channelFormValues = createChannelFormValues();
       await loadChannelsPanel();
     } catch (error) {
-      channelError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
     } finally {
       channelBusy = false;
     }
@@ -247,15 +255,18 @@
     await runChannelAction(channel.id, async () => {
       if (channel.enabled) {
         await rpc('channel.disable', { id: channel.id });
-        channelNotice = t(
-          'settings.channels.disableSuccess',
-          'Channel disabled.',
-        );
+        onToast({
+          title: t('settings.channels.disableSuccess', 'Channel disabled.'),
+          variant: 'success',
+        });
         return;
       }
 
       await rpc('channel.enable', { id: channel.id });
-      channelNotice = t('settings.channels.enableSuccess', 'Channel enabled.');
+      onToast({
+        title: t('settings.channels.enableSuccess', 'Channel enabled.'),
+        variant: 'success',
+      });
     });
   }
 
@@ -276,7 +287,10 @@
 
     await runChannelAction(channel.id, async () => {
       await rpc('channel.delete', { id: channel.id });
-      channelNotice = t('settings.channels.deleteSuccess', 'Channel deleted.');
+      onToast({
+        title: t('settings.channels.deleteSuccess', 'Channel deleted.'),
+        variant: 'success',
+      });
     });
 
     if (
@@ -299,7 +313,9 @@
       await action();
       await loadChannelsPanel();
     } catch (error) {
-      channelError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
     } finally {
       channelActionChannelId = '';
     }
@@ -327,14 +343,12 @@
   </div>
 </div>
 
-{#if channelError}
-  <div class="s-feedback s-feedback--error">{channelError}</div>
-{:else if channelNotice}
-  <div class="s-feedback s-feedback--success">{channelNotice}</div>
-{/if}
-
 {#if channelFormVisible}
   <form class="s-channel-form" onsubmit={submitChannelForm}>
+    {#if channelFormError}
+      <div class="s-feedback s-feedback--error">{channelFormError}</div>
+    {/if}
+
     <div class="s-channel-form-header">
       <h3 class="s-channel-form-title">
         {channelFormMode === CHANNEL_FORM_MODE_CREATE
