@@ -32,6 +32,7 @@
     targetPanelId = '',
     targetPanelRequestId = 0,
     onDebugEnabledChange = noop,
+    onOpenSetupGuide = noop,
     modelsRefreshToken = 0,
     clientsRefreshToken = 0,
   } = $props();
@@ -350,7 +351,11 @@
         />
 
         {#if activePanelId === 'general'}
-          <SettingsGeneralPanel {settings} {clientsRefreshToken} />
+          <SettingsGeneralPanel
+            {settings}
+            {clientsRefreshToken}
+            {onOpenSetupGuide}
+          />
         {:else if activePanelId === 'defaults'}
           <SettingsDefaultsPanel
             {settings}

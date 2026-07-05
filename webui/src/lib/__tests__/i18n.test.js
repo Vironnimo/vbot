@@ -552,6 +552,19 @@ describe('i18n t()', () => {
     ).toBe('Connected 10:00');
   });
 
+  it('contains the Setup guide re-entry copy for the Server info panel', () => {
+    const requiredKeys = [
+      'settings.general.setupGuide',
+      'settings.general.setupGuideDescription',
+      'settings.general.setupGuideAction',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(t('settings.general.setupGuide')).toBe('Setup guide');
+    expect(t('settings.general.setupGuideAction')).toBe('Open setup guide');
+    expect(t('settings.general.setupGuideDescription')).toContain('provider');
+  });
+
   it('contains Logs tab copy for navigation, filters, and states', () => {
     const requiredKeys = [
       'navigation.logs',

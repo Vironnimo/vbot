@@ -594,6 +594,10 @@ export const englishCatalog = Object.freeze({
   'settings.general.dataDirectory': 'Data directory',
   'settings.general.dataDirectoryDescription':
     'Root path for agents, sessions, and workspace files.',
+  'settings.general.setupGuide': 'Setup guide',
+  'settings.general.setupGuideDescription':
+    'Reopen the guided first-run setup to connect a provider and assign a model.',
+  'settings.general.setupGuideAction': 'Open setup guide',
   'settings.general.clients.title': 'Connected clients',
   'settings.general.clients.description':
     'App windows currently connected to this server (browser tabs and the Desktop app).',
