@@ -62,7 +62,7 @@
       subtitle: () =>
         t(
           'settings.defaults.subtitle',
-          'Model, temperature, and thinking effort used when an agent leaves them unset.',
+          'Model, temperature, and thinking effort used when an agent or project leaves them unset — shown there as "Inherited: … (global default)".',
         ),
     },
     {
@@ -73,7 +73,7 @@
       subtitle: () =>
         t(
           'settings.specializedModels.subtitle',
-          'Task-specific model bindings for speech, image, and embedding tools.',
+          'Task-specific model bindings for speech, image, and embedding tools. These bindings are independent of agent and project defaults.',
         ),
     },
     {
