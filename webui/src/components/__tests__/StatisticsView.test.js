@@ -217,6 +217,52 @@ function makeReport(overrides = {}) {
       by_agent: [{ key: 'main', count: 7 }],
       top_sessions: [{ agent_id: 'main', session_id: 's1', calls: 7 }],
     },
+    skills: {
+      total_skills: 3,
+      used_skills: 1,
+      never_used_skills: 1,
+      skills: [
+        {
+          name: 'deploy',
+          origins: ['bundled'],
+          offered_sessions: 10,
+          activated_sessions: 4,
+          usage_rate: 0.4,
+          first_offered: '2026-06-10T08:00:00+00:00',
+          last_offered: '2026-06-13T09:00:00+00:00',
+          first_activated: '2026-06-11T08:00:00+00:00',
+          last_activated: '2026-06-13T08:30:00+00:00',
+          by_agent: [
+            { key: 'main', count: 3 },
+            { key: 'builder@vbot', count: 1 },
+          ],
+        },
+        {
+          name: 'lonely-skill',
+          origins: ['global', 'project:vBot'],
+          offered_sessions: 8,
+          activated_sessions: 0,
+          usage_rate: 0,
+          first_offered: '2026-06-09T08:00:00+00:00',
+          last_offered: '2026-06-12T09:00:00+00:00',
+          first_activated: null,
+          last_activated: null,
+          by_agent: [],
+        },
+        {
+          name: 'fresh-skill',
+          origins: ['agent:assistant'],
+          offered_sessions: 0,
+          activated_sessions: 0,
+          usage_rate: null,
+          first_offered: null,
+          last_offered: null,
+          first_activated: null,
+          last_activated: null,
+          by_agent: [],
+        },
+      ],
+    },
     ...overrides,
   };
 }
@@ -404,6 +450,95 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('not_found');
     expect(document.body.textContent).toContain(
       'Tool arguments are never collected.',
+    );
+  });
+
+  it('renders the skills sub-view with per-skill rows, origins, and rates', async () => {
+    rpcMock.mockResolvedValue(makeReport());
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+
+    const skillsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+      (button) => button.textContent.trim() === 'Skills',
+    );
+    skillsTab.click();
+    flushSync();
+
+    const text = document.body.textContent;
+    expect(text).toContain('Per skill');
+    // Summary cards: 3 total, 1 used, 1 never used.
+    expect(text).toContain('Never used');
+    // Per-skill rows.
+    expect(text).toContain('deploy');
+    expect(text).toContain('lonely-skill');
+    // Origins render as short localized labels (agent:<id>/project:<name>).
+    expect(text).toContain('bundled');
+    expect(text).toContain('project: vBot');
+    expect(text).toContain('agent: assistant');
+    // usage_rate: 0.4 → 40%; null (offered == 0) → em dash, never NaN.
+    expect(text).toContain('40%');
+    expect(text).not.toContain('NaN');
+    // Panel-wide activations-per-agent rollup shows the project agent.
+    expect(text).toContain('Activations per agent');
+    expect(text).toContain('builder');
+  });
+
+  it('highlights zero-activation skills as delete/improve candidates', async () => {
+    rpcMock.mockResolvedValue(makeReport());
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+
+    const skillsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+      (button) => button.textContent.trim() === 'Skills',
+    );
+    skillsTab.click();
+    flushSync();
+
+    // Two skills have zero activations (lonely-skill, fresh-skill); each gets a
+    // highlighted row and the "Never activated" badge.
+    const neverRows = document.querySelectorAll('.stats-skill-row--never');
+    expect(neverRows.length).toBe(2);
+    expect(document.body.textContent).toContain('Never activated');
+    // The activated skill (deploy) is not highlighted.
+    const rows = [...document.querySelectorAll('.stats-table tbody tr')].filter(
+      (row) => row.textContent.includes('deploy'),
+    );
+    expect(
+      rows.some((row) => row.classList.contains('stats-skill-row--never')),
+    ).toBe(false);
+  });
+
+  it('shows the skills empty state instead of crashing when the inventory is empty', async () => {
+    rpcMock.mockResolvedValue(
+      makeReport({
+        skills: {
+          total_skills: 0,
+          used_skills: 0,
+          never_used_skills: 0,
+          skills: [],
+        },
+      }),
+    );
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+
+    const skillsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+      (button) => button.textContent.trim() === 'Skills',
+    );
+    skillsTab.click();
+    flushSync();
+
+    expect(document.body.textContent).toContain(
+      'No skills in the current inventory.',
     );
   });
 

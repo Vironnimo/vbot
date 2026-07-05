@@ -13,6 +13,7 @@ from core.sessions.sessions import (
     is_partial_thinking_note,
     is_skill_available_note,
     is_skill_context_note,
+    skill_context_note_name,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "is_partial_thinking_note",
     "is_skill_available_note",
     "is_skill_context_note",
+    "skill_context_note_name",
 ]

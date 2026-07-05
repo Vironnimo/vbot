@@ -759,6 +759,7 @@ describe('i18n t()', () => {
       'statistics.subview.usage',
       'statistics.subview.runs',
       'statistics.subview.tools',
+      'statistics.subview.skills',
       'statistics.granularity.day',
       'statistics.granularity.week',
       'statistics.granularity.month',
@@ -787,8 +788,28 @@ describe('i18n t()', () => {
       'statistics.errors.byHour',
       'statistics.tools.perTool',
       'statistics.tools.noArgsNote',
+      'statistics.skills.total',
+      'statistics.skills.used',
+      'statistics.skills.neverUsed',
+      'statistics.skills.intro',
+      'statistics.skills.perSkill',
+      'statistics.skills.empty',
+      'statistics.skills.neverUsedBadge',
+      'statistics.skills.neverUsedRowTitle',
+      'statistics.skills.byAgent',
+      'statistics.skills.origin.bundled',
+      'statistics.skills.origin.global',
+      'statistics.skills.origin.agent',
+      'statistics.skills.origin.project',
       'statistics.col.tokens',
       'statistics.col.share',
+      'statistics.col.skill',
+      'statistics.col.origins',
+      'statistics.col.offered',
+      'statistics.col.activated',
+      'statistics.col.usageRate',
+      'statistics.col.firstActivated',
+      'statistics.col.lastActivated',
     ];
 
     expectCatalogKeys(requiredKeys);
@@ -798,6 +819,14 @@ describe('i18n t()', () => {
     );
     expect(t('statistics.estimatedBadge')).toContain('estimated');
     expect(t('statistics.subview.runs')).toBe('Runs & errors');
+    expect(t('statistics.subview.skills')).toBe('Skills');
+    // The scoped origin labels interpolate the agent id / project name detail.
+    expect(
+      t('statistics.skills.origin.agent', undefined, { detail: 'assistant' }),
+    ).toBe('agent: assistant');
+    expect(
+      t('statistics.skills.origin.project', undefined, { detail: 'vBot' }),
+    ).toBe('project: vBot');
   });
 
   it('contains the project-agent badge label for the statistics tab', () => {

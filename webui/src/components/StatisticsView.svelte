@@ -20,8 +20,11 @@
     formatResetAt,
     formatShare,
     formatTokens,
+    formatUsageRate,
     groupModelsByProvider,
+    parseOrigin,
     rollupDaily,
+    rollupSkillActivationsByAgent,
     sparklinePoints,
     tokenSplit,
     topN,
@@ -62,6 +65,7 @@
   const runs = $derived(report?.runs ?? null);
   const errors = $derived(report?.errors ?? null);
   const tools = $derived(report?.tools ?? null);
+  const skills = $derived(report?.skills ?? null);
   const usageProviders = $derived(usageReport?.providers ?? []);
 
   $effect(() => {
@@ -104,6 +108,9 @@
   );
   const hourFractions = $derived(
     errors ? barFractions(errors.by_hour.map((entry) => entry.count)) : [],
+  );
+  const skillActivationsByAgent = $derived(
+    skills ? rollupSkillActivationsByAgent(skills.skills) : [],
   );
 
   onMount(() => {
@@ -180,6 +187,8 @@
         return t('statistics.subview.runs', 'Runs & errors');
       case 'tools':
         return t('statistics.subview.tools', 'Tools');
+      case 'skills':
+        return t('statistics.subview.skills', 'Skills');
       case 'limits':
         return t('statistics.subview.limits', 'Limits');
       default:
@@ -204,6 +213,20 @@
 
   function roleLabel(role) {
     return t(`statistics.role.${role}`, role);
+  }
+
+  // Turn a report origin token (`bundled` / `global` / `agent:<id>` /
+  // `project:<name>`) into a short localized label. The scope word is
+  // translated; the detail (an agent id / project name) is shown verbatim. An
+  // unknown/bare token falls back to the raw string so nothing renders empty.
+  function originLabel(origin) {
+    const { scope, detail } = parseOrigin(origin);
+    if (detail !== null) {
+      return t(`statistics.skills.origin.${scope}`, `${scope}: ${detail}`, {
+        detail,
+      });
+    }
+    return t(`statistics.skills.origin.${scope}`, scope);
   }
 </script>
 
@@ -279,6 +302,8 @@
       {@render runsPanel()}
     {:else if activeSubView === 'tools'}
       {@render toolsPanel()}
+    {:else if activeSubView === 'skills'}
+      {@render skillsPanel()}
     {:else if activeSubView === 'limits'}
       {@render limitsPanel()}
     {/if}
@@ -1116,6 +1141,105 @@
   </div>
 {/snippet}
 
+{#snippet skillOrigins(origins)}
+  <span class="stats-origins">
+    {#each origins ?? [] as origin (origin)}
+      <span class="stats-origin">{originLabel(origin)}</span>
+    {/each}
+  </span>
+{/snippet}
+
+{#snippet skillsPanel()}
+  <div class="stats-panel">
+    <div class="stats-grid">
+      {@render statCard(
+        t('statistics.skills.total', 'Skills'),
+        formatInteger(skills.total_skills, locale),
+      )}
+      {@render statCard(
+        t('statistics.skills.used', 'Used'),
+        formatInteger(skills.used_skills, locale),
+      )}
+      {@render statCard(
+        t('statistics.skills.neverUsed', 'Never used'),
+        formatInteger(skills.never_used_skills, locale),
+      )}
+    </div>
+    <p class="stats-note">
+      {t(
+        'statistics.skills.intro',
+        'A skill is offered to a session when its catalog is built, and activated when the agent actually invokes it. A skill offered to many sessions but never activated is a candidate to delete or improve.',
+      )}
+    </p>
+
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t('statistics.skills.perSkill', 'Per skill')}
+      </h3>
+      {#if skills.skills.length === 0}
+        <p class="stats-empty">
+          {t('statistics.skills.empty', 'No skills in the current inventory.')}
+        </p>
+      {:else}
+        <table class="stats-table">
+          <thead>
+            <tr>
+              <th>{t('statistics.col.skill', 'Skill')}</th>
+              <th>{t('statistics.col.origins', 'Origins')}</th>
+              <th>{t('statistics.col.offered', 'Offered')}</th>
+              <th>{t('statistics.col.activated', 'Activated')}</th>
+              <th>{t('statistics.col.usageRate', 'Usage rate')}</th>
+              <th>{t('statistics.col.firstActivated', 'First activated')}</th>
+              <th>{t('statistics.col.lastActivated', 'Last activated')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each skills.skills as skill (skill.name)}
+              {@const neverActivated = skill.activated_sessions === 0}
+              <tr
+                class:stats-skill-row--never={neverActivated}
+                title={neverActivated
+                  ? t(
+                      'statistics.skills.neverUsedRowTitle',
+                      'Offered but never activated — a candidate to delete or improve.',
+                    )
+                  : null}
+              >
+                <td class="stats-mono">
+                  <span class="stats-skill-name">
+                    <span>{skill.name}</span>
+                    {#if neverActivated}
+                      <span class="stats-skill-badge">
+                        {t(
+                          'statistics.skills.neverUsedBadge',
+                          'Never activated',
+                        )}
+                      </span>
+                    {/if}
+                  </span>
+                </td>
+                <td>{@render skillOrigins(skill.origins)}</td>
+                <td>{formatInteger(skill.offered_sessions, locale)}</td>
+                <td>{formatInteger(skill.activated_sessions, locale)}</td>
+                <td>{formatUsageRate(skill.usage_rate)}</td>
+                <td>{formatDateTime(skill.first_activated, locale)}</td>
+                <td>{formatDateTime(skill.last_activated, locale)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+    </div>
+
+    <div class="stats-columns">
+      {@render agentCountTable(
+        t('statistics.skills.byAgent', 'Activations per agent'),
+        skillActivationsByAgent,
+      )}
+    </div>
+  </div>
+{/snippet}
+
 {#snippet limitWindow(window)}
   {@const percent = clampUsagePercent(window.used_percent)}
   {@const severity = usageSeverity(window.used_percent)}
@@ -1451,6 +1575,45 @@
     color: var(--accent);
     border: 1px solid var(--accent);
     border-radius: 10px;
+    padding: 1px 6px;
+  }
+  /* Zero-activation skills are the delete/improve candidates — highlight the
+     whole row with a warm amber tint + left rule so they read as actionable at
+     a glance, not as errors (red is reserved for failure). */
+  .stats-skill-row--never td {
+    background: rgba(245, 158, 11, 0.06);
+  }
+  .stats-skill-row--never td:first-child {
+    box-shadow: inset 2px 0 0 var(--amber);
+  }
+  .stats-skill-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .stats-skill-badge {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--amber);
+    border: 1px solid var(--amber);
+    border-radius: 10px;
+    padding: 1px 6px;
+  }
+  .stats-origins {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .stats-origin {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-med);
+    background: var(--surface-3);
+    border-radius: var(--r-sm);
     padding: 1px 6px;
   }
   .stats-bars {

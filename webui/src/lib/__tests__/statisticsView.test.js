@@ -15,8 +15,11 @@ import {
   formatResetAt,
   formatShare,
   formatTokens,
+  formatUsageRate,
   groupModelsByProvider,
+  parseOrigin,
   rollupDaily,
+  rollupSkillActivationsByAgent,
   sparklinePoints,
   tokenSplit,
   topN,
@@ -24,12 +27,13 @@ import {
 } from '../statisticsView.js';
 
 describe('statisticsView formatting', () => {
-  it('exposes the five sub-views and three granularities', () => {
+  it('exposes the six sub-views (skills between tools and limits) and three granularities', () => {
     expect(STATISTICS_SUB_VIEWS).toEqual([
       'overview',
       'usage',
       'runs',
       'tools',
+      'skills',
       'limits',
     ]);
     expect(DAILY_GRANULARITIES).toEqual(['day', 'week', 'month']);
@@ -277,5 +281,101 @@ describe('agentDisplay (project-aware agent rendering)', () => {
     expect(agentDisplay('')).toEqual({ name: '', projectId: null });
     expect(agentDisplay(null)).toEqual({ name: '', projectId: null });
     expect(agentDisplay('a@b@c')).toEqual({ name: 'a@b@c', projectId: null });
+  });
+});
+
+describe('parseOrigin (skill-usage origin scope/detail)', () => {
+  it('returns a bare scope with null detail for scope-only tokens', () => {
+    expect(parseOrigin('bundled')).toEqual({ scope: 'bundled', detail: null });
+    expect(parseOrigin('global')).toEqual({ scope: 'global', detail: null });
+  });
+
+  it('splits scoped tokens into scope + verbatim detail', () => {
+    expect(parseOrigin('agent:assistant')).toEqual({
+      scope: 'agent',
+      detail: 'assistant',
+    });
+    expect(parseOrigin('project:vBot')).toEqual({
+      scope: 'project',
+      detail: 'vBot',
+    });
+  });
+
+  it('keeps only the first colon as the separator (project names may contain colons)', () => {
+    expect(parseOrigin('project:a:b')).toEqual({
+      scope: 'project',
+      detail: 'a:b',
+    });
+  });
+
+  it('treats an unknown scope or empty detail as a bare token', () => {
+    expect(parseOrigin('mystery:x')).toEqual({
+      scope: 'mystery:x',
+      detail: null,
+    });
+    expect(parseOrigin('agent:')).toEqual({ scope: 'agent:', detail: null });
+  });
+
+  it('yields an empty scope for an empty/non-string value', () => {
+    expect(parseOrigin('')).toEqual({ scope: '', detail: null });
+    expect(parseOrigin(null)).toEqual({ scope: '', detail: null });
+    expect(parseOrigin(42)).toEqual({ scope: '', detail: null });
+  });
+});
+
+describe('formatUsageRate (skill activation rate)', () => {
+  it('renders a whole-percent rate', () => {
+    expect(formatUsageRate(0.5)).toBe('50%');
+    expect(formatUsageRate(0.125)).toBe('13%');
+    expect(formatUsageRate(1)).toBe('100%');
+    expect(formatUsageRate(0)).toBe('0%');
+  });
+
+  it('renders an em dash when the rate is null (no offered sessions)', () => {
+    // usage_rate is null when offered_sessions == 0 — never NaN or a misleading 0%.
+    expect(formatUsageRate(null)).toBe('—');
+    expect(formatUsageRate(undefined)).toBe('—');
+    expect(formatUsageRate(Number.NaN)).toBe('—');
+  });
+});
+
+describe('rollupSkillActivationsByAgent', () => {
+  it('sums an agent activations across every skill, sorted count desc then key asc', () => {
+    const result = rollupSkillActivationsByAgent([
+      { name: 'deploy', by_agent: [{ key: 'main', count: 2 }] },
+      {
+        name: 'review',
+        by_agent: [
+          { key: 'main', count: 1 },
+          { key: 'builder@vbot', count: 5 },
+        ],
+      },
+    ]);
+    expect(result).toEqual([
+      { key: 'builder@vbot', count: 5 },
+      { key: 'main', count: 3 },
+    ]);
+  });
+
+  it('breaks count ties by ascending key for a stable order', () => {
+    const result = rollupSkillActivationsByAgent([
+      { name: 's', by_agent: [{ key: 'zeta', count: 1 }] },
+      { name: 't', by_agent: [{ key: 'alpha', count: 1 }] },
+    ]);
+    expect(result).toEqual([
+      { key: 'alpha', count: 1 },
+      { key: 'zeta', count: 1 },
+    ]);
+  });
+
+  it('ignores missing / malformed by_agent lists and empty keys', () => {
+    expect(rollupSkillActivationsByAgent(null)).toEqual([]);
+    expect(
+      rollupSkillActivationsByAgent([
+        { name: 'a' },
+        { name: 'b', by_agent: null },
+        { name: 'c', by_agent: [{ key: '', count: 9 }] },
+      ]),
+    ).toEqual([]);
   });
 });

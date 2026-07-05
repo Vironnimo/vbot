@@ -11,6 +11,7 @@ export const STATISTICS_SUB_VIEWS = Object.freeze([
   'usage',
   'runs',
   'tools',
+  'skills',
   'limits',
 ]);
 
@@ -324,6 +325,80 @@ export function barFractions(values) {
   const numeric = values.map(toFiniteNumber);
   const max = Math.max(...numeric, 0);
   return numeric.map((value) => barFraction(value, max));
+}
+
+// Origin scopes that carry a detail after a colon (`agent:<id>`,
+// `project:<name>`). `bundled` / `global` are bare scope tokens with no detail.
+const SCOPED_ORIGIN_PREFIXES = Object.freeze(['agent', 'project']);
+
+// Split a skill-usage origin string into `{ scope, detail }` for localized
+// rendering. The report emits origins as short tokens: `bundled`, `global`,
+// `agent:<id>`, `project:<name>`. `agent`/`project` carry a detail after the
+// first colon (a project name may itself contain colons, so only the first is
+// the separator); `bundled`/`global` (and any unknown/empty token) yield a null
+// detail. The component maps `scope` to a localized word and shows `detail`
+// verbatim (an agent id / project name), keeping this layer pure and testable.
+export function parseOrigin(origin) {
+  const raw = typeof origin === 'string' ? origin.trim() : '';
+  if (!raw) {
+    return { scope: '', detail: null };
+  }
+  const separatorIndex = raw.indexOf(':');
+  if (separatorIndex === -1) {
+    return { scope: raw, detail: null };
+  }
+  const scope = raw.slice(0, separatorIndex);
+  const detail = raw.slice(separatorIndex + 1);
+  if (!SCOPED_ORIGIN_PREFIXES.includes(scope) || detail.length === 0) {
+    return { scope: raw, detail: null };
+  }
+  return { scope, detail };
+}
+
+// Format a skill's usage rate (activated / offered, a 0–1 ratio) for display.
+// The report sets `usage_rate` to null when `offered_sessions` is 0 (no
+// opportunity to activate); that renders as an em dash, never `NaN` or a
+// misleading `0%`. A present ratio renders as a whole percentage — a skill's
+// activation rate needs no sub-percent precision to be read as a delete signal.
+export function formatUsageRate(rate) {
+  if (rate == null || !Number.isFinite(rate)) {
+    return EM_DASH;
+  }
+  return formatPercent(rate, { fractionDigits: 0 });
+}
+
+// Roll the per-skill `by_agent` activation lists up into one agent→count list
+// for the panel-wide "activations per agent" breakdown, summing an agent's
+// activations across every skill. Keys are agent display keys (`agent@projekt`
+// for project agents) already carried by the report. Returns entries sorted by
+// count descending, then key ascending for a stable order among ties.
+export function rollupSkillActivationsByAgent(skills) {
+  const rows = Array.isArray(skills) ? skills : [];
+  const byAgent = new Map();
+  for (const skill of rows) {
+    const entries = Array.isArray(skill?.by_agent) ? skill.by_agent : [];
+    for (const entry of entries) {
+      const key = typeof entry?.key === 'string' ? entry.key : '';
+      if (!key) {
+        continue;
+      }
+      byAgent.set(
+        key,
+        toFiniteNumber(byAgent.get(key)) + toFiniteNumber(entry?.count),
+      );
+    }
+  }
+  return [...byAgent.entries()]
+    .map(([key, count]) => ({ key, count }))
+    .sort((left, right) =>
+      right.count !== left.count
+        ? right.count - left.count
+        : left.key < right.key
+          ? -1
+          : left.key > right.key
+            ? 1
+            : 0,
+    );
 }
 
 // Donut segments for the run-status ring: each segment carries its fraction of
