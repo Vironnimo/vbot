@@ -155,7 +155,7 @@ PROJECT_FIELDS = frozenset(
         "default_temperature",
         "default_thinking_effort",
         "display_name",
-        "pins",
+        "overrides",
         "project_id",
         "skills_bundled_enabled",
         "skills_global_enabled",
@@ -163,9 +163,9 @@ PROJECT_FIELDS = frozenset(
         "updated_at",
     }
 )
-# The optional fields a per-agent Pin object may carry. Kept in sync with
-# ``core.projects.projects.PIN_FIELDS`` (which owns the runtime shape).
-PIN_FIELDS = frozenset({"model", "temperature", "thinking_effort"})
+# The optional fields a per-agent override object may carry. Kept in sync with
+# ``core.projects.projects.OVERRIDE_FIELDS`` (which owns the runtime shape).
+OVERRIDE_FIELDS = frozenset({"model", "temperature", "thinking_effort"})
 REQUIRED_PROJECT_FIELDS = frozenset(
     {"created_at", "cwd", "display_name", "project_id", "updated_at"}
 )
@@ -550,12 +550,12 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     _validate_optional_string_list(
         diagnostics, "$.skills_project_disabled", data.get("skills_project_disabled")
     )
-    # Per-agent Pins (vBot-owned, data-dir only). Optional — an old project.json
-    # omits it and defaults to {} at load. Each value is a pin object with optional
-    # model/temperature/thinking_effort. The model value is NOT checked against the
-    # catalog here (that is the /model set-time gate), exactly like default_model;
-    # temperature/thinking_effort reuse the canonical agent field rules.
-    _validate_pins(diagnostics, "$.pins", data.get("pins"))
+    # Per-agent overrides (vBot-owned, data-dir only). Optional — an old project.json
+    # omits it and defaults to {} at load. Each value is an override object with
+    # optional model/temperature/thinking_effort. The model value is NOT checked
+    # against the catalog here (that is the /model set-time gate), exactly like
+    # default_model; temperature/thinking_effort reuse the canonical agent field rules.
+    _validate_overrides(diagnostics, "$.overrides", data.get("overrides"))
     _validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
     _validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
     return diagnostics
@@ -1110,51 +1110,52 @@ def _validate_optional_string_list(
             _error(diagnostics, f"{path}[{index}]", "must be a non-empty string")
 
 
-def _validate_pins(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
-    """Validate the optional per-agent Pin map, tolerating absence.
+def _validate_overrides(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    """Validate the optional per-agent override map, tolerating absence.
 
     ``None`` (absent field or explicit ``null``) is accepted as "use the default
     empty map". Any present value must be an object keyed by non-empty ``agent_id``
-    strings, each value a pin object with only the fields in :data:`PIN_FIELDS`, at
-    least one set. ``model`` must be a non-empty string (shape only — configured-ness
-    is the ``/model`` set-time gate); ``temperature`` and ``thinking_effort`` reuse
-    the canonical agent field validators (so ranges/levels can never drift), with
-    ``thinking_effort = ""`` allowed as the explicit "provider default".
+    strings, each value an override object with only the fields in
+    :data:`OVERRIDE_FIELDS`, at least one set. ``model`` must be a non-empty string
+    (shape only — configured-ness is the ``/model`` set-time gate); ``temperature`` and
+    ``thinking_effort`` reuse the canonical agent field validators (so ranges/levels
+    can never drift), with ``thinking_effort = ""`` allowed as the explicit
+    "provider default".
     """
     if value is None:
         return
     if not isinstance(value, Mapping):
         _error(diagnostics, path, "must be an object")
         return
-    for agent_id, pin in value.items():
+    for agent_id, override in value.items():
         if not isinstance(agent_id, str) or not agent_id.strip():
             _error(diagnostics, path, "keys must be non-empty agent id strings")
             continue
-        _validate_one_pin(diagnostics, _child_path(path, agent_id), pin)
+        _validate_one_override(diagnostics, _child_path(path, agent_id), override)
 
 
-def _validate_one_pin(diagnostics: list[JsonDiagnostic], path: str, pin: Any) -> None:
-    if not isinstance(pin, Mapping):
+def _validate_one_override(diagnostics: list[JsonDiagnostic], path: str, override: Any) -> None:
+    if not isinstance(override, Mapping):
         _error(diagnostics, path, "must be an object")
         return
-    unknown = sorted(set(pin) - PIN_FIELDS)
+    unknown = sorted(set(override) - OVERRIDE_FIELDS)
     for field in unknown:
-        _error(diagnostics, _child_path(path, field), f"unknown pin field: {field}")
-    if not pin:
+        _error(diagnostics, _child_path(path, field), f"unknown override field: {field}")
+    if not override:
         _error(diagnostics, path, "must set at least one field")
-    if "model" in pin:
-        model = pin["model"]
+    if "model" in override:
+        model = override["model"]
         if not isinstance(model, str) or not model.strip():
             _error(diagnostics, _child_path(path, "model"), "must be a non-empty string")
-    if "temperature" in pin:
+    if "temperature" in override:
         _validate_temperature_value(
-            diagnostics, _child_path(path, "temperature"), pin["temperature"], allow_none=False
+            diagnostics, _child_path(path, "temperature"), override["temperature"], allow_none=False
         )
-    if "thinking_effort" in pin:
+    if "thinking_effort" in override:
         _validate_thinking_effort_value(
             diagnostics,
             _child_path(path, "thinking_effort"),
-            pin["thinking_effort"],
+            override["thinking_effort"],
             allow_none=False,
         )
 

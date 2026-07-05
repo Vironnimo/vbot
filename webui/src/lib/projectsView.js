@@ -374,8 +374,8 @@ export function normalizeProjects(projects) {
   return raw.map((project) => normalizeProject(project));
 }
 
-// The three per-agent pinnable / effective run fields, in display order. Each is
-// resolved through the config-agent chain (pin → agent file → project default →
+// The three per-agent overridable / effective run fields, in display order. Each is
+// resolved through the config-agent chain (override → agent file → project default →
 // global default) and reported by the scan as `effective[field] = {value, source}`.
 export const TEAM_EFFECTIVE_FIELDS = Object.freeze([
   'model',
@@ -384,7 +384,7 @@ export const TEAM_EFFECTIVE_FIELDS = Object.freeze([
 ]);
 
 // The winning-source discriminants the scan reports on `effective[field].source`.
-export const EFFECTIVE_SOURCE_PIN = 'pin';
+export const EFFECTIVE_SOURCE_OVERRIDE = 'override';
 export const EFFECTIVE_SOURCE_AGENT = 'agent';
 export const EFFECTIVE_SOURCE_PROJECT_DEFAULT = 'project_default';
 export const EFFECTIVE_SOURCE_GLOBAL_DEFAULT = 'global_default';
@@ -392,8 +392,8 @@ export const EFFECTIVE_SOURCE_GLOBAL_DEFAULT = 'global_default';
 // Project the scan's team into a stable, display-ready list. The repo is the
 // source of truth (no copy drift) — this only shapes what the view renders. Each
 // member carries its raw repo-declared values (for reference), the per-agent
-// `pins` object (or null), and the `effective` map of `{value, source}` per run
-// field so the row can show the resolved value with provenance.
+// `overrides` object (or null), and the `effective` map of `{value, source}` per
+// run field so the row can show the resolved value with provenance.
 //
 // NOTE: `agent_id` and `display_name` are consumed by ChatView's project team bar
 // (the second consumer of this helper) — do not drop or rename them.
@@ -410,10 +410,10 @@ export function projectTeam(scan) {
     source_format: asText(member?.source_format),
     source_path: asText(member?.source_path),
     denied_tools: normalizeStringList(member?.denied_tools),
-    // The per-agent pin object (any subset of model/temperature/thinking_effort),
-    // or null when the agent has no pin. Read shape-only here — the row derives
-    // whether a field is pinned from `effective[field].source === 'pin'`.
-    pins: normalizePins(member?.pins),
+    // The per-agent override object (any subset of model/temperature/thinking_effort),
+    // or null when the agent has no override. Read shape-only here — the row derives
+    // whether a field is overridden from `effective[field].source === 'override'`.
+    overrides: normalizeOverrides(member?.overrides),
     // The provenance-aware resolved values, one entry per run field:
     // `{ value, source }`. A null value means "not configured" (model) or
     // "provider default" (temperature/thinking); a null source means no tier won.
@@ -421,17 +421,17 @@ export function projectTeam(scan) {
   }));
 }
 
-// Normalize the member's `pins` object into a plain map of the known fields, or
+// Normalize the member's `overrides` object into a plain map of the known fields, or
 // null when absent/empty. The value shapes are field-specific and passed through
 // verbatim (model string, temperature number, thinking-effort string).
-function normalizePins(pins) {
-  if (!isPlainObject(pins)) {
+function normalizeOverrides(overrides) {
+  if (!isPlainObject(overrides)) {
     return null;
   }
   const normalized = {};
   for (const field of TEAM_EFFECTIVE_FIELDS) {
-    if (Object.hasOwn(pins, field)) {
-      normalized[field] = pins[field];
+    if (Object.hasOwn(overrides, field)) {
+      normalized[field] = overrides[field];
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : null;
@@ -454,31 +454,31 @@ function normalizeEffective(effective) {
   return normalized;
 }
 
-// Whether a team member currently has a pin for the given field. Derived from
-// `effective[field].source === 'pin'`, the single truth for "pinned" that also
-// drives the Clear-pin control's visibility.
-export function memberFieldIsPinned(member, field) {
-  return member?.effective?.[field]?.source === EFFECTIVE_SOURCE_PIN;
+// Whether a team member currently has an override for the given field. Derived from
+// `effective[field].source === 'override'`, the single truth for "overridden" that
+// also drives the Clear-override control's visibility.
+export function memberFieldIsOverridden(member, field) {
+  return member?.effective?.[field]?.source === EFFECTIVE_SOURCE_OVERRIDE;
 }
 
-// Seed the per-field pin draft (the values the pin controls edit) for one team
-// member. The model draft is the member's pinned model (or the effective/repo
-// model as a starting suggestion), the temperature draft a text box seeded from
-// the pinned/effective number, the thinking-effort draft the pinned/effective
-// level. A blank draft means "nothing typed yet".
-export function seedTeamPinDraft(member) {
-  const pins = isPlainObject(member?.pins) ? member.pins : {};
+// Seed the per-field override draft (the values the override controls edit) for one
+// team member. The model draft is the member's overridden model (or the
+// effective/repo model as a starting suggestion), the temperature draft a text box
+// seeded from the overridden/effective number, the thinking-effort draft the
+// overridden/effective level. A blank draft means "nothing typed yet".
+export function seedTeamOverrideDraft(member) {
+  const overrides = isPlainObject(member?.overrides) ? member.overrides : {};
   const effective = member?.effective ?? {};
 
-  const modelSeed = hasText(pins.model)
-    ? String(pins.model)
+  const modelSeed = hasText(overrides.model)
+    ? String(overrides.model)
     : effectiveTextValue(effective.model);
-  const temperatureSeed = hasNumber(pins.temperature)
-    ? String(pins.temperature)
+  const temperatureSeed = hasNumber(overrides.temperature)
+    ? String(overrides.temperature)
     : effectiveTextValue(effective.temperature);
   const thinkingSeed =
-    typeof pins.thinking_effort === 'string'
-      ? pins.thinking_effort
+    typeof overrides.thinking_effort === 'string'
+      ? overrides.thinking_effort
       : effectiveTextValue(effective.thinking_effort);
 
   return {
@@ -488,10 +488,10 @@ export function seedTeamPinDraft(member) {
   };
 }
 
-// The temperature pin value for the payload: a comma-tolerant number, or null
-// when the box is empty/non-numeric (the Set button is disabled on null — a pin
-// must carry a value; clearing is a separate action).
-export function normalizePinTemperature(value) {
+// The temperature override value for the payload: a comma-tolerant number, or null
+// when the box is empty/non-numeric (the Set button is disabled on null — an
+// override must carry a value; clearing is a separate action).
+export function normalizeOverrideTemperature(value) {
   return normalizeProjectTemperature(value);
 }
 

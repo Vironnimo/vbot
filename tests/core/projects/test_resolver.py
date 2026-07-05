@@ -448,13 +448,13 @@ def test_unconfigured_agent_model_falls_through_to_default(
 # ---------------------------------------------------------------------------
 
 
-def test_model_pin_wins_over_repo_model(
+def test_model_override_wins_over_repo_model(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # The repo declares gpt-5.2; a vBot-owned pin sets gpt-mini → the pin wins.
+    # The repo declares gpt-5.2; a vBot-owned override sets gpt-mini → the override wins.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
+    projects.set_override("vbot", "builder", "model", "openai/gpt-mini")
     resolver = _resolver(agents, projects, _openai_configured())
 
     runtime_agent = resolver.resolve_agent("vbot", "builder")
@@ -462,28 +462,28 @@ def test_model_pin_wins_over_repo_model(
     assert runtime_agent.model == "openai/gpt-mini"
 
 
-def test_model_pin_applies_only_to_its_agent(
+def test_model_override_applies_only_to_its_agent(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # A pin keyed on builder must not bleed onto another agent.
+    # An override keyed on builder must not bleed onto another agent.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _write_agent(repo, "planner.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
+    projects.set_override("vbot", "builder", "model", "openai/gpt-mini")
     resolver = _resolver(agents, projects, _openai_configured())
 
     assert resolver.resolve_agent("vbot", "builder").model == "openai/gpt-mini"
     assert resolver.resolve_agent("vbot", "planner").model == "openai/gpt-5.2"
 
 
-def test_unconfigured_model_pin_degrades_to_repo_model(
+def test_unconfigured_model_override_degrades_to_repo_model(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # A pin that is not configured in this instance (e.g. credential removed)
+    # An override that is not configured in this instance (e.g. credential removed)
     # falls through the same is_configured gate to the repo-declared model.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    projects.set_pin("vbot", "builder", "model", "openai/ghost-model")
+    projects.set_override("vbot", "builder", "model", "openai/ghost-model")
     resolver = _resolver(agents, projects, _openai_configured())
 
     runtime_agent = resolver.resolve_agent("vbot", "builder")
@@ -875,17 +875,17 @@ def test_resolve_prompt_project_none_for_empty_workspace(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_effective_config_model_pin_wins(
+def test_effective_config_model_override_wins(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
+    projects.set_override("vbot", "builder", "model", "openai/gpt-mini")
     resolver = _resolver(agents, projects, _openai_configured())
 
     result = resolver.effective_config("vbot", "builder")
 
-    assert result["model"] == {"value": "openai/gpt-mini", "source": "pin"}
+    assert result["model"] == {"value": "openai/gpt-mini", "source": "override"}
 
 
 def test_effective_config_model_agent_wins(
@@ -938,14 +938,14 @@ def test_effective_config_model_fell_through_returns_none_without_raising(
     assert result["model"] == {"value": None, "source": None}
 
 
-def test_effective_config_unconfigured_model_pin_skipped_falls_to_agent(
+def test_effective_config_unconfigured_model_override_skipped_falls_to_agent(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # An unconfigured pinned model is skipped by the is_configured gate for BOTH
+    # An unconfigured overridden model is skipped by the is_configured gate for BOTH
     # resolve_agent and effective_config — the chain falls to the repo-declared model.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    projects.set_pin("vbot", "builder", "model", "openai/ghost-model")
+    projects.set_override("vbot", "builder", "model", "openai/ghost-model")
     resolver = _resolver(agents, projects, _openai_configured())
 
     assert resolver.resolve_agent("vbot", "builder").model == "openai/gpt-5.2"
@@ -955,18 +955,18 @@ def test_effective_config_unconfigured_model_pin_skipped_falls_to_agent(
     }
 
 
-def test_effective_config_temperature_pin_zero_wins(
+def test_effective_config_temperature_override_zero_wins(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # A temperature pin of 0.0 (a real value) is the top tier and wins.
+    # A temperature override of 0.0 (a real value) is the top tier and wins.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=0.7)
     _project(projects, repo, default_temperature=0.2)
-    projects.set_pin("vbot", "builder", "temperature", 0.0)
+    projects.set_override("vbot", "builder", "temperature", 0.0)
     resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
 
     result = resolver.effective_config("vbot", "builder")
 
-    assert result["temperature"] == {"value": 0.0, "source": "pin"}
+    assert result["temperature"] == {"value": 0.0, "source": "override"}
 
 
 def test_effective_config_temperature_agent_wins(
@@ -1005,18 +1005,18 @@ def test_effective_config_temperature_global_default_wins(
     assert result["temperature"] == {"value": 0.9, "source": "global_default"}
 
 
-def test_effective_config_thinking_pin_empty_string_wins(
+def test_effective_config_thinking_override_empty_string_wins(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # A thinking_effort pin of "" (force provider default, a real value) wins.
+    # A thinking_effort override of "" (force provider default, a real value) wins.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2", reasoning_effort="high")
     _project(projects, repo, default_thinking_effort="low")
-    projects.set_pin("vbot", "builder", "thinking_effort", "")
+    projects.set_override("vbot", "builder", "thinking_effort", "")
     resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
 
     result = resolver.effective_config("vbot", "builder")
 
-    assert result["thinking_effort"] == {"value": "", "source": "pin"}
+    assert result["thinking_effort"] == {"value": "", "source": "override"}
 
 
 def test_effective_config_thinking_agent_wins(
@@ -1082,7 +1082,7 @@ def test_effective_config_for_member_matches_effective_config(
     # so a team listing never re-scans yet reports the identical result.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=0.7)
     project = _project(projects, repo)
-    projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
+    projects.set_override("vbot", "builder", "model", "openai/gpt-mini")
     resolver = _resolver(agents, projects, _openai_configured())
     result = resolver.scan_project_report(project)
     member = next(m for m in result.team if m.agent_id == "builder")
@@ -1090,7 +1090,7 @@ def test_effective_config_for_member_matches_effective_config(
     from_member = resolver.effective_config_for_member(projects.get("vbot"), member)
 
     assert from_member == resolver.effective_config("vbot", "builder")
-    assert from_member["model"] == {"value": "openai/gpt-mini", "source": "pin"}
+    assert from_member["model"] == {"value": "openai/gpt-mini", "source": "override"}
 
 
 # ---------------------------------------------------------------------------

@@ -42,10 +42,10 @@ from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.project_methods import (
     _add_project,
-    _clear_pin,
+    _clear_override,
     _list_projects,
     _remove_project,
-    _set_pin,
+    _set_override,
     _set_project,
     _show_project,
 )
@@ -153,9 +153,9 @@ def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNames
         projects=projects,
         agent_resolver=resolver,
         cron_service=cron_service,
-        # ``project.set_pin``'s model gate reads ``runtime.models`` only for a pinned
+        # ``project.set_override``'s model gate reads ``runtime.models`` only for a pinned
         # ``::connection`` suffix (never in these tests), but expose it so a plain
-        # model pin never trips an AttributeError.
+        # model override never trips an AttributeError.
         models=_FakeModels({("openai", "gpt-5.2"), ("openai", "gpt-mini")}),
     )
     return SimpleNamespace(runtime=runtime, chat_runs=chat_runs)
@@ -527,11 +527,11 @@ def test_team_member_reports_denied_tools(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Per-agent Pins: team response fields (pins + effective) + set/clear handlers.
+# Per-agent Overrides: team response fields (overrides + effective) + set/clear handlers.
 # ---------------------------------------------------------------------------
 
 
-def test_team_member_reports_null_pins_by_default(tmp_path: Path) -> None:
+def test_team_member_reports_null_overrides_by_default(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
@@ -539,72 +539,72 @@ def test_team_member_reports_null_pins_by_default(tmp_path: Path) -> None:
     result = _show_project(state, {"project_id": "vbot"})
 
     member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
-    assert member["pins"] is None
+    assert member["overrides"] is None
     # The effective block reports the model resolved from the repo (agent tier).
     assert member["effective"]["model"] == {"value": "openai/gpt-5.2", "source": "agent"}
 
 
-def test_team_member_reports_pins_value_and_effective(tmp_path: Path) -> None:
+def test_team_member_reports_overrides_value_and_effective(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-    state.runtime.projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
+    state.runtime.projects.set_override("vbot", "builder", "model", "openai/gpt-mini")
 
     result = _show_project(state, {"project_id": "vbot"})
 
     member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
-    assert member["pins"] == {"model": "openai/gpt-mini"}
-    # The pin is the winning tier of the effective model chain.
-    assert member["effective"]["model"] == {"value": "openai/gpt-mini", "source": "pin"}
+    assert member["overrides"] == {"model": "openai/gpt-mini"}
+    # The override is the winning tier of the effective model chain.
+    assert member["effective"]["model"] == {"value": "openai/gpt-mini", "source": "override"}
 
 
-def test_set_pin_model_writes_pin_and_returns_scan(tmp_path: Path) -> None:
+def test_set_override_model_writes_override_and_returns_scan(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    result = _set_pin(
+    result = _set_override(
         state,
         {"project_id": "vbot", "agent_id": "builder", "field": "model", "value": "openai/gpt-mini"},
     )
 
     member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
-    assert member["pins"] == {"model": "openai/gpt-mini"}
-    assert state.runtime.projects.get("vbot").pins == {"builder": {"model": "openai/gpt-mini"}}
+    assert member["overrides"] == {"model": "openai/gpt-mini"}
+    assert state.runtime.projects.get("vbot").overrides == {"builder": {"model": "openai/gpt-mini"}}
 
 
-def test_set_pin_temperature_writes_pin(tmp_path: Path) -> None:
+def test_set_override_temperature_writes_override(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    _set_pin(
+    _set_override(
         state, {"project_id": "vbot", "agent_id": "builder", "field": "temperature", "value": 0.4}
     )
 
-    assert state.runtime.projects.get("vbot").pins == {"builder": {"temperature": 0.4}}
+    assert state.runtime.projects.get("vbot").overrides == {"builder": {"temperature": 0.4}}
 
 
-def test_set_pin_thinking_effort_writes_pin(tmp_path: Path) -> None:
+def test_set_override_thinking_effort_writes_override(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    _set_pin(
+    _set_override(
         state,
         {"project_id": "vbot", "agent_id": "builder", "field": "thinking_effort", "value": "high"},
     )
 
-    assert state.runtime.projects.get("vbot").pins == {"builder": {"thinking_effort": "high"}}
+    assert state.runtime.projects.get("vbot").overrides == {"builder": {"thinking_effort": "high"}}
 
 
-def test_set_pin_rejects_unknown_field(tmp_path: Path) -> None:
+def test_set_override_rejects_unknown_field(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
     with pytest.raises(RpcError) as exc_info:
-        _set_pin(
+        _set_override(
             state, {"project_id": "vbot", "agent_id": "builder", "field": "nope", "value": "x"}
         )
 
@@ -612,13 +612,13 @@ def test_set_pin_rejects_unknown_field(tmp_path: Path) -> None:
     assert "params.field must be one of" in exc_info.value.message
 
 
-def test_set_pin_rejects_bad_temperature(tmp_path: Path) -> None:
+def test_set_override_rejects_bad_temperature(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
     with pytest.raises(RpcError) as exc_info:
-        _set_pin(
+        _set_override(
             state,
             {"project_id": "vbot", "agent_id": "builder", "field": "temperature", "value": 3.0},
         )
@@ -626,13 +626,13 @@ def test_set_pin_rejects_bad_temperature(tmp_path: Path) -> None:
     assert exc_info.value.code == "invalid_request"
 
 
-def test_set_pin_rejects_unusable_model(tmp_path: Path) -> None:
+def test_set_override_rejects_unusable_model(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
     with pytest.raises(RpcError) as exc_info:
-        _set_pin(
+        _set_override(
             state,
             {
                 "project_id": "vbot",
@@ -645,13 +645,13 @@ def test_set_pin_rejects_unusable_model(tmp_path: Path) -> None:
     assert exc_info.value.code == "invalid_request"
 
 
-def test_set_pin_rejects_unsupported_field_param(tmp_path: Path) -> None:
+def test_set_override_rejects_unsupported_field_param(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    with pytest.raises(RpcError, match="unsupported project.set_pin fields: bogus"):
-        _set_pin(
+    with pytest.raises(RpcError, match="unsupported project.set_override fields: bogus"):
+        _set_override(
             state,
             {
                 "project_id": "vbot",
@@ -663,56 +663,56 @@ def test_set_pin_rejects_unsupported_field_param(tmp_path: Path) -> None:
         )
 
 
-def test_clear_pin_removes_field_and_returns_scan(tmp_path: Path) -> None:
+def test_clear_override_removes_field_and_returns_scan(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-    state.runtime.projects.set_pin("vbot", "builder", "model", "openai/gpt-mini")
+    state.runtime.projects.set_override("vbot", "builder", "model", "openai/gpt-mini")
 
-    result = _clear_pin(state, {"project_id": "vbot", "agent_id": "builder", "field": "model"})
+    result = _clear_override(state, {"project_id": "vbot", "agent_id": "builder", "field": "model"})
 
     member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
-    assert member["pins"] is None
-    assert state.runtime.projects.get("vbot").pins == {}
+    assert member["overrides"] is None
+    assert state.runtime.projects.get("vbot").overrides == {}
 
 
-def test_clear_pin_absent_entry_is_noop(tmp_path: Path) -> None:
+def test_clear_override_absent_entry_is_noop(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    result = _clear_pin(state, {"project_id": "vbot", "agent_id": "builder", "field": "model"})
+    result = _clear_override(state, {"project_id": "vbot", "agent_id": "builder", "field": "model"})
 
     assert result["project"]["project_id"] == "vbot"
 
 
-def test_clear_pin_rejects_unknown_field(tmp_path: Path) -> None:
+def test_clear_override_rejects_unknown_field(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
     with pytest.raises(RpcError) as exc_info:
-        _clear_pin(state, {"project_id": "vbot", "agent_id": "builder", "field": "nope"})
+        _clear_override(state, {"project_id": "vbot", "agent_id": "builder", "field": "nope"})
 
     assert exc_info.value.code == "invalid_request"
 
 
-def test_clear_pin_rejects_unsupported_field_param(tmp_path: Path) -> None:
+def test_clear_override_rejects_unsupported_field_param(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    with pytest.raises(RpcError, match="unsupported project.clear_pin fields: bogus"):
-        _clear_pin(
+    with pytest.raises(RpcError, match="unsupported project.clear_override fields: bogus"):
+        _clear_override(
             state, {"project_id": "vbot", "agent_id": "builder", "field": "model", "bogus": 1}
         )
 
 
-def test_clear_pin_unknown_project_raises(tmp_path: Path) -> None:
+def test_clear_override_unknown_project_raises(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
 
     with pytest.raises(RpcError) as exc_info:
-        _clear_pin(state, {"project_id": "missing", "agent_id": "builder", "field": "model"})
+        _clear_override(state, {"project_id": "missing", "agent_id": "builder", "field": "model"})
 
     assert exc_info.value.code == "project_not_found"
 
@@ -988,8 +988,8 @@ def test_project_methods_are_registered() -> None:
         "project.list",
         "project.show",
         "project.set",
-        "project.set_pin",
-        "project.clear_pin",
+        "project.set_override",
+        "project.clear_override",
         "project.rm",
     ):
         assert method in handlers

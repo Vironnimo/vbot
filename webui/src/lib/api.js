@@ -517,13 +517,13 @@ export function setProject(projectId, changes = {}, options = {}) {
   return rpc('project.set', { ...changes, project_id: projectId }, options);
 }
 
-export function setPin(projectId, agentId, field, value, options = {}) {
+export function setOverride(projectId, agentId, field, value, options = {}) {
   if (!isNonEmptyString(projectId)) {
     throw new ApiClientError(
       RPC_ERROR_INVALID_CLIENT_REQUEST,
       'Project id must be a non-empty string',
       {
-        method: 'project.set_pin',
+        method: 'project.set_override',
       },
     );
   }
@@ -533,7 +533,7 @@ export function setPin(projectId, agentId, field, value, options = {}) {
       RPC_ERROR_INVALID_CLIENT_REQUEST,
       'Agent id must be a non-empty string',
       {
-        method: 'project.set_pin',
+        method: 'project.set_override',
       },
     );
   }
@@ -541,31 +541,31 @@ export function setPin(projectId, agentId, field, value, options = {}) {
   if (!isNonEmptyString(field)) {
     throw new ApiClientError(
       RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Pin field must be a non-empty string',
+      'Override field must be a non-empty string',
       {
-        method: 'project.set_pin',
+        method: 'project.set_override',
       },
     );
   }
 
-  // A per-agent pin (model / temperature / thinking_effort) becomes the top tier
-  // of that field's resolution chain for this agent in this project. The value
+  // A per-agent override (model / temperature / thinking_effort) becomes the top
+  // tier of that field's resolution chain for this agent in this project. The value
   // shape is field-specific (a model address string, a number, an effort string);
   // the server validates it against the canonical agent rules.
   return rpc(
-    'project.set_pin',
+    'project.set_override',
     { project_id: projectId, agent_id: agentId, field, value },
     options,
   );
 }
 
-export function clearPin(projectId, agentId, field, options = {}) {
+export function clearOverride(projectId, agentId, field, options = {}) {
   if (!isNonEmptyString(projectId)) {
     throw new ApiClientError(
       RPC_ERROR_INVALID_CLIENT_REQUEST,
       'Project id must be a non-empty string',
       {
-        method: 'project.clear_pin',
+        method: 'project.clear_override',
       },
     );
   }
@@ -575,7 +575,7 @@ export function clearPin(projectId, agentId, field, options = {}) {
       RPC_ERROR_INVALID_CLIENT_REQUEST,
       'Agent id must be a non-empty string',
       {
-        method: 'project.clear_pin',
+        method: 'project.clear_override',
       },
     );
   }
@@ -583,17 +583,18 @@ export function clearPin(projectId, agentId, field, options = {}) {
   if (!isNonEmptyString(field)) {
     throw new ApiClientError(
       RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Pin field must be a non-empty string',
+      'Override field must be a non-empty string',
       {
-        method: 'project.clear_pin',
+        method: 'project.clear_override',
       },
     );
   }
 
-  // Drop one pinned field for this agent; clearing the agent's last field removes
-  // the pin entry entirely (server-side). The field falls back through its chain.
+  // Drop one overridden field for this agent; clearing the agent's last field
+  // removes the override entry entirely (server-side). The field falls back through
+  // its chain.
   return rpc(
-    'project.clear_pin',
+    'project.clear_override',
     { project_id: projectId, agent_id: agentId, field },
     options,
   );

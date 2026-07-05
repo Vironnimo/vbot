@@ -412,14 +412,14 @@ class AgentResolver:
         ``{"value": ..., "source": ...}``:
 
         - **Config agents** (``project_id`` set): fields ``model``, ``temperature``,
-          ``thinking_effort``. Sources: ``"pin"`` (the vBot override layer),
+          ``thinking_effort``. Sources: ``"override"`` (the vBot override layer),
           ``"agent"`` (the repo-declared scanned value), ``"project_default"``,
           ``"global_default"``, or ``None`` when every tier fell through. Unlike
           :meth:`resolve_agent`, a model chain that falls all the way through does
           **not** raise here — it returns ``{"value": None, "source": None}`` (an
           unknown project/agent still raises :class:`AgentResolutionError`). Each
           tier is gated by the same ``is_configured`` model check, so an unconfigured
-          pin/agent/default model falls through exactly as at run time.
+          override/agent/default model falls through exactly as at run time.
         - **Identity agents** (``project_id is None``): fields ``model``,
           ``fallback_model``, ``temperature``, ``thinking_effort``. Sources:
           ``"agent"`` (the own persisted value) or ``"global_default"``, or ``None``
@@ -488,13 +488,13 @@ class AgentResolver:
     ) -> dict[str, Any]:
         """Return the effective model + source, gated by ``is_configured`` per tier.
 
-        Same chain as :meth:`_resolve_model_or_raise` (pin → agent → project default
-        → global default) with each tier skipped when its model is not configured
-        here, but never raising: a fully-fallen-through chain reports
+        Same chain as :meth:`_resolve_model_or_raise` (override → agent → project
+        default → global default) with each tier skipped when its model is not
+        configured here, but never raising: a fully-fallen-through chain reports
         ``{"value": None, "source": None}``.
         """
         tiers = (
-            ("pin", _pinned_model(project, scanned.agent_id)),
+            ("override", _overridden_model(project, scanned.agent_id)),
             ("agent", scanned.model),
             ("project_default", project.default_model),
             ("global_default", str(global_defaults.get("model", "") or "")),
@@ -585,21 +585,21 @@ class AgentResolver:
     ) -> str:
         """Run the model chain and return the first usable model, or raise.
 
-        Chain: pin → agent model → project default → global default. The pin
-        (``project.pins[agent_id]["model"]`` — vBot-owned, data-dir only) is the
-        **top** tier, so a pinned model wins over the repo-declared one. Each
-        candidate counts only when it exists/is configured in this instance, so a
-        pinned model whose credential later vanished degrades to the repo value rather
-        than erroring (same ``is_configured`` gate as every tier). Falling all the way
-        through is a clear "cannot run" error.
+        Chain: override → agent model → project default → global default. The override
+        (``project.overrides[agent_id]["model"]`` — vBot-owned, data-dir only) is the
+        **top** tier, so an overridden model wins over the repo-declared one. Each
+        candidate counts only when it exists/is configured in this instance, so an
+        overridden model whose credential later vanished degrades to the repo value
+        rather than erroring (same ``is_configured`` gate as every tier). Falling all
+        the way through is a clear "cannot run" error.
         """
-        pinned = _pinned_model(project, scanned.agent_id)
+        overridden = _overridden_model(project, scanned.agent_id)
         global_model = global_defaults.get("model", "")
-        for candidate in (pinned, scanned.model, project.default_model, global_model):
+        for candidate in (overridden, scanned.model, project.default_model, global_model):
             if candidate and self._model_checker.is_configured(candidate):
                 return candidate
         raise AgentResolutionError(
-            f"agent '{scanned.agent_id}' has no usable model: pin {pinned!r}, "
+            f"agent '{scanned.agent_id}' has no usable model: override {overridden!r}, "
             f"declared {scanned.model!r}, project default {project.default_model!r}, "
             f"and the global default are all missing or unconfigured"
         )
@@ -711,15 +711,15 @@ def _build_config_agent(
 def _resolve_temperature(
     scanned: ScannedAgent, project: Project, global_defaults: Mapping[str, Any]
 ) -> float | None:
-    """Resolve temperature: pin → agent value → project default → global default → None.
+    """Resolve temperature: override → agent value → project default → global default → None.
 
     The first tier that carries a number wins; ``0.0`` is a real value (the
-    sampling floor) and stops the chain. A pin present (not ``None``, including
+    sampling floor) and stops the chain. An override present (not ``None``, including
     ``0.0``) is the top tier and wins. Falling through every tier yields ``None`` →
     the field is dropped at the wire and the provider default applies.
     """
     candidates = (
-        _pinned_temperature(project, scanned.agent_id),
+        _overridden_temperature(project, scanned.agent_id),
         scanned.temperature,
         project.default_temperature,
         global_defaults.get("temperature"),
@@ -733,16 +733,16 @@ def _resolve_temperature(
 def _resolve_thinking_effort(
     scanned: ScannedAgent, project: Project, global_defaults: Mapping[str, Any]
 ) -> str | None:
-    """Resolve thinking effort: pin → agent → project default → global default → None.
+    """Resolve thinking effort: override → agent → project default → global default → None.
 
     The first tier that is not ``None`` wins. ``""`` is a real value meaning
-    "provider default" and stops the chain, so a pin (or project
+    "provider default" and stops the chain, so an override (or project
     ``default_thinking_effort``) of ``""`` blocks the lower tiers (forces the
-    provider default) while ``None`` lets them through. A pin present (not ``None``,
-    including ``""``) is the top tier. Falling through every tier yields ``None``.
+    provider default) while ``None`` lets them through. An override present (not
+    ``None``, including ``""``) is the top tier. Falling through every tier yields ``None``.
     """
     candidates = (
-        _pinned_thinking_effort(project, scanned.agent_id),
+        _overridden_thinking_effort(project, scanned.agent_id),
         scanned.thinking_effort,
         project.default_thinking_effort,
         global_defaults.get("thinking_effort"),
@@ -758,11 +758,11 @@ def _config_temperature_source(
 ) -> dict[str, Any]:
     """Return the effective temperature + source for a config agent.
 
-    Same chain as :func:`_resolve_temperature` (pin → agent → project default →
+    Same chain as :func:`_resolve_temperature` (override → agent → project default →
     global default) but reporting which tier won; ``0.0`` is a real stopping value.
     """
     tiers = (
-        ("pin", _pinned_temperature(project, scanned.agent_id)),
+        ("override", _overridden_temperature(project, scanned.agent_id)),
         ("agent", scanned.temperature),
         ("project_default", project.default_temperature),
         ("global_default", _global_default_temperature(global_defaults)),
@@ -778,11 +778,11 @@ def _config_thinking_effort_source(
 ) -> dict[str, Any]:
     """Return the effective thinking effort + source for a config agent.
 
-    Same chain as :func:`_resolve_thinking_effort` (pin → agent → project default →
+    Same chain as :func:`_resolve_thinking_effort` (override → agent → project default →
     global default) but reporting which tier won; ``""`` is a real stopping value.
     """
     tiers = (
-        ("pin", _pinned_thinking_effort(project, scanned.agent_id)),
+        ("override", _overridden_thinking_effort(project, scanned.agent_id)),
         ("agent", scanned.thinking_effort),
         ("project_default", project.default_thinking_effort),
         ("global_default", _global_default_thinking_effort(global_defaults)),
@@ -838,20 +838,20 @@ def _global_default_thinking_effort(global_defaults: Mapping[str, Any]) -> str |
     return value if isinstance(value, str) else None
 
 
-def _pinned_model(project: Project, agent_id: str) -> str:
-    """Return the agent's pinned model, or ``""`` when unpinned."""
-    return str(project.pins.get(agent_id, {}).get("model", "") or "")
+def _overridden_model(project: Project, agent_id: str) -> str:
+    """Return the agent's overridden model, or ``""`` when not overridden."""
+    return str(project.overrides.get(agent_id, {}).get("model", "") or "")
 
 
-def _pinned_temperature(project: Project, agent_id: str) -> float | None:
-    """Return the agent's pinned temperature, or ``None`` when unpinned."""
-    value = project.pins.get(agent_id, {}).get("temperature")
+def _overridden_temperature(project: Project, agent_id: str) -> float | None:
+    """Return the agent's overridden temperature, or ``None`` when not overridden."""
+    value = project.overrides.get(agent_id, {}).get("temperature")
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def _pinned_thinking_effort(project: Project, agent_id: str) -> str | None:
-    """Return the agent's pinned thinking effort (``""`` allowed), or ``None`` when unpinned."""
-    value = project.pins.get(agent_id, {}).get("thinking_effort")
+def _overridden_thinking_effort(project: Project, agent_id: str) -> str | None:
+    """Return the agent's overridden thinking effort (``""`` allowed), or ``None`` when not set."""
+    value = project.overrides.get(agent_id, {}).get("thinking_effort")
     return value if isinstance(value, str) else None
 
 

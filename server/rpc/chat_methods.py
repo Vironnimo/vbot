@@ -398,8 +398,8 @@ def _handle_set_model_command(
     value validated against actually-usable models. Routing follows the session
     kind: an identity session writes the agent's own ``model`` field (empty on
     reset → the global default), a project session sets/clears the agent's **model
-    pin** in ``project.json`` (the top model-chain tier). The change takes effect on
-    the next run, so there is no busy-guard.
+    override** in ``project.json`` (the top model-chain tier). The change takes effect
+    on the next run, so there is no busy-guard.
     """
     raw = (argument or "").strip()
     is_reset = raw.lower() == _MODEL_RESET_TOKEN
@@ -411,9 +411,9 @@ def _handle_set_model_command(
         if project_id is None:
             state.runtime.agents.update(agent_id, model=model)
         elif is_reset:
-            state.runtime.projects.clear_pin(project_id, agent_id, "model")
+            state.runtime.projects.clear_override(project_id, agent_id, "model")
         else:
-            state.runtime.projects.set_pin(project_id, agent_id, "model", model)
+            state.runtime.projects.set_override(project_id, agent_id, "model", model)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
