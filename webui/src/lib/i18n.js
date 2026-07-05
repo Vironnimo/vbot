@@ -1143,6 +1143,8 @@ export const englishCatalog = Object.freeze({
   'statistics.usage.cacheRead': 'Cache read',
   'statistics.usage.cacheWrite': 'Cache write',
   'statistics.usage.cacheHitRate': 'Cache hit rate',
+  'statistics.usage.cacheIntro':
+    'Cache metrics track provider-side prompt caching: cached input tokens are billed at a much lower rate, so a higher hit rate means cheaper runs.',
   'statistics.usage.cacheHitHint':
     'Cache hit rate: tokens read from cache as a share of the input, over the turns that report cache data.',
   'statistics.usage.cacheSessions': 'Sessions with lowest cache hit rate',
