@@ -773,6 +773,7 @@ describe('i18n t()', () => {
       'statistics.overview.dailyTrend',
       'statistics.usage.measuredTokens',
       'statistics.usage.estimatedTokens',
+      'statistics.usage.cacheIntro',
       'statistics.usage.providers',
       'statistics.usage.models',
       'statistics.runs.p50Hint',
