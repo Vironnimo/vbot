@@ -141,88 +141,133 @@ def test_load_falls_back_to_base_tools_for_old_config(data_dir: Path, repo: Path
     assert reloaded.skills_project_disabled == []
 
 
-def test_set_model_override_persists_one_entry(data_dir: Path, repo: Path) -> None:
+def test_set_pin_persists_one_entry(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
 
-    updated = store.set_model_override("vbot", "builder", "openai/gpt-5")
+    updated = store.set_pin("vbot", "builder", "model", "openai/gpt-5")
 
-    assert updated.model_overrides == {"builder": "openai/gpt-5"}
+    assert updated.pins == {"builder": {"model": "openai/gpt-5"}}
     payload = json.loads((data_dir / "projects" / "vbot" / "project.json").read_text("utf-8"))
-    assert payload["model_overrides"] == {"builder": "openai/gpt-5"}
+    assert payload["pins"] == {"builder": {"model": "openai/gpt-5"}}
 
 
-def test_set_model_override_replaces_existing_leaves_others(data_dir: Path, repo: Path) -> None:
+def test_set_pin_merges_into_existing_pin(data_dir: Path, repo: Path) -> None:
+    # A second field on the same agent merges in — the first field stays.
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
-    store.set_model_override("vbot", "builder", "openai/gpt-5")
-    store.set_model_override("vbot", "planner", "anthropic/claude-sonnet-4")
+    store.set_pin("vbot", "builder", "model", "openai/gpt-5")
 
-    updated = store.set_model_override("vbot", "builder", "openai/gpt-mini")
+    updated = store.set_pin("vbot", "builder", "temperature", 0.4)
 
-    # Exactly the targeted entry changed; the other agent's override is intact.
-    assert updated.model_overrides == {
-        "builder": "openai/gpt-mini",
-        "planner": "anthropic/claude-sonnet-4",
+    assert updated.pins == {"builder": {"model": "openai/gpt-5", "temperature": 0.4}}
+
+
+def test_set_pin_replaces_existing_leaves_others(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_pin("vbot", "builder", "model", "openai/gpt-5")
+    store.set_pin("vbot", "planner", "model", "anthropic/claude-sonnet-4")
+
+    updated = store.set_pin("vbot", "builder", "model", "openai/gpt-mini")
+
+    # Exactly the targeted agent's field changed; the other agent's pin is intact.
+    assert updated.pins == {
+        "builder": {"model": "openai/gpt-mini"},
+        "planner": {"model": "anthropic/claude-sonnet-4"},
     }
 
 
-def test_clear_model_override_removes_only_target(data_dir: Path, repo: Path) -> None:
+def test_set_pin_accepts_temperature_zero(data_dir: Path, repo: Path) -> None:
+    # 0.0 is a real value (the sampling floor), a valid pinned temperature.
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
-    store.set_model_override("vbot", "builder", "openai/gpt-5")
-    store.set_model_override("vbot", "planner", "anthropic/claude-sonnet-4")
 
-    updated = store.clear_model_override("vbot", "builder")
+    updated = store.set_pin("vbot", "builder", "temperature", 0.0)
 
-    assert updated.model_overrides == {"planner": "anthropic/claude-sonnet-4"}
-    assert store.get("vbot").model_overrides == {"planner": "anthropic/claude-sonnet-4"}
+    assert updated.pins == {"builder": {"temperature": 0.0}}
 
 
-def test_clear_model_override_absent_entry_is_noop(data_dir: Path, repo: Path) -> None:
+def test_set_pin_accepts_thinking_effort_empty_string(data_dir: Path, repo: Path) -> None:
+    # "" = force provider default; a real value, a valid pinned thinking effort.
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
-    store.set_model_override("vbot", "planner", "anthropic/claude-sonnet-4")
 
-    # Clearing an agent that has no override succeeds and changes nothing.
-    updated = store.clear_model_override("vbot", "builder")
+    updated = store.set_pin("vbot", "builder", "thinking_effort", "")
 
-    assert updated.model_overrides == {"planner": "anthropic/claude-sonnet-4"}
+    assert updated.pins == {"builder": {"thinking_effort": ""}}
 
 
-def test_set_model_override_rejects_empty_model(data_dir: Path, repo: Path) -> None:
+def test_clear_pin_removes_only_target_field(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_pin("vbot", "builder", "model", "openai/gpt-5")
+    store.set_pin("vbot", "builder", "temperature", 0.4)
+
+    updated = store.clear_pin("vbot", "builder", "temperature")
+
+    # Only the cleared field is gone; the agent's other pinned field survives.
+    assert updated.pins == {"builder": {"model": "openai/gpt-5"}}
+    assert store.get("vbot").pins == {"builder": {"model": "openai/gpt-5"}}
+
+
+def test_clear_pin_last_field_removes_agent_entry(data_dir: Path, repo: Path) -> None:
+    # Clearing an agent's only pinned field drops the whole entry, not an empty pin.
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_pin("vbot", "builder", "model", "openai/gpt-5")
+    store.set_pin("vbot", "planner", "model", "anthropic/claude-sonnet-4")
+
+    updated = store.clear_pin("vbot", "builder", "model")
+
+    assert updated.pins == {"planner": {"model": "anthropic/claude-sonnet-4"}}
+    assert store.get("vbot").pins == {"planner": {"model": "anthropic/claude-sonnet-4"}}
+
+
+def test_clear_pin_absent_field_is_noop(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_pin("vbot", "planner", "model", "anthropic/claude-sonnet-4")
+
+    # Clearing a field the agent has no pin for succeeds and changes nothing.
+    updated = store.clear_pin("vbot", "builder", "model")
+
+    assert updated.pins == {"planner": {"model": "anthropic/claude-sonnet-4"}}
+
+
+def test_set_pin_rejects_empty_model(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
 
     with pytest.raises(ProjectError):
-        store.set_model_override("vbot", "builder", "  ")
+        store.set_pin("vbot", "builder", "model", "  ")
 
 
-def test_set_model_override_raises_for_unknown_project(data_dir: Path) -> None:
+def test_set_pin_raises_for_unknown_project(data_dir: Path) -> None:
     store = ProjectStore(data_dir)
 
     with pytest.raises(ProjectNotFoundError):
-        store.set_model_override("missing", "builder", "openai/gpt-5")
+        store.set_pin("missing", "builder", "model", "openai/gpt-5")
 
 
-def test_update_preserves_model_overrides_across_unrelated_edit(data_dir: Path, repo: Path) -> None:
-    # model_overrides is carried through an unrelated update, never dropped.
+def test_update_preserves_pins_across_unrelated_edit(data_dir: Path, repo: Path) -> None:
+    # pins is carried through an unrelated update, never dropped.
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
-    store.set_model_override("vbot", "builder", "openai/gpt-5")
+    store.set_pin("vbot", "builder", "model", "openai/gpt-5")
 
     updated = store.update("vbot", display_name="vBot Renamed")
 
-    assert updated.model_overrides == {"builder": "openai/gpt-5"}
+    assert updated.pins == {"builder": {"model": "openai/gpt-5"}}
 
 
-def test_update_rejects_model_overrides_as_generic_field(data_dir: Path, repo: Path) -> None:
-    # model_overrides has its own set/clear seam; it is not a generic update field.
+def test_update_rejects_pins_as_generic_field(data_dir: Path, repo: Path) -> None:
+    # pins has its own set/clear seam; it is not a generic update field.
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
 
-    with pytest.raises(ProjectError):
-        store.update("vbot", model_overrides={"builder": "openai/gpt-5"})
+    with pytest.raises(ProjectError, match="Unknown project fields: pins"):
+        store.update("vbot", pins={"builder": {"model": "openai/gpt-5"}})
 
 
 def test_update_does_not_reseed_agents_file(data_dir: Path, repo: Path) -> None:

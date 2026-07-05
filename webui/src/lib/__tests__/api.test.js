@@ -446,7 +446,7 @@ describe('project.* wrappers', () => {
     );
   });
 
-  it('clears a model override through project.clear_model_override', async () => {
+  it('clears a model pin through project.clear_pin', async () => {
     const fetchFunction = vi.fn().mockResolvedValue(
       jsonResponse({
         ok: true,
@@ -457,22 +457,22 @@ describe('project.* wrappers', () => {
     await clearModelOverride('demo', 'builder', { fetch: fetchFunction });
 
     expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
-      method: 'project.clear_model_override',
-      params: { project_id: 'demo', agent_id: 'builder' },
+      method: 'project.clear_pin',
+      params: { project_id: 'demo', agent_id: 'builder', field: 'model' },
     });
   });
 
-  it('rejects an empty project or agent id before sending clear_model_override', () => {
+  it('rejects an empty project or agent id before sending clear_pin', () => {
     expect(() => clearModelOverride('', 'builder')).toThrow(
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
-        method: 'project.clear_model_override',
+        method: 'project.clear_pin',
       }),
     );
     expect(() => clearModelOverride('demo', '')).toThrow(
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
-        method: 'project.clear_model_override',
+        method: 'project.clear_pin',
       }),
     );
   });

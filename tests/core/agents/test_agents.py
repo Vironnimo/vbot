@@ -515,6 +515,65 @@ def test_get_reflects_updated_defaults_without_reloading_agent_file(
     assert persisted["thinking_effort"] is None
 
 
+def test_get_raw_returns_unbaked_values_even_with_defaults(
+    tmp_path: Path,
+    template_dir: Path,
+) -> None:
+    # get_raw skips the defaults bake: the raw "" model and None temperature/thinking
+    # survive even though a global default exists (the provenance seam the resolver
+    # reads to tell an own value from an inherited default).
+    store = AgentStore(
+        tmp_path / "data",
+        template_dir=template_dir,
+        defaults_provider=lambda: {
+            "model": "openai/gpt-5.2",
+            "fallback_model": "openai/gpt-5.2-mini",
+            "temperature": 0.6,
+            "thinking_effort": "high",
+        },
+    )
+    store.create(
+        "coder_raw",
+        "Coder Agent",
+        model="",
+        fallback_model="",
+        temperature=None,
+        thinking_effort=None,
+    )
+
+    baked = store.get("coder_raw")
+    raw = store.get_raw("coder_raw")
+
+    # get bakes the defaults; get_raw preserves the un-set persisted values.
+    assert baked.model == "openai/gpt-5.2"
+    assert raw.model == ""
+    assert raw.fallback_model == ""
+    assert raw.temperature is None
+    assert raw.thinking_effort is None
+
+
+def test_get_raw_preserves_explicit_own_values(
+    tmp_path: Path,
+    template_dir: Path,
+) -> None:
+    store = AgentStore(
+        tmp_path / "data",
+        template_dir=template_dir,
+        defaults_provider=lambda: {"model": "openai/gpt-5.2", "temperature": 0.6},
+    )
+    store.create("coder_own", "Coder Agent", model="openai/gpt-mini", temperature=0.1)
+
+    raw = store.get_raw("coder_own")
+
+    assert raw.model == "openai/gpt-mini"
+    assert raw.temperature == 0.1
+
+
+def test_get_raw_raises_for_unknown_agent(store: AgentStore) -> None:
+    with pytest.raises(AgentNotFoundError, match="missing"):
+        store.get_raw("missing")
+
+
 def test_create_returns_resolved_defaults_but_persists_raw_values(
     tmp_path: Path,
     template_dir: Path,

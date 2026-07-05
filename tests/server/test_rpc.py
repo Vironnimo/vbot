@@ -159,6 +159,9 @@ class StubAgents:
     def get(self, agent_id: str) -> StubAgent:
         return self._apply_defaults(self._get_raw(agent_id))
 
+    def get_raw(self, agent_id: str) -> StubAgent:
+        return self._get_raw(agent_id)
+
     def list(self) -> list[StubAgent]:
         return [self._apply_defaults(self._agents[agent_id]) for agent_id in sorted(self._agents)]
 
@@ -247,6 +250,44 @@ class StubAgentResolver:
             raise AgentResolutionError(
                 f"agent '{agent_id}' is not on project '{project_id}' team"
             ) from error
+
+    def effective_config(self, project_id: str | None, agent_id: str) -> dict[str, dict[str, Any]]:
+        """Identity provenance seam the agent payload reads (agent CRUD is identity-only).
+
+        Mirrors the real resolver's identity branch: the agent's raw own value wins
+        (source ``agent``) unless it is ``""``/``None``, in which case a global default
+        applies (source ``global_default``), else ``None``.
+        """
+        if project_id is not None:
+            raise AgentResolutionError("project effective_config not stubbed")
+        try:
+            raw = self._agents.get_raw(agent_id)
+        except KeyError as error:
+            raise AgentResolutionError(str(error)) from error
+        defaults = (
+            self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
+        )
+        return {
+            "model": _identity_source(raw.model, defaults, "model", empty=""),
+            "fallback_model": _identity_source(
+                raw.fallback_model, defaults, "fallback_model", empty=""
+            ),
+            "temperature": _identity_source(raw.temperature, defaults, "temperature", empty=None),
+            "thinking_effort": _identity_source(
+                raw.thinking_effort, defaults, "thinking_effort", empty=None
+            ),
+        }
+
+
+def _identity_source(
+    own_value: object, defaults: JsonObject, key: str, *, empty: object
+) -> dict[str, object]:
+    """Helper for :meth:`StubAgentResolver.effective_config`: own → global → none."""
+    if own_value != empty:
+        return {"value": own_value, "source": "agent"}
+    if key in defaults and defaults.get(key) is not None:
+        return {"value": defaults.get(key), "source": "global_default"}
+    return {"value": None, "source": None}
 
 
 class InstrumentedAgentDeleteLock:
@@ -3412,8 +3453,20 @@ async def test_tool_list_returns_all_registered_tools_with_name_and_description(
         "ok": True,
         "result": {
             "tools": [
-                {"name": "a_tool", "description": "First tool alphabetically"},
-                {"name": "z_tool", "description": "Last tool alphabetically"},
+                {
+                    "name": "a_tool",
+                    "description": "First tool alphabetically",
+                    "ready": True,
+                    "readiness_hint": None,
+                    "extension": None,
+                },
+                {
+                    "name": "z_tool",
+                    "description": "Last tool alphabetically",
+                    "ready": True,
+                    "readiness_hint": None,
+                    "extension": None,
+                },
             ],
             "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
         },
@@ -4473,6 +4526,32 @@ async def test_agent_get_reflects_configured_default_model(tmp_path: Path) -> No
     assert response["ok"] is True
     assert response["result"]["id"] == "coder"
     assert response["result"]["model"] == "openai/gpt-4.1-mini"
+
+
+@pytest.mark.asyncio
+async def test_agent_get_exposes_raw_config_and_effective_provenance(tmp_path: Path) -> None:
+    # The agent payload distinguishes an explicit own value from an inherited global
+    # default: `config` carries the raw own value ("" model) while `effective` names
+    # the winning tier (global_default for the fallen-through model).
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.update_settings_sections(
+        {"defaults": {"agent": {"model": "openai/gpt-4.1-mini"}}}
+    )
+    state.runtime.agents.update("coder", model="")
+
+    response = await dispatch_rpc(state, {"method": "agent.get", "params": {"id": "coder"}})
+
+    result = response["result"]
+    # Raw own value is preserved (empty), the baked top-level value is resolved.
+    assert result["config"]["model"] == ""
+    assert result["model"] == "openai/gpt-4.1-mini"
+    # Effective names the tier that supplied the model.
+    assert result["effective"]["model"] == {
+        "value": "openai/gpt-4.1-mini",
+        "source": "global_default",
+    }
+    # A field with an explicit own value reports source "agent".
+    assert result["effective"]["temperature"]["source"] == "agent"
 
 
 @pytest.mark.asyncio
