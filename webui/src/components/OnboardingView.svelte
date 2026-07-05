@@ -236,7 +236,7 @@
       {#if step === STEP_SERVICE}
         <div class="onboarding-step">
           <p class="onboarding-kicker">
-            {t('onboarding.step.service.kicker', 'Step 1 of 3')}
+            {t('onboarding.step.service.kicker', 'Step 1 of 2')}
           </p>
           <h3 class="onboarding-step-title">
             {t('onboarding.step.service.title', 'Choose an AI service')}
@@ -366,7 +366,7 @@
       {:else}
         <div class="onboarding-step">
           <p class="onboarding-kicker">
-            {t('onboarding.step.model.kicker', 'Step 3 of 3')}
+            {t('onboarding.step.model.kicker', 'Step 2 of 2')}
           </p>
           <h3 class="onboarding-step-title">
             {t('onboarding.step.model.title', 'Choose a model')}

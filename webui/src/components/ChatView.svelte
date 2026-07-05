@@ -2174,7 +2174,13 @@
       aria-label={t('chat.project.teamLabel', 'Project team')}
     >
       <div class="chat-view__project-team-inner">
-        <span class="chat-view__project-team-name">{selectedProjectName}</span>
+        <span
+          class="chat-view__project-team-name"
+          title={t(
+            'chat.project.teamBarHint',
+            'Agents discovered in this project’s repository.',
+          )}>{selectedProjectName}</span
+        >
         {#if loadingProjectTeam}
           <span class="chat-view__project-team-empty">
             {t('loading.agents', 'Loading agents…')}
