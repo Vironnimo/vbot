@@ -455,6 +455,61 @@ describe('SettingsView', () => {
     ).toBe(true);
   });
 
+  it('lists denied chats and allows one from the channel card', async () => {
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        channels: [
+          channelConfig('tg-assistant', {
+            agent_id: 'assistant',
+            enabled: true,
+            allowed_chat_ids: [12345],
+          }),
+        ],
+        channelStatuses: {
+          'tg-assistant': {
+            running: true,
+            enabled: true,
+            denied_chats: [
+              {
+                chat_id: '99999',
+                kind: 'direct',
+                display_name: 'Julian B.',
+                last_seen_at: '2026-07-05T12:00:00+00:00',
+                count: 3,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openChannelsPanel();
+
+    await waitForCondition(() =>
+      document.body.textContent.includes('Julian B.'),
+    );
+    expect(document.body.textContent).toContain(
+      'Recent requests from chats not on the allowlist',
+    );
+    expect(document.body.textContent).toContain('ID 99999');
+
+    buttonByAriaLabel('Allow chat 99999').click();
+
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some((call) => call[0] === 'channel.update'),
+    );
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'channel.update',
+    );
+    expect(updateCall[1]).toEqual({
+      id: 'tg-assistant',
+      allowed_chat_ids: ['12345', '99999'],
+    });
+  });
+
   it('creates a channel from the inline form', async () => {
     rpcMock.mockImplementation(
       createSettingsRpcMock({
@@ -1417,6 +1472,9 @@ function createSettingsRpcMock(options = {}) {
             typeof providedStatus.running === 'boolean'
               ? providedStatus.running
               : false,
+          denied_chats: Array.isArray(providedStatus.denied_chats)
+            ? providedStatus.denied_chats.map((entry) => ({ ...entry }))
+            : [],
         },
       ];
     }),
@@ -1496,6 +1554,7 @@ function createSettingsRpcMock(options = {}) {
         id: status.id,
         enabled: status.enabled,
         running: status.running,
+        denied_chats: status.denied_chats.map((entry) => ({ ...entry })),
       };
     }
 

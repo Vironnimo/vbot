@@ -23,7 +23,7 @@ from core.channels import (
     ChannelService,
     ChannelStorage,
 )
-from core.channels.adapter import FileData, RouteFacts
+from core.channels.adapter import DeniedChatLog, FileData, RouteFacts
 from core.channels.channels import _normalize_channel_id
 from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
@@ -739,6 +739,48 @@ async def test_channel_service_send_raises_for_inactive_channel(tmp_path: Path) 
 
     with pytest.raises(ChannelNotFoundError, match="Channel not active"):
         await service.send("tg-assistant", "hello", "12345")
+
+
+class DeniedAwareAdapter(BlockingAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self._denied_chat_log = DeniedChatLog()
+
+    def denied_chats(self) -> list[Any]:
+        return self._denied_chat_log.entries()
+
+
+@pytest.mark.asyncio
+async def test_channel_service_denied_chats_delegates_to_running_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    adapter = DeniedAwareAdapter()
+    adapter._denied_chat_log.record(chat_id="777", kind="direct", display_name="Julian")
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+
+    service.start_channel(config.id)
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
+
+    entries = service.denied_chats(config.id)
+    assert [entry.chat_id for entry in entries] == ["777"]
+
+    service.stop()
+    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert service.denied_chats(config.id) == []
+
+
+def test_channel_service_denied_chats_empty_for_unknown_channel(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+
+    assert service.denied_chats("tg-assistant") == []
 
 
 @pytest.mark.asyncio

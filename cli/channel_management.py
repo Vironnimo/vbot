@@ -122,14 +122,39 @@ def channel_status(instance: ServerInstance, channel_id: str) -> CommandResult:
         if isinstance(failure_reason, str) and failure_reason
         else ""
     )
-    return CommandResult(
-        ok=True,
-        message=(
-            f"{resolved_id}: enabled={enabled_text} running={running_text} "
-            f"failed={failed_text}{failure_suffix}"
-        ),
-        instance=instance,
+    lines = [
+        f"{resolved_id}: enabled={enabled_text} running={running_text} "
+        f"failed={failed_text}{failure_suffix}"
+    ]
+    lines.extend(_format_denied_chats(resolved_id, payload.data.get("denied_chats")))
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def _format_denied_chats(channel_id: str, value: object) -> list[str]:
+    if not isinstance(value, list) or not value:
+        return []
+
+    lines = ["denied inbound chats (messaged the bot but are not in the allowlist):"]
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        chat_id = _string_or_default(entry.get("chat_id"), "?")
+        kind = _string_or_default(entry.get("kind"), "?")
+        display_name = entry.get("display_name")
+        name_part = (
+            f" name={display_name}" if isinstance(display_name, str) and display_name else ""
+        )
+        last_seen = _string_or_default(entry.get("last_seen_at"), "?")
+        count = entry.get("count")
+        count_part = f" messages={count}" if isinstance(count, int) else ""
+        lines.append(
+            f"- chat_id={chat_id} kind={kind}{name_part} last_seen={last_seen}{count_part}"
+        )
+    lines.append(
+        f"to allow a chat: vbot channel update {channel_id} --allow <all allowed chat ids> "
+        "(--allow replaces the full list; include existing ids)"
     )
+    return lines
 
 
 def _format_channel_rows(channels: Sequence[object]) -> str:
