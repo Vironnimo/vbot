@@ -927,7 +927,7 @@
       onkeyup={handleSelection}
       placeholder={t(
         'chat.composerPlaceholder',
-        'Ask this agent to do something…',
+        'Ask this agent to do something… (/ for commands, $ for skills)',
       )}
       rows="1"
     ></textarea>
