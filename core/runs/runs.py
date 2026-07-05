@@ -195,6 +195,14 @@ class Run:
         # executor before it returns/raises; the manager merges it alongside
         # ``timing`` regardless of the terminal outcome.
         self.terminal_payload_extras: JsonObject = {}
+        # Log-facing run telemetry, incremented by the chat loop as the run
+        # progresses and read by the end-of-run log line. Token totals sum the
+        # per-turn usage payloads (estimated turns included — the log line cares
+        # about magnitude; the statistics domain owns real-vs-estimated rigor).
+        self.model_step_count = 0
+        self.tool_call_count = 0
+        self.input_token_total = 0
+        self.output_token_total = 0
 
     @property
     def events(self) -> list[RunEvent]:
@@ -510,7 +518,14 @@ class ChatRunManager:
                 item.future.set_result(run)
                 return item
 
-            self._queues.setdefault(session_key, deque()).append(item)
+            queue = self._queues.setdefault(session_key, deque())
+            queue.append(item)
+            _LOGGER.info(
+                "Run queued for busy session (agent=%s session=%s queue_depth=%d)",
+                agent_id,
+                session_id,
+                len(queue),
+            )
             return item
 
     def list_queued(self, agent_id: str, session_id: str) -> list[QueuedRunItem]:

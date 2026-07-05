@@ -386,6 +386,44 @@ async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion()
     assert await queued_run.wait() == "queued"
 
 
+async def test_enqueue_when_session_is_busy_logs_queue_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        await active_release.wait()
+        return "done"
+
+    active_run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=execute,
+    )
+    with caplog.at_level(logging.INFO, logger="vbot.runs"):
+        item = await manager.enqueue(
+            agent_id="coder",
+            session_id="session-one",
+            executor=execute,
+            display_content="Queued next",
+        )
+
+    queue_line = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("Run queued for busy session")
+    )
+    assert "agent=coder" in queue_line
+    assert "session=session-one" in queue_line
+    assert "queue_depth=1" in queue_line
+
+    active_release.set()
+    assert await active_run.wait() == "done"
+    queued_run = await asyncio.wait_for(item.future, timeout=1)
+    assert await queued_run.wait() == "done"
+
+
 async def test_has_activity_for_agent_reports_active_and_queued_work() -> None:
     manager = ChatRunManager()
     active_release = asyncio.Event()
