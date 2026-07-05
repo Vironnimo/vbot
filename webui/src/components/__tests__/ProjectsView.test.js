@@ -552,7 +552,7 @@ describe('ProjectsView', () => {
     });
   });
 
-  it('shows a model-override badge and clears it through project.clear_model_override', async () => {
+  it('shows a model-override badge and clears it through project.clear_pin', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -564,13 +564,13 @@ describe('ProjectsView', () => {
             agent_id: 'builder',
             display_name: 'Builder',
             model: 'openai/gpt-5.2',
-            model_override: 'openai/gpt-mini',
+            pins: { model: 'openai/gpt-mini' },
           },
         ],
         report: { clean: true, findings: [] },
       },
     });
-    // After clearing, the refreshed scan drops the override so the badge vanishes.
+    // After clearing, the refreshed scan drops the pin so the badge vanishes.
     clearModelOverrideMock.mockResolvedValue({
       project: project({ project_id: 'demo' }),
       scan: {
@@ -579,7 +579,7 @@ describe('ProjectsView', () => {
             agent_id: 'builder',
             display_name: 'Builder',
             model: 'openai/gpt-5.2',
-            model_override: null,
+            pins: null,
           },
         ],
         report: { clean: true, findings: [] },

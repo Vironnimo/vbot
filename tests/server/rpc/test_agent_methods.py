@@ -12,12 +12,16 @@ Coverage (AAA):
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from core.agents.agents import AgentStore
 from core.chat import ChatSessionError
+from core.projects.resolver import AgentResolver
+from core.projects.store import ProjectStore
 from core.sessions import FORK_SOURCE_META_KEY
 from server.events import ServerEventBus
 from server.rpc.agent_methods import (
@@ -26,6 +30,7 @@ from server.rpc.agent_methods import (
     _create_session,
     _delete_session,
     _fork_session,
+    _get_agent,
     _list_sessions,
     _rename_session,
 )
@@ -503,3 +508,101 @@ async def test_fork_rejects_unsupported_field() -> None:
 
     assert exc_info.value.code == "invalid_request"
     assert sessions.forked == []
+
+
+# ---------------------------------------------------------------------------
+# agent.get payload: config (raw own values) + effective (per-field value+source).
+# Wired against a real AgentStore + AgentResolver so get_raw / effective_config
+# are exercised end-to-end rather than stubbed.
+# ---------------------------------------------------------------------------
+
+
+class _PayloadCheckerModels:
+    """Model existence probe the resolver's checker uses (returns a bare marker)."""
+
+    def get(self, provider_id: str, model_id: str) -> object:
+        if (provider_id, model_id) == ("openai", "gpt-5.2"):
+            return object()
+        raise KeyError(f"{provider_id}/{model_id}")
+
+
+class _PayloadRuntimeModels:
+    """The runtime model registry the context-window lookup reads.
+
+    It always raises ``KeyError`` so ``_resolve_context_window`` degrades to
+    ``None`` — the payload test does not assert the window, and a bare-object
+    return would trip ``.context_window``.
+    """
+
+    def get(self, provider_id: str, model_id: str) -> object:
+        raise KeyError(f"{provider_id}/{model_id}")
+
+
+def _agent_payload_state(tmp_path: Path, defaults: dict[str, Any]) -> SimpleNamespace:
+    """Build a real-store state for the agent.get payload path.
+
+    ``defaults`` is the ``defaults.agent`` map both the store (for baking) and the
+    resolver's global tier read, so the baked top-level keys and the effective
+    ``global_default`` source agree.
+    """
+    from core.projects.resolver import ModelConfigurationChecker
+
+    data_dir = tmp_path / "data"
+    template_dir = tmp_path / "templates"
+    template_dir.mkdir(parents=True)
+    for filename in ("SOUL.md", "USER.md", "MEMORY.md"):
+        (template_dir / filename).write_text(f"# {filename}\n", encoding="utf-8")
+
+    agents = AgentStore(data_dir, template_dir=template_dir, defaults_provider=lambda: defaults)
+    projects = ProjectStore(data_dir)
+    checker = ModelConfigurationChecker(
+        _PayloadCheckerModels(),
+        _PayloadProviders(),
+        _PayloadCredentials(),
+    )
+    resolver = AgentResolver(agents, projects, checker, lambda: defaults)
+    runtime = SimpleNamespace(
+        agents=agents, agent_resolver=resolver, models=_PayloadRuntimeModels()
+    )
+    return SimpleNamespace(runtime=runtime)
+
+
+class _PayloadProviders:
+    def get(self, provider_id: str) -> object:
+        if provider_id == "openai":
+            return SimpleNamespace(connections=[SimpleNamespace(id="api-key")])
+        raise KeyError(provider_id)
+
+
+class _PayloadCredentials:
+    def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
+        return connection_id == "openai:api-key"
+
+
+def test_agent_get_reports_config_and_effective_for_own_value(tmp_path: Path) -> None:
+    state = _agent_payload_state(tmp_path, defaults={})
+    state.runtime.agents.create("orchestrator", "Orchestrator", model="openai/gpt-5.2")
+
+    result = _get_agent(state, {"id": "orchestrator"})
+
+    # config = raw own values (pre-default-bake); shape check.
+    assert set(result["config"]) == {"model", "fallback_model", "temperature", "thinking_effort"}
+    assert result["config"]["model"] == "openai/gpt-5.2"
+    assert result["config"]["fallback_model"] == ""
+    assert result["config"]["temperature"] is None
+    # effective = per-field {value, source}; the own model wins as source "agent".
+    assert result["effective"]["model"] == {"value": "openai/gpt-5.2", "source": "agent"}
+    assert result["effective"]["temperature"] == {"value": None, "source": None}
+
+
+def test_agent_get_effective_reports_global_default_when_own_empty(tmp_path: Path) -> None:
+    # With a global default set, the top-level model is baked while config keeps the
+    # raw "", and effective attributes the value to the global_default tier.
+    state = _agent_payload_state(tmp_path, defaults={"model": "openai/gpt-5.2"})
+    state.runtime.agents.create("orchestrator", "Orchestrator")
+
+    result = _get_agent(state, {"id": "orchestrator"})
+
+    assert result["model"] == "openai/gpt-5.2"  # baked top-level key
+    assert result["config"]["model"] == ""  # raw own value
+    assert result["effective"]["model"] == {"value": "openai/gpt-5.2", "source": "global_default"}

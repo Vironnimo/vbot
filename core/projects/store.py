@@ -274,10 +274,10 @@ class ProjectStore:
             skills_project_disabled=changes.get(
                 "skills_project_disabled", list(project.skills_project_disabled)
             ),
-            # model_overrides is not a generic update field (it has its own atomic
+            # pins is not a generic update field (it has its own atomic per-field
             # set/clear seam below); always carry the current map through so an
-            # unrelated edit never drops a pinned override.
-            model_overrides=dict(project.model_overrides),
+            # unrelated edit never drops a pin.
+            pins=_copy_pins(project.pins),
             created_at=project.created_at,
         )
 
@@ -288,38 +288,48 @@ class ProjectStore:
         self._write_project(updated)
         return updated
 
-    def set_model_override(self, project_id: str, agent_id: str, model: str) -> Project:
-        """Pin a per-agent model override, replacing any existing entry for that agent.
+    def set_pin(self, project_id: str, agent_id: str, field: str, value: Any) -> Project:
+        """Pin one field (``model`` / ``temperature`` / ``thinking_effort``) for an agent.
 
         Atomic read-modify-write over ``project.json``: load the project, copy its
-        override map, set ``agent_id → model``, and rewrite — leaving every other
-        entry and field intact. The id/model shape is validated through
-        ``build_project``; whether the model is *configured in this instance* is the
-        caller's gate (the ``/model`` command path), not enforced here. Returns the
-        updated project.
+        pin map, set ``agent_id`` → ``{…, field: value}`` (merging into any existing
+        pin for that agent), and rewrite — leaving every other agent and every other
+        field intact. The field/value shape is validated through ``build_project``
+        (ranges/levels reuse the canonical agent validators); whether a pinned model
+        is *configured in this instance* is the caller's gate (the ``/model`` command
+        path), not enforced here. Returns the updated project.
         """
         project = self.get(project_id)
-        overrides = dict(project.model_overrides)
-        overrides[agent_id] = model
-        return self._rewrite_with_model_overrides(project, overrides)
+        pins = _copy_pins(project.pins)
+        agent_pin = dict(pins.get(agent_id, {}))
+        agent_pin[field] = value
+        pins[agent_id] = agent_pin
+        return self._rewrite_with_pins(project, pins)
 
-    def clear_model_override(self, project_id: str, agent_id: str) -> Project:
-        """Remove one agent's model override; clearing an absent entry is a no-op success.
+    def clear_pin(self, project_id: str, agent_id: str, field: str) -> Project:
+        """Remove one pinned field for an agent; clearing an absent field is a no-op success.
 
-        The config agent then falls back to its repo-declared model (or the
-        project/global default). When the agent has no override, the project is
-        returned unchanged without a write; otherwise exactly that one entry is
-        dropped and the rest of the map is preserved.
+        The config agent's matching chain then falls back to its repo-declared value
+        (or the project/global default). Clearing the agent's **last** pinned field
+        removes the agent's entry entirely. When the agent has no such pinned field,
+        the project is returned unchanged without a write; otherwise exactly that one
+        field is dropped and every other pin and field is preserved.
         """
         project = self.get(project_id)
-        if agent_id not in project.model_overrides:
+        agent_pin = project.pins.get(agent_id)
+        if agent_pin is None or field not in agent_pin:
             return project
-        overrides = dict(project.model_overrides)
-        del overrides[agent_id]
-        return self._rewrite_with_model_overrides(project, overrides)
+        pins = _copy_pins(project.pins)
+        updated_pin = dict(pins[agent_id])
+        del updated_pin[field]
+        if updated_pin:
+            pins[agent_id] = updated_pin
+        else:
+            del pins[agent_id]
+        return self._rewrite_with_pins(project, pins)
 
-    def _rewrite_with_model_overrides(self, project: Project, overrides: dict[str, str]) -> Project:
-        """Rebuild a project with a new override map and persist it atomically.
+    def _rewrite_with_pins(self, project: Project, pins: dict[str, dict[str, Any]]) -> Project:
+        """Rebuild a project with a new pin map and persist it atomically.
 
         Carries every other field unchanged through ``build_project`` (the single
         validation path), refreshes ``updated_at``, and writes via the atomic
@@ -339,7 +349,7 @@ class ProjectStore:
             skills_bundled_enabled=list(project.skills_bundled_enabled),
             skills_global_enabled=list(project.skills_global_enabled),
             skills_project_disabled=list(project.skills_project_disabled),
-            model_overrides=overrides,
+            pins=pins,
             created_at=project.created_at,
         )
         updated = replace(rebuilt, updated_at=_utc_now())
@@ -449,6 +459,11 @@ class ProjectStore:
                 f"expected {config_path.parent.name}, got {project.project_id}"
             )
         return project
+
+
+def _copy_pins(pins: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Return a deep-enough copy of a pin map (each agent's pin object copied)."""
+    return {agent_id: dict(pin) for agent_id, pin in pins.items()}
 
 
 def _has_session_file(sessions_dir: Path) -> bool:

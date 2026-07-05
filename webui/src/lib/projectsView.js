@@ -372,9 +372,10 @@ export function projectTeam(scan) {
     source_format: asText(member?.source_format),
     source_path: asText(member?.source_path),
     denied_tools: normalizeStringList(member?.denied_tools),
-    // The per-agent model override (vBot-owned, top model-chain tier), or null.
-    // The team row shows it with an `x` to clear; it is set only via /model.
-    model_override: stringOrNull(member?.model_override),
+    // The per-agent model pin (vBot-owned, top model-chain tier), read from the
+    // member's `pins` object, or null. The team row shows it with an `x` to clear;
+    // a pin is set only via /model. UI keeps the existing "override" naming.
+    model_override: stringOrNull(member?.pins?.model),
   }));
 }
 

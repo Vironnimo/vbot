@@ -35,6 +35,7 @@ from core.projects import (
     cwd_exists,
     slugify_project_id,
 )
+from core.projects.projects import PIN_FIELDS
 from core.projects.scan_report import ScanFinding, ScanReport
 from core.projects.scanners.base import ScannedAgent, ScanResult
 from core.settings import (
@@ -53,7 +54,7 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.runtime_access import _state_chat_runs
-from server.rpc.validation import _optional_string, _required_string
+from server.rpc.validation import _ensure_model_usable, _optional_string, _required_string
 
 JsonObject = dict[str, Any]
 
@@ -242,31 +243,103 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
     return {"project": _project_response(project), "scan": scan}
 
 
-def _clear_model_override(state: Any, params: JsonObject) -> JsonObject:
-    """Clear one agent's per-agent model override and return the refreshed project.
+def _set_pin(state: Any, params: JsonObject) -> JsonObject:
+    """Pin one field (``model`` / ``temperature`` / ``thinking_effort``) for an agent.
 
-    The set side is command-only (``/model``); the UI only ever *clears* an
-    override (the Projects-tab ``x``). Clearing an absent entry is a no-op success.
-    No cache invalidation is needed — ``project.json`` is read fresh on every
-    resolve, so the dropped override takes effect on the next run with no resolver
-    or skill cache to clear.
+    Validates the field name and its value before the store write: ``model`` through
+    the same usable-model check the ``/model`` command uses (configured here + any
+    pinned ``::connection`` allowed), ``temperature`` / ``thinking_effort`` through
+    the canonical agent field validators. Returns the refreshed project + scan and
+    publishes the same resource-changed signal ``clear_pin`` does. No cache
+    invalidation is needed — ``project.json`` is read fresh on every resolve.
     """
-    unsupported_fields = sorted(set(params) - {"project_id", "agent_id"})
+    unsupported_fields = sorted(set(params) - {"project_id", "agent_id", "field", "value"})
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.clear_model_override fields: {', '.join(unsupported_fields)}",
+            f"unsupported project.set_pin fields: {', '.join(unsupported_fields)}",
         )
 
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
+    field = _required_pin_field(params)
+    value = _validate_pin_value(state, field, params.get("value"))
+
     try:
-        project = _projects(state).clear_model_override(project_id, agent_id)
+        project = _projects(state).set_pin(project_id, agent_id, field, value)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
+    return _pin_result(state, project)
+
+
+def _clear_pin(state: Any, params: JsonObject) -> JsonObject:
+    """Clear one pinned field for an agent and return the refreshed project.
+
+    Clearing an absent field (or the agent's last field, which removes the entry) is
+    a no-op success. No cache invalidation is needed — ``project.json`` is read fresh
+    on every resolve, so the dropped pin takes effect on the next run.
+    """
+    unsupported_fields = sorted(set(params) - {"project_id", "agent_id", "field"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported project.clear_pin fields: {', '.join(unsupported_fields)}",
+        )
+
+    project_id = _required_string(params, "project_id")
+    agent_id = _required_string(params, "agent_id")
+    field = _required_pin_field(params)
+    try:
+        project = _projects(state).clear_pin(project_id, agent_id, field)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    return _pin_result(state, project)
+
+
+def _pin_result(state: Any, project: Project) -> JsonObject:
+    """Return the standard pin RPC result (refreshed project + live scan)."""
     scan = _scan_preview(state, project)
     return {"project": _project_response(project), "scan": scan}
+
+
+def _required_pin_field(params: JsonObject) -> str:
+    """Return the pin field name, rejecting an unknown one as ``invalid_request``."""
+    field = _required_string(params, "field")
+    if field not in PIN_FIELDS:
+        allowed = ", ".join(sorted(PIN_FIELDS))
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.field must be one of: {allowed}",
+        )
+    return field
+
+
+def _validate_pin_value(state: Any, field: str, value: Any) -> Any:
+    """Validate a pin value against the field's rule; raise ``invalid_request`` on error.
+
+    ``model`` reuses the ``/model`` usable-model gate (configured in this instance +
+    any pinned connection allowed); ``temperature`` / ``thinking_effort`` reuse the
+    canonical agent field validators (``""`` thinking effort forces the provider
+    default). ``None`` is never a valid pin value — clearing is ``project.clear_pin``.
+    """
+    if field == "model":
+        if not isinstance(value, str) or not value.strip():
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, "params.value must be a non-empty model string"
+            )
+        _ensure_model_usable(state, value)
+        return value
+    if field == "temperature":
+        try:
+            return validate_temperature(value, label="params.value", allow_none=False)
+        except SettingsValidationError as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    try:
+        return validate_thinking_effort(value, label="params.value", allow_none=False)
+    except SettingsValidationError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
 
 async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
@@ -351,8 +424,9 @@ def _cron_targets_project_agent(job: Any, project_id: str) -> bool:
 
 def _scan_preview(state: Any, project: Project) -> JsonObject:
     """Scan one project into the agent-facing Team + report preview."""
-    result = _agent_resolver(state).scan_project_report(project)
-    response = _scan_response(result, project)
+    resolver = _agent_resolver(state)
+    result = resolver.scan_project_report(project)
+    response = _scan_response(resolver, result, project)
     response["skills"] = _project_skill_pool(state, project.project_id)
     return response
 
@@ -517,14 +591,14 @@ def _project_response(project: Project) -> JsonObject:
     }
 
 
-def _scan_response(result: ScanResult, project: Project) -> JsonObject:
+def _scan_response(resolver: Any, result: ScanResult, project: Project) -> JsonObject:
     return {
-        "team": [_team_member_response(member, project) for member in result.team],
+        "team": [_team_member_response(resolver, member, project) for member in result.team],
         "report": _report_response(result.report),
     }
 
 
-def _team_member_response(member: ScannedAgent, project: Project) -> JsonObject:
+def _team_member_response(resolver: Any, member: ScannedAgent, project: Project) -> JsonObject:
     return {
         "agent_id": member.agent_id,
         "display_name": member.display_name,
@@ -538,9 +612,13 @@ def _team_member_response(member: ScannedAgent, project: Project) -> JsonObject:
         # The editor pairs this with the project Tool Whitelist (the ceiling) to show
         # that an individual agent may use less than the project maximum.
         "denied_tools": sorted(member.denied_tools),
-        # The per-agent model override (vBot-owned, the top model-chain tier), or
-        # null when this agent has none — the Projects tab renders/clears it per row.
-        "model_override": project.model_overrides.get(member.agent_id),
+        # The agent's Pin object (vBot-owned, the top tier of each chain), or null
+        # when this agent has none — the Projects tab renders/clears it per row.
+        "pins": project.pins.get(member.agent_id) or None,
+        # Per run field, the effective value + winning tier (pin / agent /
+        # project_default / global_default / null), computed from the already-scanned
+        # member so the team listing never re-scans per member.
+        "effective": resolver.effective_config_for_member(project, member),
     }
 
 
@@ -568,6 +646,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "project.list": _list_projects,
         "project.show": _show_project,
         "project.set": _set_project,
-        "project.clear_model_override": _clear_model_override,
+        "project.set_pin": _set_pin,
+        "project.clear_pin": _clear_pin,
         "project.rm": _remove_project,
     }

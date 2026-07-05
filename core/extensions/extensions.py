@@ -147,6 +147,9 @@ class ToolDeclaration:
     internal: bool = False
     display: Any = None
     ready: Callable[[], bool] | None = None
+    # Optional English hint explaining the tool's readiness precondition, forwarded
+    # verbatim into ``ToolRegistry.register`` and surfaced by ``tool.list``.
+    readiness_hint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -309,6 +312,7 @@ class ExtensionAPI:
         internal: bool = False,
         display: Any = None,
         ready: Callable[[], bool] | None = None,
+        readiness_hint: str | None = None,
     ) -> None:
         """Declare an agent tool, mirroring ``ToolRegistry.register``.
 
@@ -322,7 +326,8 @@ class ExtensionAPI:
         a not-ready tool stays registered but is hidden from the System Prompt,
         the provider tool definitions, and the tool picker until it is ready
         (e.g. once the extension's credential is set). ``None`` means always
-        ready.
+        ready. ``readiness_hint`` is optional English text explaining that
+        precondition, surfaced by the ``tool.list`` RPC.
         """
         self._declarations.tools.append(
             ToolDeclaration(
@@ -333,6 +338,7 @@ class ExtensionAPI:
                 internal=internal,
                 display=display,
                 ready=ready,
+                readiness_hint=readiness_hint,
             )
         )
 
@@ -528,6 +534,8 @@ class ExtensionRegistry:
                 internal=declaration.internal,
                 display=declaration.display,
                 ready=declaration.ready,
+                readiness_hint=declaration.readiness_hint,
+                extension=record.name,
             )
         except Exception as exc:
             self._diagnose_capability(record, f"tool {name!r} registration failed: {exc}")

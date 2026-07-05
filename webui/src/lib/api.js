@@ -523,7 +523,7 @@ export function clearModelOverride(projectId, agentId, options = {}) {
       RPC_ERROR_INVALID_CLIENT_REQUEST,
       'Project id must be a non-empty string',
       {
-        method: 'project.clear_model_override',
+        method: 'project.clear_pin',
       },
     );
   }
@@ -533,14 +533,16 @@ export function clearModelOverride(projectId, agentId, options = {}) {
       RPC_ERROR_INVALID_CLIENT_REQUEST,
       'Agent id must be a non-empty string',
       {
-        method: 'project.clear_model_override',
+        method: 'project.clear_pin',
       },
     );
   }
 
+  // The Projects tab only ever clears the model pin (the `x` on a team row); a
+  // pin is set via /model. Field-scoped clear through the new pins RPC.
   return rpc(
-    'project.clear_model_override',
-    { project_id: projectId, agent_id: agentId },
+    'project.clear_pin',
+    { project_id: projectId, agent_id: agentId, field: 'model' },
     options,
   );
 }

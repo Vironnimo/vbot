@@ -71,17 +71,38 @@ def _make_model(*, model_id: str = "gpt-5.2", name: str = "GPT-5.2") -> Model:
     )
 
 
+_UNSET: Any = object()
+
+
 class _StubResolver:
     """Resolver stub returning a fixed agent, recording the resolve target.
 
     Mirrors the run-path seam ``/status`` now uses, so a test can assert the
-    dispatcher threads the session's ``project_id`` through to the resolver.
+    dispatcher threads the session's ``project_id`` through to the resolver. It
+    also answers ``effective_config`` — the provenance seam ``/model`` reads — with
+    a configurable model ``{value, source}`` so a test can drive each origin
+    wording by choosing the winning tier.
     """
 
-    def __init__(self, agent: Agent, *, resolve_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        agent: Agent,
+        *,
+        resolve_error: Exception | None = None,
+        model_value: Any = _UNSET,
+        model_source: Any = _UNSET,
+        effective_error: Exception | None = None,
+    ) -> None:
         self._agent = agent
         self._resolve_error = resolve_error
+        # Default the effective model to the agent's own model / "agent" source so a
+        # test that only cares about the value need not spell out the tier. A sentinel
+        # distinguishes "not passed" from an explicit ``None`` (a fallen-through tier).
+        self._model_value = agent.model if model_value is _UNSET else model_value
+        self._model_source = "agent" if model_source is _UNSET else model_source
+        self._effective_error = effective_error
         self.calls: list[tuple[str | None, str]] = []
+        self.effective_calls: list[tuple[str | None, str]] = []
 
     def resolve_agent(self, project_id: str | None, agent_id: str) -> Agent:
         self.calls.append((project_id, agent_id))
@@ -89,17 +110,17 @@ class _StubResolver:
             raise self._resolve_error
         return self._agent
 
+    def effective_config(self, project_id: str | None, agent_id: str) -> dict[str, dict[str, Any]]:
+        self.effective_calls.append((project_id, agent_id))
+        if self._effective_error is not None:
+            raise self._effective_error
+        return {"model": {"value": self._model_value, "source": self._model_source}}
+
 
 class _StubProject:
-    def __init__(
-        self,
-        project_id: str,
-        display_name: str,
-        model_overrides: dict[str, str] | None = None,
-    ) -> None:
+    def __init__(self, project_id: str, display_name: str) -> None:
         self.project_id = project_id
         self.display_name = display_name
-        self.model_overrides = model_overrides or {}
 
 
 class _StubProjects:
@@ -465,7 +486,7 @@ def test_dispatch_model_reset_returns_set_model_action() -> None:
 def test_dispatch_model_without_argument_shows_identity_source() -> None:
     dispatcher = CommandDispatcher(
         ChatRunManager(),
-        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent())),
+        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent(), model_source="agent")),
     )
 
     result = dispatcher.dispatch("coder", "session-one", "/model")
@@ -478,36 +499,86 @@ def test_dispatch_model_without_argument_shows_identity_source() -> None:
     assert "agent configuration" in reply
 
 
-def test_dispatch_model_project_override_shows_local_override() -> None:
-    # A project session with a pinned override resolves to it and labels the source.
+def _model_reply(
+    *,
+    project_id: str | None,
+    model_value: str | None,
+    model_source: str | None,
+) -> str:
+    """Dispatch a bare /model and return the reply for a chosen effective-model tier.
+
+    Drives the origin wording purely through the stub resolver's ``effective_config``
+    (value + source), the only seam ``/model`` now reads for provenance.
+    """
     dispatcher = CommandDispatcher(
         ChatRunManager(),
-        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent(model="openai/gpt-mini"))),
-        projects=cast(
-            ProjectStore,
-            _StubProjects(_StubProject("vbot", "vBot", {"coder": "openai/gpt-mini"})),
+        agent_resolver=cast(
+            AgentResolver,
+            _StubResolver(
+                _make_agent(),
+                model_value=model_value,
+                model_source=model_source,
+            ),
         ),
+        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot")))
+        if project_id is not None
+        else None,
+    )
+    result = dispatcher.dispatch("coder", "session-one", "/model", project_id)
+    assert isinstance(result, CommandHandled)
+    return result.reply or ""
+
+
+def test_dispatch_model_identity_global_default_origin() -> None:
+    reply = _model_reply(
+        project_id=None, model_value="openai/gpt-5.2", model_source="global_default"
     )
 
-    result = dispatcher.dispatch("coder", "session-one", "/model", "vbot")
+    assert "global default" in reply
 
-    assert isinstance(result, CommandHandled)
-    reply = result.reply or ""
+
+def test_dispatch_model_identity_none_source_origin() -> None:
+    reply = _model_reply(project_id=None, model_value=None, model_source=None)
+
+    assert "not configured" in reply
+    assert STATUS_PLACEHOLDER in reply
+
+
+def test_dispatch_model_project_pin_origin() -> None:
+    # A project session whose winning tier is the pin resolves to it and labels it.
+    reply = _model_reply(project_id="vbot", model_value="openai/gpt-mini", model_source="pin")
+
     assert "openai/gpt-mini" in reply
-    assert "local override" in reply
+    assert "pin (set via /model)" in reply
 
 
-def test_dispatch_model_project_without_override_shows_project_source() -> None:
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent())),
-        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+def test_dispatch_model_project_agent_origin() -> None:
+    reply = _model_reply(project_id="vbot", model_value="openai/gpt-5.2", model_source="agent")
+
+    assert "agent file in repo" in reply
+
+
+def test_dispatch_model_project_project_default_origin() -> None:
+    reply = _model_reply(
+        project_id="vbot", model_value="openai/gpt-5.2", model_source="project_default"
     )
 
-    result = dispatcher.dispatch("coder", "session-one", "/model", "vbot")
+    assert "project default" in reply
 
-    assert isinstance(result, CommandHandled)
-    assert "project configuration" in (result.reply or "")
+
+def test_dispatch_model_project_global_default_origin() -> None:
+    reply = _model_reply(
+        project_id="vbot", model_value="openai/gpt-5.2", model_source="global_default"
+    )
+
+    assert "global default" in reply
+
+
+def test_dispatch_model_project_none_source_origin() -> None:
+    reply = _model_reply(project_id="vbot", model_value=None, model_source=None)
+
+    assert "not configured" in reply
+    assert STATUS_PLACEHOLDER in reply
 
 
 def test_dispatch_model_without_services_degrades_to_placeholder() -> None:
@@ -519,6 +590,7 @@ def test_dispatch_model_without_services_degrades_to_placeholder() -> None:
     assert isinstance(result, CommandHandled)
     assert result.output == "transient"
     assert STATUS_PLACEHOLDER in (result.reply or "")
+    assert "not configured" in (result.reply or "")
 
 
 def test_parse_agent_argument_splits_first_token_as_address() -> None:
