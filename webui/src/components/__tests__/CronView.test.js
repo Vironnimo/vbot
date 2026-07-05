@@ -226,12 +226,10 @@ describe('CronView', () => {
     });
   });
 
-  it('calls cron.delete helper after confirmation', async () => {
+  it('calls cron.delete helper after confirming the dialog', async () => {
     listCronJobsMock.mockResolvedValue({
       jobs: [cronJob({ id: 'job-delete', status: 'active' })],
     });
-
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     mountedComponent = mount(CronView, { target: document.body });
     flushSync();
@@ -241,12 +239,50 @@ describe('CronView', () => {
     );
 
     buttonByTestId('cron-delete-job-delete').click();
+    flushSync();
+
+    // The row action opens the shared ConfirmDialog; nothing is deleted until
+    // the user confirms.
+    expect(deleteCronJobMock).not.toHaveBeenCalled();
+    confirmDialog('Delete');
 
     await waitForCondition(() => deleteCronJobMock.mock.calls.length === 1);
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(deleteCronJobMock).toHaveBeenCalledWith('job-delete');
   });
+
+  it('does not delete a cron job when the dialog is cancelled', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [cronJob({ id: 'job-delete', status: 'active' })],
+    });
+
+    mountedComponent = mount(CronView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-delete-job-delete"]'),
+    );
+
+    buttonByTestId('cron-delete-job-delete').click();
+    flushSync();
+
+    confirmDialog('Cancel');
+    flushSync();
+
+    expect(deleteCronJobMock).not.toHaveBeenCalled();
+    expect(document.body.querySelector('.modal-footer')).toBeNull();
+  });
 });
+
+// Clicks a button in the open ConfirmDialog by its label (Delete / Cancel).
+function confirmDialog(label) {
+  const footer = document.body.querySelector('.modal-footer');
+  expect(footer, 'confirm dialog not open').toBeTruthy();
+  const button = Array.from(footer.querySelectorAll('button')).find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(button, `confirm button not found: ${label}`).toBeTruthy();
+  button.click();
+}
 
 function createAgentListRpcMock(agents = defaultAgents()) {
   return async (method) => {

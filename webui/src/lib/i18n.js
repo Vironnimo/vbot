@@ -33,6 +33,7 @@ export const englishCatalog = Object.freeze({
   'common.new': 'New',
   'common.refresh': 'Refresh',
   'common.remove': 'Remove',
+  'common.reset': 'Reset',
   'common.retry': 'Retry',
   'common.save': 'Save',
   'common.saved': 'Saved',
@@ -184,6 +185,7 @@ export const englishCatalog = Object.freeze({
   'sessions.source_channel': 'Source channel',
   'sessions.subagent_parent': 'Parent',
   'sessions.actions': 'Session actions',
+  'sessions.delete_confirm_title': 'Delete session',
   'sessions.rename': 'Rename',
   'sessions.rename_label': 'Rename session',
   'sessions.rename_placeholder': 'Session name',
@@ -337,6 +339,7 @@ export const englishCatalog = Object.freeze({
   'cron.form.sessionIdPlaceholder': 'Optional',
   'cron.form.sessionIdHelp':
     'Optional: run inside one fixed existing session instead of a new one. Leave empty to let each run use its own.',
+  'cron.deleteConfirmTitle': 'Delete cron job',
   'cron.deleteConfirm': 'Delete this job permanently? It will no longer run.',
   'cron.errors.loadJobs': 'Cron jobs could not be loaded.',
   'cron.errors.loadAgents': 'Agents could not be loaded for cron jobs.',
@@ -414,6 +417,7 @@ export const englishCatalog = Object.freeze({
   'projects.manage.saveError': 'Project changes could not be saved.',
   'projects.manage.saveSuccess': 'Project updated.',
   'projects.remove': 'Remove',
+  'projects.remove.confirmTitle': 'Remove project',
   'projects.remove.confirm':
     'Remove project {name}? The project is archived and can be restored; the repository on disk is never touched.',
   'projects.remove.error': 'Project could not be removed.',
@@ -459,6 +463,7 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.fragmentEditor.modifiedIndicator': 'modified',
   'systemPrompt.fragmentEditor.modifiedHint':
     'Edited — differs from the built-in default.',
+  'systemPrompt.fragmentEditor.resetConfirmTitle': 'Reset block',
   'systemPrompt.fragmentEditor.resetConfirm':
     'Reset this block to its default? This cannot be undone.',
   'systemPrompt.fragmentEditor.resetAgentConfirm':
@@ -491,10 +496,12 @@ export const englishCatalog = Object.freeze({
     'Invalid name — use letters, digits, “-” or “_”, starting with a letter or digit.',
   'systemPrompt.blockList.createFailed':
     'Failed to create block. The slug may be invalid or already used.',
+  'systemPrompt.blockList.removeConfirmTitle': 'Remove block',
   'systemPrompt.blockList.removeConfirm':
     'Remove this custom block? This cannot be undone.',
   'systemPrompt.blockList.removeFailed': 'Failed to remove block',
   'systemPrompt.blockList.resetLayout': 'Reset order & visibility',
+  'systemPrompt.blockList.resetLayoutConfirmTitle': 'Reset layout',
   'systemPrompt.blockList.resetLayoutConfirm':
     'Reset block order and visibility to the default? This cannot be undone.',
   'systemPrompt.blockList.customBadge': 'custom',
@@ -596,7 +603,9 @@ export const englishCatalog = Object.freeze({
   'settings.skills.contentSaveError': 'Skill could not be saved.',
   'settings.skills.deleted': 'Skill deleted.',
   'settings.skills.deleteError': 'Skill could not be deleted.',
-  'settings.skills.deleteConfirm': 'Delete skill “{name}”?',
+  'settings.skills.deleteConfirmTitle': 'Delete skill',
+  'settings.skills.deleteConfirm':
+    'Delete skill “{name}” permanently? The skill file is removed from disk.',
   'settings.subagents.title': 'Sub-Agents',
   'settings.subagents.subtitle':
     'Depth, fan-out, and timeout limits for spawned agent sessions.',
@@ -794,7 +803,9 @@ export const englishCatalog = Object.freeze({
   'settings.channels.running': 'Running',
   'settings.channels.stopped': 'Stopped',
   'settings.channels.empty': 'No channels configured.',
-  'settings.channels.delete_confirm': 'Delete channel {id}?',
+  'settings.channels.delete_confirm_title': 'Delete channel',
+  'settings.channels.delete_confirm':
+    'Delete channel "{id}" permanently? vBot stops listening on it and its configuration is removed.',
   'settings.channels.createSuccess': 'Channel created.',
   'settings.channels.updateSuccess': 'Channel updated.',
   'settings.channels.enableSuccess': 'Channel enabled.',

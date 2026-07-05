@@ -3,6 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -23,6 +24,9 @@
   let editContent = $state('');
   let newName = $state('');
   let newContent = $state('');
+  // The skill name awaiting delete confirmation (null = dialog closed). The
+  // delete only runs once the confirm dialog resolves.
+  let deleteConfirmName = $state(null);
 
   let scopeOptions = $derived([
     {
@@ -115,8 +119,21 @@
     }
   }
 
-  async function deleteSkill(name) {
+  function deleteSkill(name) {
     if (busy) {
+      return;
+    }
+    deleteConfirmName = name;
+  }
+
+  function cancelDeleteSkill() {
+    deleteConfirmName = null;
+  }
+
+  async function confirmDeleteSkill() {
+    const name = deleteConfirmName;
+    deleteConfirmName = null;
+    if (!name || busy) {
       return;
     }
     busy = true;
@@ -280,3 +297,17 @@
     </div>
   {/if}
 </div>
+
+{#if deleteConfirmName}
+  <ConfirmDialog
+    title={t('settings.skills.deleteConfirmTitle', 'Delete skill')}
+    body={t(
+      'settings.skills.deleteConfirm',
+      'Delete skill “{name}” permanently? The skill file is removed from disk.',
+      { name: deleteConfirmName },
+    )}
+    confirmLabel={t('common.delete', 'Delete')}
+    onConfirm={confirmDeleteSkill}
+    onCancel={cancelDeleteSkill}
+  />
+{/if}
