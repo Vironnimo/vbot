@@ -989,6 +989,7 @@
       targetPanelId={settingsPanelTarget}
       targetPanelRequestId={settingsPanelTargetRequestId}
       onDebugEnabledChange={handleDebugEnabledChange}
+      onOpenSetupGuide={reopenOnboarding}
       {modelsRefreshToken}
       {clientsRefreshToken}
     />

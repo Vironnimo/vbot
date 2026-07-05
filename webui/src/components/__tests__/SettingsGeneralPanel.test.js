@@ -151,4 +151,28 @@ describe('SettingsGeneralPanel', () => {
       'Connected clients could not be loaded.',
     );
   });
+
+  it('opens the setup guide when the re-entry button is clicked', async () => {
+    listClientsMock.mockResolvedValue({ clients: [] });
+    const onOpenSetupGuide = vi.fn();
+
+    mountedComponent = mount(SettingsGeneralPanel, {
+      target: document.body,
+      props: { settings: null, clientsRefreshToken: 0, onOpenSetupGuide },
+    });
+    flushSync();
+    await flushAsync();
+
+    expect(document.body.textContent).toContain('Setup guide');
+
+    const setupButton = Array.from(
+      document.body.querySelectorAll('button'),
+    ).find((button) => button.textContent.includes('Open setup guide'));
+    expect(setupButton).toBeTruthy();
+
+    setupButton.click();
+    flushSync();
+
+    expect(onOpenSetupGuide).toHaveBeenCalledTimes(1);
+  });
 });
