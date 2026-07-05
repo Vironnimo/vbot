@@ -79,10 +79,14 @@ describe('SystemPromptView', () => {
       'data:soul',
     ]);
 
-    // Owner labels read "appears when: <owner>".
-    expect(document.body.textContent).toContain('appears when: always');
-    expect(document.body.textContent).toContain('appears when: memory');
-    expect(document.body.textContent).toContain('appears when: tool: bash');
+    // Owner lines read as plain sentences describing the render condition.
+    expect(document.body.textContent).toContain('Always included.');
+    expect(document.body.textContent).toContain(
+      'Included only while the memory tool is on.',
+    );
+    expect(document.body.textContent).toContain(
+      'Included only while the bash tool is active.',
+    );
   });
 
   it('renders an editable textarea for text blocks but not for data blocks', async () => {
@@ -886,12 +890,11 @@ describe('SystemPromptView', () => {
       'systemPrompt.blockList.toggleAria',
       'systemPrompt.blockList.reorderHandle',
       'systemPrompt.blockList.reorderAnnouncement',
-      'systemPrompt.blockList.appearsWhen',
-      'systemPrompt.blockList.owner.always',
-      'systemPrompt.blockList.owner.memory',
-      'systemPrompt.blockList.owner.channel',
-      'systemPrompt.blockList.owner.tool',
-      'systemPrompt.blockList.owner.extension',
+      'systemPrompt.blockList.ownerHint.always',
+      'systemPrompt.blockList.ownerHint.memory',
+      'systemPrompt.blockList.ownerHint.channel',
+      'systemPrompt.blockList.ownerHint.tool',
+      'systemPrompt.blockList.ownerHint.extension',
       'systemPrompt.preview.heading',
       'systemPrompt.preview.refresh',
       'systemPrompt.preview.copy',
