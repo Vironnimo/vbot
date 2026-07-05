@@ -376,7 +376,7 @@
       <p class="logs-view__subtitle">
         {t(
           'logs.subtitle',
-          'Read one daily log file at a time with local filtering and live append updates.',
+          'The application’s technical log, useful when diagnosing problems. Read one daily file at a time with filtering and live updates.',
         )}
       </p>
     </div>

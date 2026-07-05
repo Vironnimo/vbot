@@ -3511,7 +3511,7 @@ describe('ChatView', () => {
     const dropdownLabel = dropdown.querySelector(
       '.dropdown-primitive__trigger-label',
     );
-    expect(dropdownLabel?.textContent?.trim()).toBe('No project');
+    expect(dropdownLabel?.textContent?.trim()).toBe('Personal — no project');
     // No project chosen → no second bar, no project.show call.
     expect(document.querySelector('.chat-view__project-team')).toBeNull();
     expect(showProjectMock).not.toHaveBeenCalled();

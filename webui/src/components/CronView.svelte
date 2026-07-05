@@ -344,9 +344,10 @@
     const confirmDelete =
       typeof globalThis.confirm === 'function'
         ? globalThis.confirm(
-            t('cron.deleteConfirm', 'Delete cron job for agent {agentId}?', {
-              agentId: job.agent_id,
-            }),
+            t(
+              'cron.deleteConfirm',
+              'Delete this job permanently? It will no longer run.',
+            ),
           )
         : true;
 
@@ -716,6 +717,12 @@
                 disabled={submittingForm}
                 onInput={(next) => updateFormField('session_id', next)}
               />
+              <span class="cron-view__field-help">
+                {t(
+                  'cron.form.sessionIdHelp',
+                  'Optional: run inside one fixed existing session instead of a new one. Leave empty to let each run use its own.',
+                )}
+              </span>
             </label>
 
             {#if formErrorMessage}
@@ -752,6 +759,13 @@
   .cron-view__expression-preview {
     margin-top: 4px;
     color: var(--text-med);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .cron-view__field-help {
+    margin-top: 4px;
+    color: var(--text-lo);
     font-size: 12px;
     line-height: 1.4;
   }

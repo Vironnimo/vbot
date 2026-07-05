@@ -53,7 +53,8 @@ export const englishCatalog = Object.freeze({
     'A new session can be started after the current run finishes.',
   'chat.historyEmpty': 'No messages yet. Send the first message to this agent.',
   'chat.composerLabel': 'Message',
-  'chat.composerPlaceholder': 'Ask this agent to do something…',
+  'chat.composerPlaceholder':
+    'Ask this agent to do something… (/ for commands, $ for skills)',
   'chat.sendMessage': 'Send message',
   'chat.queueMessage': 'Queue message',
   'chat.attachment.addFile': 'Add file',
@@ -151,8 +152,12 @@ export const englishCatalog = Object.freeze({
   'chat.takenOver': 'Taken over by {from} → {to}',
   'chat.takenOverGeneric': 'Session taken over',
   'chat.transientCard.label': 'Command output',
-  'chat.project.none': 'No project',
+  'chat.project.none': 'Personal — no project',
+  'chat.personalBarLabel': 'Personal',
+  'chat.personalBarHint':
+    'Your personal agents — available with or without a project.',
   'chat.project.selectAria': 'Select project',
+  'chat.project.teamBarHint': 'Agents discovered in this project’s repository.',
   'chat.project.teamLabel': 'Project team',
   'chat.project.teamEmpty': 'This project has no agents yet.',
   'chat.project.loadError': 'The project team could not be loaded.',
@@ -166,6 +171,7 @@ export const englishCatalog = Object.freeze({
   'sessions.title': 'Sessions',
   'sessions.hide': 'Hide sessions',
   'sessions.loading': 'Loading sessions…',
+  'chat.sessions.emptyTitle': 'No sessions yet',
   'sessions.no_sessions': 'No sessions found for this agent.',
   'sessions.current': 'Current',
   'sessions.fork': 'Fork',
@@ -326,7 +332,9 @@ export const englishCatalog = Object.freeze({
   'cron.form.timezonePlaceholder': 'System default',
   'cron.form.sessionId': 'Session ID',
   'cron.form.sessionIdPlaceholder': 'Optional',
-  'cron.deleteConfirm': 'Delete cron job for agent {agentId}?',
+  'cron.form.sessionIdHelp':
+    'Optional: run inside one fixed existing session instead of a new one. Leave empty to let each run use its own.',
+  'cron.deleteConfirm': 'Delete this job permanently? It will no longer run.',
   'cron.errors.loadJobs': 'Cron jobs could not be loaded.',
   'cron.errors.loadAgents': 'Agents could not be loaded for cron jobs.',
   'cron.errors.save': 'Cron job could not be saved.',
@@ -847,7 +855,7 @@ export const englishCatalog = Object.freeze({
   'logs.title': 'Logs',
   'logs.eyebrow': 'Daily log viewer',
   'logs.subtitle':
-    'Read one daily log file at a time with local filtering and live append updates.',
+    'The application’s technical log, useful when diagnosing problems. Read one daily file at a time with filtering and live updates.',
   'logs.file': 'File',
   'logs.emptyOption': 'No log files',
   'logs.levelFilter': 'Level',
@@ -1074,6 +1082,10 @@ export const englishCatalog = Object.freeze({
   'statistics.usage.dailyTokens': 'Tokens per period',
   'statistics.runs.count': 'Runs',
   'statistics.runs.average': 'Average',
+  'statistics.runs.p50Hint':
+    'Median — half of all runs finished within this time.',
+  'statistics.runs.p90Hint': '90% of runs finished within this time.',
+  'statistics.runs.p95Hint': '95% of runs finished within this time.',
   'statistics.runs.withTools': 'Runs with tools',
   'statistics.runs.openGroups': 'Open run groups',
   'statistics.runs.openGroupsHint':
@@ -1109,7 +1121,7 @@ export const englishCatalog = Object.freeze({
   'onboarding.dismiss': 'Skip for now',
   'onboarding.finishSetup': 'Finish setup',
   'onboarding.finishSetupHint': 'Connect an AI service to start chatting.',
-  'onboarding.step.service.kicker': 'Step 1 of 3',
+  'onboarding.step.service.kicker': 'Step 1 of 2',
   'onboarding.step.service.title': 'Choose an AI service',
   'onboarding.step.service.subtitle':
     'vBot reaches AI models through a service. Pick one to connect — you can add more later in Settings.',
@@ -1125,7 +1137,7 @@ export const englishCatalog = Object.freeze({
   'onboarding.more.toggle': 'More services',
   'onboarding.more.description': 'Connect another provider with an API key.',
   'onboarding.more.action': 'Connect {provider}',
-  'onboarding.step.model.kicker': 'Step 3 of 3',
+  'onboarding.step.model.kicker': 'Step 2 of 2',
   'onboarding.step.model.title': 'Choose a model',
   'onboarding.step.model.subtitle':
     'Pick the model this agent will use. You can change it anytime in Agents.',

@@ -225,7 +225,7 @@ describe('OnboardingView', () => {
     await connectViaHero();
 
     await waitFor(() => {
-      expect(byText('.onboarding-kicker', 'Step 3 of 3')).toBeTruthy();
+      expect(byText('.onboarding-kicker', 'Step 2 of 2')).toBeTruthy();
     });
     expect(rpcMock).toHaveBeenCalledWith(
       'provider.set_key',

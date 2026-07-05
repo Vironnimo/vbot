@@ -285,8 +285,8 @@
   {/if}
 </section>
 
-{#snippet statCard(label, value)}
-  <div class="stats-card">
+{#snippet statCard(label, value, hint)}
+  <div class="stats-card" title={hint}>
     <span class="stats-card__label">{label}</span>
     <span class="stats-card__value">{value}</span>
   </div>
@@ -883,9 +883,24 @@
         t('statistics.runs.average', 'Average'),
         formatDurationMs(runs.duration.average_ms),
       )}
-      {@render statCard('P50', formatDurationMs(runs.duration.p50_ms))}
-      {@render statCard('P90', formatDurationMs(runs.duration.p90_ms))}
-      {@render statCard('P95', formatDurationMs(runs.duration.p95_ms))}
+      {@render statCard(
+        'P50',
+        formatDurationMs(runs.duration.p50_ms),
+        t(
+          'statistics.runs.p50Hint',
+          'Median — half of all runs finished within this time.',
+        ),
+      )}
+      {@render statCard(
+        'P90',
+        formatDurationMs(runs.duration.p90_ms),
+        t('statistics.runs.p90Hint', '90% of runs finished within this time.'),
+      )}
+      {@render statCard(
+        'P95',
+        formatDurationMs(runs.duration.p95_ms),
+        t('statistics.runs.p95Hint', '95% of runs finished within this time.'),
+      )}
       {@render statCard(
         t('statistics.runs.withTools', 'Runs with tools'),
         formatInteger(runs.runs_with_tool_calls, locale),

@@ -38,10 +38,17 @@
   let micDotClass = $derived(computeMicDotClass(wakewordStatus));
   let micTooltip = $derived(computeMicTooltip(wakewordStatus));
   let micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
+  // The identity bar carries a "Personal" label only while a project is
+  // selected, so it visually pairs with the project-name label on the second
+  // (team) bar below. With no project there is just one bar and no label needed.
+  let showPersonalLabel = $derived(
+    typeof selectedProjectId === 'string' &&
+      selectedProjectId.trim().length > 0,
+  );
   // "No project" (Personal) plus one option per project, mirroring the chosen
   // project's display name back into the trigger label.
   let projectOptions = $derived([
-    { value: '', label: t('chat.project.none', 'No project') },
+    { value: '', label: t('chat.project.none', 'Personal — no project') },
     ...projects.map((project) => ({
       value: project.project_id,
       label: project.display_name || project.project_id,
@@ -134,6 +141,17 @@
 <header class="chat-header">
   <h2 id="chat-title" class="chat-title">{t('chat.title', 'Chat')}</h2>
   <div class="agent-tabs" aria-label={t('chat.selectAgent', 'Select agent')}>
+    {#if showPersonalLabel}
+      <span
+        class="agent-tabs__personal-label"
+        title={t(
+          'chat.personalBarHint',
+          'Your personal agents — available with or without a project.',
+        )}
+      >
+        {t('chat.personalBarLabel', 'Personal')}
+      </span>
+    {/if}
     {#if agents.length > 0}
       {#each agents as agent (agent.id)}
         <button
@@ -273,6 +291,23 @@
 
   .agent-tab--empty {
     cursor: default;
+  }
+
+  /* Bold "Personal" label before the identity agent tabs, mirroring the
+     project-name label on the team bar below (.chat-view__project-team-name)
+     so the two bars read as a matched pair when a project is selected. */
+  .agent-tabs__personal-label {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    margin-right: 6px;
+    padding-right: 12px;
+    border-right: 1px solid var(--border);
+    color: var(--text-hi);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
   }
 
   .tab-indicator {

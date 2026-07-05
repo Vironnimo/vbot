@@ -650,6 +650,9 @@ describe('i18n t()', () => {
       'statistics.usage.estimatedTokens',
       'statistics.usage.providers',
       'statistics.usage.models',
+      'statistics.runs.p50Hint',
+      'statistics.runs.p90Hint',
+      'statistics.runs.p95Hint',
       'statistics.runs.cancelRate',
       'statistics.runs.failureRate',
       'statistics.runs.fallbackRuns',
@@ -758,8 +761,11 @@ describe('i18n t()', () => {
   it('contains two-bar project chat copy for the dropdown, team bar, and scan banner', () => {
     const requiredKeys = [
       'chat.project.none',
+      'chat.personalBarLabel',
+      'chat.personalBarHint',
       'chat.project.selectAria',
       'chat.project.teamLabel',
+      'chat.project.teamBarHint',
       'chat.project.teamEmpty',
       'chat.project.loadError',
       'chat.project.sessionError',
@@ -769,7 +775,8 @@ describe('i18n t()', () => {
     ];
 
     expectCatalogKeys(requiredKeys);
-    expect(t('chat.project.none')).toBe('No project');
+    expect(t('chat.project.none')).toBe('Personal — no project');
+    expect(t('chat.personalBarLabel')).toBe('Personal');
     expect(
       t('chat.project.scanBannerCount', undefined, { count: 2 }),
     ).toContain('2');
