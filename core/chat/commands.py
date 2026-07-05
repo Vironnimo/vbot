@@ -74,7 +74,7 @@ _IDENTITY_MODEL_ORIGINS: dict[str | None, str] = {
     "global_default": "global default",
 }
 _PROJECT_MODEL_ORIGINS: dict[str | None, str] = {
-    "pin": "pin (set via /model)",
+    "override": "override (set via /model)",
     "agent": "agent file in repo",
     "project_default": "project default",
     "global_default": "global default",
@@ -463,7 +463,7 @@ class CommandDispatcher:
         """Describe the session's current model and where it resolves from.
 
         Reads the resolver's provenance seam once (``effective_config``): the model
-        value is what the next run would use (already post-pin), and its source names
+        value is what the next run would use (already post-override), and its source names
         the winning tier. None-guarded like ``/status`` so a minimally constructed
         dispatcher degrades to a placeholder instead of crashing; a resolver error is
         logged and degrades to placeholder + "not configured".

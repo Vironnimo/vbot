@@ -607,8 +607,8 @@
   font-size: 11px;
 }
 
-/* Pin controls: a labeled block per field with a control + set/clear actions. */
-.projects-view .projects-pins {
+/* Override controls: a labeled block per field with a control + set/clear actions. */
+.projects-view .projects-overrides {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -616,29 +616,29 @@
   border-top: 1px solid var(--border);
 }
 
-.projects-view .projects-pin-row {
+.projects-view .projects-override-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.projects-view .projects-pin-controls {
+.projects-view .projects-override-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
-.projects-view .projects-pin-input {
+.projects-view .projects-override-input {
   flex: 1;
   min-width: 140px;
 }
 
-.projects-view .projects-pin-input :global(.projects-dropdown) {
+.projects-view .projects-override-input :global(.projects-dropdown) {
   width: 100%;
 }
 
-.projects-view .projects-pin-help {
+.projects-view .projects-override-help {
   margin: 0;
   color: var(--text-lo);
   font-size: 11px;

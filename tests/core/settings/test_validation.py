@@ -192,9 +192,9 @@ def test_validate_project_data_rejects_empty_global_skill_entry() -> None:
     ) in _diagnostics(data)
 
 
-def test_validate_project_data_accepts_pins() -> None:
+def test_validate_project_data_accepts_overrides() -> None:
     data = _valid_project_data()
-    data["pins"] = {
+    data["overrides"] = {
         "builder": {"model": "openai/gpt-5", "temperature": 0.4, "thinking_effort": "high"},
         "planner": {"model": "anthropic/claude-sonnet-4"},
     }
@@ -202,71 +202,75 @@ def test_validate_project_data_accepts_pins() -> None:
     assert validate_project_data(data) == []
 
 
-def test_validate_project_data_accepts_pin_temperature_zero_and_empty_thinking() -> None:
+def test_validate_project_data_accepts_override_temperature_zero_and_empty_thinking() -> None:
     # 0.0 temperature (sampling floor) and "" thinking effort (provider default) are
-    # real values — both valid pinned fields.
+    # real values — both valid overridden fields.
     data = _valid_project_data()
-    data["pins"] = {"builder": {"temperature": 0.0, "thinking_effort": ""}}
+    data["overrides"] = {"builder": {"temperature": 0.0, "thinking_effort": ""}}
 
     assert validate_project_data(data) == []
 
 
-def test_validate_project_data_rejects_non_object_pins() -> None:
+def test_validate_project_data_rejects_non_object_overrides() -> None:
     data = _valid_project_data()
-    data["pins"] = ["builder"]
+    data["overrides"] = ["builder"]
 
-    assert ("error", "$.pins", "must be an object") in _diagnostics(data)
+    assert ("error", "$.overrides", "must be an object") in _diagnostics(data)
 
 
-def test_validate_project_data_rejects_non_string_pin_key() -> None:
+def test_validate_project_data_rejects_non_string_override_key() -> None:
     data = _valid_project_data()
-    data["pins"] = {"": {"model": "openai/gpt-5"}}
+    data["overrides"] = {"": {"model": "openai/gpt-5"}}
 
-    assert ("error", "$.pins", "keys must be non-empty agent id strings") in _diagnostics(data)
+    assert ("error", "$.overrides", "keys must be non-empty agent id strings") in _diagnostics(data)
 
 
-def test_validate_project_data_rejects_non_object_pin_value() -> None:
+def test_validate_project_data_rejects_non_object_override_value() -> None:
     data = _valid_project_data()
-    data["pins"] = {"builder": "openai/gpt-5"}
+    data["overrides"] = {"builder": "openai/gpt-5"}
 
-    assert ("error", "$.pins.builder", "must be an object") in _diagnostics(data)
+    assert ("error", "$.overrides.builder", "must be an object") in _diagnostics(data)
 
 
-def test_validate_project_data_rejects_empty_pin_object() -> None:
+def test_validate_project_data_rejects_empty_override_object() -> None:
     data = _valid_project_data()
-    data["pins"] = {"builder": {}}
+    data["overrides"] = {"builder": {}}
 
-    assert ("error", "$.pins.builder", "must set at least one field") in _diagnostics(data)
+    assert ("error", "$.overrides.builder", "must set at least one field") in _diagnostics(data)
 
 
-def test_validate_project_data_rejects_unknown_pin_field() -> None:
+def test_validate_project_data_rejects_unknown_override_field() -> None:
     data = _valid_project_data()
-    data["pins"] = {"builder": {"nope": "x"}}
+    data["overrides"] = {"builder": {"nope": "x"}}
 
-    assert ("error", "$.pins.builder.nope", "unknown pin field: nope") in _diagnostics(data)
+    assert ("error", "$.overrides.builder.nope", "unknown override field: nope") in _diagnostics(
+        data
+    )
 
 
-def test_validate_project_data_rejects_empty_pin_model_value() -> None:
+def test_validate_project_data_rejects_empty_override_model_value() -> None:
     data = _valid_project_data()
-    data["pins"] = {"builder": {"model": "  "}}
+    data["overrides"] = {"builder": {"model": "  "}}
 
-    assert ("error", "$.pins.builder.model", "must be a non-empty string") in _diagnostics(data)
+    assert ("error", "$.overrides.builder.model", "must be a non-empty string") in _diagnostics(
+        data
+    )
 
 
-def test_validate_project_data_rejects_out_of_range_pin_temperature() -> None:
+def test_validate_project_data_rejects_out_of_range_override_temperature() -> None:
     data = _valid_project_data()
-    data["pins"] = {"builder": {"temperature": 3.0}}
+    data["overrides"] = {"builder": {"temperature": 3.0}}
 
     error_paths = {path for severity, path, _ in _diagnostics(data) if severity == "error"}
-    assert "$.pins.builder.temperature" in error_paths
+    assert "$.overrides.builder.temperature" in error_paths
 
 
-def test_validate_project_data_rejects_unknown_pin_thinking_effort() -> None:
+def test_validate_project_data_rejects_unknown_override_thinking_effort() -> None:
     data = _valid_project_data()
-    data["pins"] = {"builder": {"thinking_effort": "ultra"}}
+    data["overrides"] = {"builder": {"thinking_effort": "ultra"}}
 
     error_paths = {path for severity, path, _ in _diagnostics(data) if severity == "error"}
-    assert "$.pins.builder.thinking_effort" in error_paths
+    assert "$.overrides.builder.thinking_effort" in error_paths
 
 
 def test_validate_project_data_warns_on_unknown_field() -> None:

@@ -35,7 +35,7 @@ from core.projects import (
     cwd_exists,
     slugify_project_id,
 )
-from core.projects.projects import PIN_FIELDS
+from core.projects.projects import OVERRIDE_FIELDS
 from core.projects.scan_report import ScanFinding, ScanReport
 from core.projects.scanners.base import ScannedAgent, ScanResult
 from core.settings import (
@@ -243,72 +243,72 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
     return {"project": _project_response(project), "scan": scan}
 
 
-def _set_pin(state: Any, params: JsonObject) -> JsonObject:
-    """Pin one field (``model`` / ``temperature`` / ``thinking_effort``) for an agent.
+def _set_override(state: Any, params: JsonObject) -> JsonObject:
+    """Override one field (``model`` / ``temperature`` / ``thinking_effort``) for an agent.
 
     Validates the field name and its value before the store write: ``model`` through
     the same usable-model check the ``/model`` command uses (configured here + any
     pinned ``::connection`` allowed), ``temperature`` / ``thinking_effort`` through
     the canonical agent field validators. Returns the refreshed project + scan and
-    publishes the same resource-changed signal ``clear_pin`` does. No cache
+    publishes the same resource-changed signal ``clear_override`` does. No cache
     invalidation is needed — ``project.json`` is read fresh on every resolve.
     """
     unsupported_fields = sorted(set(params) - {"project_id", "agent_id", "field", "value"})
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.set_pin fields: {', '.join(unsupported_fields)}",
+            f"unsupported project.set_override fields: {', '.join(unsupported_fields)}",
         )
 
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
-    field = _required_pin_field(params)
-    value = _validate_pin_value(state, field, params.get("value"))
+    field = _required_override_field(params)
+    value = _validate_override_value(state, field, params.get("value"))
 
     try:
-        project = _projects(state).set_pin(project_id, agent_id, field, value)
+        project = _projects(state).set_override(project_id, agent_id, field, value)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    return _pin_result(state, project)
+    return _override_result(state, project)
 
 
-def _clear_pin(state: Any, params: JsonObject) -> JsonObject:
-    """Clear one pinned field for an agent and return the refreshed project.
+def _clear_override(state: Any, params: JsonObject) -> JsonObject:
+    """Clear one overridden field for an agent and return the refreshed project.
 
     Clearing an absent field (or the agent's last field, which removes the entry) is
     a no-op success. No cache invalidation is needed — ``project.json`` is read fresh
-    on every resolve, so the dropped pin takes effect on the next run.
+    on every resolve, so the dropped override takes effect on the next run.
     """
     unsupported_fields = sorted(set(params) - {"project_id", "agent_id", "field"})
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.clear_pin fields: {', '.join(unsupported_fields)}",
+            f"unsupported project.clear_override fields: {', '.join(unsupported_fields)}",
         )
 
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
-    field = _required_pin_field(params)
+    field = _required_override_field(params)
     try:
-        project = _projects(state).clear_pin(project_id, agent_id, field)
+        project = _projects(state).clear_override(project_id, agent_id, field)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    return _pin_result(state, project)
+    return _override_result(state, project)
 
 
-def _pin_result(state: Any, project: Project) -> JsonObject:
-    """Return the standard pin RPC result (refreshed project + live scan)."""
+def _override_result(state: Any, project: Project) -> JsonObject:
+    """Return the standard override RPC result (refreshed project + live scan)."""
     scan = _scan_preview(state, project)
     return {"project": _project_response(project), "scan": scan}
 
 
-def _required_pin_field(params: JsonObject) -> str:
-    """Return the pin field name, rejecting an unknown one as ``invalid_request``."""
+def _required_override_field(params: JsonObject) -> str:
+    """Return the override field name, rejecting an unknown one as ``invalid_request``."""
     field = _required_string(params, "field")
-    if field not in PIN_FIELDS:
-        allowed = ", ".join(sorted(PIN_FIELDS))
+    if field not in OVERRIDE_FIELDS:
+        allowed = ", ".join(sorted(OVERRIDE_FIELDS))
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             f"params.field must be one of: {allowed}",
@@ -316,13 +316,14 @@ def _required_pin_field(params: JsonObject) -> str:
     return field
 
 
-def _validate_pin_value(state: Any, field: str, value: Any) -> Any:
-    """Validate a pin value against the field's rule; raise ``invalid_request`` on error.
+def _validate_override_value(state: Any, field: str, value: Any) -> Any:
+    """Validate an override value against the field's rule; raise ``invalid_request`` on error.
 
     ``model`` reuses the ``/model`` usable-model gate (configured in this instance +
     any pinned connection allowed); ``temperature`` / ``thinking_effort`` reuse the
     canonical agent field validators (``""`` thinking effort forces the provider
-    default). ``None`` is never a valid pin value — clearing is ``project.clear_pin``.
+    default). ``None`` is never a valid override value — clearing is
+    ``project.clear_override``.
     """
     if field == "model":
         if not isinstance(value, str) or not value.strip():
@@ -612,10 +613,10 @@ def _team_member_response(resolver: Any, member: ScannedAgent, project: Project)
         # The editor pairs this with the project Tool Whitelist (the ceiling) to show
         # that an individual agent may use less than the project maximum.
         "denied_tools": sorted(member.denied_tools),
-        # The agent's Pin object (vBot-owned, the top tier of each chain), or null
-        # when this agent has none — the Projects tab renders/clears it per row.
-        "pins": project.pins.get(member.agent_id) or None,
-        # Per run field, the effective value + winning tier (pin / agent /
+        # The agent's override object (vBot-owned, the top tier of each chain), or
+        # null when this agent has none — the Projects tab renders/clears it per row.
+        "overrides": project.overrides.get(member.agent_id) or None,
+        # Per run field, the effective value + winning tier (override / agent /
         # project_default / global_default / null), computed from the already-scanned
         # member so the team listing never re-scans per member.
         "effective": resolver.effective_config_for_member(project, member),
@@ -646,7 +647,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "project.list": _list_projects,
         "project.show": _show_project,
         "project.set": _set_project,
-        "project.set_pin": _set_pin,
-        "project.clear_pin": _clear_pin,
+        "project.set_override": _set_override,
+        "project.clear_override": _clear_override,
         "project.rm": _remove_project,
     }
