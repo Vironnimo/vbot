@@ -89,6 +89,11 @@
   );
   let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(skillAccessItems());
+  // The wildcard default (`["*"]`) means "everything, including future items".
+  // The toggle list renders every item as on with no signal, so a note explains
+  // that flipping any single toggle collapses the wildcard into a fixed list.
+  let toolsAreWildcard = $derived(isWildcardAccess(formValues.allowed_tools));
+  let skillsAreWildcard = $derived(isWildcardAccess(formValues.allowed_skills));
   let modelOptions = $derived(
     selectModelOptions(
       formValues.model,
@@ -408,6 +413,10 @@
     )
       ? [WILDCARD_ACCESS]
       : nextItems;
+  }
+
+  function isWildcardAccess(items) {
+    return Array.isArray(items) && items.includes(WILDCARD_ACCESS);
   }
 
   function toolAccessItems() {
@@ -745,6 +754,12 @@
             onValueChange={(selectedValue) =>
               updateModelSelection('fallback_model', selectedValue)}
           />
+          <small class="agents-view__field-help">
+            {t(
+              'agents.form.fallbackModelHelp',
+              'Used automatically when the primary model fails or is unavailable.',
+            )}
+          </small>
         </label>
 
         <label class="f agents-view__thinking-field">
@@ -773,6 +788,13 @@
                 'This model does not support reasoning.',
               )}
             </small>
+          {:else}
+            <small class="agents-view__field-help">
+              {t(
+                'agents.form.thinkingEffortHelp',
+                'How much internal reasoning the model may spend before answering. Leave at — for the default.',
+              )}
+            </small>
           {/if}
         </label>
 
@@ -786,6 +808,12 @@
             value={formValues.temperature}
             onInput={(next) => (formValues.temperature = next)}
           />
+          <small class="agents-view__field-help">
+            {t(
+              'agents.form.temperatureHelp',
+              'Sampling randomness, typically 0–2. Leave empty to use the default.',
+            )}
+          </small>
           {#if formErrors.temperature}
             <small class="agents-view__field-error">
               {fieldError('temperature')}
@@ -817,6 +845,12 @@
           }}
         />
       </div>
+      <small class="agents-view__field-help">
+        {t(
+          'agents.form.customPromptHelp',
+          'Gives this agent its own editable copy of the system prompt. Edit it in the System Prompt tab by selecting this agent as the scope. Turning this off keeps the customized blocks but stops using them.',
+        )}
+      </small>
       <div class="agents-view__prompt-memory-row">
         <span class="agents-view__prompt-toggle-label">
           {t('agents.form.memoryPromptMode', 'Memory')}
@@ -833,6 +867,12 @@
           }}
         />
       </div>
+      <small class="agents-view__field-help">
+        {t(
+          'agents.form.memoryPromptModeHelp',
+          'Which memory notes are shown to the model: the agent’s own notes (MEMORY.md), or additionally what it knows about you (USER.md).',
+        )}
+      </small>
     </div>
 
     <div class="detail-group">
@@ -862,6 +902,14 @@
             </Button>
           </div>
         </div>
+        {#if toolsAreWildcard && visibleToolItems.length > 0}
+          <small class="agents-view__field-help">
+            {t(
+              'agents.form.wildcardNote',
+              'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
+            )}
+          </small>
+        {/if}
         {#if visibleToolItems.length > 0}
           <div class="tl-items">
             {#each visibleToolItems as item (item.name)}
@@ -916,6 +964,14 @@
             </Button>
           </div>
         </div>
+        {#if skillsAreWildcard && visibleSkillItems.length > 0}
+          <small class="agents-view__field-help">
+            {t(
+              'agents.form.wildcardNote',
+              'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
+            )}
+          </small>
+        {/if}
         {#if visibleSkillItems.length > 0}
           <div class="tl-items">
             {#each visibleSkillItems as item (item.name)}

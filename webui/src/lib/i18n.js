@@ -220,7 +220,19 @@ export const englishCatalog = Object.freeze({
   'agents.form.allowedTools': 'Allowed tools',
   'agents.form.allowedSkills': 'Allowed skills',
   'agents.form.customSystemPrompt': 'Custom system prompt',
+  'agents.form.customPromptHelp':
+    'Gives this agent its own editable copy of the system prompt. Edit it in the System Prompt tab by selecting this agent as the scope. Turning this off keeps the customized blocks but stops using them.',
   'agents.form.memoryPromptMode': 'Memory',
+  'agents.form.memoryPromptModeHelp':
+    'Which memory notes are shown to the model: the agent’s own notes (MEMORY.md), or additionally what it knows about you (USER.md).',
+  'agents.form.fallbackModelHelp':
+    'Used automatically when the primary model fails or is unavailable.',
+  'agents.form.temperatureHelp':
+    'Sampling randomness, typically 0–2. Leave empty to use the default.',
+  'agents.form.thinkingEffortHelp':
+    'How much internal reasoning the model may spend before answering. Leave at — for the default.',
+  'agents.form.wildcardNote':
+    'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
   'agents.form.idHelp': 'Agent IDs are immutable after creation.',
   'agents.form.modelPlaceholder': 'Default (no model selected)',
   'agents.form.fallbackModelPlaceholder': 'None',
@@ -238,8 +250,9 @@ export const englishCatalog = Object.freeze({
   'agents.form.thinkingEffortUnsupported':
     'This model does not support reasoning.',
   'agents.form.memoryPromptModeOption.off': 'Off',
-  'agents.form.memoryPromptModeOption.agent': 'MEMORY.md',
-  'agents.form.memoryPromptModeOption.agent_user': 'MEMORY.md + USER.md',
+  'agents.form.memoryPromptModeOption.agent': 'Agent notes (MEMORY.md)',
+  'agents.form.memoryPromptModeOption.agent_user':
+    'Agent + user notes (MEMORY.md + USER.md)',
   'agents.form.workspaceAssignedByServer':
     'Workspace is assigned by the server when the agent is created.',
   'agents.form.submitCreate': 'Create agent',
@@ -433,10 +446,12 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.fragmentEditor.reset': 'Reset',
   'systemPrompt.fragmentEditor.dirtyIndicator': 'unsaved',
   'systemPrompt.fragmentEditor.modifiedIndicator': 'modified',
+  'systemPrompt.fragmentEditor.modifiedHint':
+    'Edited — differs from the built-in default.',
   'systemPrompt.fragmentEditor.resetConfirm':
-    'Reset this fragment to its bundled default? This cannot be undone.',
+    'Reset this block to its default? This cannot be undone.',
   'systemPrompt.fragmentEditor.resetAgentConfirm':
-    'Reset this Agent fragment to the current Default content? This cannot be undone.',
+    'Reset this Agent block to the current Default content? This cannot be undone.',
   'systemPrompt.preview.heading': 'Preview for',
   'systemPrompt.preview.refresh': 'Refresh',
   'systemPrompt.preview.copy': 'Copy',
@@ -457,12 +472,12 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.error.copyFailed': 'Failed to copy',
   'systemPrompt.error.layoutFailed': 'Failed to save layout',
   'systemPrompt.blockList.intro':
-    'Reorder, toggle, and edit the blocks that build the system prompt.',
+    'Reorder, toggle, and edit the blocks that build the system prompt. The Default scope applies to every agent; an agent gets its own scope here once “Custom system prompt” is enabled in the Agents tab.',
   'systemPrompt.blockList.newBlock': 'New block',
   'systemPrompt.blockList.newBlockPrompt':
-    'New block slug (letters, digits, “-” or “_”):',
+    'Name for the new block (letters, digits, “-” or “_”):',
   'systemPrompt.blockList.invalidSlug':
-    'Invalid slug — use letters, digits, “-” or “_”, starting with a letter or digit.',
+    'Invalid name — use letters, digits, “-” or “_”, starting with a letter or digit.',
   'systemPrompt.blockList.createFailed':
     'Failed to create block. The slug may be invalid or already used.',
   'systemPrompt.blockList.removeConfirm':
@@ -473,6 +488,8 @@ export const englishCatalog = Object.freeze({
     'Reset block order and visibility to the default? This cannot be undone.',
   'systemPrompt.blockList.customBadge': 'custom',
   'systemPrompt.blockList.dataBadge': 'auto',
+  'systemPrompt.blockList.dataHint':
+    'Generated content — rebuilt automatically, not editable.',
   'systemPrompt.blockList.inheritedBadge': 'inherited',
   'systemPrompt.blockList.inheritedHint':
     'Inherited from the Default scope — editing creates an override.',
