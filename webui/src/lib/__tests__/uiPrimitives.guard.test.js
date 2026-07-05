@@ -186,6 +186,31 @@ describe('UI primitive guard', () => {
     expect(violations).toEqual([]);
   });
 
+  it('bans raw checkbox inputs — boolean toggles use Toggle.svelte', () => {
+    // Every boolean on/off control is the shared Toggle (role="switch") button.
+    // A raw `<input type="checkbox">` would bypass the primitive, so this scan
+    // fails the build if one reappears. WakewordVoiceSettings' `voice-toggle`
+    // checkbox-slider is a deliberately distinct control (DESIGN.md → Toggles),
+    // so it is the one allowlisted exception.
+    const CHECKBOX_ALLOWLIST = new Set([
+      'components/WakewordVoiceSettings.svelte',
+    ]);
+    const RAW_CHECKBOX = /type\s*=\s*"checkbox"/;
+    const violations = [];
+
+    for (const filePath of SVELTE_FILES) {
+      const relativePath = relative(SRC_DIR, filePath);
+      if (CHECKBOX_ALLOWLIST.has(relativePath.split(sep).join('/'))) {
+        continue;
+      }
+      if (RAW_CHECKBOX.test(readFileSync(filePath, 'utf8'))) {
+        violations.push(`${relativePath}: <input type="checkbox">`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   it('routes every text field through components/ui/TextField.svelte', () => {
     // Editable inputs: scoped to <input> so textareas (which legitimately reuse
     // s-input for styling) are unaffected. The read-only value-box may live on

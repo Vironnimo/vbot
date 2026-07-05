@@ -301,23 +301,6 @@
   min-width: 280px;
 }
 
-.s-row-control--checkbox {
-  width: auto;
-  min-width: 0;
-}
-
-.s-checkbox-wrap {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-}
-
-.s-checkbox {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--accent);
-}
-
 .s-row-actions {
   display: flex;
   align-items: center;

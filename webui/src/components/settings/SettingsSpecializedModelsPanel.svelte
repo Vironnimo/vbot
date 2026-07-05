@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import {
     getTaskModelOptions,
     listTaskModelTargets,
@@ -512,13 +513,12 @@
                     handleTaskModelOptionChange(row.taskType, field, event)}
                 />
               {:else if field.type === 'boolean'}
-                <input
-                  class="s-checkbox"
-                  type="checkbox"
+                <Toggle
                   checked={taskModelOptionValue(row.taskType, field) === true}
                   disabled={taskModelSaving}
-                  onchange={(event) =>
-                    handleTaskModelOptionChange(row.taskType, field, event)}
+                  ariaLabel={field.label}
+                  onChange={(next) =>
+                    setTaskModelOption(row.taskType, field, next)}
                 />
               {:else}
                 <TextField
