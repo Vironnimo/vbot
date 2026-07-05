@@ -476,7 +476,6 @@ describe('SettingsView', () => {
   });
 
   it('updates, toggles, and deletes channels from row actions', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     rpcMock.mockImplementation(
       createSettingsRpcMock({
         channels: [
@@ -528,19 +527,25 @@ describe('SettingsView', () => {
     ).toBe(true);
 
     buttonByAriaLabel('Delete channel tg-assistant').click();
+    flushSync();
+
+    // The row action opens the shared ConfirmDialog; the delete RPC only fires
+    // once it is confirmed.
+    expect(
+      rpcMock.mock.calls.some((call) => call[0] === 'channel.delete'),
+    ).toBe(false);
+    confirmChannelDialog('Delete');
+
     await waitForCondition(() =>
       rpcMock.mock.calls.some((call) => call[0] === 'channel.delete'),
     );
 
-    expect(confirmSpy).toHaveBeenCalled();
     expect(
       rpcMock.mock.calls.some(
         (call) =>
           call[0] === 'channel.delete' && call[1]?.id === 'tg-assistant',
       ),
     ).toBe(true);
-
-    confirmSpy.mockRestore();
   });
 
   it('auto-saves sub-agent settings 800 ms after the last change', async () => {
@@ -1210,6 +1215,17 @@ function buttonByAriaLabel(label) {
   return Array.from(document.body.querySelectorAll('button')).find(
     (button) => button.getAttribute('aria-label') === label,
   );
+}
+
+// Clicks a button in the open ConfirmDialog by its label (Delete / Cancel).
+function confirmChannelDialog(label) {
+  const footer = document.body.querySelector('.modal-footer');
+  expect(footer, 'confirm dialog not open').toBeTruthy();
+  const button = Array.from(footer.querySelectorAll('button')).find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(button, `confirm button not found: ${label}`).toBeTruthy();
+  button.click();
 }
 
 function getButton(label) {

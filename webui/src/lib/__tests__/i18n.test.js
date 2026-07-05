@@ -796,6 +796,52 @@ describe('i18n t()', () => {
     expect(t('chat.project.scanBannerLink').toLowerCase()).toContain('project');
   });
 
+  it('contains confirm-dialog titles, verbs, and consequence bodies', () => {
+    const requiredKeys = [
+      'common.reset',
+      'projects.remove.confirmTitle',
+      'sessions.delete_confirm_title',
+      'cron.deleteConfirmTitle',
+      'settings.channels.delete_confirm_title',
+      'settings.channels.delete_confirm',
+      'settings.skills.deleteConfirmTitle',
+      'settings.skills.deleteConfirm',
+      'systemPrompt.fragmentEditor.resetConfirmTitle',
+      'systemPrompt.blockList.removeConfirmTitle',
+      'systemPrompt.blockList.resetLayoutConfirmTitle',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+
+    // Confirm buttons carry the action verb; titles name the entity.
+    expect(t('common.reset')).toBe('Reset');
+    expect(t('projects.remove.confirmTitle')).toBe('Remove project');
+    expect(t('sessions.delete_confirm_title')).toBe('Delete session');
+    expect(t('cron.deleteConfirmTitle')).toBe('Delete cron job');
+    expect(t('settings.channels.delete_confirm_title')).toBe('Delete channel');
+    expect(t('settings.skills.deleteConfirmTitle')).toBe('Delete skill');
+    expect(t('systemPrompt.fragmentEditor.resetConfirmTitle')).toBe(
+      'Reset block',
+    );
+    expect(t('systemPrompt.blockList.removeConfirmTitle')).toBe('Remove block');
+    expect(t('systemPrompt.blockList.resetLayoutConfirmTitle')).toBe(
+      'Reset layout',
+    );
+
+    // The rewritten permanent-delete bodies state the consequence honestly and
+    // interpolate the entity id/name.
+    expect(
+      t('settings.channels.delete_confirm', undefined, { id: 'tg-main' }),
+    ).toBe(
+      'Delete channel "tg-main" permanently? vBot stops listening on it and its configuration is removed.',
+    );
+    expect(
+      t('settings.skills.deleteConfirm', undefined, { name: 'deploy' }),
+    ).toBe(
+      'Delete skill “deploy” permanently? The skill file is removed from disk.',
+    );
+  });
+
   it('does not expose Components showcase labels in the live catalog', () => {
     expect(englishCatalog['components.title']).toBeUndefined();
     expect(englishCatalog['components.toast.errorMessage']).toBeUndefined();

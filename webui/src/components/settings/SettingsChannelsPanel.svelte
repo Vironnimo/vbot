@@ -3,6 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
@@ -33,6 +34,9 @@
   let channelActionChannelId = $state('');
   let channelNotice = $state('');
   let channelError = $state('');
+  // The channel awaiting delete confirmation (null = dialog closed). The delete
+  // only runs once the confirm dialog resolves.
+  let deleteConfirmChannel = $state(null);
 
   let channelPlatformOptions = $derived(
     CHANNEL_PLATFORMS.map((platformId) => ({
@@ -255,13 +259,18 @@
     });
   }
 
-  async function deleteChannel(channel) {
-    const confirmed = confirm(
-      t('settings.channels.delete_confirm', 'Delete channel {id}?', {
-        id: channel.id,
-      }),
-    );
-    if (!confirmed) {
+  function deleteChannel(channel) {
+    deleteConfirmChannel = channel;
+  }
+
+  function cancelDeleteChannel() {
+    deleteConfirmChannel = null;
+  }
+
+  async function confirmDeleteChannel() {
+    const channel = deleteConfirmChannel;
+    deleteConfirmChannel = null;
+    if (!channel) {
       return;
     }
 
@@ -546,4 +555,18 @@
       </div>
     {/each}
   </div>
+{/if}
+
+{#if deleteConfirmChannel}
+  <ConfirmDialog
+    title={t('settings.channels.delete_confirm_title', 'Delete channel')}
+    body={t(
+      'settings.channels.delete_confirm',
+      'Delete channel "{id}" permanently? vBot stops listening on it and its configuration is removed.',
+      { id: deleteConfirmChannel.id },
+    )}
+    confirmLabel={t('common.delete', 'Delete')}
+    onConfirm={confirmDeleteChannel}
+    onCancel={cancelDeleteChannel}
+  />
 {/if}

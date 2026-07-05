@@ -164,6 +164,28 @@ describe('UI primitive guard', () => {
     expect(violations).toEqual([]);
   });
 
+  it('bans native confirm() in components — use ConfirmDialog instead', () => {
+    // The shared ConfirmDialog replaces every native browser confirm. This scan
+    // fails the build if `window.confirm(`, `globalThis.confirm(`, or a bare
+    // `confirm(` call reappears in a component. The lookbehind requires the
+    // token to start on a non-word boundary and be immediately followed by `(`,
+    // so identifiers that merely contain the word — `confirmDelete`,
+    // `onConfirm`, `ConfirmDialog`, and i18n keys like `delete_confirm` or
+    // `deleteConfirm` — never trip it.
+    const NATIVE_CONFIRM_CALL = /(?<![A-Za-z0-9_])confirm\s*\(/g;
+    const violations = [];
+
+    for (const filePath of SVELTE_FILES) {
+      const source = readFileSync(filePath, 'utf8');
+      for (const match of source.matchAll(NATIVE_CONFIRM_CALL)) {
+        const relativePath = relative(SRC_DIR, filePath);
+        violations.push(`${relativePath}: ${match[0]}`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   it('routes every text field through components/ui/TextField.svelte', () => {
     // Editable inputs: scoped to <input> so textareas (which legitimately reuse
     // s-input for styling) are unaffected. The read-only value-box may live on

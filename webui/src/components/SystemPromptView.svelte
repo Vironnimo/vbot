@@ -3,6 +3,7 @@
 
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Toggle from './ui/Toggle.svelte';
   import {
     buildAgentTargetDropdownOptions,
@@ -48,6 +49,27 @@
   // The drag source index for a native HTML5 drag (mirrored from dataTransfer so
   // a same-document drop can reorder without parsing the payload defensively).
   let dragSourceIndex = null;
+
+  // Pending confirmations (null = the dialog is closed). Each destructive action
+  // opens its own dialog and runs only once the user confirms. `resetBlock` and
+  // `removeCustomBlock` remember the target block id; `resetLayout` takes none.
+  let resetConfirmBlockId = $state(null);
+  let removeConfirmBlockId = $state(null);
+  let resetLayoutConfirmOpen = $state(false);
+
+  // The reset-block confirm body speaks of the Default scope's built-in default
+  // or an Agent scope's inherited Default content, matching the scope in effect.
+  let resetConfirmBody = $derived(
+    isAgentScope
+      ? t(
+          'systemPrompt.fragmentEditor.resetAgentConfirm',
+          'Reset this Agent block to the current Default content? This cannot be undone.',
+        )
+      : t(
+          'systemPrompt.fragmentEditor.resetConfirm',
+          'Reset this block to its default? This cannot be undone.',
+        ),
+  );
 
   // Project teams power the project-agent options in the preview agent picker.
   // Identity agents come from `agent.list`; project agents are scanned lazily
@@ -517,21 +539,25 @@
     }
   }
 
-  async function resetBlock(blockId) {
+  function resetBlock(blockId) {
+    if (blockIndexById(blockId) === -1) {
+      return;
+    }
+    resetConfirmBlockId = blockId;
+  }
+
+  function cancelResetBlock() {
+    resetConfirmBlockId = null;
+  }
+
+  async function confirmResetBlock() {
+    const blockId = resetConfirmBlockId;
+    resetConfirmBlockId = null;
     const index = blockIndexById(blockId);
     if (index === -1) {
       return;
     }
     const block = blocks[index];
-    const confirmKey = isAgentScope
-      ? 'systemPrompt.fragmentEditor.resetAgentConfirm'
-      : 'systemPrompt.fragmentEditor.resetConfirm';
-    const confirmed = window.confirm(
-      t(confirmKey, 'Reset this block to its default? This cannot be undone.'),
-    );
-    if (!confirmed) {
-      return;
-    }
 
     clearAutoSaveTimer(blockId);
     blocks[index].isBusy = true;
@@ -746,14 +772,18 @@
     }
   }
 
-  async function removeCustomBlock(blockId) {
-    const confirmed = window.confirm(
-      t(
-        'systemPrompt.blockList.removeConfirm',
-        'Remove this custom block? This cannot be undone.',
-      ),
-    );
-    if (!confirmed) {
+  function removeCustomBlock(blockId) {
+    removeConfirmBlockId = blockId;
+  }
+
+  function cancelRemoveCustomBlock() {
+    removeConfirmBlockId = null;
+  }
+
+  async function confirmRemoveCustomBlock() {
+    const blockId = removeConfirmBlockId;
+    removeConfirmBlockId = null;
+    if (!blockId) {
       return;
     }
 
@@ -769,16 +799,16 @@
     }
   }
 
-  async function resetLayout() {
-    const confirmed = window.confirm(
-      t(
-        'systemPrompt.blockList.resetLayoutConfirm',
-        'Reset block order and visibility to the default? This cannot be undone.',
-      ),
-    );
-    if (!confirmed) {
-      return;
-    }
+  function resetLayout() {
+    resetLayoutConfirmOpen = true;
+  }
+
+  function cancelResetLayout() {
+    resetLayoutConfirmOpen = false;
+  }
+
+  async function confirmResetLayout() {
+    resetLayoutConfirmOpen = false;
 
     try {
       await rpc('prompt.reset_layout', scopedParams());
@@ -1190,6 +1220,45 @@
   <div class="sp-sr-only" aria-live="polite" role="status">
     {reorderAnnouncement}
   </div>
+
+  {#if resetConfirmBlockId}
+    <ConfirmDialog
+      title={t('systemPrompt.fragmentEditor.resetConfirmTitle', 'Reset block')}
+      body={resetConfirmBody}
+      confirmLabel={t('common.reset', 'Reset')}
+      onConfirm={confirmResetBlock}
+      onCancel={cancelResetBlock}
+    />
+  {/if}
+
+  {#if removeConfirmBlockId}
+    <ConfirmDialog
+      title={t('systemPrompt.blockList.removeConfirmTitle', 'Remove block')}
+      body={t(
+        'systemPrompt.blockList.removeConfirm',
+        'Remove this custom block? This cannot be undone.',
+      )}
+      confirmLabel={t('common.remove', 'Remove')}
+      onConfirm={confirmRemoveCustomBlock}
+      onCancel={cancelRemoveCustomBlock}
+    />
+  {/if}
+
+  {#if resetLayoutConfirmOpen}
+    <ConfirmDialog
+      title={t(
+        'systemPrompt.blockList.resetLayoutConfirmTitle',
+        'Reset layout',
+      )}
+      body={t(
+        'systemPrompt.blockList.resetLayoutConfirm',
+        'Reset block order and visibility to the default? This cannot be undone.',
+      )}
+      confirmLabel={t('common.reset', 'Reset')}
+      onConfirm={confirmResetLayout}
+      onCancel={cancelResetLayout}
+    />
+  {/if}
 </section>
 
 <style>
