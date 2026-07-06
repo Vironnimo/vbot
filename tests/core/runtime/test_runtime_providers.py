@@ -712,6 +712,26 @@ def test_get_connection_token_getter_returns_static_for_api_key(runtime: Runtime
 
 
 @pytest.mark.asyncio
+async def test_token_getter_for_none_connection_is_static_and_empty(runtime: Runtime) -> None:
+    """A keyless ``none`` connection yields a StaticTokenGetter with an empty token."""
+    # Arrange — fabricated keyless connection (public-path coverage arrives with
+    # the first shipped ``none`` provider config).
+    connection = ConnectionConfig(
+        id="local",
+        type="none",
+        label="Local",
+        auth=AuthConfig(header="", prefix="", credential_key=""),
+    )
+
+    # Act
+    getter = runtime._get_token_getter("ollama", "ollama:local", connection, None)
+
+    # Assert
+    assert isinstance(getter, StaticTokenGetter)
+    assert await getter() == ""
+
+
+@pytest.mark.asyncio
 async def test_get_connection_token_getter_returns_oauth_for_subscription(
     runtime: Runtime,
 ) -> None:

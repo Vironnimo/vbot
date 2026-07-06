@@ -914,6 +914,43 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_refresh_models_keyless_connection_sends_no_auth_header(
+        self,
+        tmp_path: Path,
+    ):
+        """A ``none`` connection refreshes with an empty credential and no auth header."""
+        keyless_connection = ConnectionConfig(
+            id="local",
+            type="none",
+            label="Local",
+            auth=AuthConfig(header="", prefix="", credential_key=""),
+        )
+        provider_config = ProviderConfig(
+            id="localhost",
+            name="Localhost",
+            adapter="openai_compatible",
+            base_url="http://localhost:9999/v1",
+            connections=[keyless_connection],
+            models_endpoint="/models",
+        )
+        route = respx.get("http://localhost:9999/v1/models").mock(
+            return_value=httpx.Response(200, json={"models": [{"id": "test-model"}]})
+        )
+
+        result = await refresh_models(
+            provider_config,
+            "",
+            tmp_path / "resources",
+            credential_connection=keyless_connection,
+        )
+
+        registry = ModelRegistry.load(tmp_path / "resources")
+        assert result["model_count"] == 1
+        assert registry.get("localhost", "test-model").connections == ("local",)
+        assert "Authorization" not in route.calls.last.request.headers
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_refresh_models_uses_tolerant_normalizer_for_github_copilot(
         self,
         tmp_path: Path,

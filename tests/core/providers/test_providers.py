@@ -974,6 +974,82 @@ class TestConnectionModeAndModelsEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# Connection type "none" — keyless connections (e.g. local Ollama)
+# ---------------------------------------------------------------------------
+
+
+class TestNoneConnectionType:
+    """Tests for the keyless ``none`` connection type."""
+
+    def _write_provider(self, tmp_path: Path, connection: dict[str, Any]) -> Path:
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = {
+            "id": "ollama",
+            "name": "Ollama",
+            "adapter": "ollama",
+            "base_url": "http://localhost:11434",
+            "connections": [connection],
+        }
+        (prov_dir / "ollama.json").write_text(json.dumps(data), encoding="utf-8")
+        return tmp_path
+
+    def test_none_connection_without_auth_block_parses(self, tmp_path: Path) -> None:
+        """A ``none`` connection needs no auth block and gets an empty AuthConfig."""
+        # Arrange
+        resources = self._write_provider(
+            tmp_path, {"id": "local", "type": "none", "label": "Local"}
+        )
+
+        # Act
+        registry = ProviderRegistry.load(resources)
+        connection = registry.get("ollama").get_connection("local")
+
+        # Assert
+        assert connection.type == "none"
+        assert connection.auth == AuthConfig(header="", prefix="", credential_key="")
+
+    def test_none_connection_with_auth_block_parses_leniently(self, tmp_path: Path) -> None:
+        """An optional auth block on a ``none`` connection parses without required fields."""
+        # Arrange
+        resources = self._write_provider(
+            tmp_path,
+            {"id": "local", "type": "none", "label": "Local", "auth": {}},
+        )
+
+        # Act
+        registry = ProviderRegistry.load(resources)
+        connection = registry.get("ollama").get_connection("local")
+
+        # Assert
+        assert connection.auth == AuthConfig(header="", prefix="", credential_key="")
+
+    def test_api_key_connection_still_requires_auth_block(self, tmp_path: Path) -> None:
+        """Non-keyless connection types keep requiring the auth block."""
+        # Arrange
+        resources = self._write_provider(
+            tmp_path,
+            {"id": "cloud", "type": "api_key", "label": "Cloud"},
+        )
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="missing required field 'auth'"):
+            ProviderRegistry.load(resources)
+
+    def test_oauth_connection_still_requires_auth_block(self, tmp_path: Path) -> None:
+        """OAuth connections keep requiring the auth block."""
+        # Arrange
+        resources = self._write_provider(
+            tmp_path,
+            {"id": "sso", "type": "oauth", "label": "SSO"},
+        )
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="missing required field 'auth'"):
+            ProviderRegistry.load(resources)
+
+
+# ---------------------------------------------------------------------------
 # models_dev_id — vBot↔models.dev provider-id mapping (Phase 3 consumer)
 # ---------------------------------------------------------------------------
 
