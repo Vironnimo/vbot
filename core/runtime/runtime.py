@@ -18,7 +18,7 @@ from typing import Any, Protocol, cast
 
 from core.agents.agents import AgentStore
 from core.attachments import AttachmentStore
-from core.automation import CronService, TriggerService
+from core.automation import CronService, ReflectionService, TriggerService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
@@ -374,6 +374,7 @@ class Runtime:
         self._streaming_chat_loop: ChatLoop | None = None
         self._started_at: datetime | None = None
         self._trigger_service: TriggerService | None = None
+        self._reflection_service: ReflectionService | None = None
         self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
@@ -554,17 +555,23 @@ class Runtime:
             raise RuntimeError("Attachment store not available")
         resolver = ContentBlockResolver(self._attachment_store, transcriber=self._speech)
         compaction_service = CompactionService(SummarizationStrategy())
+        # The reflection service starts review runs through the runtime's
+        # streaming loop lazily at review time, so constructing it before the
+        # loops is safe — the loops only need its notify hook.
+        self._reflection_service = ReflectionService(self)
         self._chat_loop = ChatLoop(
             self,
             streaming=False,
             attachment_resolver=resolver,
             compaction_service=compaction_service,
+            reflection_service=self._reflection_service,
         )
         self._streaming_chat_loop = ChatLoop(
             self,
             streaming=True,
             attachment_resolver=resolver,
             compaction_service=compaction_service,
+            reflection_service=self._reflection_service,
         )
         self._trigger_service = TriggerService(
             self._chat_loop,
@@ -708,6 +715,7 @@ class Runtime:
         self._channel_service = None
         self._cron_service = None
         self._trigger_service = None
+        self._reflection_service = None
         self._subagent_coordinator = None
         self._chat_loop = None
         self._streaming_chat_loop = None
@@ -1717,6 +1725,14 @@ class Runtime:
         if self._trigger_service is None:
             raise RuntimeError("Trigger service not available")
         return self._trigger_service
+
+    @property
+    def reflection(self) -> ReflectionService:
+        """Access to background self-improvement reviews (fork + cadence)."""
+        self._ensure_started()
+        if self._reflection_service is None:
+            raise RuntimeError("Reflection service not available")
+        return self._reflection_service
 
     @property
     def streaming_chat_loop(self) -> ChatLoop:

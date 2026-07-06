@@ -1058,3 +1058,33 @@ class TestChatSessionManagerFork:
 
         with pytest.raises(ChatSessionError, match="session does not exist"):
             asyncio.run(manager.fork("alpha", "missing"))
+
+
+class TestForkStripPolicy:
+    """Drift guards: the literal strip-set keys must track the owning domains.
+
+    The sets live beside the fork primitive with literal key names (importing
+    the owning constants would cycle back through ``core/chat``); these
+    assertions fail the moment an owning domain renames its sidecar key.
+    """
+
+    def test_always_strip_set_tracks_owning_domain_constants(self) -> None:
+        from core.automation.reflection import REFLECTION_COUNTERS_META_KEY
+        from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS
+        from core.subagents.subagents import (
+            SUBAGENT_PARENT_METADATA_KEY,
+            SUBAGENT_SESSION_METADATA_FLAG,
+        )
+
+        assert SUBAGENT_SESSION_METADATA_FLAG in SESSION_FORK_ALWAYS_STRIP_META_KEYS
+        assert SUBAGENT_PARENT_METADATA_KEY in SESSION_FORK_ALWAYS_STRIP_META_KEYS
+        assert REFLECTION_COUNTERS_META_KEY in SESSION_FORK_ALWAYS_STRIP_META_KEYS
+
+    def test_cross_agent_strip_set_tracks_chat_constants(self) -> None:
+        from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY, SEEN_SKILLS_META_KEY
+        from core.sessions import SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
+
+        assert {
+            PINNED_SKILL_CATALOG_META_KEY,
+            SEEN_SKILLS_META_KEY,
+        } == SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS

@@ -226,6 +226,9 @@ class IntegrationStorage:
     def load_debug_settings(self) -> JsonObject:
         return {"enabled": False, "trace_limit": 50}
 
+    def load_reflection_settings(self) -> JsonObject:
+        return {"enabled": False, "memory_turn_interval": 10, "skill_tool_call_interval": 25}
+
     def load_model_task_settings(self) -> JsonObject:
         return {}
 
@@ -583,6 +586,11 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "enabled": False,
                 "trace_limit": 50,
                 "trace_count": 0,
+            },
+            "reflection": {
+                "enabled": False,
+                "memory_turn_interval": 10,
+                "skill_tool_call_interval": 25,
             },
             "model_tasks": {},
         },

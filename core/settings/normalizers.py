@@ -46,6 +46,11 @@ COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
     "tail_tokens": 15_000,
     "summary_model": None,
 }
+REFLECTION_SETTING_DEFAULTS: dict[str, Any] = {
+    "enabled": False,
+    "memory_turn_interval": 10,
+    "skill_tool_call_interval": 25,
+}
 
 
 # --- appearance ---------------------------------------------------------------
@@ -371,6 +376,50 @@ def _normalize_debug_trace_limit(value: Any) -> int:
         raise StorageError("Debug setting trace_limit must be positive")
     if value > 500:
         raise StorageError("Debug setting trace_limit must be at most 500")
+    return value
+
+
+# --- reflection ----------------------------------------------------------------
+
+
+def normalize_reflection_settings(reflection: Any) -> dict[str, Any]:
+    """Return the normalized background-reflection settings section."""
+
+    section = _coerce_reflection_section(reflection)
+    return {
+        "enabled": _normalize_reflection_enabled(section.get("enabled")),
+        "memory_turn_interval": _normalize_reflection_interval(
+            "memory_turn_interval", section.get("memory_turn_interval")
+        ),
+        "skill_tool_call_interval": _normalize_reflection_interval(
+            "skill_tool_call_interval", section.get("skill_tool_call_interval")
+        ),
+    }
+
+
+def _coerce_reflection_section(reflection: Any) -> dict[str, Any]:
+    if reflection is None:
+        return {}
+    if not isinstance(reflection, Mapping):
+        raise StorageError("Expected settings.reflection to be an object")
+    return dict(reflection)
+
+
+def _normalize_reflection_enabled(value: Any) -> bool:
+    if value is None:
+        return cast("bool", REFLECTION_SETTING_DEFAULTS["enabled"])
+    if not isinstance(value, bool):
+        raise StorageError("Reflection setting enabled must be a boolean")
+    return value
+
+
+def _normalize_reflection_interval(key: str, value: Any) -> int:
+    if value is None:
+        return cast("int", REFLECTION_SETTING_DEFAULTS[key])
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise StorageError(f"Reflection setting {key} must be an integer")
+    if value <= 0:
+        raise StorageError(f"Reflection setting {key} must be positive")
     return value
 
 

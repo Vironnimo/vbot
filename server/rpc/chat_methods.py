@@ -12,7 +12,6 @@ from core.chat import (
     parse_agent_argument,
     parse_handoff_argument,
 )
-from core.chat.chat import VISITED_PROJECTS_META_KEY
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.projects import (
     AgentResolutionError,
@@ -21,13 +20,13 @@ from core.projects import (
     parse_agent_address,
 )
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem
+from core.sessions import SESSION_MOVE_STRIP_META_KEYS
 from core.subagents.subagents import (
     SUBAGENT_PARENT_METADATA_KEY,
     SUBAGENT_SESSION_METADATA_FLAG,
 )
-from server.events import RESOURCE_KIND_QUEUE, RESOURCE_KIND_SESSIONS
+from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_QUEUE, RESOURCE_KIND_SESSIONS
 from server.rpc.agent_methods import (
-    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     _create_session,
     _rename_session,
 )
@@ -73,10 +72,11 @@ MAX_CHAT_HISTORY_LIMIT = 500
 # runs. They live as bundled resource files (`resources/prompts/`) read through
 # Storage — like `compaction.md`, and user-overridable via a `<data_dir>/prompts/`
 # copy — not as constants. Both are plain, model-facing English delivered as an
-# internal note, never shown to the user; the wording is deliberate.
+# internal note, never shown to the user; the wording is deliberate. The
+# `/reflect` brief (`reflect.md`) moved with its orchestration into the
+# reflection service (`core/automation/reflection.py`).
 HANDOFF_FRAGMENT_NAME = "handoff.md"
 LEARN_FRAGMENT_NAME = "learn.md"
-REFLECT_FRAGMENT_NAME = "reflect.md"
 
 # Sidecar marker on a channel-bound session; such sessions are excluded from
 # ``/agent`` moves so the channel pointer is never left dangling.
@@ -481,9 +481,10 @@ async def _start_command_run(
 
     Shared by ``/handoff``, agent takeover, and ``/learn``. An identity run
     (``project_id is None``) goes through ``trigger_service.trigger_run`` (with its
-    queue-on-busy fallback); a project run has no project-aware trigger service yet
-    (automation is a separate task), so it goes straight through the chat loop, which
-    already threads ``project_id`` into the session anchor and run.
+    queue-on-busy fallback); a project run goes straight through the chat loop —
+    every project-scoped command targets a session its handler already guarded as
+    idle (fresh, or refused-while-busy), so the queue fallback adds nothing — and
+    the loop threads ``project_id`` into the session anchor and run.
     """
     if project_id is None:
         return await state.runtime.trigger_service.trigger_run(
@@ -538,21 +539,6 @@ async def _handle_learn_command(
     return _command_handled_response(summary or "Skill authoring run completed.")
 
 
-def _build_reflect_prompt(base_instruction: str, focus: str | None) -> str:
-    """Weave the optional ``/reflect`` focus into the base reflection brief.
-
-    With no focus the bare brief is used unchanged (trailing whitespace
-    normalized away), so the no-argument path is identical to the ``reflect.md``
-    fragment. A focus argument steers which dimension the reflection concentrates
-    on, without dropping the rest of the brief.
-    """
-    base = base_instruction.strip()
-    cleaned = (focus or "").strip()
-    if not cleaned:
-        return base
-    return f"{base}\n\nThe user asked you to focus this reflection on:\n{cleaned}"
-
-
 async def _handle_reflect_command(
     state: Any,
     agent_id: str,
@@ -563,13 +549,15 @@ async def _handle_reflect_command(
 ) -> JsonObject:
     """Review this session in a fork and save durable memory/skill updates.
 
-    Forks the current session (cache-warm: same agent, so the pinned catalog is
-    kept), then runs the reflection brief as an internal run *in the fork* with
-    only the ``memory``/``skill``/``skill_manage`` tools dispatchable — the
-    restriction is enforced at dispatch, not by changing the tool definitions, so
-    the fork's prompt prefix stays byte-identical to the source. The original
-    session is never touched. Identity-agents-only (a config/project agent has no
-    private memory/skill home); refused while a run is active on the source.
+    Fork + review orchestration lives in the runtime reflection service
+    (`core/automation/reflection.py`, shared with the background cadence
+    trigger): same-agent fork (cache-warm, pinned catalog kept), internal run
+    in the fork with the dispatch-only memory/skill tool restriction, source
+    session untouched. This handler owns only the RPC-side gates, the fork's
+    live announcement to other windows, and the cadence counter reset — a
+    manual review covers both dimensions, so the background cadence restarts.
+    Identity-agents-only (a config/project agent has no private memory/skill
+    home); refused while a run is active on the source.
     """
     active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
     if active_run is not None:
@@ -584,39 +572,31 @@ async def _handle_reflect_command(
             "Reflection needs an identity agent with its own memory and skill home."
         )
 
+    focus = (argument or "").strip()
+    extra_instruction = (
+        f"The user asked you to focus this reflection on:\n{focus}" if focus else None
+    )
     try:
-        fork = await state.runtime.chat_sessions.fork(
+        reflection = state.runtime.reflection
+        result = await reflection.run_review(
             agent_id,
             session_id,
-            source_project_id=project_id,
-            target_project_id=project_id,
-            strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
-        )
-        # The drawer shows the fork immediately (scoped to this agent).
-        publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
-        # The fork is fresh and never busy, so start the review run directly on the
-        # chat loop (no trigger-service queue needed). The tool restriction is
-        # dispatch-only — the fork's prompt/tool definitions stay byte-identical.
-        reflect_run = await state.chat_loop.start_run(
-            agent_id,
-            _build_reflect_prompt(
-                state.runtime.storage.read_prompt_fragment(REFLECT_FRAGMENT_NAME), argument
-            ),
-            session_id=fork.id,
-            internal=True,
             project_id=project_id,
-            tool_restriction=("memory", "skill", "skill_manage"),
+            extra_instruction=extra_instruction,
+            # The drawer shows the fork immediately (scoped to this agent).
+            on_fork_created=lambda _fork_id: publish_resource_changed(
+                state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id}
+            ),
         )
-        reflect_message = await reflect_run.wait()
+        reflection.reset_counters(agent_id, session_id, project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    summary = _extract_handoff_text(reflect_message.content)
     return _command_handled_response(
         CommandHandled(
-            reply=summary or "Reflection completed.",
+            reply=result.summary or "Reflection completed.",
             # The fork session id rides in ``data`` so an accessor can link to it.
-            data={"command": "reflect", "session_id": fork.id, "agent_id": agent_id},
+            data={"command": "reflect", "session_id": result.session_id, "agent_id": agent_id},
         )
     )
 
@@ -796,7 +776,7 @@ async def _handle_move_session_command(
             target_agent_id,
             source_project_id=project_id,
             target_project_id=target_project_id,
-            strip_meta_keys=frozenset({VISITED_PROJECTS_META_KEY}),
+            strip_meta_keys=SESSION_MOVE_STRIP_META_KEYS,
         )
         async with chat_sessions.write_lock(target_agent_id, session_id, target_project_id):
             destination = chat_sessions.get(target_agent_id, session_id, target_project_id)
@@ -811,6 +791,17 @@ async def _handle_move_session_command(
             state.runtime.agents.reset_current_after_session_removed(agent_id, session_id)
         if target_project_id is None:
             state.runtime.agents.update(target_agent_id, current_session_id=session_id)
+
+        # Same emit points as session.create/delete: the session left one list and
+        # joined another, so other windows on either agent refresh — scoped per
+        # agent like the other session handlers. Emitted before the optional task
+        # run so the announcement is not lost when that run fails to start.
+        publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+        publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": target_agent_id})
+        # Re-aiming an identity current pointer is an agent-config change, exactly
+        # as in session.delete — one signal covers whichever side(s) changed.
+        if project_id is None or target_project_id is None:
+            publish_resource_changed(state, RESOURCE_KIND_AGENTS)
 
         run = None
         if parsed.task is not None:
