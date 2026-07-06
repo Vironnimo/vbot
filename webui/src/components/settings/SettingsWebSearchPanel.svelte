@@ -68,6 +68,7 @@
 
     return (
       normalizedLeft.provider === normalizedRight.provider &&
+      normalizedLeft.default_count === normalizedRight.default_count &&
       normalizedLeft.searxng.base_url === normalizedRight.searxng.base_url
     );
   }
@@ -76,6 +77,14 @@
     webSearchSettings = {
       ...webSearchSettings,
       provider,
+    };
+    onError('');
+  }
+
+  function handleWebSearchDefaultCountChange(next) {
+    webSearchSettings = {
+      ...webSearchSettings,
+      default_count: next,
     };
     onError('');
   }
@@ -161,6 +170,32 @@
       triggerClass="settings-view__dropdown"
       listClass="settings-view__thinking-list"
       onValueChange={handleWebSearchProviderChange}
+    />
+  </div>
+</div>
+
+<div class="s-row">
+  <div class="s-row-info">
+    <div class="s-row-label">
+      {t('settings.webSearch.defaultCount', 'Default result count')}
+    </div>
+    <div class="s-row-desc">
+      {t(
+        'settings.webSearch.defaultCountDescription',
+        'Number of results a web_search call returns when the agent does not ask for a specific count (1-20).',
+      )}
+    </div>
+  </div>
+  <div class="s-row-control s-row-control--number">
+    <TextField
+      id="settings-web-search-default-count"
+      type="number"
+      min="1"
+      max="20"
+      step="1"
+      value={webSearchSettings.default_count}
+      ariaLabel={t('settings.webSearch.defaultCount', 'Default result count')}
+      onInput={(next) => handleWebSearchDefaultCountChange(next)}
     />
   </div>
 </div>

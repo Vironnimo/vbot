@@ -69,6 +69,9 @@ const WEB_SEARCH_PROVIDER_DEFAULTS = Object.freeze([
   WEB_SEARCH_PROVIDER_SEARXNG,
 ]);
 const DEFAULT_SEARXNG_BASE_URL = 'http://localhost:8888';
+const WEB_SEARCH_DEFAULT_COUNT = 12;
+const WEB_SEARCH_MIN_COUNT = 1;
+const WEB_SEARCH_MAX_COUNT = 20;
 
 const AGENT_DEFAULT_THINKING_EFFORT_OPTIONS = Object.freeze([
   'none',
@@ -775,10 +778,18 @@ function normalizeWebSearchSettings(rawSettings) {
     webSearch.searxng?.base_url,
     DEFAULT_SEARXNG_BASE_URL,
   );
+  const defaultCountValue = Number(webSearch.default_count);
+  const defaultCount =
+    Number.isInteger(defaultCountValue) &&
+    defaultCountValue >= WEB_SEARCH_MIN_COUNT &&
+    defaultCountValue <= WEB_SEARCH_MAX_COUNT
+      ? defaultCountValue
+      : WEB_SEARCH_DEFAULT_COUNT;
 
   return {
     provider,
     available_providers: availableProviders,
+    default_count: defaultCount,
     searxng: {
       base_url: searxngBaseUrl,
     },
@@ -795,6 +806,7 @@ export function buildWebSearchSettingsPayload(formValues) {
   return {
     web_search: {
       provider: normalized.provider,
+      default_count: normalized.default_count,
       searxng: {
         base_url: normalized.searxng.base_url,
       },

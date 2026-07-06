@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import random
+import html
+import re
 from collections.abc import Callable, Mapping
 from datetime import date
 from typing import Any
@@ -13,8 +14,12 @@ import httpx
 
 from core.search_config import (
     DEFAULT_SEARXNG_BASE_URL,
+    DEFAULT_WEB_SEARCH_COUNT,
     DEFAULT_WEB_SEARCH_PROVIDER,
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
+    MAX_WEB_SEARCH_COUNT,
+    MAX_WEB_SEARCH_PAGE,
+    MIN_WEB_SEARCH_COUNT,
     WEB_SEARCH_PROVIDER_SEARXNG,
 )
 from core.tools.arguments import ToolArgumentError, optional_int
@@ -26,22 +31,17 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
-from core.utils.http_status import HttpRequestFailure, is_retryable_status
+from core.utils.http_status import HttpRequestFailure, is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
+from core.utils.retry import MAX_RETRIES, compute_retry_delay
 
 _LOGGER = get_logger("tools.web_search")
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 
-_DEFAULT_COUNT = 5
-_MIN_COUNT = 1
-_MAX_COUNT = 20
-
-_RETRY_MAX_RETRIES = 3
-_RETRY_INITIAL_DELAY_SECONDS = 1.0
-_RETRY_BACKOFF_FACTOR = 2
-_RETRY_JITTER_FACTOR = 0.5
 _REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
 _BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -82,12 +82,15 @@ _SEARXNG_TIME_RANGE_MAP: dict[str, str] = {
     "y": "year",
 }
 
-_ALLOWED_ARGUMENTS = frozenset({"query", "count", "freshness", "date_after", "date_before"})
+_ALLOWED_ARGUMENTS = frozenset({"query", "count", "page", "freshness", "date_after", "date_before"})
 
 WEB_SEARCH_TOOL_NAME = "web_search"
 WEB_SEARCH_TOOL_DESCRIPTION = (
     "Search the public web using the configured search provider and return "
-    "structured results with title, url, and description."
+    "structured results with title, url, description, and page age where "
+    "available. Descriptions are short snippets - use web_fetch on a result "
+    "url to read the full page. Supports recency filtering (freshness or "
+    "date bounds) and pagination (page)."
 )
 WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -98,10 +101,21 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
         },
         "count": {
             "type": "integer",
-            "description": "Maximum number of results to return (1-20).",
-            "minimum": _MIN_COUNT,
-            "maximum": _MAX_COUNT,
-            "default": _DEFAULT_COUNT,
+            "description": (
+                "Maximum number of results to return (1-20). Omit to use the configured default."
+            ),
+            "minimum": MIN_WEB_SEARCH_COUNT,
+            "maximum": MAX_WEB_SEARCH_COUNT,
+        },
+        "page": {
+            "type": "integer",
+            "description": (
+                "Result page to fetch (1-based). Request the next page when "
+                "more_results_available is true and the first page was not enough."
+            ),
+            "minimum": 1,
+            "maximum": MAX_WEB_SEARCH_PAGE,
+            "default": 1,
         },
         "freshness": {
             "type": "string",
@@ -133,6 +147,19 @@ def _normalize_text(raw: Any) -> str:
     if not isinstance(raw, str):
         return ""
     return raw.strip()
+
+
+def _clean_snippet(raw: Any) -> str:
+    """Normalize provider display text: drop HTML tags and unescape entities.
+
+    Brave decorates titles/descriptions with highlight markup and HTML
+    entities; that is pure noise for a model, so result text is flattened to
+    plain text before it enters the envelope.
+    """
+    text = _normalize_text(raw)
+    if not text:
+        return ""
+    return html.unescape(_HTML_TAG_PATTERN.sub("", text)).strip()
 
 
 def _normalize_date(raw: Any, field_name: str) -> tuple[str, str | None]:
@@ -254,21 +281,23 @@ def _standardize_results(raw_results: Any) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):
             continue
 
-        title = _normalize_text(raw.get("title"))
+        title = _clean_snippet(raw.get("title"))
         url = _normalize_text(raw.get("url"))
-        description = _normalize_text(raw.get("description"))
+        description = _clean_snippet(raw.get("description"))
         if not title and not url and not description:
             continue
 
-        normalized.append(
-            {
-                "rank": index,
-                "title": title,
-                "url": url,
-                "description": description,
-                "content_trust": "untrusted_web_content",
-            }
-        )
+        entry: dict[str, Any] = {
+            "rank": index,
+            "title": title,
+            "url": url,
+            "description": description,
+            "content_trust": "untrusted_web_content",
+        }
+        page_age = _normalize_text(raw.get("page_age")) or _normalize_text(raw.get("age"))
+        if page_age:
+            entry["page_age"] = page_age
+        normalized.append(entry)
 
     return normalized
 
@@ -282,23 +311,25 @@ def _standardize_searxng_results(raw_results: Any, count: int) -> list[dict[str,
         if not isinstance(raw, dict):
             continue
 
-        title = _normalize_text(raw.get("title"))
+        title = _clean_snippet(raw.get("title"))
         url = _normalize_text(raw.get("url"))
-        description = _normalize_text(raw.get("content"))
+        description = _clean_snippet(raw.get("content"))
         if not description:
-            description = _normalize_text(raw.get("description"))
+            description = _clean_snippet(raw.get("description"))
         if not title and not url and not description:
             continue
 
-        normalized.append(
-            {
-                "rank": len(normalized) + 1,
-                "title": title,
-                "url": url,
-                "description": description,
-                "content_trust": "untrusted_web_content",
-            }
-        )
+        entry: dict[str, Any] = {
+            "rank": len(normalized) + 1,
+            "title": title,
+            "url": url,
+            "description": description,
+            "content_trust": "untrusted_web_content",
+        }
+        page_age = _normalize_text(raw.get("publishedDate"))
+        if page_age:
+            entry["page_age"] = page_age
+        normalized.append(entry)
         if len(normalized) >= count:
             break
 
@@ -328,10 +359,9 @@ def _extract_error_detail(response: httpx.Response) -> str:
     return response.reason_phrase or "request failed"
 
 
-async def _sleep_for_retry(attempt: int) -> None:
-    base_delay = _RETRY_INITIAL_DELAY_SECONDS * (_RETRY_BACKOFF_FACTOR**attempt)
-    jitter = random.uniform(0, base_delay * _RETRY_JITTER_FACTOR)
-    await asyncio.sleep(base_delay + jitter)
+async def _sleep_for_retry(attempt: int, retry_after: float | None = None) -> None:
+    delay, _ = compute_retry_delay(attempt, retry_after=retry_after)
+    await asyncio.sleep(delay)
 
 
 async def _search_brave(
@@ -339,6 +369,7 @@ async def _search_brave(
     api_key: str,
     query: str,
     count: int,
+    page: int,
     freshness: str,
     date_after: str,
     date_before: str,
@@ -347,11 +378,15 @@ async def _search_brave(
     if filter_error is not None:
         return None, HttpRequestFailure(filter_error)
 
-    params: dict[str, Any] = {"q": query, "count": count}
+    # text_decorations off: Brave otherwise wraps snippets in highlight markup.
+    params: dict[str, Any] = {"q": query, "count": count, "text_decorations": "false"}
+    if page > 1:
+        # Brave paginates with a zero-based page offset in units of `count`.
+        params["offset"] = page - 1
     params.update(filters)
 
     async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
-        for attempt in range(_RETRY_MAX_RETRIES + 1):
+        for attempt in range(MAX_RETRIES + 1):
             try:
                 response = await client.get(
                     _BRAVE_ENDPOINT,
@@ -359,12 +394,12 @@ async def _search_brave(
                     headers={"X-Subscription-Token": api_key},
                 )
             except httpx.RequestError as error:
-                if attempt >= _RETRY_MAX_RETRIES:
+                if attempt >= MAX_RETRIES:
                     _LOGGER.warning("Brave web search request failed: %s", error)
                     return None, HttpRequestFailure(
                         f"request failed: {error}",
                         retryable=True,
-                        attempts_made=_RETRY_MAX_RETRIES + 1,
+                        attempts_made=MAX_RETRIES + 1,
                     )
                 await _sleep_for_retry(attempt)
                 continue
@@ -373,9 +408,9 @@ async def _search_brave(
                 # GET is idempotent — safe to repeat (includes a transient 500).
                 if (
                     is_retryable_status(response.status_code, idempotent=True)
-                    and attempt < _RETRY_MAX_RETRIES
+                    and attempt < MAX_RETRIES
                 ):
-                    await _sleep_for_retry(attempt)
+                    await _sleep_for_retry(attempt, parse_retry_after(response.headers))
                     continue
                 detail = _extract_error_detail(response)
                 _LOGGER.warning(
@@ -388,7 +423,7 @@ async def _search_brave(
                 return None, HttpRequestFailure(
                     f"HTTP {response.status_code}: {detail}",
                     retryable=retryable,
-                    attempts_made=(_RETRY_MAX_RETRIES + 1) if retryable else None,
+                    attempts_made=(MAX_RETRIES + 1) if retryable else None,
                 )
 
             try:
@@ -407,6 +442,7 @@ async def _search_brave(
                 "provider": "brave",
                 "query": query,
                 "count_requested": count,
+                "page": page,
                 "result_count": len(results),
                 "results": results,
                 "content_trust": "untrusted_web_content",
@@ -441,6 +477,7 @@ async def _search_searxng(
     base_url: str,
     query: str,
     count: int,
+    page: int,
     freshness: str,
     date_after: str,
     date_before: str,
@@ -458,23 +495,23 @@ async def _search_searxng(
     params: dict[str, Any] = {
         "q": query,
         "format": "json",
-        "pageno": 1,
+        "pageno": page,
         "safesearch": 0,
         "categories": "general",
     }
     params.update(filters)
 
     async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
-        for attempt in range(_RETRY_MAX_RETRIES + 1):
+        for attempt in range(MAX_RETRIES + 1):
             try:
                 response = await client.get(endpoint, params=params)
             except httpx.RequestError as error:
-                if attempt >= _RETRY_MAX_RETRIES:
+                if attempt >= MAX_RETRIES:
                     _LOGGER.warning("SearXNG web search request failed: %s", error)
                     return None, HttpRequestFailure(
                         f"request failed: {error}",
                         retryable=True,
-                        attempts_made=_RETRY_MAX_RETRIES + 1,
+                        attempts_made=MAX_RETRIES + 1,
                     )
                 await _sleep_for_retry(attempt)
                 continue
@@ -483,9 +520,9 @@ async def _search_searxng(
                 # GET is idempotent — safe to repeat (includes a transient 500).
                 if (
                     is_retryable_status(response.status_code, idempotent=True)
-                    and attempt < _RETRY_MAX_RETRIES
+                    and attempt < MAX_RETRIES
                 ):
-                    await _sleep_for_retry(attempt)
+                    await _sleep_for_retry(attempt, parse_retry_after(response.headers))
                     continue
                 detail = _extract_error_detail(response)
                 if response.status_code == 403:
@@ -500,7 +537,7 @@ async def _search_searxng(
                 return None, HttpRequestFailure(
                     f"HTTP {response.status_code}: {detail}",
                     retryable=retryable,
-                    attempts_made=(_RETRY_MAX_RETRIES + 1) if retryable else None,
+                    attempts_made=(MAX_RETRIES + 1) if retryable else None,
                 )
 
             try:
@@ -514,6 +551,7 @@ async def _search_searxng(
                 "provider": WEB_SEARCH_PROVIDER_SEARXNG,
                 "query": query,
                 "count_requested": count,
+                "page": page,
                 "result_count": len(results),
                 "results": results,
                 "content_trust": "untrusted_web_content",
@@ -548,8 +586,20 @@ def _normalize_web_search_settings(raw_settings: Any) -> tuple[dict[str, Any] | 
     if not isinstance(base_url, str) or not base_url.strip():
         return None, "web_search.searxng.base_url must be a non-empty string"
 
+    default_count = raw_settings.get("default_count", DEFAULT_WEB_SEARCH_COUNT)
+    if (
+        isinstance(default_count, bool)
+        or not isinstance(default_count, int)
+        or not (MIN_WEB_SEARCH_COUNT <= default_count <= MAX_WEB_SEARCH_COUNT)
+    ):
+        return None, (
+            "web_search.default_count must be an integer between "
+            f"{MIN_WEB_SEARCH_COUNT} and {MAX_WEB_SEARCH_COUNT}"
+        )
+
     return {
         "provider": provider,
+        "default_count": default_count,
         "searxng": {"base_url": base_url.strip()},
     }, None
 
@@ -586,13 +636,28 @@ async def web_search_handler(
     if not query:
         return tool_failure("validation_error", "query must be a non-empty string", retryable=False)
 
+    settings, settings_error = _resolve_web_search_settings(settings_resolver)
+    if settings_error is not None:
+        return tool_failure("configuration_error", settings_error, retryable=False)
+    if settings is None:
+        return tool_failure(
+            "configuration_error", "web search settings could not be resolved", retryable=False
+        )
+
     try:
         count = optional_int(
             arguments.get("count"),
             field_name="count",
-            default=_DEFAULT_COUNT,
-            minimum=_MIN_COUNT,
-            maximum=_MAX_COUNT,
+            default=settings["default_count"],
+            minimum=MIN_WEB_SEARCH_COUNT,
+            maximum=MAX_WEB_SEARCH_COUNT,
+        )
+        page = optional_int(
+            arguments.get("page"),
+            field_name="page",
+            default=1,
+            minimum=1,
+            maximum=MAX_WEB_SEARCH_PAGE,
         )
     except ToolArgumentError as error:
         return tool_failure("validation_error", str(error), retryable=False)
@@ -615,20 +680,13 @@ async def web_search_handler(
     if filter_error is not None:
         return tool_failure("validation_error", filter_error, retryable=False)
 
-    settings, settings_error = _resolve_web_search_settings(settings_resolver)
-    if settings_error is not None:
-        return tool_failure("configuration_error", settings_error, retryable=False)
-    if settings is None:
-        return tool_failure(
-            "configuration_error", "web search settings could not be resolved", retryable=False
-        )
-
     provider = settings["provider"]
     if provider == WEB_SEARCH_PROVIDER_SEARXNG:
         payload, search_failure = await _search_searxng(
             base_url=settings["searxng"]["base_url"],
             query=query,
             count=count,
+            page=page,
             freshness=freshness,
             date_after=date_after,
             date_before=date_before,
@@ -647,6 +705,7 @@ async def web_search_handler(
         api_key=api_key,
         query=query,
         count=count,
+        page=page,
         freshness=freshness,
         date_after=date_after,
         date_before=date_before,

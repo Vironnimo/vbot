@@ -404,6 +404,7 @@ describe('SettingsView', () => {
     expect(getSettingsUpdateCalls()[0][1]).toEqual({
       web_search: {
         provider: 'searxng',
+        default_count: 12,
         searxng: {
           base_url: 'http://localhost:9999',
         },
@@ -1879,6 +1880,7 @@ function settingsPayload(options = {}) {
     web_search: {
       provider: 'brave',
       available_providers: ['brave', 'searxng'],
+      default_count: 12,
       searxng: {
         base_url: 'http://localhost:8888',
       },

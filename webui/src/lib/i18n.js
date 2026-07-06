@@ -729,6 +729,9 @@ export const englishCatalog = Object.freeze({
     'Provider used whenever an agent calls web_search.',
   'settings.webSearch.providers.brave': 'Brave Search',
   'settings.webSearch.providers.searxng': 'SearXNG',
+  'settings.webSearch.defaultCount': 'Default result count',
+  'settings.webSearch.defaultCountDescription':
+    'Number of results a web_search call returns when the agent does not ask for a specific count (1-20).',
   'settings.webSearch.searxngBaseUrl': 'SearXNG base URL',
   'settings.webSearch.searxngBaseUrlDescription':
     'Address of the SearXNG instance to use. SearXNG is a self-hosted metasearch engine — you need to run one yourself or point this at a reachable instance.',

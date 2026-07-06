@@ -11,7 +11,11 @@ from typing import Any, Literal, cast
 
 from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
-from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
+from core.search_config import (
+    FIRST_PARTY_WEB_SEARCH_PROVIDERS,
+    MAX_WEB_SEARCH_COUNT,
+    MIN_WEB_SEARCH_COUNT,
+)
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
     is_absolute_or_home_relative_path,
@@ -66,7 +70,7 @@ COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_mode
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
 EXTENSIONS_FIELDS = frozenset({"disabled", "config"})
-WEB_SEARCH_FIELDS = frozenset({"provider", "searxng"})
+WEB_SEARCH_FIELDS = frozenset({"provider", "default_count", "searxng"})
 WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
 MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
 DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
@@ -882,6 +886,18 @@ def _validate_web_search(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     ):
         allowed = ", ".join(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS))
         _error(diagnostics, "$.web_search.provider", f"must be one of: {allowed}")
+
+    default_count = value.get("default_count")
+    if default_count is not None and (
+        isinstance(default_count, bool)
+        or not isinstance(default_count, int)
+        or not (MIN_WEB_SEARCH_COUNT <= default_count <= MAX_WEB_SEARCH_COUNT)
+    ):
+        _error(
+            diagnostics,
+            "$.web_search.default_count",
+            f"must be an integer between {MIN_WEB_SEARCH_COUNT} and {MAX_WEB_SEARCH_COUNT}",
+        )
 
     searxng = value.get("searxng")
     if searxng is None:
