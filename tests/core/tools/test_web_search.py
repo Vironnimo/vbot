@@ -10,7 +10,6 @@ import httpx
 import pytest
 import respx
 
-import core.tools.web_search as web_search_module
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.web_search import (
     WEB_SEARCH_TOOL_DESCRIPTION,
@@ -20,6 +19,7 @@ from core.tools.web_search import (
     register_web_search_tool,
     web_search_handler,
 )
+from core.utils.retry import MAX_RETRIES
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _SEARXNG_ENDPOINT = "http://localhost:8888/search"
@@ -104,10 +104,13 @@ def test_register_web_search_tool_schema() -> None:
 
     properties = parameters["properties"]
     assert "provider" not in properties
-    assert set(properties) == {"query", "count", "freshness", "date_after", "date_before"}
+    assert set(properties) == {"query", "count", "page", "freshness", "date_after", "date_before"}
     count_schema = properties["count"]
     assert count_schema["minimum"] == 1
     assert count_schema["maximum"] == 20
+    page_schema = properties["page"]
+    assert page_schema["minimum"] == 1
+    assert page_schema["maximum"] == 10
 
 
 @pytest.mark.asyncio
@@ -291,7 +294,8 @@ async def test_web_search_handler_brave_network_error(
 
     sleep_attempts: list[int] = []
 
-    async def _fake_sleep(attempt: int) -> None:
+    async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del retry_after
         sleep_attempts.append(attempt)
 
     monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
@@ -325,7 +329,8 @@ async def test_web_search_handler_retries_transient_http_status(
 
     sleep_attempts: list[int] = []
 
-    async def _fake_sleep(attempt: int) -> None:
+    async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del retry_after
         sleep_attempts.append(attempt)
 
     monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
@@ -357,8 +362,8 @@ async def test_web_search_brave_exhausted_status_signals_retryable(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    async def _fake_sleep(attempt: int) -> None:
-        del attempt
+    async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
 
     monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
 
@@ -374,8 +379,8 @@ async def test_web_search_brave_exhausted_status_signals_retryable(
 
     error = assert_failure_envelope(result, "provider_request_failed")
     assert error["retryable"] is True
-    assert error["attempts_made"] == web_search_module._RETRY_MAX_RETRIES + 1
-    assert len(route.calls) == web_search_module._RETRY_MAX_RETRIES + 1
+    assert error["attempts_made"] == MAX_RETRIES + 1
+    assert len(route.calls) == MAX_RETRIES + 1
 
 
 @respx.mock
@@ -386,8 +391,8 @@ async def test_web_search_brave_network_error_signals_retryable(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    async def _fake_sleep(attempt: int) -> None:
-        del attempt
+    async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
 
     monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
 
@@ -404,7 +409,7 @@ async def test_web_search_brave_network_error_signals_retryable(
 
     error = assert_failure_envelope(result, "provider_request_failed")
     assert error["retryable"] is True
-    assert error["attempts_made"] == web_search_module._RETRY_MAX_RETRIES + 1
+    assert error["attempts_made"] == MAX_RETRIES + 1
 
 
 @respx.mock
@@ -563,6 +568,227 @@ async def test_web_search_handler_searxng_rejects_invalid_base_url(tmp_path: Pat
     )
 
     assert_failure_envelope(result, "provider_request_failed")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_brave_default_count_and_no_offset(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.get(_BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"web": {"results": []}})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["count_requested"] == 12
+    assert data["page"] == 1
+    request = route.calls[0].request
+    assert request.url.params["count"] == "12"
+    assert request.url.params["text_decorations"] == "false"
+    assert "offset" not in request.url.params
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_uses_configured_default_count(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.get(_BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"web": {"results": []}})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "brave", "default_count": 7},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["count_requested"] == 7
+    assert route.calls[0].request.url.params["count"] == "7"
+
+
+@pytest.mark.asyncio
+async def test_web_search_handler_rejects_invalid_configured_default_count(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "brave", "default_count": 0},
+    )
+
+    error = assert_failure_envelope(result, "configuration_error")
+    assert "default_count" in error["message"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_brave_page_maps_to_offset(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.get(_BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"web": {"results": []}})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "page": 3},
+        _fake_credential_resolver,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["page"] == 3
+    assert route.calls[0].request.url.params["offset"] == "2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page", [0, 11])
+async def test_web_search_handler_page_out_of_range(tmp_path: Path, page: int) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "page": page},
+        _fake_credential_resolver,
+    )
+
+    assert_failure_envelope(result, "validation_error")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_brave_strips_markup_and_keeps_page_age(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.get(_BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        {
+                            "title": "<strong>vBot</strong> docs",
+                            "url": "https://example.com/vbot",
+                            "description": "The <strong>vBot</strong> docs &amp; guides",
+                            "page_age": "2026-05-01T00:00:00",
+                        },
+                        {
+                            "title": "vBot news",
+                            "url": "https://example.com/news",
+                            "description": "No date on this one",
+                        },
+                    ]
+                }
+            },
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    data = assert_success_envelope(result)
+    first, second = data["results"]
+    assert first["title"] == "vBot docs"
+    assert first["description"] == "The vBot docs & guides"
+    assert first["page_age"] == "2026-05-01T00:00:00"
+    assert "page_age" not in second
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_searxng_page_and_published_date(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.get(_SEARXNG_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "vBot docs",
+                        "url": "https://example.com/vbot",
+                        "content": "vBot documentation",
+                        "publishedDate": "2026-04-30T12:00:00+00:00",
+                    }
+                ]
+            },
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "page": 2},
+        lambda key: "",
+        lambda: {
+            "provider": "searxng",
+            "searxng": {"base_url": "http://localhost:8888"},
+        },
+    )
+
+    data = assert_success_envelope(result)
+    assert data["page"] == 2
+    assert data["results"][0]["page_age"] == "2026-04-30T12:00:00+00:00"
+    assert route.calls[0].request.url.params["pageno"] == "2"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_honors_retry_after_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    observed_hints: list[float | None] = []
+
+    async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt
+        observed_hints.append(retry_after)
+
+    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
+
+    respx.get(_BRAVE_ENDPOINT).mock(
+        side_effect=[
+            httpx.Response(
+                429,
+                headers={"Retry-After": "7"},
+                json={"error": {"message": "rate limited"}},
+            ),
+            httpx.Response(200, json={"web": {"results": []}}),
+        ]
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    assert_success_envelope(result)
+    assert observed_hints == [7.0]
 
 
 def test_api_key_not_in_schema() -> None:

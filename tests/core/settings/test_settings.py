@@ -55,6 +55,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             "recall": {"backend": "sqlite_fts"},
             "web_search": {
                 "provider": "searxng",
+                "default_count": 15,
                 "searxng": {"base_url": "http://localhost:8888"},
             },
             "model_tasks": {
@@ -91,6 +92,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         "recall": {"backend": "sqlite_fts"},
         "web_search": {
             "provider": "searxng",
+            "default_count": 15,
             "searxng": {"base_url": "http://localhost:8888"},
         },
         "model_tasks": {
@@ -171,6 +173,14 @@ def test_parse_settings_update_omits_absent_chat_width() -> None:
         (
             {"web_search": {"provider": "searxng", "searxng": {"base_url": ""}}},
             "params.web_search.searxng.base_url must be a string",
+        ),
+        (
+            {"web_search": {"provider": "brave", "default_count": 0}},
+            "params.web_search.default_count must be an integer between 1 and 20",
+        ),
+        (
+            {"web_search": {"provider": "brave", "default_count": True}},
+            "params.web_search.default_count must be an integer between 1 and 20",
         ),
         ({"model_tasks": []}, "params.model_tasks must be an object"),
         (
@@ -280,6 +290,7 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
                 },
                 "web_search": {
                     "provider": "searxng",
+                    "default_count": 12,
                     "searxng": {"base_url": "http://localhost:8888"},
                 },
                 "defaults": {
@@ -347,6 +358,7 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
                 "defaults": {"agent": {"temperature": "warm", "unknown": True}},
                 "web_search": {
                     "provider": "unknown",
+                    "default_count": 25,
                     "searxng": {"base_url": ""},
                 },
                 "model_tasks": {"speech_to_text": {"target": "", "options": []}},
@@ -374,6 +386,7 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
         ),
         ("error", "$.defaults.agent.temperature", "must be a number"),
         ("error", "$.web_search.provider", "must be one of: brave, searxng"),
+        ("error", "$.web_search.default_count", "must be an integer between 1 and 20"),
         ("error", "$.web_search.searxng.base_url", "must be a non-empty string"),
         ("error", "$.model_tasks.speech_to_text.target", "must be a non-empty string"),
         ("error", "$.model_tasks.speech_to_text.options", "must be an object"),

@@ -16,8 +16,11 @@ from typing import Any, cast
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.search_config import (
     DEFAULT_SEARXNG_BASE_URL,
+    DEFAULT_WEB_SEARCH_COUNT,
     DEFAULT_WEB_SEARCH_PROVIDER,
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
+    MAX_WEB_SEARCH_COUNT,
+    MIN_WEB_SEARCH_COUNT,
 )
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
@@ -34,6 +37,7 @@ SUPPORTED_APPEARANCE_LANGUAGES = frozenset({DEFAULT_APPEARANCE_LANGUAGE})
 DEFAULT_RECALL_SETTINGS = {"backend": "jsonl_scan"}
 DEFAULT_WEB_SEARCH_SETTINGS = {
     "provider": DEFAULT_WEB_SEARCH_PROVIDER,
+    "default_count": DEFAULT_WEB_SEARCH_COUNT,
     "searxng": {"base_url": DEFAULT_SEARXNG_BASE_URL},
 }
 DEBUG_SETTING_DEFAULTS: dict[str, Any] = {
@@ -449,8 +453,20 @@ def normalize_web_search_settings(web_search: Any) -> dict[str, Any]:
     if not isinstance(base_url, str) or not base_url.strip():
         raise StorageError("SearXNG base_url must be a non-empty string")
 
+    default_count = section.get("default_count", DEFAULT_WEB_SEARCH_COUNT)
+    if (
+        isinstance(default_count, bool)
+        or not isinstance(default_count, int)
+        or not (MIN_WEB_SEARCH_COUNT <= default_count <= MAX_WEB_SEARCH_COUNT)
+    ):
+        raise StorageError(
+            "Web search default_count must be an integer between "
+            f"{MIN_WEB_SEARCH_COUNT} and {MAX_WEB_SEARCH_COUNT}"
+        )
+
     return {
         "provider": provider,
+        "default_count": default_count,
         "searxng": {"base_url": base_url.strip()},
     }
 
@@ -460,7 +476,7 @@ def _coerce_web_search_section(web_search: Any) -> dict[str, Any]:
         return {}
     if not isinstance(web_search, Mapping):
         raise StorageError("Expected settings.web_search to be an object")
-    unsupported_fields = sorted(set(web_search) - {"provider", "searxng"})
+    unsupported_fields = sorted(set(web_search) - {"provider", "default_count", "searxng"})
     if unsupported_fields:
         raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
     return dict(web_search)

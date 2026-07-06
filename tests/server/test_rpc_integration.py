@@ -217,6 +217,7 @@ class IntegrationStorage:
     def load_web_search_settings(self) -> JsonObject:
         return {
             "provider": "brave",
+            "default_count": 12,
             "searxng": {"base_url": "http://localhost:8888"},
         }
 
@@ -579,6 +580,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
             "web_search": {
                 "provider": "brave",
                 "available_providers": ["brave", "searxng"],
+                "default_count": 12,
                 "searxng": {"base_url": "http://localhost:8888"},
             },
             "defaults": {},
