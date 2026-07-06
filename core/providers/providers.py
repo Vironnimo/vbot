@@ -50,7 +50,7 @@ class AuthConfig:
     credential_key: str = ""
 
 
-VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth"})
+VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth", "none"})
 VALID_OAUTH_FLOWS = frozenset({"device"})
 STANDARD_DEVICE_FLOW = "oauth2"
 OPENAI_CODEX_DEVICE_FLOW = "openai_codex"
@@ -79,9 +79,11 @@ class ConnectionConfig:
 
     Attributes:
         id: Local connection identifier within the provider config.
-        type: Connection kind. Supported values are ``"api_key"`` and ``"oauth"``.
+        type: Connection kind. Supported values are ``"api_key"``, ``"oauth"``,
+            and ``"none"`` (a keyless endpoint, e.g. a local server).
         label: Human-readable display label.
-        auth: Authentication configuration for this connection.
+        auth: Authentication configuration for this connection. Empty for
+            ``"none"`` connections, which need no credential.
         base_url: Optional provider base URL override for this connection.
         mode: Optional wire-variant selector freely interpreted by the
             provider adapter (e.g. ``"codex_responses"``). Per-connection;
@@ -377,17 +379,8 @@ class ProviderRegistry:
                     f"'{provider_id}' connection '{local_id}'"
                 )
 
-            auth_data = connection_data["auth"]
-            credential_key = auth_data.get("credential_key", "")
-            if connection_type == "api_key" and not credential_key:
-                raise ConfigError(
-                    f"Provider '{provider_id}' connection '{local_id}' api_key auth "
-                    "requires 'credential_key'"
-                )
-            auth = AuthConfig(
-                header=auth_data["header"],
-                prefix=auth_data["prefix"],
-                credential_key=credential_key,
+            auth = ProviderRegistry._parse_auth(
+                provider_id, local_id, connection_type, connection_data
             )
             oauth = ProviderRegistry._parse_oauth_config(provider_id, local_id, connection_data)
 
@@ -419,6 +412,40 @@ class ProviderRegistry:
             )
 
         return connections
+
+    @staticmethod
+    def _parse_auth(
+        provider_id: str,
+        local_id: str,
+        connection_type: str,
+        connection_data: dict[str, Any],
+    ) -> AuthConfig:
+        auth_data = connection_data.get("auth")
+        if auth_data is None:
+            # Keyless connections need no auth block; every other type does.
+            if connection_type == "none":
+                return AuthConfig(header="", prefix="", credential_key="")
+            raise ConfigError(
+                f"Provider '{provider_id}' connection '{local_id}' is missing required field 'auth'"
+            )
+
+        credential_key = auth_data.get("credential_key", "")
+        if connection_type == "api_key" and not credential_key:
+            raise ConfigError(
+                f"Provider '{provider_id}' connection '{local_id}' api_key auth "
+                "requires 'credential_key'"
+            )
+        if connection_type == "none":
+            return AuthConfig(
+                header=auth_data.get("header", ""),
+                prefix=auth_data.get("prefix", ""),
+                credential_key=credential_key,
+            )
+        return AuthConfig(
+            header=auth_data["header"],
+            prefix=auth_data["prefix"],
+            credential_key=credential_key,
+        )
 
     @staticmethod
     def _parse_oauth_config(

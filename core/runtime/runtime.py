@@ -1945,6 +1945,10 @@ class Runtime:
         connection: ConnectionConfig,
         account_id: str | None,
     ) -> TokenGetter:
+        if connection.type == "none":
+            # Keyless connection: adapters and discovery skip the auth header
+            # when the credential value is empty.
+            return StaticTokenGetter("")
         if connection.type == "api_key":
             raw_token = self.provider_credentials.get_credentials(provider_id, connection_id)
             return StaticTokenGetter(raw_token)

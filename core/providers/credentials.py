@@ -150,6 +150,8 @@ class ProviderCredentialResolver:
         connection: ConnectionConfig,
         account_id: str,
     ) -> str:
+        if connection.type == "none":
+            return ""
         if self._uses_token_store(connection):
             token = None
             if self._token_store is not None:
@@ -224,6 +226,10 @@ class ProviderCredentialResolver:
         provider_id: str,
         connection: ConnectionConfig,
     ) -> list[ProviderAccount]:
+        if connection.type == "none":
+            # A keyless connection has exactly one implicit, always-usable
+            # account — there is no credential to discover or scan for.
+            return [ProviderAccount(id=DEFAULT_ACCOUNT_ID, usable=True, source="none")]
         if self._uses_token_store(connection):
             return self._token_store_accounts(provider_id, connection)
         return self._environment_accounts(connection)
