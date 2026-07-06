@@ -8,7 +8,11 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
-from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
+from core.search_config import (
+    FIRST_PARTY_WEB_SEARCH_PROVIDERS,
+    MAX_WEB_SEARCH_COUNT,
+    MIN_WEB_SEARCH_COUNT,
+)
 
 JsonObject = dict[str, Any]
 
@@ -180,7 +184,7 @@ def _parse_web_search_update(web_search: Any) -> JsonObject:
     if not isinstance(web_search, dict):
         raise SettingsValidationError("params.web_search must be an object")
 
-    unsupported_fields = sorted(set(web_search) - {"provider", "searxng"})
+    unsupported_fields = sorted(set(web_search) - {"provider", "default_count", "searxng"})
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported web_search settings: {', '.join(unsupported_fields)}"
@@ -192,6 +196,18 @@ def _parse_web_search_update(web_search: Any) -> JsonObject:
         raise SettingsValidationError(f"params.web_search.provider must be one of: {allowed}")
 
     parsed: JsonObject = {"provider": provider}
+    if "default_count" in web_search:
+        default_count = web_search["default_count"]
+        if (
+            isinstance(default_count, bool)
+            or not isinstance(default_count, int)
+            or not (MIN_WEB_SEARCH_COUNT <= default_count <= MAX_WEB_SEARCH_COUNT)
+        ):
+            raise SettingsValidationError(
+                "params.web_search.default_count must be an integer between "
+                f"{MIN_WEB_SEARCH_COUNT} and {MAX_WEB_SEARCH_COUNT}"
+            )
+        parsed["default_count"] = default_count
     if "searxng" in web_search:
         parsed["searxng"] = _parse_searxng_settings(web_search["searxng"])
     return parsed

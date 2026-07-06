@@ -347,6 +347,7 @@ describe('SettingsView', () => {
     expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
       web_search: {
         provider: 'searxng',
+        default_count: 12,
         searxng: {
           base_url: 'http://localhost:9999',
         },
@@ -807,6 +808,7 @@ describe('settingsView helpers', () => {
     expect(getWebSearchSettings({})).toEqual({
       provider: 'brave',
       available_providers: ['brave', 'searxng'],
+      default_count: 12,
       searxng: {
         base_url: 'http://localhost:8888',
       },
@@ -816,6 +818,7 @@ describe('settingsView helpers', () => {
         web_search: {
           provider: 'searxng',
           available_providers: ['brave', 'searxng'],
+          default_count: 15,
           searxng: {
             base_url: ' http://localhost:9999 ',
           },
@@ -824,13 +827,20 @@ describe('settingsView helpers', () => {
     ).toEqual({
       provider: 'searxng',
       available_providers: ['brave', 'searxng'],
+      default_count: 15,
       searxng: {
         base_url: 'http://localhost:9999',
       },
     });
     expect(
+      getWebSearchSettings({
+        web_search: { provider: 'brave', default_count: '0' },
+      }).default_count,
+    ).toBe(12);
+    expect(
       buildWebSearchSettingsPayload({
         provider: 'searxng',
+        default_count: 15,
         searxng: {
           base_url: ' http://localhost:9999 ',
         },
@@ -838,6 +848,7 @@ describe('settingsView helpers', () => {
     ).toEqual({
       web_search: {
         provider: 'searxng',
+        default_count: 15,
         searxng: {
           base_url: 'http://localhost:9999',
         },
@@ -1015,6 +1026,7 @@ function createSettingsPayload(overrides = {}) {
     web_search: {
       provider: 'brave',
       available_providers: ['brave', 'searxng'],
+      default_count: 12,
       searxng: {
         base_url: 'http://localhost:8888',
       },
