@@ -36,6 +36,7 @@ from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -205,6 +206,51 @@ async def refresh_models(
                 continue
             if model_filter.accepts(model):
                 normalized_models[model.model_id] = model
+
+        # A provider may need per-model detail calls to fill capabilities the
+        # listing endpoint omits (e.g. Ollama's POST /api/show for tool/vision/
+        # thinking support and the context window). The adapter owns the
+        # endpoints and the projection; discovery supplies POST plumbing with
+        # the same retry semantics as the catalog GET and records the raw
+        # responses. A failure degrades to the un-enriched catalog, never a
+        # failed refresh.
+        raw_enrichment_responses: list[dict[str, Any]] = []
+        enrich_discovered_models = getattr(adapter_class, "enrich_discovered_models", None)
+        if callable(enrich_discovered_models):
+            enrichment_headers = _build_headers(
+                provider_config,
+                credential_value,
+                adapter_class,
+                credential_connection,
+            )
+
+            async def _post_enrichment_json(endpoint: str, payload: dict[str, Any]) -> Any:
+                response_payload = await _post_json_payload(
+                    _join_url(base_url, endpoint), enrichment_headers, payload
+                )
+                raw_enrichment_responses.append(
+                    {"endpoint": endpoint, "request": payload, "response": response_payload}
+                )
+                return response_payload
+
+            try:
+                enriched_models = await enrich_discovered_models(
+                    normalized_models, _post_enrichment_json
+                )
+            except (httpx.HTTPError, ProviderError, NetworkError, ValueError) as exc:
+                _LOGGER.warning(
+                    "Model enrichment fetch failed for provider '%s': %s",
+                    provider_config.id,
+                    exc,
+                )
+            else:
+                normalized_models.update(enriched_models)
+            if raw_enrichment_responses:
+                raw_output_data["raw_enrichment_responses"] = raw_enrichment_responses
+                raw_output_path.write_text(
+                    json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
 
         # A provider may expose dedicated task-capability catalogs (e.g. the
         # OpenRouter image API) whose typed per-model option schemas the
@@ -509,6 +555,37 @@ async def _fetch_json_payload(url: str, headers: dict[str, str]) -> Any:
     return await retry_async(_request)
 
 
+async def _post_json_payload(url: str, headers: dict[str, str], payload: dict[str, Any]) -> Any:
+    """POST *payload* to *url* and return the parsed JSON body with retry semantics.
+
+    The POST twin of :func:`_fetch_json_payload`, used by adapter enrichment
+    hooks whose detail endpoints are POST-only (e.g. Ollama's ``/api/show``).
+    Same transient-failure handling as the catalog GET.
+    """
+
+    async def _request() -> Any:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                response = await client.post(url, headers=headers, json=payload)
+            except httpx.TransportError as exc:
+                raise wrap_network_error(exc) from exc
+            if response.status_code >= 400:
+                error_body = response.text
+                detail = (
+                    f"{response.status_code} {error_body}".strip()
+                    if error_body
+                    else str(response.status_code)
+                )
+                classify_http_status(
+                    response.status_code,
+                    detail=detail,
+                    response_headers=response.headers,
+                )
+            return response.json()
+
+    return await retry_async(_request)
+
+
 def _raw_models_from_payload(payload: Any) -> Any:
     if not isinstance(payload, dict):
         return payload
@@ -760,4 +837,5 @@ _DISCOVERY_ADAPTER_MAP = {
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
     "github_copilot": GitHubCopilotAdapter,
+    "ollama": OllamaAdapter,
 }
