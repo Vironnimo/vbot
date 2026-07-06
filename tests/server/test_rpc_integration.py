@@ -855,7 +855,9 @@ async def test_same_session_queued_while_different_sessions_run_in_parallel(
     assert parallel_response["ok"] is True
     assert parallel_response["result"]["message"]["content"] == "Second done"
 
-    removed = state.chat_runs.remove_queued("coder", "session-one", queued_item["id"])
+    removed = state.chat_runs.remove_queued(
+        "coder", "session-one", queued_item["id"], project_id=None
+    )
     assert removed is True
 
     run = state.chat_runs.get(first_response["result"]["run_id"])

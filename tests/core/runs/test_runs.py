@@ -45,7 +45,9 @@ async def test_replays_events_to_late_subscriber() -> None:
         run.emit("visible", {"content": "hello"})
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     assert await run.wait() == "done"
 
     events = [event async for event in run.subscribe()]
@@ -62,10 +64,14 @@ async def test_rejects_second_active_run_for_same_session() -> None:
         await release.wait()
         return run.id
 
-    first_run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    first_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
 
     with pytest.raises(ActiveRunError, match="active run"):
-        await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+        await manager.start(
+            agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        )
 
     release.set()
     assert await first_run.wait() == first_run.id
@@ -81,8 +87,12 @@ async def test_allows_parallel_runs_for_different_sessions() -> None:
         await release.wait()
         return run.session_id
 
-    first_run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
-    second_run = await manager.start(agent_id="coder", session_id="session-two", executor=execute)
+    first_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
+    second_run = await manager.start(
+        agent_id="coder", session_id="session-two", executor=execute, project_id=None
+    )
     await asyncio.sleep(0)
 
     release.set()
@@ -104,7 +114,9 @@ async def test_cancel_marks_run_cancelled_and_suppresses_late_output() -> None:
         run.emit("visible", {"step": "late"})
         return "ignored"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await output_started.wait()
     run.request_cancel()
     release.set()
@@ -211,7 +223,9 @@ async def test_cancel_invokes_registered_abort_callback() -> None:
         run.raise_if_cancelled()
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await asyncio.sleep(0)
     await manager.cancel(run.id)
     release.set()
@@ -273,10 +287,12 @@ async def test_cancel_by_session_requests_cancel_and_returns_run() -> None:
         run.raise_if_cancelled()
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await started.wait()
 
-    cancelled_run = manager.cancel_by_session("coder", "session-one")
+    cancelled_run = manager.cancel_by_session("coder", "session-one", project_id=None)
 
     assert cancelled_run is run
     assert run.cancel_requested is True
@@ -290,7 +306,7 @@ async def test_cancel_by_session_without_active_run_raises_not_found() -> None:
     manager = ChatRunManager()
 
     with pytest.raises(RunNotFoundError, match="no active run"):
-        manager.cancel_by_session("coder", "session-one")
+        manager.cancel_by_session("coder", "session-one", project_id=None)
 
 
 async def test_failed_run_releases_session_lock() -> None:
@@ -302,11 +318,15 @@ async def test_failed_run_releases_session_lock() -> None:
     async def succeed(_run: Run) -> str:
         return "ok"
 
-    failed_run = await manager.start(agent_id="coder", session_id="session-one", executor=fail)
+    failed_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=fail, project_id=None
+    )
     with pytest.raises(RuntimeError, match="boom"):
         await failed_run.wait()
 
-    next_run = await manager.start(agent_id="coder", session_id="session-one", executor=succeed)
+    next_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=succeed, project_id=None
+    )
 
     assert await next_run.wait() == "ok"
 
@@ -326,12 +346,13 @@ async def test_enqueue_when_session_is_idle_starts_run_immediately() -> None:
         session_id="session-one",
         executor=execute,
         display_content="Queued hello",
+        project_id=None,
     )
     run = await item.future
 
     assert run.status == RunStatus.RUNNING
-    assert manager.active_run(agent_id="coder", session_id="session-one") is run
-    assert manager.list_queued("coder", "session-one") == []
+    assert manager.active_run(agent_id="coder", session_id="session-one", project_id=None) is run
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
     assert item.to_dict()["content"] == "Queued hello"
 
     await started.wait()
@@ -356,21 +377,21 @@ async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion()
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_execute,
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
     )
     item = await manager.enqueue(
         agent_id="coder",
         session_id="session-one",
         executor=queued_execute,
         display_content="Queued next",
+        project_id=None,
     )
 
     assert item.future.done() is False
-    assert [queued_item.item_id for queued_item in manager.list_queued("coder", "session-one")] == [
-        item.item_id
-    ]
+    assert [
+        queued_item.item_id
+        for queued_item in manager.list_queued("coder", "session-one", project_id=None)
+    ] == [item.item_id]
 
     active_release.set()
     assert await active_run.wait() == "active"
@@ -378,7 +399,7 @@ async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion()
     queued_run = await asyncio.wait_for(item.future, timeout=1)
 
     assert queued_run.status == RunStatus.RUNNING
-    assert manager.list_queued("coder", "session-one") == []
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
 
     await queued_started.wait()
     queued_release.set()
@@ -397,9 +418,7 @@ async def test_enqueue_when_session_is_busy_logs_queue_line(
         return "done"
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=execute,
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
     )
     with caplog.at_level(logging.INFO, logger="vbot.runs"):
         item = await manager.enqueue(
@@ -407,6 +426,7 @@ async def test_enqueue_when_session_is_busy_logs_queue_line(
             session_id="session-one",
             executor=execute,
             display_content="Queued next",
+            project_id=None,
         )
 
     queue_line = next(
@@ -436,27 +456,26 @@ async def test_has_activity_for_agent_reports_active_and_queued_work() -> None:
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_execute,
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
     )
     queued_item = await manager.enqueue(
         agent_id="coder",
         session_id="session-one",
         executor=queued_execute,
         display_content="Queued next",
+        project_id=None,
     )
 
-    assert manager.has_activity_for_agent("coder") is True
-    assert manager.has_activity_for_agent("writer") is False
+    assert manager.has_activity_for_agent("coder", project_id=None) is True
+    assert manager.has_activity_for_agent("writer", project_id=None) is False
 
     active_release.set()
     assert await active_run.wait() == "active"
     queued_run = await queued_item.future
-    assert manager.has_activity_for_agent("coder") is True
+    assert manager.has_activity_for_agent("coder", project_id=None) is True
     assert await queued_run.wait() == "queued"
 
-    assert manager.has_activity_for_agent("coder") is False
+    assert manager.has_activity_for_agent("coder", project_id=None) is False
 
 
 async def test_has_activity_for_session_is_scoped_to_one_session() -> None:
@@ -471,29 +490,28 @@ async def test_has_activity_for_session_is_scoped_to_one_session() -> None:
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_execute,
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
     )
     queued_item = await manager.enqueue(
         agent_id="coder",
         session_id="session-one",
         executor=queued_execute,
         display_content="Queued next",
+        project_id=None,
     )
 
     # Busy on the exact session, but not on the agent's other sessions nor on
     # the same session id under a different agent.
-    assert manager.has_activity_for_session("coder", "session-one") is True
-    assert manager.has_activity_for_session("coder", "session-two") is False
-    assert manager.has_activity_for_session("writer", "session-one") is False
+    assert manager.has_activity_for_session("coder", "session-one", project_id=None) is True
+    assert manager.has_activity_for_session("coder", "session-two", project_id=None) is False
+    assert manager.has_activity_for_session("writer", "session-one", project_id=None) is False
 
     active_release.set()
     assert await active_run.wait() == "active"
     queued_run = await queued_item.future
     assert await queued_run.wait() == "queued"
 
-    assert manager.has_activity_for_session("coder", "session-one") is False
+    assert manager.has_activity_for_session("coder", "session-one", project_id=None) is False
 
 
 async def test_multiple_enqueued_items_drain_in_fifo_order() -> None:
@@ -525,30 +543,34 @@ async def test_multiple_enqueued_items_drain_in_fifo_order() -> None:
         return execute
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_execute,
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
     )
     first_item = await manager.enqueue(
         agent_id="coder",
         session_id="session-one",
         executor=make_executor("first"),
         display_content="first",
+        project_id=None,
     )
     second_item = await manager.enqueue(
         agent_id="coder",
         session_id="session-one",
         executor=make_executor("second"),
         display_content="second",
+        project_id=None,
     )
     third_item = await manager.enqueue(
         agent_id="coder",
         session_id="session-one",
         executor=make_executor("third"),
         display_content="third",
+        project_id=None,
     )
 
-    assert [item.display_content for item in manager.list_queued("coder", "session-one")] == [
+    assert [
+        item.display_content
+        for item in manager.list_queued("coder", "session-one", project_id=None)
+    ] == [
         "first",
         "second",
         "third",
@@ -588,25 +610,24 @@ async def test_remove_queued_item_cancels_future_and_removes_from_queue() -> Non
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_execute,
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
     )
     item = await manager.enqueue(
         agent_id="coder",
         session_id="session-one",
         executor=queued_execute,
         display_content="remove me",
+        project_id=None,
     )
 
-    assert manager.remove_queued("coder", "session-one", item.item_id) is True
-    assert manager.list_queued("coder", "session-one") == []
+    assert manager.remove_queued("coder", "session-one", item.item_id, project_id=None) is True
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
     assert item.future.cancelled() is True
-    assert manager.remove_queued("coder", "session-one", item.item_id) is False
+    assert manager.remove_queued("coder", "session-one", item.item_id, project_id=None) is False
 
     active_release.set()
     assert await active_run.wait() == "active"
-    assert manager.active_run(agent_id="coder", session_id="session-one") is None
+    assert manager.active_run(agent_id="coder", session_id="session-one", project_id=None) is None
 
 
 async def test_update_queued_item_replaces_executor_and_display_content() -> None:
@@ -631,35 +652,28 @@ async def test_update_queued_item_replaces_executor_and_display_content() -> Non
         return "updated"
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_execute,
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
     )
     item = await manager.enqueue(
         agent_id="coder",
         session_id="session-one",
         executor=original_execute,
         display_content="original",
+        project_id=None,
     )
 
     assert (
         manager.update_queued(
-            "coder",
-            "session-one",
-            item.item_id,
-            updated_execute,
-            "updated",
+            "coder", "session-one", item.item_id, updated_execute, "updated", project_id=None
         )
         is True
     )
-    assert manager.list_queued("coder", "session-one")[0].display_content == "updated"
+    assert (
+        manager.list_queued("coder", "session-one", project_id=None)[0].display_content == "updated"
+    )
     assert (
         manager.update_queued(
-            "coder",
-            "session-one",
-            "missing",
-            updated_execute,
-            "updated",
+            "coder", "session-one", "missing", updated_execute, "updated", project_id=None
         )
         is False
     )
@@ -688,16 +702,12 @@ async def test_enqueue_race_condition_session_becomes_idle_between_error_and_enq
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_execute,
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
     )
 
     with pytest.raises(ActiveRunError, match="active run"):
         await manager.start(
-            agent_id="coder",
-            session_id="session-one",
-            executor=queued_execute,
+            agent_id="coder", session_id="session-one", executor=queued_execute, project_id=None
         )
 
     active_release.set()
@@ -708,11 +718,12 @@ async def test_enqueue_race_condition_session_becomes_idle_between_error_and_enq
         session_id="session-one",
         executor=queued_execute,
         display_content="race",
+        project_id=None,
     )
     queued_run = await item.future
 
     assert queued_run.status == RunStatus.RUNNING
-    assert manager.list_queued("coder", "session-one") == []
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
 
     queued_release.set()
     assert await queued_run.wait() == "queued"
@@ -749,9 +760,7 @@ async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_pat
         return "active"
 
     active_run = await runtime.chat_runs.start(
-        agent_id="coder",
-        session_id=session_id,
-        executor=active_execute,
+        agent_id="coder", session_id=session_id, executor=active_execute, project_id=None
     )
 
     item = await ChatLoop(runtime).queue_run(
@@ -761,9 +770,11 @@ async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_pat
     )
 
     assert item.display_content == "x" * 500
-    assert runtime.chat_runs.list_queued("coder", session_id)[0] is item
+    assert runtime.chat_runs.list_queued("coder", session_id, project_id=None)[0] is item
 
-    assert runtime.chat_runs.remove_queued("coder", session_id, item.item_id) is True
+    assert (
+        runtime.chat_runs.remove_queued("coder", session_id, item.item_id, project_id=None) is True
+    )
     active_release.set()
     assert await active_run.wait() == "active"
 
@@ -791,7 +802,9 @@ async def test_executor_terminal_payload_extras_ride_completed_event() -> None:
         run.terminal_payload_extras["session_usage"] = {"input_tokens": 12}
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     assert await run.wait() == "done"
 
     completed_events = [event for event in run.events if event.type == "run_completed"]
@@ -807,7 +820,9 @@ async def test_executor_terminal_payload_extras_ride_failed_and_cancelled_events
         run.terminal_payload_extras["session_usage"] = {"input_tokens": 7}
         raise VBotError("boom")
 
-    failed_run = await manager.start(agent_id="coder", session_id="session-fail", executor=failing)
+    failed_run = await manager.start(
+        agent_id="coder", session_id="session-fail", executor=failing, project_id=None
+    )
     with pytest.raises(VBotError):
         await failed_run.wait()
     failed_events = [event for event in failed_run.events if event.type == "run_failed"]
@@ -823,7 +838,7 @@ async def test_executor_terminal_payload_extras_ride_failed_and_cancelled_events
         return "late"
 
     cancelled_run = await manager.start(
-        agent_id="coder", session_id="session-cancel", executor=cancellable
+        agent_id="coder", session_id="session-cancel", executor=cancellable, project_id=None
     )
     await started.wait()
     cancelled_run.request_cancel()
@@ -935,7 +950,9 @@ async def test_failed_run_logs_once_through_manager_executor(
         raise RuntimeError("executor boom")
 
     caplog.set_level(logging.ERROR, logger="vbot.runs")
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=fail)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=fail, project_id=None
+    )
     with pytest.raises(RuntimeError, match="executor boom"):
         await run.wait()
 
@@ -960,7 +977,9 @@ async def test_run_completed_includes_usage_from_result_object() -> None:
     async def execute(run: Run) -> FakeResult:
         return FakeResult()
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await run.wait()
 
     completed_events = [event for event in run.events if event.type == "run_completed"]
@@ -980,7 +999,9 @@ async def test_run_completed_omits_usage_when_result_has_no_usage() -> None:
     async def execute(run: Run) -> str:
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await run.wait()
 
     completed_events = [event for event in run.events if event.type == "run_completed"]
@@ -999,17 +1020,13 @@ async def test_run_started_callbacks_are_notified_and_removable() -> None:
 
     remove_callback = manager.add_run_started_callback(observed_runs.append)
     first_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=execute,
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
     )
     await first_run.wait()
     remove_callback()
 
     second_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=execute,
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
     )
     await second_run.wait()
 
@@ -1022,11 +1039,17 @@ async def test_completed_run_lookup_retention_is_bounded() -> None:
     async def execute(run: Run) -> str:
         return run.id
 
-    first_run = await manager.start(agent_id="coder", session_id="one", executor=execute)
+    first_run = await manager.start(
+        agent_id="coder", session_id="one", executor=execute, project_id=None
+    )
     await first_run.wait()
-    second_run = await manager.start(agent_id="coder", session_id="two", executor=execute)
+    second_run = await manager.start(
+        agent_id="coder", session_id="two", executor=execute, project_id=None
+    )
     await second_run.wait()
-    third_run = await manager.start(agent_id="coder", session_id="three", executor=execute)
+    third_run = await manager.start(
+        agent_id="coder", session_id="three", executor=execute, project_id=None
+    )
     await third_run.wait()
 
     with pytest.raises(RunNotFoundError):
@@ -1046,7 +1069,9 @@ async def test_run_completed_omits_usage_when_usage_is_none() -> None:
     async def execute(run: Run) -> ResultWithNoneUsage:
         return ResultWithNoneUsage()
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await run.wait()
 
     completed_events = [event for event in run.events if event.type == "run_completed"]
@@ -1066,7 +1091,9 @@ async def test_request_cancel_stores_reason_and_surfaces_in_terminal_payload() -
         run.raise_if_cancelled()
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await asyncio.sleep(0)
     run.request_cancel(reason="user")
     release.set()
@@ -1091,7 +1118,9 @@ async def test_request_cancel_omits_reason_from_payload_when_not_provided() -> N
         run.raise_if_cancelled()
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await asyncio.sleep(0)
     run.request_cancel()
     release.set()
@@ -1193,7 +1222,9 @@ async def test_tool_call_cancel_does_not_invoke_run_cancel_callbacks_or_cancel_t
         run.raise_if_cancelled()
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await asyncio.sleep(0)
     run.register_tool_cancel("tool-1", lambda: tool_invocations.append("tool-abort"))
 
@@ -1258,16 +1289,12 @@ async def test_active_runs_returns_running_runs_and_omits_terminal_runs() -> Non
         return "done"
 
     running_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=running_execute,
+        agent_id="coder", session_id="session-one", executor=running_execute, project_id=None
     )
     await started.wait()
 
     finishing_run = await manager.start(
-        agent_id="coder",
-        session_id="session-two",
-        executor=finishing_execute,
+        agent_id="coder", session_id="session-two", executor=finishing_execute, project_id=None
     )
     assert await finishing_run.wait() == "done"
     assert finishing_run.status == RunStatus.COMPLETED
@@ -1276,7 +1303,7 @@ async def test_active_runs_returns_running_runs_and_omits_terminal_runs() -> Non
 
     assert active == [running_run]
     assert all(run.status == RunStatus.RUNNING for run in active)
-    assert manager.active_run(agent_id="coder", session_id="session-two") is None
+    assert manager.active_run(agent_id="coder", session_id="session-two", project_id=None) is None
 
     running_release.set()
     assert await running_run.wait() == "active"
@@ -1302,9 +1329,7 @@ async def test_active_runs_returns_runs_across_multiple_sessions() -> None:
     runs_by_session: dict[str, Run] = {}
     for session_id in started_events:
         runs_by_session[session_id] = await manager.start(
-            agent_id="coder",
-            session_id=session_id,
-            executor=execute,
+            agent_id="coder", session_id=session_id, executor=execute, project_id=None
         )
 
     for _session_id, event in started_events.items():
@@ -1339,15 +1364,14 @@ async def test_drained_queued_run_started_payload_contains_queue_item_id() -> No
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_execute,
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
     )
     item = await manager.enqueue(
         agent_id="coder",
         session_id="session-one",
         executor=queued_execute,
         display_content="Queued next",
+        project_id=None,
     )
 
     active_release.set()
@@ -1381,6 +1405,7 @@ async def test_enqueue_idle_session_start_immediately_carries_queue_item_id() ->
         session_id="session-one",
         executor=execute,
         display_content="Hello",
+        project_id=None,
     )
     run = await item.future
     await asyncio.sleep(0)
@@ -1403,7 +1428,9 @@ async def test_start_run_payload_omits_queue_item_id() -> None:
     async def execute(_run: Run) -> str:
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     assert await run.wait() == "done"
 
     started_events = [event for event in run.events if event.type == RUN_STARTED_EVENT]
@@ -1412,13 +1439,12 @@ async def test_start_run_payload_omits_queue_item_id() -> None:
     assert "queue_item_id" not in started_events[0].payload
 
 
-async def test_project_id_rides_run_not_key() -> None:
-    """project_id is carried on the Run for session I/O, never in the dedup key.
+async def test_project_and_identity_sessions_with_same_ids_never_collide() -> None:
+    """The run key is ``(project_id, agent_id, session_id)`` — anchors stay apart.
 
-    A run started with a project_id is found by the project-agnostic lookups
-    (active_run without project_id), and a second start on the same session is
-    rejected as already active regardless of whether the caller knows the
-    project. This is the exact contract the server RPCs / commands rely on.
+    ``session.create`` accepts caller-chosen session ids, so identity ``builder``
+    and project ``builder@vbot`` can both own a session named the same. The two
+    must never block, cancel, or guard each other.
     """
     manager = ChatRunManager()
     release = asyncio.Event()
@@ -1429,7 +1455,7 @@ async def test_project_id_rides_run_not_key() -> None:
 
     project_run = await manager.start(
         agent_id="coder",
-        session_id="sess-uuid",
+        session_id="main",
         executor=execute,
         project_id="acme",
     )
@@ -1438,16 +1464,31 @@ async def test_project_id_rides_run_not_key() -> None:
     # The project anchor rides the Run, available to its session I/O.
     assert project_run.project_id == "acme"
 
-    # The project-scoped run is found by the project-agnostic lookup the server
-    # RPCs and slash commands use (no project_id passed).
-    assert manager.active_run(agent_id="coder", session_id="sess-uuid") is project_run
+    # The project-scoped lookup finds it; the identity scope does not.
+    assert manager.active_run(agent_id="coder", session_id="main", project_id="acme") is project_run
+    assert manager.active_run(agent_id="coder", session_id="main", project_id=None) is None
 
-    # A second start on the same (agent, session) is rejected as active even
-    # though no project_id is supplied — the key is project-agnostic.
+    # An identity run on the same (agent, session) ids starts fine in parallel …
+    identity_run = await manager.start(
+        agent_id="coder", session_id="main", executor=execute, project_id=None
+    )
+    # Let the executor task actually start before cancelling it (a same-tick
+    # cancel would close the never-run task without terminal bookkeeping).
+    await asyncio.sleep(0)
+    # … while a second start in the *same* anchor is still rejected.
     with pytest.raises(ActiveRunError, match="active run"):
-        await manager.start(agent_id="coder", session_id="sess-uuid", executor=execute)
+        await manager.start(
+            agent_id="coder", session_id="main", executor=execute, project_id="acme"
+        )
+
+    # Cancelling the identity session leaves the project run untouched.
+    cancelled = manager.cancel_by_session("coder", "main", project_id=None)
+    assert cancelled is identity_run
+    assert project_run.cancel_requested is False
 
     release.set()
+    with pytest.raises(RunCancelledError):
+        await identity_run.wait()
     assert await project_run.wait() == project_run.id
 
 
@@ -1460,11 +1501,13 @@ async def test_identity_run_leaves_project_id_none() -> None:
         await release.wait()
         return run.id
 
-    run = await manager.start(agent_id="coder", session_id="sess-uuid", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="sess-uuid", executor=execute, project_id=None
+    )
     await asyncio.sleep(0)
 
     assert run.project_id is None
-    assert manager.active_run(agent_id="coder", session_id="sess-uuid") is run
+    assert manager.active_run(agent_id="coder", session_id="sess-uuid", project_id=None) is run
 
     release.set()
     await run.wait()
@@ -1495,9 +1538,7 @@ async def test_emitted_events_carry_run_project_id() -> None:
     assert visible.to_dict()["project_id"] == "acme"
 
     identity_run = await manager.start(
-        agent_id="coder",
-        session_id="sess-uuid-2",
-        executor=execute,
+        agent_id="coder", session_id="sess-uuid-2", executor=execute, project_id=None
     )
     await identity_run.wait()
     assert all(event.project_id is None for event in identity_run.events)
@@ -1533,11 +1574,12 @@ async def test_queued_project_run_carries_project_id_when_drained() -> None:
         project_id="acme",
     )
 
-    # The session is busy, so the item is queued (found by the 2-arg lookup).
+    # The session is busy, so the item is queued under the project scope.
     assert item.future.done() is False
-    assert [queued.item_id for queued in manager.list_queued("coder", "sess-uuid")] == [
-        item.item_id
-    ]
+    assert [
+        queued.item_id for queued in manager.list_queued("coder", "sess-uuid", project_id="acme")
+    ] == [item.item_id]
+    assert manager.list_queued("coder", "sess-uuid", project_id=None) == []
 
     active_release.set()
     assert await active_run.wait() == "active"
@@ -1549,8 +1591,8 @@ async def test_queued_project_run_carries_project_id_when_drained() -> None:
     assert drained and drained[0].project_id == "acme"
 
 
-async def test_cancel_by_session_finds_a_project_scoped_run() -> None:
-    """cancel_by_session (no project_id) cancels a project-scoped active run."""
+async def test_cancel_by_session_is_scoped_to_the_project_anchor() -> None:
+    """cancel_by_session needs the run's own project scope to find it."""
     manager = ChatRunManager()
     release = asyncio.Event()
 
@@ -1564,7 +1606,11 @@ async def test_cancel_by_session_finds_a_project_scoped_run() -> None:
     )
     await asyncio.sleep(0)
 
-    cancelled = manager.cancel_by_session("coder", "sess-uuid")
+    # The identity scope must not reach the project run.
+    with pytest.raises(RunNotFoundError, match="no active run"):
+        manager.cancel_by_session("coder", "sess-uuid", project_id=None)
+
+    cancelled = manager.cancel_by_session("coder", "sess-uuid", project_id="acme")
     assert cancelled is project_run
     assert project_run.cancel_requested is True
 
@@ -1573,8 +1619,13 @@ async def test_cancel_by_session_finds_a_project_scoped_run() -> None:
         await project_run.wait()
 
 
-async def test_has_activity_for_agent_matches_a_project_scoped_run() -> None:
-    """An agent busy only in a project-scoped run still reports activity."""
+async def test_has_activity_for_agent_is_scoped_to_the_project_anchor() -> None:
+    """Agent activity is checked per (project, agent) pair, not by bare id.
+
+    An active run of project ``coder@acme`` must not read as activity of the
+    same-named identity agent (or another project's ``coder``) — the false
+    positive used to block deleting an unrelated identity agent / project.
+    """
     manager = ChatRunManager()
     release = asyncio.Event()
 
@@ -1586,9 +1637,11 @@ async def test_has_activity_for_agent_matches_a_project_scoped_run() -> None:
         agent_id="coder", session_id="sess-uuid", executor=execute, project_id="acme"
     )
 
-    assert manager.has_activity_for_agent("coder") is True
-    assert manager.has_activity_for_agent("writer") is False
+    assert manager.has_activity_for_agent("coder", project_id="acme") is True
+    assert manager.has_activity_for_agent("coder", project_id=None) is False
+    assert manager.has_activity_for_agent("coder", project_id="other") is False
+    assert manager.has_activity_for_agent("writer", project_id="acme") is False
 
     release.set()
     await run.wait()
-    assert manager.has_activity_for_agent("coder") is False
+    assert manager.has_activity_for_agent("coder", project_id="acme") is False

@@ -127,7 +127,7 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             if _is_visible_history_message(message)
         ]
         messages, has_more = _history_page(visible_messages, limit=limit, before=before)
-        active_run = _active_run_response(state, agent_id, active_session_id)
+        active_run = _active_run_response(state, agent_id, active_session_id, project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response: JsonObject = {
@@ -319,7 +319,9 @@ def _handle_new_session_command(
     state: Any, agent_id: str, session_id: str, *, project_id: str | None = None
 ) -> JsonObject:
     try:
-        active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+        active_run = _state_chat_runs(state).active_run(
+            agent_id=agent_id, session_id=session_id, project_id=project_id
+        )
         if active_run is not None:
             return _command_handled_response(
                 "A new session can be started after the current run finishes.",
@@ -517,7 +519,9 @@ async def _handle_learn_command(
     agent's own home, then we report the agent's summary. Refused while another run
     is active, like a handoff.
     """
-    active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+    active_run = _state_chat_runs(state).active_run(
+        agent_id=agent_id, session_id=session_id, project_id=project_id
+    )
     if active_run is not None:
         return _command_handled_response("A skill can be authored after the current run finishes.")
     try:
@@ -559,7 +563,9 @@ async def _handle_reflect_command(
     Identity-agents-only (a config/project agent has no private memory/skill
     home); refused while a run is active on the source.
     """
-    active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+    active_run = _state_chat_runs(state).active_run(
+        agent_id=agent_id, session_id=session_id, project_id=project_id
+    )
     if active_run is not None:
         return _command_handled_response("A reflection can run after the current run finishes.")
 
@@ -626,7 +632,9 @@ async def _handle_handoff_command(
 
     target_display = format_agent_address(target_agent_id, target_project_id)
     try:
-        active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+        active_run = _state_chat_runs(state).active_run(
+            agent_id=agent_id, session_id=session_id, project_id=project_id
+        )
         if active_run is not None:
             return _command_handled_response(
                 "A handoff can be started after the current run finishes.",
@@ -748,9 +756,12 @@ async def _handle_move_session_command(
         return _command_handled_response(f"This session already belongs to {target_display}.")
 
     chat_runs = _state_chat_runs(state)
-    if chat_runs.active_run(agent_id=agent_id, session_id=session_id) is not None:
+    if (
+        chat_runs.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
+        is not None
+    ):
         return _command_handled_response("This session can be moved once its current run finishes.")
-    if chat_runs.list_queued(agent_id, session_id):
+    if chat_runs.list_queued(agent_id, session_id, project_id=project_id):
         return _command_handled_response("This session can be moved once its queued run finishes.")
 
     chat_sessions = state.runtime.chat_sessions
@@ -1059,12 +1070,14 @@ def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
             f"unsupported chat.queue_list fields: {', '.join(unsupported_fields)}",
         )
 
-    agent_id = _required_string(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     try:
         items = [
             item
-            for item in _state_chat_runs(state).list_queued(agent_id, session_id)
+            for item in _state_chat_runs(state).list_queued(
+                agent_id, session_id, project_id=project_id
+            )
             if not item.internal
         ]
     except Exception as exc:
@@ -1080,14 +1093,14 @@ def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
             f"unsupported chat.queue_remove fields: {', '.join(unsupported_fields)}",
         )
 
-    agent_id = _required_string(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     item_id = _required_string(params, "item_id")
     try:
         chat_runs = _state_chat_runs(state)
-        if not _queue_item_is_public(chat_runs, agent_id, session_id, item_id):
+        if not _queue_item_is_public(chat_runs, agent_id, session_id, item_id, project_id):
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
-        removed = chat_runs.remove_queued(agent_id, session_id, item_id)
+        removed = chat_runs.remove_queued(agent_id, session_id, item_id, project_id=project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -1107,7 +1120,7 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
             f"unsupported chat.queue_update fields: {', '.join(unsupported_fields)}",
         )
 
-    agent_id = _required_string(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     item_id = _required_string(params, "item_id")
     content = _parse_chat_content(params, "content")
@@ -1115,14 +1128,14 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         chat_runs = _state_chat_runs(state)
-        queued_item = _public_queue_item(chat_runs, agent_id, session_id, item_id)
+        queued_item = _public_queue_item(chat_runs, agent_id, session_id, item_id, project_id)
         if queued_item is None:
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
 
-        # The queue is keyed on the bare agent id, so the edit's params carry no project.
-        # Rebuild against the anchor the item was queued under (its own project_id — the same
-        # source the drain path uses); otherwise a project session is looked up in the
-        # identity anchor and the rebuild fails with session-not-found.
+        # The address's project is the anchor the item was queued under — the queue
+        # key carries it, and the item above was found via that key. Rebuild against
+        # the same anchor; otherwise a project session is looked up in the identity
+        # anchor and the rebuild fails with session-not-found.
         (
             resolved_session_id,
             updated_executor,
@@ -1133,7 +1146,7 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
             session_id,
             content,
             input_origin=input_origin,
-            project_id=queued_item.project_id,
+            project_id=project_id,
         )
         updated = chat_runs.update_queued(
             agent_id,
@@ -1141,6 +1154,7 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
             item_id,
             updated_executor,
             updated_display_content,
+            project_id=project_id,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -1153,8 +1167,12 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True}
 
 
-def _active_run_response(state: Any, agent_id: str, session_id: str) -> JsonObject | None:
-    run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+def _active_run_response(
+    state: Any, agent_id: str, session_id: str, project_id: str | None
+) -> JsonObject | None:
+    run = _state_chat_runs(state).active_run(
+        agent_id=agent_id, session_id=session_id, project_id=project_id
+    )
     if run is None:
         return None
     return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
@@ -1165,13 +1183,14 @@ def _public_queue_item(
     agent_id: str,
     session_id: str,
     item_id: str,
+    project_id: str | None,
 ) -> QueuedRunItem | None:
     """Return the queued item if it exists and is public (not internal), else ``None``.
 
     Internal items (e.g. subagent-driven) stay hidden from the queue RPCs, so they are
     treated as absent here just like a missing id.
     """
-    for item in chat_runs.list_queued(agent_id, session_id):
+    for item in chat_runs.list_queued(agent_id, session_id, project_id=project_id):
         if item.item_id == item_id:
             return item if not item.internal else None
     return None
@@ -1182,8 +1201,9 @@ def _queue_item_is_public(
     agent_id: str,
     session_id: str,
     item_id: str,
+    project_id: str | None,
 ) -> bool:
-    return _public_queue_item(chat_runs, agent_id, session_id, item_id) is not None
+    return _public_queue_item(chat_runs, agent_id, session_id, item_id, project_id) is not None
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

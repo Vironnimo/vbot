@@ -170,7 +170,9 @@ def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
         runtime=runtime,
         event_bus=ServerEventBus(),
         # _state_chat_runs reads state.chat_runs directly (not under runtime).
-        chat_runs=SimpleNamespace(has_activity_for_session=lambda agent_id, session_id: False),
+        chat_runs=SimpleNamespace(
+            has_activity_for_session=lambda agent_id, session_id, project_id: False
+        ),
     )
     state._updates = updates  # type: ignore[attr-defined]
     state._resets = resets  # type: ignore[attr-defined]
@@ -371,7 +373,7 @@ async def test_delete_project_session_creates_fresh_when_none_remain() -> None:
 @pytest.mark.asyncio
 async def test_delete_busy_session_is_rejected() -> None:
     state, _resolver, sessions = _make_state()
-    state.chat_runs.has_activity_for_session = lambda agent_id, session_id: True
+    state.chat_runs.has_activity_for_session = lambda agent_id, session_id, project_id: True
 
     with pytest.raises(RpcError) as exc_info:
         await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})

@@ -4114,7 +4114,7 @@ describe('ChatView', () => {
     expect(activeAgentTab()?.textContent).toContain('Alpha');
   });
 
-  it('sends a project-agent message with the full address and syncs the queue with the bare id (trap 2)', async () => {
+  it('sends a project-agent message and syncs the queue with the full address (trap 2)', async () => {
     showProjectMock.mockResolvedValue({
       project: { project_id: 'vbot', default_agent: 'builder' },
       scan: {
@@ -4171,11 +4171,15 @@ describe('ChatView', () => {
       100,
     );
 
-    // The queue sync that ran during history load used the BARE id (trap 2).
-    expect(listQueueMock).toHaveBeenCalledWith('builder', 'builder-session');
-    // It must NEVER be called with the full address.
-    expect(listQueueMock).not.toHaveBeenCalledWith(
+    // The queue key carries the project anchor, so the queue sync that ran
+    // during history load used the FULL address (trap 2).
+    expect(listQueueMock).toHaveBeenCalledWith(
       'builder@vbot',
+      'builder-session',
+    );
+    // It must NEVER strip the address down to the bare id.
+    expect(listQueueMock).not.toHaveBeenCalledWith(
+      'builder',
       'builder-session',
     );
 

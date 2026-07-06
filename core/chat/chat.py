@@ -487,7 +487,10 @@ class ChatLoop:
             return "Compaction is not available."
 
         manager = self._runtime.chat_run_manager
-        if manager.active_run(agent_id=agent_id, session_id=session_id) is not None:
+        if (
+            manager.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
+            is not None
+        ):
             return "Cannot compact while a run is active for this session."
 
         # Resolve the agent and load the session in the caller's scope: a project

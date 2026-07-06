@@ -85,20 +85,31 @@ class TriggerService:
                 )
             return await queued_item.future
 
-    async def retry_run(self, agent_id: str, session_id: str) -> Run:
-        """Retry the last user turn for a channel or automation entry point."""
-        return await self._trigger_chat_loop.retry_run(agent_id, session_id)
+    async def retry_run(
+        self, agent_id: str, session_id: str, *, project_id: str | None = None
+    ) -> Run:
+        """Retry the last user turn for a channel or automation entry point.
 
-    def has_active_run(self, agent_id: str, session_id: str) -> bool:
+        ``project_id=None`` keeps the identity scope — channels are identity-only
+        callers today.
+        """
+        return await self._trigger_chat_loop.retry_run(agent_id, session_id, project_id=project_id)
+
+    def has_active_run(
+        self, agent_id: str, session_id: str, *, project_id: str | None = None
+    ) -> bool:
         """Return whether one session currently has an active run.
 
         A thin delegate to the run manager's active-run guard, so command
         producers (channels) can refuse run-conflicting actions such as starting
         a new session mid-run without taking their own dependency on the run
-        manager.
+        manager. ``project_id=None`` keeps the identity scope (channels).
         """
         return (
-            self._chat_run_manager.active_run(agent_id=agent_id, session_id=session_id) is not None
+            self._chat_run_manager.active_run(
+                agent_id=agent_id, session_id=session_id, project_id=project_id
+            )
+            is not None
         )
 
     async def compact_session(

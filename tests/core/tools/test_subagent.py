@@ -195,7 +195,9 @@ class FakeRunManager:
             self._schedule_terminal_state(run)
         return item
 
-    def remove_queued(self, agent_id: str, session_id: str, item_id: str) -> bool:
+    def remove_queued(
+        self, agent_id: str, session_id: str, item_id: str, *, project_id: str | None = None
+    ) -> bool:
         for record in list(self.enqueued):
             item = record["item"]
             if (
@@ -225,7 +227,9 @@ class FakeRunManager:
         except KeyError as exc:
             raise RunNotFoundError(f"run not found: {run_id}") from exc
 
-    def active_run(self, *, agent_id: str, session_id: str) -> Run | None:
+    def active_run(
+        self, *, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> Run | None:
         return self.busy_sessions.get((agent_id, session_id))
 
     def _schedule_terminal_state(self, run: Run) -> None:
@@ -781,7 +785,7 @@ async def test_subagent_tool_returns_queued_without_waiting_for_busy_session_sta
         "queue_item_id": "queued-item-1",
         "status": "queued",
     }
-    manager.remove_queued("parent", "waiting-sub-session", "queued-item-1")
+    manager.remove_queued("parent", "waiting-sub-session", "queued-item-1", project_id=None)
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
 
@@ -822,7 +826,7 @@ async def test_subagent_tool_counts_queued_run_against_per_turn_limit(
     assert second_result["ok"] is False
     assert second_result["error"]["code"] == "subagent_limit_exceeded"
     assert len(manager.enqueued) == 1
-    manager.remove_queued("parent", "limited-sub-session", "queued-item-1")
+    manager.remove_queued("parent", "limited-sub-session", "queued-item-1", project_id=None)
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
 
@@ -901,7 +905,7 @@ async def test_parent_cancellation_does_not_remove_background_queued_subagent(
     assert result["data"]["status"] == "queued"
     assert len(manager.enqueued) == 1
     assert tracker.spawn_count(parent_key) == 1
-    manager.remove_queued("parent", "survive-sub-session", "queued-item-1")
+    manager.remove_queued("parent", "survive-sub-session", "queued-item-1", project_id=None)
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
 
@@ -948,7 +952,7 @@ async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
         "result": None,
         "usage": None,
     }
-    manager.remove_queued("parent", "queued-result-sub-session", "queued-item-1")
+    manager.remove_queued("parent", "queued-result-sub-session", "queued-item-1", project_id=None)
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
 

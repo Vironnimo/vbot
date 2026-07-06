@@ -268,12 +268,12 @@ async def test_project_session_is_created_and_opened_under_project_anchor(
 
 @pytest.mark.asyncio
 async def test_project_run_carries_project_id_and_dedups_per_session(tmp_path: Path) -> None:
-    # A run started with a project_id carries it on the Run (for session I/O) but
-    # keys the active-run slot on (agent_id, session_id) alone — session ids are
-    # globally unique UUIDs. Proof of the contract the server RPCs depend on:
-    # the project run is found by the project-agnostic active_run lookup, and a
-    # second start on the same session is rejected as already active even when no
-    # project_id is passed.
+    # A run started with a project_id carries it on the Run (for session I/O) and
+    # the active-run slot is keyed on (project_id, agent_id, session_id) — the
+    # project anchor is part of the key because session.create accepts
+    # caller-chosen session ids. The project-scoped lookup finds the run, the
+    # identity scope does not, and a second start in the same project session is
+    # rejected as already active.
     from core.runs import ActiveRunError
     from tests.core.chat.test_chat_loop import BlockingStubAdapter, StubAgent
 
@@ -289,15 +289,22 @@ async def test_project_run_carries_project_id_and_dedups_per_session(tmp_path: P
     project_run = await loop.start_run("coder", "Hi", session_id="session-one", project_id="acme")
     await adapter.request_started.wait()
 
-    # The project anchor rides the Run, not the key.
+    # The project anchor rides the Run and scopes the key.
     assert project_run.project_id == "acme"
-    # The project-scoped run is found by the project-agnostic server-RPC lookup
-    # (no project_id) — the exact path chat_methods.py / commands.py exercise.
     assert (
-        runtime.chat_run_manager.active_run(agent_id="coder", session_id="session-one")
+        runtime.chat_run_manager.active_run(
+            agent_id="coder", session_id="session-one", project_id="acme"
+        )
         is project_run
     )
-    # A second start on the same session is rejected as already active.
+    # The identity scope must not see the project run (separate anchor).
+    assert (
+        runtime.chat_run_manager.active_run(
+            agent_id="coder", session_id="session-one", project_id=None
+        )
+        is None
+    )
+    # A second start on the same project session is rejected as already active.
     with pytest.raises(ActiveRunError):
         await loop.start_run("coder", "Hi", session_id="session-one", project_id="acme")
 
