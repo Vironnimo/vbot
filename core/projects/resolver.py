@@ -32,11 +32,13 @@ allowed_skills, fallback_model, memory_prompt_mode, workspace, id, …).
 **Model chain for config agents** (decision in the plan): agent model → project
 default → global default → **error**. A model counts only when it
 *exists/is configured in this instance* — its provider is registered, the model
-is in the catalog, and the provider has a usable connection (credentials). An
-unconfigured model is treated as **no model** and the chain falls through; if it
-falls all the way through, resolution raises (the agent cannot run). The same
-"exists/configured?" check produces the scan's ``BAD_MODEL`` findings, hung onto
-the report through :meth:`ScanReport.with_model_findings` (the B3.1 seam).
+is in the catalog, and a connection the model's per-model allowlist permits has
+usable credentials (a pinned ``::connection[:account]`` suffix is checked
+verbatim). An unconfigured model is treated as **no model** and the chain falls
+through; if it falls all the way through, resolution raises (the agent cannot
+run). The same "exists/configured?" check produces the scan's ``BAD_MODEL``
+findings, hung onto the report through :meth:`ScanReport.with_model_findings`
+(the B3.1 seam).
 
 Constructor injection only; the runtime dependencies are declared as local
 structural Protocols so this module never imports ``core.runtime`` (import-cycle
@@ -194,10 +196,21 @@ class AgentResolutionError(ValueError):
 # slice of the real service the resolver uses.
 
 
+class ConnectionRestrictedModel(Protocol):
+    """The catalog-model slice the checker reads: the per-model connection rule.
+
+    ``allows_connection`` is the single source of the connection allowlist
+    (``core.models.Model.allows_connection``): an empty allowlist permits every
+    connection, a non-empty one restricts the model to the listed connection ids.
+    """
+
+    def allows_connection(self, connection_id: str) -> bool: ...
+
+
 class ModelProbe(Protocol):
     """The model-registry slice used to answer "does this model exist?"."""
 
-    def get(self, provider_id: str, model_id: str) -> object: ...
+    def get(self, provider_id: str, model_id: str) -> ConnectionRestrictedModel: ...
 
 
 class ProviderProbe(Protocol):
@@ -254,12 +267,19 @@ def _bad_model_finding(member: ScannedAgent) -> ScanFinding:
 
 
 class ModelConfigurationChecker:
-    """Decides whether a ``<provider>/<model-id>`` exists and is configured here.
+    """Decides whether a ``<provider>/<model-id>[::connection[:account]]`` can run here.
 
     "Configured in this instance" = the provider is registered, the model is in
-    that provider's catalog, and the provider has at least one connection with
-    usable credentials. This is the single rule the model chain and the scan's
-    ``BAD_MODEL`` check both consult, so they cannot drift.
+    that provider's catalog, and a connection is usable **for this model**: it
+    has usable credentials and the model's per-model connection allowlist
+    (``Model.allows_connection`` — empty means unrestricted) permits it. A pinned
+    ``::connection[:account]`` suffix narrows the question to exactly that
+    connection (and account). This mirrors what the chat runtime enforces at
+    request time (``core/chat/model_resolution.py`` — allowlist-filtered
+    connection pick, verbatim pinned suffix), so a model this gate accepts never
+    fails connection resolution at run time. It is the single rule the model
+    chain, the scan's ``BAD_MODEL`` check, and the ``/model`` set-time gate all
+    consult, so they cannot drift.
     """
 
     def __init__(
@@ -277,7 +297,7 @@ class ModelConfigurationChecker:
         parsed = _parse_provider_model(model)
         if parsed is None:
             return False
-        provider_id, model_id = parsed
+        provider_id, model_id, connection_suffix = parsed
 
         try:
             self._providers.get(provider_id)
@@ -285,39 +305,78 @@ class ModelConfigurationChecker:
             return False
 
         try:
-            self._models.get(provider_id, model_id)
+            catalog_model = self._models.get(provider_id, model_id)
         except KeyError:
             return False
 
-        return self._has_usable_connection(provider_id)
+        if connection_suffix:
+            return self._pinned_connection_usable(provider_id, catalog_model, connection_suffix)
+        return self._has_usable_allowed_connection(provider_id, catalog_model)
 
-    def _has_usable_connection(self, provider_id: str) -> bool:
+    def _has_usable_allowed_connection(
+        self, provider_id: str, catalog_model: ConnectionRestrictedModel
+    ) -> bool:
+        """Whether any connection is both allowed by the model and credentialed.
+
+        Mirrors the runtime's unpinned pick (``_first_usable_connection_id``): a
+        connection outside the model's allowlist never counts, so a
+        connection-bound model (e.g. subscription-only) with credentials only on
+        a forbidden connection is *not* configured — the chain falls through
+        instead of the run failing later.
+        """
         provider_config = self._providers.get(provider_id)
         # ProviderConfig.connections is a list of ConnectionConfig with an ``id``
         # local part; the usable check uses the compositional ``provider:conn`` id.
         connections = getattr(provider_config, "connections", [])
         for connection in connections:
+            if not catalog_model.allows_connection(connection.id):
+                continue
             connection_id = f"{provider_id}:{connection.id}"
             if self._provider_credentials.has_credentials(provider_id, connection_id):
                 return True
         return False
 
+    def _pinned_connection_usable(
+        self, provider_id: str, catalog_model: ConnectionRestrictedModel, connection_suffix: str
+    ) -> bool:
+        """Whether the pinned ``connection[:account]`` exists, is allowed, and is usable.
 
-def _parse_provider_model(model: str) -> tuple[str, str] | None:
-    """Split ``<provider>/<model-id>[::suffix]`` into ``(provider, model_id)``.
+        The runtime reconstructs the pinned connection verbatim and resolves its
+        credential downstream, so the gate checks exactly that path: the local
+        connection id must exist on the provider, pass the model's allowlist, and
+        ``has_credentials`` must hold for the full (possibly account-pinned) id.
+        """
+        connection_local_id = connection_suffix.partition(":")[0]
+        if not catalog_model.allows_connection(connection_local_id):
+            return False
+        provider_config = self._providers.get(provider_id)
+        connections = getattr(provider_config, "connections", [])
+        if all(connection.id != connection_local_id for connection in connections):
+            return False
+        return self._provider_credentials.has_credentials(
+            provider_id, f"{provider_id}:{connection_suffix}"
+        )
 
-    Returns ``None`` for an empty or malformed string (no provider/model split),
-    which the chain treats as "no model" so it falls through cleanly. The optional
-    ``::connection[:account]`` suffix is dropped — existence is per provider+model,
-    the connection only affects credential selection downstream.
+
+def _parse_provider_model(model: str) -> tuple[str, str, str] | None:
+    """Split ``<provider>/<model-id>[::connection[:account]]`` into its parts.
+
+    Returns ``(provider, model_id, suffix)`` with ``suffix == ""`` when unpinned,
+    or ``None`` for an empty or malformed string (no provider/model split, or an
+    empty suffix after ``::``), which the chain treats as "no model" so it falls
+    through cleanly. Uses ``rpartition`` like the canonical chat-side parse
+    (``parse_model_with_connection``) so the two can never split differently.
     """
     if not model:
         return None
-    bare, _, _suffix = model.partition("::")
+    before, suffix_separator, connection_suffix = model.rpartition("::")
+    if suffix_separator and not connection_suffix:
+        return None
+    bare = before if suffix_separator else model
     provider_id, separator, model_id = bare.partition("/")
     if not separator or not provider_id or not model_id:
         return None
-    return provider_id, model_id
+    return provider_id, model_id, connection_suffix if suffix_separator else ""
 
 
 class AgentResolver:
@@ -541,10 +600,12 @@ class AgentResolver:
         """Return whether *model* can actually run in this instance.
 
         The single public seam over the shared :class:`ModelConfigurationChecker`
-        rule (provider registered, model in catalog, usable credential), reused by
-        the ``/model`` command's set-time validation so the accepted-model rule and
-        the scan's ``BAD_MODEL`` rule (and the resolver chain's per-tier gate) can
-        never drift. An empty/malformed string is not configured.
+        rule (provider registered, model in catalog, a usable connection the
+        model's allowlist permits — a pinned ``::connection`` checked verbatim),
+        reused by the ``/model`` command's set-time validation so the
+        accepted-model rule and the scan's ``BAD_MODEL`` rule (and the resolver
+        chain's per-tier gate) can never drift. An empty/malformed string is not
+        configured.
         """
         return self._model_checker.is_configured(model)
 
