@@ -625,7 +625,12 @@ class ChatLoop:
         # agent sees its project skills. A plain identity run with no agent-own skills
         # is byte-identical to before.
         skill_project_id = project_id if project_id is not None else rooted_project_id
-        skill_registry = self._runtime.skills_for(skill_project_id, run.agent_id)
+        # The agent's private-skill layer applies to identity runs only: a project
+        # run executes a config agent, whose project-local slug must not resolve a
+        # same-named identity agent's private home (trust boundary — private skills
+        # would bypass the project skill whitelist as always-allowed).
+        identity_agent_id = run.agent_id if project_id is None else None
+        skill_registry = self._runtime.skills_for(skill_project_id, identity_agent_id)
         # The catalog block and skill-tool presence are pinned per session on the
         # first build, so a skill written mid-session never shifts this session's
         # prompt prefix (the cache invariant). Triggers and skill activation below
@@ -1517,7 +1522,11 @@ class ChatLoop:
 
         session.append(checkpoint)
         run.emit(COMPACTION_COMPLETED_EVENT, {"message": checkpoint.to_dict()})
-        compaction_skill_registry = self._runtime.skills_for(skill_project_id, run.agent_id)
+        # Identity runs only, exactly like the run-start resolution: a config
+        # agent's slug must not resolve a same-named identity agent's private home.
+        compaction_skill_registry = self._runtime.skills_for(
+            skill_project_id, run.agent_id if run.project_id is None else None
+        )
         rebuilt_messages = await self._build_request_messages(
             agent,
             session,

@@ -96,15 +96,21 @@ def _command_skill_suggestions(state: Any, address: tuple[str, str | None] | Non
     ``address is None`` → the global skill list (no agent scope). With an address,
     the agent is resolved and its effective skills are filtered against the
     agent-aware project-scoped registry, so a project agent's suggestions are exactly
-    the skills it could actually activate — including the agent's own private skills,
-    which are always allowed for their owner.
+    the skills it could actually activate — for an identity agent including its own
+    private skills, which are always allowed for their owner. A project address names
+    a config agent: private skills are identity-only, so no agent layer applies (a
+    team slug colliding with an identity agent's id must not surface that agent's
+    private skills here).
     """
     if address is None:
         return _sorted_filtered_skills(state.runtime.skills, ["*"])
     agent_id, project_id = address
     agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
     allowed_skills = getattr(agent, "allowed_skills", ["*"])
-    return _sorted_filtered_skills(state.runtime.skills_for(project_id, agent_id), allowed_skills)
+    identity_agent_id = agent_id if project_id is None else None
+    return _sorted_filtered_skills(
+        state.runtime.skills_for(project_id, identity_agent_id), allowed_skills
+    )
 
 
 def _sorted_filtered_skills(skill_registry: Any, allowed_skills: list[str]) -> list[Any]:
