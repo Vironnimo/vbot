@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.chat.usage import aggregate_session_usage
 from core.projects import format_agent_address
 from core.providers.providers import resolve_context_window
 from core.providers.reasoning import (
@@ -85,6 +86,8 @@ _PROJECT_MODEL_ORIGINS: dict[str | None, str] = {
 REASONING_STATE_ON = "on"
 REASONING_STATE_OFF = "off"
 _STATUS_TIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
+_CACHE_PERCENT_SCALE = 100
+_CACHE_HIT_RATE_DECIMALS = 1
 _STATUS_MODEL_DISPLAY_OVERRIDE: ContextVar[str | None] = ContextVar(
     "status_model_display_override",
     default=None,
@@ -818,6 +821,8 @@ def build_status_text(
 
     actual_thinking_effort_text = _actual_thinking_effort_text(actual_thinking_effort)
     context_usage = _context_usage_text(messages, context_window)
+    last_request_cache = _last_request_cache_text(messages)
+    session_cache = _session_cache_text(messages)
     session_started = _session_started_text(messages, now_utc)
     turn_count = _turn_count_text(messages)
     app_uptime = _app_uptime_text(started_at, now_utc)
@@ -837,6 +842,8 @@ def build_status_text(
         f"Run created at: {run_created_at or STATUS_PLACEHOLDER}",
         f"Run updated at: {run_updated_at or STATUS_PLACEHOLDER}",
         f"Context usage: {context_usage}",
+        f"Last request cache: {last_request_cache}",
+        f"Session cache: {session_cache}",
         f"Session started: {session_started}",
         f"Turn count: {turn_count}",
         f"App uptime: {app_uptime}",
@@ -934,14 +941,92 @@ def _turn_count_text(messages: list[ChatMessage]) -> str:
 
 
 def _latest_assistant_usage(messages: list[ChatMessage]) -> tuple[int, bool] | None:
+    usage = _latest_assistant_usage_object(messages, require_input=True)
+    if usage is None:
+        return None
+    input_tokens = _coerce_int(usage.get("input_tokens"))
+    if input_tokens is None:
+        return None
+    return input_tokens, bool(usage.get("estimated"))
+
+
+def _latest_assistant_usage_object(
+    messages: list[ChatMessage],
+    *,
+    require_input: bool = False,
+) -> dict[str, Any] | None:
     for message in reversed(messages):
         if message.role != "assistant" or not isinstance(message.usage, dict):
             continue
-        input_tokens = _coerce_int(message.usage.get("input_tokens"))
-        if input_tokens is None:
+        if require_input and _coerce_int(message.usage.get("input_tokens")) is None:
             continue
-        return input_tokens, bool(message.usage.get("estimated"))
+        return message.usage
     return None
+
+
+def _last_request_cache_text(messages: list[ChatMessage]) -> str:
+    usage = _latest_assistant_usage_object(messages)
+    if usage is None or usage.get("estimated") is True:
+        return STATUS_PLACEHOLDER
+
+    cache_data = _cache_data_from_usage(usage)
+    if cache_data is None:
+        return STATUS_PLACEHOLDER
+    return _format_cache_data(cache_data)
+
+
+def _session_cache_text(messages: list[ChatMessage]) -> str:
+    totals = aggregate_session_usage(messages)
+    cache_turns = _coerce_non_negative_int(totals.get("cache_turns")) or 0
+    if cache_turns <= 0:
+        return STATUS_PLACEHOLDER
+
+    cache_input_tokens = 0
+    for message in messages:
+        if message.role != "assistant" or not isinstance(message.usage, dict):
+            continue
+        if message.usage.get("estimated") is True:
+            continue
+        cache_data = _cache_data_from_usage(message.usage)
+        if cache_data is None:
+            continue
+        cache_input_tokens += cache_data[0]
+
+    cache_data = (
+        cache_input_tokens,
+        _coerce_non_negative_int(totals.get("cache_read_tokens")) or 0,
+        _coerce_non_negative_int(totals.get("cache_write_tokens")) or 0,
+    )
+    return f"{_format_cache_data(cache_data)}, turns {cache_turns}"
+
+
+def _cache_data_from_usage(usage: dict[str, Any]) -> tuple[int, int, int] | None:
+    if "cache_read_tokens" not in usage and "cache_write_tokens" not in usage:
+        return None
+    input_tokens = _coerce_non_negative_int(usage.get("input_tokens"))
+    if input_tokens is None:
+        return None
+    return (
+        input_tokens,
+        _coerce_non_negative_int(usage.get("cache_read_tokens")) or 0,
+        _coerce_non_negative_int(usage.get("cache_write_tokens")) or 0,
+    )
+
+
+def _format_cache_data(cache_data: tuple[int, int, int]) -> str:
+    input_tokens, cache_read_tokens, cache_write_tokens = cache_data
+    return (
+        f"read {cache_read_tokens} / {input_tokens} "
+        f"({_cache_hit_rate_text(cache_read_tokens, input_tokens)} hit), "
+        f"write {cache_write_tokens}"
+    )
+
+
+def _cache_hit_rate_text(cache_read_tokens: int, input_tokens: int) -> str:
+    if input_tokens <= 0:
+        return STATUS_PLACEHOLDER
+    hit_rate = cache_read_tokens / input_tokens * _CACHE_PERCENT_SCALE
+    return f"{hit_rate:.{_CACHE_HIT_RATE_DECIMALS}f}%"
 
 
 def _session_started_text(messages: list[ChatMessage], now_utc: datetime) -> str:
@@ -997,6 +1082,13 @@ def _coerce_int(value: object) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _coerce_non_negative_int(value: object) -> int | None:
+    coerced = _coerce_int(value)
+    if coerced is None or coerced < 0:
+        return None
+    return coerced
 
 
 def _has_exception_name(error: BaseException, expected_name: str) -> bool:
