@@ -51,8 +51,10 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "model_tasks",
         "web_search",
         "extensions",
+        "reflection",
     }
 )
+REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",
@@ -107,7 +109,34 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "extensions" in params:
         parsed_update["extensions"] = _parse_extensions_update(params["extensions"])
 
+    if "reflection" in params:
+        parsed_update["reflection"] = _parse_reflection_update(params["reflection"])
+
     return parsed_update
+
+
+def _parse_reflection_update(reflection: Any) -> JsonObject:
+    """Parse the background-reflection section (partial update, like debug)."""
+    if not isinstance(reflection, dict):
+        raise SettingsValidationError("params.reflection must be an object")
+
+    supported_fields = {"enabled", *REFLECTION_INTERVAL_FIELDS}
+    unsupported_fields = sorted(set(reflection) - supported_fields)
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported reflection settings: {', '.join(unsupported_fields)}"
+        )
+
+    parsed: JsonObject = {}
+    if "enabled" in reflection:
+        enabled = reflection["enabled"]
+        if not isinstance(enabled, bool):
+            raise SettingsValidationError("params.reflection.enabled must be a boolean")
+        parsed["enabled"] = enabled
+    for field in REFLECTION_INTERVAL_FIELDS:
+        if field in reflection:
+            parsed[field] = _positive_integer(reflection[field], f"params.reflection.{field}")
+    return parsed
 
 
 def _parse_extensions_update(extensions: Any) -> JsonObject:

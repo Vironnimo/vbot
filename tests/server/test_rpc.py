@@ -699,6 +699,17 @@ class StubStorage:
     def load_debug_settings(self) -> JsonObject:
         return {"enabled": False, "trace_limit": 50}
 
+    def load_reflection_settings(self) -> JsonObject:
+        defaults: JsonObject = {
+            "enabled": False,
+            "memory_turn_interval": 10,
+            "skill_tool_call_interval": 25,
+        }
+        stored = self._settings.get("reflection")
+        if isinstance(stored, dict):
+            defaults.update(stored)
+        return defaults
+
     def load_model_task_settings(self) -> JsonObject:
         stored = self._settings.get("model_tasks")
         return dict(stored) if isinstance(stored, dict) else {}
@@ -908,6 +919,13 @@ class StubStorage:
             normalized = normalize_extensions_settings(settings_update["extensions"])
             self._settings = {**self._settings, "extensions": normalized}
             updated_sections["extensions"] = normalized
+        if "reflection" in settings_update:
+            merged_reflection = {
+                **self.load_reflection_settings(),
+                **dict(settings_update["reflection"]),
+            }
+            self._settings = {**self._settings, "reflection": merged_reflection}
+            updated_sections["reflection"] = merged_reflection
         return updated_sections
 
     def load_extensions_settings(self) -> JsonObject:
@@ -1535,6 +1553,11 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "enabled": False,
             "trace_limit": 50,
             "trace_count": 0,
+        },
+        "reflection": {
+            "enabled": False,
+            "memory_turn_interval": 10,
+            "skill_tool_call_interval": 25,
         },
         "model_tasks": {},
         "skills": {
@@ -3625,6 +3648,45 @@ async def test_settings_update_persists_subagent_settings_and_returns_full_paylo
         "max_subagents_per_turn": 12,
         "subagent_timeout_minutes": 90,
     }
+
+
+@pytest.mark.asyncio
+async def test_settings_update_persists_reflection_settings_and_returns_full_payload(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {"reflection": {"enabled": True, "memory_turn_interval": 5}},
+        },
+    )
+
+    assert response["ok"] is True, response
+    # Partial update merges with defaults; the full payload echoes the section.
+    assert response["result"]["reflection"] == {
+        "enabled": True,
+        "memory_turn_interval": 5,
+        "skill_tool_call_interval": 25,
+    }
+
+
+@pytest.mark.asyncio
+async def test_settings_update_rejects_invalid_reflection_section(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {"reflection": {"memory_turn_interval": 0}},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio

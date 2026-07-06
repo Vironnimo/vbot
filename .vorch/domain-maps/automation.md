@@ -1,10 +1,12 @@
 # Automation
 
-Programmatic Run triggering and time-based scheduling in `core/automation/`.
+Programmatic Run triggering, time-based scheduling, and background self-improvement reviews in `core/automation/`.
 
 ## Overview
 
 `TriggerService` is the kernel bridge for non-WebUI producers that need to start normal chat Runs: cron jobs, channels, sub-agent batch completion, and background tools. It does not own a second execution path; it calls the Chat domain and uses the same `ChatRunManager` active-Run guard and FIFO queue as browser sends. `CronService` owns persisted time-based jobs under `<data_dir>/cron/jobs.json`, creates one asyncio task per active job while the Runtime is started inside an event loop, and fires due jobs through `TriggerService.trigger_run(...)`. Server cron RPCs (`server/rpc/automation_methods.py`) and the `cron` tool are thin clients; scheduling behavior belongs in `core/automation/cron.py`.
+
+`ReflectionService` (`core/automation/reflection.py`) owns background self-improvement reviews: the shared fork-review orchestration used by both the `/reflect` command and the automatic cadence trigger, plus the cadence policy itself. See the Reflection section below.
 
 ## Interfaces
 
@@ -28,6 +30,16 @@ Programmatic Run triggering and time-based scheduling in `core/automation/`.
 - `CronService` validates strings and schedules but does not verify that `agent_id` exists. Server cron RPCs validate agent references before create/update; other producers must do that themselves if they need immediate feedback.
 - A `CronJob` may target a **project agent**: it carries an optional `project_id` (default `None` = identity/global agent, unchanged). The server cron RPC parses the target as the `agent@projekt` address form (`core.projects.parse_agent_address`, the one parse seam), validates it through the agent resolver, stores `project_id` on the job, and lists/displays the target via `format_agent_address` (so a bare `builder` stays unambiguous across projects). Firing a project job creates the Session under the project anchor and runs project-scoped (cwd = repo, project files in the prompt) — the normal "born in project" case. The "agent in use by cron" lock is **qualified**: a project's removal is blocked only by a job whose `project_id` equals that project (not by a same-named identity job), and an identity agent's deletion is blocked only by a `project_id is None` job.
 - Active once jobs write a durable fire claim under `<data_dir>/cron/once-fire-claims/` before calling `trigger_run(...)`. If trigger fails, the claim is removed and the job retries with bounded exponential backoff, and is abandoned (marked `failed`) once `_ONCE_MAX_FIRE_ATTEMPTS` is reached so a permanently failing once job stops looping; if completed-state save fails after a successful trigger, the scheduler retries that save without firing again.
+
+## Reflection (background self-improvement reviews)
+
+`ReflectionService(runtime: RuntimeServices)` — wired by the Runtime before the chat loops; exposed as `runtime.reflection`. Two halves:
+
+- **Shared review orchestration** — `await run_review(agent_id, session_id, *, project_id=None, extra_instruction=None, on_fork_created=None) -> ReflectionResult(session_id, summary)`: forks the session same-agent (prompt-cache-warm, pinned skill catalog kept, `SESSION_FORK_ALWAYS_STRIP_META_KEYS` from `core.sessions` applied), titles the fork recognizably (`"Reflection"` or `"Reflection: <source title>"` via `set_title`), then starts an **internal** run in the fork on the **streaming** chat loop with the dispatch-only `REFLECTION_TOOL_RESTRICTION = ("memory", "skill", "skill_manage")` and the `reflect.md` brief (+ optional `extra_instruction` appended). Returns the fork id and the run's closing summary; the source session is never touched. `on_fork_created(fork_id)` fires before the review run starts so an accessor can announce the fork (the `/reflect` handler publishes `resource_changed(sessions)` there). Used by `server/rpc/chat_methods._handle_reflect_command` and by the cadence trigger.
+- **Cadence trigger** — `notify_run_end(run, agent, *, internal, outcome)`: called by the chat loop at the end of every run (see `chat.md`); non-blocking, schedules an asyncio task. Inline gates: internal runs, non-`success` outcomes, and empty-`workspace` (config) agents never count. In the task: reads `settings.reflection` live via `storage.load_reflection_settings()` (disabled → no-op, so the toggle applies without restart), skips sub-agent sessions (`is_subagent_session` metadata), then increments the per-session counters in the metadata sidecar (`reflection_counters`: `turns_since_memory_review` +1 per run, `tool_calls_since_skill_review` += `run.tool_call_count`). When a counter reaches its interval (`memory_turn_interval` / `skill_tool_call_interval`), one review run fires in the background with a cadence note naming the due dimension (both due → bare brief) and only the **due** counters reset — at trigger time, so a failed review costs the cycle instead of retry-looping. One review at a time per agent (in-memory guard); a due session during an active review keeps its counters and re-checks on its next run end. Trigger and outcome (summary excerpt) are logged at info on `vbot.automation.reflection`.
+- `reset_counters(agent_id, session_id, project_id=None)` zeroes both counters; the `/reflect` handler calls it after a successful manual review (it covers both dimensions).
+- The review run is itself internal, so it never re-triggers accounting (no recursion). Counters are stripped from forks (`reflection_counters` is in the always-strip set), so a fork restarts at zero.
+- Background review forks appear in the session drawer on its next load; only the manual `/reflect` path publishes a live `resource_changed(sessions)` signal (core cannot reach the server event bus).
 
 ## Constraints & Gotchas
 

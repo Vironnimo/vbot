@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, cast
 
 from core.channels import ChannelConfigError, channel_system_reminder
-from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY, SEEN_SKILLS_META_KEY
 from core.memory import MEMORY_PROMPT_MODES
 from core.projects import (
     InvalidAgentAddressError,
@@ -13,7 +12,11 @@ from core.projects import (
     parse_agent_address,
 )
 from core.prompts import load_bundled_default_layout
-from core.sessions import FORK_SOURCE_META_KEY
+from core.sessions import (
+    FORK_SOURCE_META_KEY,
+    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+    SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
+)
 from core.settings import (
     ALLOWED_THINKING_EFFORTS,
     MAX_TEMPERATURE,
@@ -21,10 +24,6 @@ from core.settings import (
     SettingsValidationError,
     validate_temperature,
     validate_thinking_effort,
-)
-from core.subagents.subagents import (
-    SUBAGENT_PARENT_METADATA_KEY,
-    SUBAGENT_SESSION_METADATA_FLAG,
 )
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_SESSIONS
 from server.rpc.agent_refs import _agent_reference_ids, _agent_reference_lock
@@ -53,33 +52,6 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 
 __all__ = ["ALLOWED_THINKING_EFFORTS", "MAX_TEMPERATURE", "MIN_TEMPERATURE"]
-
-# Session-fork strip policy, server-owned so the sessions domain imports no
-# chat/channel constant (it takes the set as a parameter). A fork must never
-# inherit a channel binding or a sub-agent parent linkage — the copy is a plain,
-# unbound session — so those keys are always stripped. The channel keys are
-# literals: the channels engine writes them as bare strings (see
-# ``core/channels/engine.py`` ~514-516, ``877-879``), there is no exported
-# constant; the sub-agent keys come from their domain constants. Shared with the
-# ``/reflect`` fork orchestrator in ``chat_methods.py``.
-SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
-    {
-        "source_channel_id",
-        "platform",
-        "platform_conv_id",
-        "last_reply_target",
-        SUBAGENT_SESSION_METADATA_FLAG,
-        SUBAGENT_PARENT_METADATA_KEY,
-    }
-)
-# Additionally stripped when a fork re-homes to a *different* agent: the pinned
-# skill catalog and its seen-skills set belong to the source agent's skill pool,
-# so a different agent must re-pin its own catalog on the fork's first run. A
-# same-agent fork (e.g. ``/reflect``) deliberately keeps them, so the fork stays
-# prompt-cache-warm against the source.
-SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS = frozenset(
-    {PINNED_SKILL_CATALOG_META_KEY, SEEN_SKILLS_META_KEY}
-)
 
 
 def _list_agents(state: Any) -> JsonObject:

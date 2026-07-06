@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.errors import ChatError, ChatSessionError, ToolIterationLimitError
@@ -202,6 +202,20 @@ class _StreamRestartNeeded(Exception):  # noqa: N818 — control-flow signal, no
         self.cause = cause
 
 
+class ReflectionNotifier(Protocol):
+    """Run-end hook of the background reflection service.
+
+    The chat loop only reports that a run ended; cadence policy, exclusions
+    beyond the cheap inline gates, and the review itself live in
+    ``core/automation/reflection.py``. The callable must be non-blocking —
+    anything with I/O belongs in a task the service schedules itself.
+    """
+
+    def notify_run_end(self, run: Run, agent: Any, *, internal: bool, outcome: str) -> None:
+        """Account one finished run (``outcome``: success/error/cancelled)."""
+        ...
+
+
 def _resolve_reasoning_replay_policy(adapter: Any, model_id: str) -> ReasoningReplayPolicy:
     """Resolve the adapter's reasoning replay policy for one request build.
 
@@ -270,6 +284,7 @@ class ChatLoop:
         streaming: bool = False,
         attachment_resolver: ContentBlockResolver | None = None,
         compaction_service: CompactionService | None = None,
+        reflection_service: ReflectionNotifier | None = None,
     ) -> None:
         if max_tool_iterations < 0:
             raise ChatError("max tool iterations must not be negative")
@@ -278,6 +293,7 @@ class ChatLoop:
         self._streaming = streaming
         self._attachment_resolver = attachment_resolver
         self._compaction_service = compaction_service
+        self._reflection_service = reflection_service
         self._nesting_depth = 0
 
     def child_loop(self, *, nesting_depth: int) -> ChatLoop:
@@ -293,6 +309,7 @@ class ChatLoop:
             streaming=self._streaming,
             attachment_resolver=self._attachment_resolver,
             compaction_service=self._compaction_service,
+            reflection_service=self._reflection_service,
         )
         child._nesting_depth = nesting_depth
         return child
@@ -826,6 +843,18 @@ class ChatLoop:
                     agent_id=run.agent_id,
                     outcome=outcome,
                 )
+
+            # Background reflection accounting. Fire-and-forget on the service's
+            # side; a failure here must never mask the run outcome.
+            if self._reflection_service is not None:
+                try:
+                    self._reflection_service.notify_run_end(
+                        run, agent, internal=internal, outcome=outcome
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "Reflection run-end notification failed (run=%s)", run.id, exc_info=True
+                    )
 
             await _close_adapter(adapter)
 

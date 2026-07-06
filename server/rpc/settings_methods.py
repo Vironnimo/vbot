@@ -289,6 +289,7 @@ def _settings_response(state: Any) -> JsonObject:
     recall = runtime.storage.load_recall_settings()
     web_search = runtime.storage.load_web_search_settings()
     debug = runtime.storage.load_debug_settings()
+    reflection = runtime.storage.load_reflection_settings()
     model_tasks = runtime.storage.load_model_task_settings()
     defaults = runtime.storage.load_defaults()
     server_bind = _server_bind_response(state)
@@ -330,6 +331,7 @@ def _settings_response(state: Any) -> JsonObject:
             "trace_limit": debug["trace_limit"],
             "trace_count": _trace_count(runtime),
         },
+        "reflection": dict(reflection),
         "model_tasks": model_tasks,
     }
     skill_directory_loader = getattr(runtime.storage, "load_skill_directory_settings", None)
