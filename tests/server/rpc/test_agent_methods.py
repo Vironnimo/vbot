@@ -517,12 +517,19 @@ async def test_fork_rejects_unsupported_field() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _PayloadCheckerModels:
-    """Model existence probe the resolver's checker uses (returns a bare marker)."""
+class _UnrestrictedCatalogModel:
+    """Catalog-model stub with no connection allowlist (every connection allowed)."""
 
-    def get(self, provider_id: str, model_id: str) -> object:
+    def allows_connection(self, connection_id: str) -> bool:
+        return True
+
+
+class _PayloadCheckerModels:
+    """Model existence probe the resolver's checker uses (unrestricted marker)."""
+
+    def get(self, provider_id: str, model_id: str) -> _UnrestrictedCatalogModel:
         if (provider_id, model_id) == ("openai", "gpt-5.2"):
-            return object()
+            return _UnrestrictedCatalogModel()
         raise KeyError(f"{provider_id}/{model_id}")
 
 

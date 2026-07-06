@@ -249,9 +249,9 @@ def _set_override(state: Any, params: JsonObject) -> JsonObject:
     Validates the field name and its value before the store write: ``model`` through
     the same usable-model check the ``/model`` command uses (configured here + any
     pinned ``::connection`` allowed), ``temperature`` / ``thinking_effort`` through
-    the canonical agent field validators. Returns the refreshed project + scan and
-    publishes the same resource-changed signal ``clear_override`` does. No cache
-    invalidation is needed — ``project.json`` is read fresh on every resolve.
+    the canonical agent field validators. Returns the refreshed project + scan
+    (``clear_override`` returns the same shape). No cache invalidation is needed —
+    ``project.json`` is read fresh on every resolve.
     """
     unsupported_fields = sorted(set(params) - {"project_id", "agent_id", "field", "value"})
     if unsupported_fields:

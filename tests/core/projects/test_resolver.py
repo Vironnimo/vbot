@@ -42,16 +42,31 @@ class _FakeProviderConfig:
     connections: list[_FakeConnection]
 
 
+@dataclass(frozen=True)
+class _FakeCatalogModel:
+    """Catalog-model stub carrying the per-model connection allowlist rule."""
+
+    connections: tuple[str, ...] = ()
+
+    def allows_connection(self, connection_id: str) -> bool:
+        return not self.connections or connection_id in self.connections
+
+
 class _FakeModels:
-    """Catalog of configured ``(provider, model_id)`` pairs."""
+    """Catalog of configured ``(provider, model_id)`` pairs with optional allowlists."""
 
-    def __init__(self, known: set[tuple[str, str]]) -> None:
+    def __init__(
+        self,
+        known: set[tuple[str, str]],
+        connections: dict[tuple[str, str], tuple[str, ...]] | None = None,
+    ) -> None:
         self._known = known
+        self._connections = connections or {}
 
-    def get(self, provider_id: str, model_id: str) -> object:
+    def get(self, provider_id: str, model_id: str) -> _FakeCatalogModel:
         if (provider_id, model_id) not in self._known:
             raise KeyError(f"{provider_id}/{model_id}")
-        return object()
+        return _FakeCatalogModel(self._connections.get((provider_id, model_id), ()))
 
 
 class _FakeProviders:
@@ -80,9 +95,10 @@ def _checker(
     catalog: set[tuple[str, str]],
     providers: dict[str, _FakeProviderConfig],
     usable: set[str],
+    model_connections: dict[tuple[str, str], tuple[str, ...]] | None = None,
 ) -> ModelConfigurationChecker:
     return ModelConfigurationChecker(
-        _FakeModels(catalog),
+        _FakeModels(catalog, model_connections),
         _FakeProviders(providers),
         _FakeCredentials(usable),
     )
@@ -803,6 +819,111 @@ def test_model_unconfigured_when_no_usable_connection(
     # Act / Assert: declared model is not usable → chain falls through → error.
     with pytest.raises(AgentResolutionError):
         resolver.resolve_agent(project.project_id, "builder")
+
+
+def _two_connection_checker(
+    *,
+    usable: set[str],
+    allowlist: tuple[str, ...],
+) -> ModelConfigurationChecker:
+    """Checker with connections ``api-key``/``subscription`` and one allowlisted model."""
+    return _checker(
+        catalog={("openai", "gpt-5.2")},
+        providers={
+            "openai": _FakeProviderConfig(
+                [_FakeConnection("api-key"), _FakeConnection("subscription")]
+            )
+        },
+        usable=usable,
+        model_connections={("openai", "gpt-5.2"): allowlist},
+    )
+
+
+def test_connection_bound_model_unconfigured_without_allowed_credential() -> None:
+    # A subscription-only model whose only credential is on the forbidden api-key
+    # connection cannot run — the runtime would refuse the connection pick, so the
+    # gate must refuse too (chain falls through instead of a hard run failure).
+    checker = _two_connection_checker(usable={"openai:api-key"}, allowlist=("subscription",))
+    assert checker.is_configured("openai/gpt-5.2") is False
+
+
+def test_connection_bound_model_configured_on_allowed_credential() -> None:
+    checker = _two_connection_checker(usable={"openai:subscription"}, allowlist=("subscription",))
+    assert checker.is_configured("openai/gpt-5.2") is True
+
+
+def test_pinned_connection_without_credential_is_unconfigured() -> None:
+    # The pin is verbatim: a credential on another connection does not help.
+    checker = _two_connection_checker(usable={"openai:api-key"}, allowlist=())
+    assert checker.is_configured("openai/gpt-5.2::subscription") is False
+
+
+def test_pinned_connection_with_credential_is_configured() -> None:
+    checker = _two_connection_checker(usable={"openai:subscription"}, allowlist=())
+    assert checker.is_configured("openai/gpt-5.2::subscription") is True
+
+
+def test_pinned_account_suffix_checks_full_compositional_id() -> None:
+    checker = _two_connection_checker(usable={"openai:subscription:work"}, allowlist=())
+    assert checker.is_configured("openai/gpt-5.2::subscription:work") is True
+    assert checker.is_configured("openai/gpt-5.2::subscription:home") is False
+
+
+def test_pinned_unknown_connection_is_unconfigured() -> None:
+    checker = _two_connection_checker(usable={"openai:ghost"}, allowlist=())
+    assert checker.is_configured("openai/gpt-5.2::ghost") is False
+
+
+def test_pinned_connection_forbidden_by_model_allowlist_is_unconfigured() -> None:
+    checker = _two_connection_checker(
+        usable={"openai:api-key", "openai:subscription"}, allowlist=("subscription",)
+    )
+    assert checker.is_configured("openai/gpt-5.2::api-key") is False
+
+
+def test_empty_suffix_after_separator_is_unconfigured() -> None:
+    checker = _two_connection_checker(usable={"openai:api-key"}, allowlist=())
+    assert checker.is_configured("openai/gpt-5.2::") is False
+
+
+def test_connection_bound_declared_model_falls_through_chain(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # The declared model is allowlist-bound to a connection without credentials;
+    # the chain must degrade to the configured project default instead of
+    # resolving a model that would fail connection resolution at run time.
+    checker = _checker(
+        catalog={("openai", "gpt-5.2"), ("openai", "gpt-mini")},
+        providers={
+            "openai": _FakeProviderConfig(
+                [_FakeConnection("api-key"), _FakeConnection("subscription")]
+            )
+        },
+        usable={"openai:api-key"},
+        model_connections={("openai", "gpt-5.2"): ("subscription",)},
+    )
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo, default_model="openai/gpt-mini")
+    resolver = _resolver(agents, projects, checker)
+
+    resolved = resolver.resolve_agent(project.project_id, "builder")
+
+    assert resolved.model == "openai/gpt-mini"
+
+
+def test_scan_reports_connection_bound_model_as_bad_model_finding(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    checker = _two_connection_checker(usable={"openai:api-key"}, allowlist=("subscription",))
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, checker)
+
+    result = resolver.scan_project_report(project)
+
+    findings = result.report.findings_of(FindingType.BAD_MODEL)
+    assert len(findings) == 1
+    assert findings[0].agent_id == "builder"
 
 
 # ---------------------------------------------------------------------------

@@ -206,16 +206,17 @@ def _ensure_model_usable(state: Any, model: str) -> None:
 
     Two gates, both surfaced as ``invalid_request`` and shared by the ``/model``
     command's set-time validation and ``project.set_override``'s model check so the
-    accepted-model rule can never drift: the model must be configured here (provider
-    registered, in catalog, usable credential — the resolver's public
-    ``is_model_configured`` seam, the same rule behind the scan's ``BAD_MODEL``
-    finding), and a pinned ``::connection`` suffix must be allowed by the model's
-    connection allowlist.
+    accepted-model rule can never drift: a pinned ``::connection`` suffix must be
+    allowed by the model's connection allowlist (checked first — its message names
+    the forbidden connection), and the model must be configured here (provider
+    registered, in catalog, a usable credential on an allowed connection — the
+    resolver's public ``is_model_configured`` seam, the same rule behind the scan's
+    ``BAD_MODEL`` finding, which itself re-checks the allowlist).
     """
+    _ensure_model_connection_supported(state.runtime.models, "model", model)
     if not state.runtime.agent_resolver.is_model_configured(model):
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             f"model {model!r} is not usable in this instance "
-            "(unknown provider/model or no usable credential)",
+            "(unknown provider/model or no usable credential on an allowed connection)",
         )
-    _ensure_model_connection_supported(state.runtime.models, "model", model)
