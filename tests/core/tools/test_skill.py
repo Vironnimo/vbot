@@ -12,7 +12,6 @@ from core.tools import (
     ToolRegistry,
     register_skill_tool,
     tool_failure,
-    tool_success,
 )
 from core.tools.skill import load_skill_content
 
@@ -24,41 +23,35 @@ def _fixed_registry(
     return lambda _project_id, _agent_id: registry
 
 
-def test_skill_tool_loads_body_and_resources(tmp_path: Path) -> None:
+def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path))
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry))
-    stored: dict[str, object] = {}
+    registered: dict[str, str] = {}
 
-    def activate(name: str, data: dict[str, object]) -> dict[str, object]:
-        stored[name] = data
-        return tool_success(data)
+    def activate(name: str, content: str) -> bool:
+        registered[name] = content
+        return True
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path, activate), {"name": "debugging"}))
     data = cast(dict[str, Any], result["data"])
-    stored_data = cast(dict[str, Any], stored["debugging"])
     skill_directory = _skill_directory(tmp_path)
 
     assert result["ok"] is True
-    assert data == {
-        "name": "debugging",
-        "status": "loaded",
-        "message": "Skill 'debugging' loaded into session context.",
-        "directory": skill_directory,
-        "resources": ["scripts/run.py", "references/guide.md"],
-    }
-    assert "content" not in data
-    assert "<skill_content" not in str(result)
-    assert "Investigate failures methodically." not in str(result)
-    assert stored_data["resources"] == ["scripts/run.py", "references/guide.md"]
-    assert "frontmatter" not in stored_data["content"]
-    assert str(stored_data["content"]).startswith('<skill_content name="debugging">')
-    assert f"Skill directory: {skill_directory}" in str(stored_data["content"])
-    assert "resolve against the skill directory" in str(stored_data["content"])
-    assert "Investigate failures methodically." in str(stored_data["content"])
+    assert data["name"] == "debugging"
+    assert data["status"] == "loaded"
+    content = cast(str, data["content"])
+    assert content.startswith('<skill_content name="debugging">')
+    assert f"Skill directory: {skill_directory}" in content
+    assert "resolve against the skill directory" in content
+    assert "- scripts/run.py" in content
+    assert "- references/guide.md" in content
+    assert "Investigate failures methodically." in content
+    assert "frontmatter" not in content
+    assert registered == {"debugging": content}
 
 
-def test_skill_tool_without_activation_hook_returns_minimal_status(tmp_path: Path) -> None:
+def test_skill_tool_without_activation_hook_still_returns_content(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path))
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry))
@@ -67,12 +60,9 @@ def test_skill_tool_without_activation_hook_returns_minimal_status(tmp_path: Pat
     data = cast(dict[str, Any], result["data"])
 
     assert result["ok"] is True
-    assert data["resources"] == ["scripts/run.py", "references/guide.md"]
-    assert data["directory"] == _skill_directory(tmp_path)
     assert data["status"] == "loaded"
-    assert "content" not in data
-    assert "<skill_content" not in str(result)
-    assert "Investigate failures methodically." not in str(result)
+    assert cast(str, data["content"]).startswith('<skill_content name="debugging">')
+    assert "Investigate failures methodically." in cast(str, data["content"])
 
 
 def test_skill_tool_unknown_skill_fails(tmp_path: Path) -> None:
@@ -138,17 +128,7 @@ def test_skill_tool_dedup_uses_session_activation_hook(tmp_path: Path) -> None:
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))))
 
-    result = tool_success(
-        {
-            "content": (
-                "Skill 'debugging' was already activated in this session. Skipping re-activation."
-            ),
-            "resources": [],
-            "already_active": True,
-        }
-    )
-
-    context = _context(tmp_path, lambda _name, _data: result)
+    context = _context(tmp_path, lambda _name, _content: False)
     actual = asyncio.run(async_dispatch(tools, context, {"name": "debugging"}))
     data = cast(dict[str, Any], actual["data"])
 
@@ -156,11 +136,11 @@ def test_skill_tool_dedup_uses_session_activation_hook(tmp_path: Path) -> None:
     assert data == {
         "name": "debugging",
         "status": "already_active",
-        "message": "Skill 'debugging' was already active in this session.",
-        "directory": _skill_directory(tmp_path),
-        "resources": ["scripts/run.py", "references/guide.md"],
+        "message": (
+            "Skill 'debugging' is already active in this session; "
+            "its instructions are already in context."
+        ),
     }
-    assert "content" not in data
     assert "<skill_content" not in str(actual)
 
 

@@ -14,9 +14,17 @@ from core.sessions import (
     ChatSession,
     ChatSessionError,
     ChatSessionManager,
+    is_skill_context_note,
     skill_context_note_name,
 )
-from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX, _skill_context_note_content
+from core.sessions.sessions import (
+    SKILL_CONTEXT_NOTE_PREFIX,
+    SKILL_TOOL_LOADED_STATUS,
+    SKILL_TOOL_MESSAGE_NAME,
+    _skill_context_note_content,
+)
+from core.tools import tool_failure, tool_success
+from core.tools.skill import SKILL_STATUS_LOADED, SKILL_TOOL_NAME
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 
@@ -212,7 +220,7 @@ class TestChatSession:
 
         assert session.bookend_timestamps() == (first_message.timestamp, large_message.timestamp)
 
-    def test_skill_context_messages_uses_preloaded_messages_without_file_read(self, tmp_path):
+    def test_activated_skill_contents_uses_preloaded_messages_without_file_read(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         session.activate_skill_context("demo", {"content": "Skill body", "resources": []})
         loaded_messages = session.load()
@@ -220,23 +228,71 @@ class TestChatSession:
         fresh_handle = ChatSession(session.path)
         session.path.unlink()
 
-        assert fresh_handle.skill_context_messages(loaded_messages) == [
-            {"role": "user", "content": "Skill body"}
-        ]
+        assert fresh_handle.activated_skill_contents(loaded_messages) == {"demo": "Skill body"}
 
-    def test_skill_context_messages_preserve_activation_order(self, tmp_path):
+    def test_activated_skill_contents_preserve_activation_order(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         session.activate_skill_context("zeta", {"content": "Zeta body", "resources": []})
         session.activate_skill_context("alpha", {"content": "Alpha body", "resources": []})
 
-        expected = [
-            {"role": "user", "content": "Zeta body"},
-            {"role": "user", "content": "Alpha body"},
-        ]
-        assert session.skill_context_messages() == expected
+        expected = {"zeta": "Zeta body", "alpha": "Alpha body"}
+        assert session.activated_skill_contents() == expected
+        assert list(session.activated_skill_contents()) == ["zeta", "alpha"]
 
         fresh_handle = ChatSession(session.path)
-        assert fresh_handle.skill_context_messages() == expected
+        assert list(fresh_handle.activated_skill_contents()) == ["zeta", "alpha"]
+
+    def test_activate_skill_context_dedups_and_reports(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+
+        assert session.activate_skill_context("demo", {"content": "Body", "resources": []}) is True
+        assert session.activate_skill_context("demo", {"content": "Body", "resources": []}) is False
+        assert len([m for m in session.load() if is_skill_context_note(m)]) == 1
+
+    def test_register_skill_activation_dedups_without_persisting(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+
+        assert session.register_skill_activation("demo", "<skill_content>…</skill_content>") is True
+        assert session.register_skill_activation("demo", "other") is False
+        assert session.load() == []
+        assert session.activated_skill_contents() == {"demo": "<skill_content>…</skill_content>"}
+
+    def test_activated_skill_contents_scans_skill_tool_results(self, tmp_path):
+        # The ``skill`` tool result is the durable carrier of a tool-loaded skill:
+        # a fresh handle recovers name+content from the persisted envelope, while
+        # already-active stubs and failures contribute nothing.
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        loaded_envelope = tool_success(
+            {
+                "name": "docx",
+                "status": "loaded",
+                "content": '<skill_content name="docx">B</skill_content>',
+            }
+        )
+        stub_envelope = tool_success(
+            {"name": "docx", "status": "already_active", "message": "already active"}
+        )
+        failure_envelope = tool_failure("skill_not_found", "Skill not found: nope")
+        for index, envelope in enumerate([loaded_envelope, stub_envelope, failure_envelope]):
+            session.append(
+                ChatMessage.tool(
+                    tool_call_id=f"call-{index}",
+                    name="skill",
+                    content=json.dumps(envelope, ensure_ascii=False, separators=(",", ":")),
+                )
+            )
+
+        fresh_handle = ChatSession(session.path)
+        assert fresh_handle.activated_skill_contents() == {
+            "docx": '<skill_content name="docx">B</skill_content>'
+        }
+
+    def test_skill_tool_carrier_literals_match_tool_constants(self):
+        # The sessions-side carrier scan matches the tool name and loaded status
+        # as literals (importing the tool module would cycle); this pins them to
+        # the tool's own constants so the two can never silently drift.
+        assert SKILL_TOOL_MESSAGE_NAME == SKILL_TOOL_NAME
+        assert SKILL_TOOL_LOADED_STATUS == SKILL_STATUS_LOADED
 
     def test_load_rejects_invalid_json_line(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")

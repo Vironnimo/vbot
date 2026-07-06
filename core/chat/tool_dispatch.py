@@ -352,7 +352,7 @@ async def _dispatch_tool_calls(
             ),
             tool_call_cancel_check=lambda tool_call_id: run.tool_call_cancelled(tool_call_id),
             note_hook=session.add_note,
-            skill_activation_hook=session.activate_skill_context,
+            skill_activation_hook=session.register_skill_activation,
             nesting_depth=nesting_depth,
         ),
     )
@@ -473,13 +473,13 @@ def _activate_triggered_skills(
             )
             session.add_note(f"Skill trigger '{skill_name}' could not be loaded: {error}")
             continue
-        session.activate_skill_context(skill.name, data)
-        _LOGGER.info(
-            "Activated triggered skill '%s' for agent=%s session=%s",
-            skill.name,
-            agent.id,
-            session.id,
-        )
+        if session.activate_skill_context(skill.name, data):
+            _LOGGER.info(
+                "Activated triggered skill '%s' for agent=%s session=%s",
+                skill.name,
+                agent.id,
+                session.id,
+            )
 
 
 def _tool_display_payload(registry: Any, tool_name: str, arguments: Any) -> JsonObject:
@@ -624,39 +624,3 @@ def _triggered_skill_names(content: str) -> list[str]:
         if name not in names:
             names.append(name)
     return names
-
-
-def _is_skill_context_message(message: JsonObject) -> bool:
-    content = message.get("content")
-    return (
-        message.get("role") == "user"
-        and isinstance(content, str)
-        and content.startswith("<skill_content ")
-    )
-
-
-def _skill_context_insert_index(messages: list[JsonObject]) -> int:
-    """Position right after a leading system message and any existing skill contexts.
-
-    Mirrors the build-time layout (`[system?] [skill_context...] [history...]`) so
-    mid-run activations land at the front of the skill-context block — at index 0 when
-    no system message exists — and keep their activation order instead of reversing.
-    """
-    index = 0
-    if index < len(messages) and messages[index].get("role") == "system":
-        index += 1
-    while index < len(messages) and _is_skill_context_message(messages[index]):
-        index += 1
-    return index
-
-
-def _sync_skill_context_messages(messages: list[JsonObject], session: ChatSession) -> None:
-    existing = {
-        message.get("content") for message in messages if _is_skill_context_message(message)
-    }
-    insert_index = _skill_context_insert_index(messages)
-    for skill_message in session.skill_context_messages():
-        if skill_message["content"] not in existing:
-            messages.insert(insert_index, skill_message)
-            existing.add(skill_message["content"])
-            insert_index += 1

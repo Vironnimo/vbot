@@ -39,7 +39,7 @@ from core.chat.messages import (
     _last_user_message_with_content_blocks,
     _latest_compaction_checkpoint,
     _message_to_request_dict,
-    _notes_to_synthetic_user_message,
+    _notes_to_request_messages,
     _resolve_preserved_tail,
     _restore_in_run_assistant_reasoning,
     _session_has_any_content_blocks,
@@ -121,7 +121,6 @@ from core.chat.tool_dispatch import (
     _activate_triggered_skills,
     _dispatch_tool_calls,
     _project_containing_path,
-    _sync_skill_context_messages,
     _visiting_candidate_paths,
 )
 from core.chat.usage import aggregate_session_usage
@@ -140,7 +139,7 @@ from core.runs import (
     Run,
     RunExecutor,
 )
-from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, ChatSession
+from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, ChatSession, skill_activation_names
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
@@ -1120,11 +1119,7 @@ class ChatLoop:
                 replay_policy=replay_policy,
                 agent_model=agent.model,
             )
-            request_messages = [
-                *system_messages,
-                *session.skill_context_messages(session_messages),
-                *history,
-            ]
+            request_messages = [*system_messages, *history]
         else:
             tail_messages, tail_recovered = _resolve_preserved_tail(session_messages, checkpoint)
             if tail_recovered:
@@ -1152,9 +1147,21 @@ class ChatLoop:
                 replay_policy=replay_policy,
                 agent_model=agent.model,
             )
+            # Activated skills stay loaded across compaction: their carriers live
+            # in normal history, so any activation whose carrier was folded into
+            # the summary region is re-injected here, ahead of the summary. Free
+            # cache-wise — the checkpoint rebuild breaks the prefix anyway, and
+            # the injected block is deterministic (activation order) afterwards.
+            # A carrier that survives in the preserved tail is not duplicated.
+            tail_carried_skills = skill_activation_names(tail_messages)
+            skill_context_messages = [
+                {"role": "user", "content": content}
+                for name, content in session.activated_skill_contents(session_messages).items()
+                if name not in tail_carried_skills
+            ]
             request_messages = [
                 *system_messages,
-                *session.skill_context_messages(session_messages),
+                *skill_context_messages,
                 summary_synthetic_message,
                 *history,
             ]
@@ -1223,8 +1230,7 @@ class ChatLoop:
             run.raise_if_cancelled()
             pending_notes = session.drain_pending_notes()
             if pending_notes:
-                messages.append(_notes_to_synthetic_user_message(pending_notes))
-            _sync_skill_context_messages(messages, session)
+                messages.extend(_notes_to_request_messages(pending_notes))
             extension_registry = self._runtime.extensions
             messages_for_request = [dict(message) for message in messages]
             if extension_registry is not None:

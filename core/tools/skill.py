@@ -123,10 +123,16 @@ def make_skill_handler(resolve_registry: SkillRegistryResolver) -> Any:
         except ValueError as error:
             return tool_failure("skill_read_error", str(error))
 
-        stored_result = context.activate_skill(skill_name, data)
-        if stored_result is not None:
-            return _skill_activation_result(skill_name, stored_result, data)
-        return _minimal_skill_result(skill_name, data, already_active=False)
+        content = data.get("content")
+        if not isinstance(content, str) or not content:
+            return tool_failure(
+                "skill_read_error",
+                f"Skill '{skill_name}' produced no loadable content.",
+            )
+        newly_activated = context.activate_skill(skill_name, content)
+        if newly_activated is False:
+            return _already_active_result(skill_name)
+        return _loaded_skill_result(skill_name, content)
 
     return skill_handler
 
@@ -162,45 +168,33 @@ def load_skill_content(skill_name: str, skill_file: Path) -> JsonObject:
     }
 
 
-def _skill_activation_result(
-    skill_name: str,
-    stored_result: JsonObject,
-    data: JsonObject,
-) -> JsonObject:
-    if stored_result.get("ok") is not True:
-        return stored_result
+def _loaded_skill_result(skill_name: str, content: str) -> JsonObject:
+    """Success envelope of a fresh activation — the tool result IS the content carrier.
 
-    stored_data = stored_result.get("data")
-    already_active = isinstance(stored_data, dict) and stored_data.get("already_active") is True
-    return _minimal_skill_result(skill_name, data, already_active=already_active)
-
-
-def _minimal_skill_result(
-    skill_name: str,
-    data: JsonObject,
-    *,
-    already_active: bool,
-) -> JsonObject:
-    resources = data.get("resources", [])
-    if not isinstance(resources, list):
-        resources = []
-    directory = data.get("directory")
-    if not isinstance(directory, str):
-        directory = ""
-
-    status = SKILL_STATUS_ALREADY_ACTIVE if already_active else SKILL_STATUS_LOADED
-    message = (
-        f"Skill '{skill_name}' was already active in this session."
-        if already_active
-        else f"Skill '{skill_name}' loaded into session context."
-    )
+    The full wrapped ``<skill_content>`` rides in ``data.content``, so it sits in
+    the conversation exactly where the load happened and replays verbatim like
+    any other tool result. The sessions domain parses this envelope shape
+    (``skill_tool_activation``) for dedup, statistics, and the post-compaction
+    re-injection — keep ``name``/``status``/``content`` stable.
+    """
     return tool_success(
         {
             "name": skill_name,
-            "status": status,
-            "message": message,
-            "directory": directory,
-            "resources": list(resources),
+            "status": SKILL_STATUS_LOADED,
+            "content": content,
+        }
+    )
+
+
+def _already_active_result(skill_name: str) -> JsonObject:
+    return tool_success(
+        {
+            "name": skill_name,
+            "status": SKILL_STATUS_ALREADY_ACTIVE,
+            "message": (
+                f"Skill '{skill_name}' is already active in this session; "
+                "its instructions are already in context."
+            ),
         }
     )
 
