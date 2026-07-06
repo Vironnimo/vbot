@@ -11,11 +11,21 @@
     pushHistory,
     setDraft,
   } from '$lib/composerMemory.js';
+  import {
+    extractMentionTokens,
+    fuzzyFilterFiles,
+    isMentionTokenChar,
+    matchMentionCandidates,
+  } from '$lib/fileMentions.js';
   import { t } from '$lib/i18n.js';
+  import FileAutocomplete from './FileAutocomplete.svelte';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
   import Button from './ui/Button.svelte';
 
   const SKILL_TRIGGER_PATTERN = /[A-Za-z0-9_-]/u;
+  // Mirrors FileAutocomplete's render cap so keyboard navigation and the
+  // rendered list can never disagree on the match set.
+  const MAX_FILE_MATCHES = 50;
   const ATTACHMENT_ACCEPT =
     'image/*,audio/*,video/*,text/*,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
@@ -29,6 +39,7 @@
     onSendMessage,
     onCancelRun = () => {},
     onTranscriptionError,
+    onListFiles = null,
   } = $props();
   let content = $state('');
   // Input-history navigation. `historyCursor` is -1 while editing the live draft
@@ -41,9 +52,17 @@
   let lastDraftKey = null;
   let inputElement = $state(null);
   let autocompleteElement = $state(null);
+  let fileAutocompleteElement = $state(null);
   let fileInputElement = $state(null);
   let triggerContext = $state(null);
   let activeSkillIndex = $state(0);
+  // @-mention picker data: `null` = never fetched for this session. Fetched
+  // once per picker open (fresh list, no cache-invalidation problem) and reused
+  // at submit to decide which @-tokens are real files.
+  let fileCandidates = $state(null);
+  let fileListTruncated = $state(false);
+  let fileListLoading = $state(false);
+  let _fileFetchToken = 0;
   let pendingAttachments = $state([]);
   let isDragOver = $state(false);
   let attachmentToastMessage = $state('');
@@ -65,8 +84,24 @@
 
     return content.slice(triggerContext.start + 1, triggerContext.end);
   });
+  let matchingFiles = $derived.by(() =>
+    triggerContext?.marker === '@'
+      ? fuzzyFilterFiles(
+          fileCandidates ?? [],
+          autocompleteQuery,
+          MAX_FILE_MATCHES,
+        )
+      : [],
+  );
   let showSkillAutocomplete = $derived(
-    Boolean(triggerContext) && matchingSkillCount() > 0,
+    Boolean(triggerContext) &&
+      triggerContext.marker !== '@' &&
+      matchingSkillCount() > 0,
+  );
+  let showFileAutocomplete = $derived(
+    Boolean(triggerContext) &&
+      triggerContext.marker === '@' &&
+      (fileListLoading || matchingFiles.length > 0),
   );
   let hasUploadingAttachments = $derived(
     pendingAttachments.some((attachment) => attachment.uploading),
@@ -104,6 +139,11 @@
     triggerContext = null;
     activeSkillIndex = 0;
     _triggerClosed = false;
+    // A different session may sit on a different cwd — drop the file list.
+    fileCandidates = null;
+    fileListTruncated = false;
+    fileListLoading = false;
+    _fileFetchToken += 1;
     content = getDraft(key);
     tick().then(() => {
       if (content) {
@@ -412,6 +452,24 @@
     await _handleFiles(files);
   };
 
+  // Which @-tokens in the outgoing text are actual files. Decided against the
+  // picker's file list (fetched now if this draft never opened the picker, e.g.
+  // a restored draft), so pasted code decorators and handles never expand.
+  const collectFileMentions = async (tokens) => {
+    let files = fileCandidates;
+    if (files === null && typeof onListFiles === 'function') {
+      try {
+        const result = await onListFiles();
+        files = Array.isArray(result?.files) ? result.files : [];
+        fileCandidates = files;
+        fileListTruncated = Boolean(result?.truncated);
+      } catch {
+        files = [];
+      }
+    }
+    return matchMentionCandidates(tokens, files ?? []);
+  };
+
   const submit = () => {
     const trimmedContent = content.trim();
     const hasPendingAttachments = pendingAttachments.length > 0;
@@ -429,7 +487,27 @@
     // Record the typed text (if any) so it can be recalled later from any of
     // this agent's sessions. Attachment-only sends contribute no history entry.
     pushHistory(historyKey, content);
-    const sendOptions = inputOrigin ? { inputOrigin } : null;
+    // A message without @-tokens sends synchronously (the common case); only a
+    // mention-bearing message waits for the file-list check.
+    const mentionTokens = extractMentionTokens(content);
+    if (mentionTokens.length === 0) {
+      finishSubmit([]);
+      return;
+    }
+    collectFileMentions(mentionTokens).then(finishSubmit);
+  };
+
+  const finishSubmit = (fileMentions) => {
+    const trimmedContent = content.trim();
+    const hasPendingAttachments = pendingAttachments.length > 0;
+    const sendOptionCandidates = {
+      ...(inputOrigin ? { inputOrigin } : {}),
+      ...(fileMentions.length > 0 ? { fileMentions } : {}),
+    };
+    const sendOptions =
+      Object.keys(sendOptionCandidates).length > 0
+        ? sendOptionCandidates
+        : null;
 
     if (!hasPendingAttachments) {
       if (sendOptions) {
@@ -630,14 +708,24 @@
     return true;
   };
 
+  // The skill/command popup and the file popup share one keyboard contract;
+  // these two pick the popup that is currently open.
+  const activeAutocompleteElement = () =>
+    showFileAutocomplete ? fileAutocompleteElement : autocompleteElement;
+  const activeMatchCount = () =>
+    triggerContext?.marker === '@'
+      ? matchingFiles.length
+      : matchingSkillCount();
+
   const handleKeydown = (event) => {
-    if (showSkillAutocomplete) {
+    const autocompleteOpen = showSkillAutocomplete || showFileAutocomplete;
+    if (autocompleteOpen) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         _suppressSelectionUpdate = true;
         activeSkillIndex = Math.min(
           activeSkillIndex + 1,
-          matchingSkillCount() - 1,
+          activeMatchCount() - 1,
         );
         return;
       }
@@ -650,7 +738,7 @@
       }
 
       if (event.key === 'Tab') {
-        if (autocompleteElement?.selectActive()) {
+        if (activeAutocompleteElement()?.selectActive()) {
           event.preventDefault();
         }
         return;
@@ -665,10 +753,10 @@
       }
     }
 
-    // Input history — only when the skill/command popup isn't already using the
-    // arrow keys. Up walks into older sent messages from the first line; Down
-    // walks back toward (and finally into) the live draft.
-    if (!showSkillAutocomplete) {
+    // Input history — only when a popup isn't already using the arrow keys.
+    // Up walks into older sent messages from the first line; Down walks back
+    // toward (and finally into) the live draft.
+    if (!autocompleteOpen) {
       if (
         event.key === 'ArrowUp' &&
         caretOnFirstLine() &&
@@ -692,7 +780,7 @@
       return;
     }
 
-    if (showSkillAutocomplete && autocompleteElement?.selectActive()) {
+    if (autocompleteOpen && activeAutocompleteElement()?.selectActive()) {
       event.preventDefault();
       return;
     }
@@ -764,12 +852,83 @@
     }
 
     const cursorPosition = inputElement.selectionStart ?? content.length;
+    const previousContext = triggerContext;
     triggerContext = detectSkillTrigger(content, cursorPosition);
     activeSkillIndex = 0;
+    // A newly opened @-picker (or the caret jumping to a different @-token)
+    // fetches a fresh file list; typing within the same token filters locally.
+    if (
+      triggerContext?.marker === '@' &&
+      (previousContext?.marker !== '@' ||
+        previousContext.start !== triggerContext.start)
+    ) {
+      refreshFileCandidates();
+    }
+  };
+
+  const refreshFileCandidates = async () => {
+    if (typeof onListFiles !== 'function') {
+      fileCandidates = [];
+      fileListTruncated = false;
+      return;
+    }
+    // The token invalidates stale responses: a session switch or a newer fetch
+    // bumps it, and the slower response is dropped instead of applied.
+    const fetchToken = ++_fileFetchToken;
+    fileListLoading = true;
+    try {
+      const result = await onListFiles();
+      if (fetchToken !== _fileFetchToken) {
+        return;
+      }
+      fileCandidates = Array.isArray(result?.files) ? result.files : [];
+      fileListTruncated = Boolean(result?.truncated);
+    } catch {
+      if (fetchToken !== _fileFetchToken) {
+        return;
+      }
+      // Keep whatever list we had; a picker without data simply shows nothing.
+      fileCandidates = fileCandidates ?? [];
+      fileListTruncated = false;
+    } finally {
+      if (fetchToken === _fileFetchToken) {
+        fileListLoading = false;
+      }
+    }
+  };
+
+  // An @-mention trigger: the token charset includes path characters, and the
+  // char before the `@` must not look like a word/path char (so an email's
+  // `user@host` never opens the picker).
+  const detectFileTrigger = (value, boundedCursor) => {
+    let start = boundedCursor - 1;
+
+    while (start >= 0 && isMentionTokenChar(value[start])) {
+      start -= 1;
+    }
+
+    if (start < 0 || value[start] !== '@') {
+      return null;
+    }
+
+    if (start > 0) {
+      const previous = value[start - 1];
+      if (isMentionTokenChar(previous) || previous === '@') {
+        return null;
+      }
+    }
+
+    return { marker: '@', start, end: boundedCursor };
   };
 
   const detectSkillTrigger = (value, cursorPosition) => {
     const boundedCursor = Math.max(0, Math.min(cursorPosition, value.length));
+
+    const fileTrigger = detectFileTrigger(value, boundedCursor);
+    if (fileTrigger) {
+      return fileTrigger;
+    }
+
     let start = boundedCursor - 1;
 
     while (start >= 0 && SKILL_TRIGGER_PATTERN.test(value[start])) {
@@ -828,6 +987,28 @@
     navWorkingCopies = {};
     resetInputHeight();
     onSendMessage?.(`/${normalizedName}`);
+  };
+
+  const selectFile = async (file) => {
+    if (!triggerContext || typeof file !== 'string' || !file) {
+      return;
+    }
+
+    const prefix = content.slice(0, triggerContext.start);
+    const suffix = content.slice(triggerContext.end);
+    // The trailing space ends the mention token, so typing continues normally.
+    const insertedToken = `@${file} `;
+    const nextCursorPosition = prefix.length + insertedToken.length;
+    content = `${prefix}${insertedToken}${suffix}`;
+    noteContentEdited();
+    triggerContext = null;
+    activeSkillIndex = 0;
+    _triggerClosed = true;
+
+    await tick();
+    inputElement?.focus();
+    inputElement?.setSelectionRange(nextCursorPosition, nextCursorPosition);
+    resizeInput();
   };
 
   const selectSkill = async (skill) => {
@@ -907,6 +1088,20 @@
       }}
     />
   {/if}
+  {#if showFileAutocomplete}
+    <FileAutocomplete
+      bind:this={fileAutocompleteElement}
+      files={fileCandidates ?? []}
+      query={autocompleteQuery}
+      truncated={fileListTruncated}
+      loading={fileListLoading}
+      activeIndex={activeSkillIndex}
+      onSelect={selectFile}
+      onHover={(index) => {
+        activeSkillIndex = index;
+      }}
+    />
+  {/if}
   <div
     class="input-wrap"
     role="group"
@@ -927,7 +1122,7 @@
       onkeyup={handleSelection}
       placeholder={t(
         'chat.composerPlaceholder',
-        'Ask this agent to do something… (/ for commands, $ for skills)',
+        'Ask this agent to do something… (/ for commands, $ for skills, @ for files)',
       )}
       rows="1"
     ></textarea>

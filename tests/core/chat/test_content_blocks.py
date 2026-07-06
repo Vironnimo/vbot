@@ -7,6 +7,7 @@ import pytest
 from core.chat.content_blocks import (
     ContentBlockError,
     FileBlock,
+    FileMentionBlock,
     MediaBlock,
     TextBlock,
     content_block_from_dict,
@@ -50,6 +51,38 @@ class TestContentBlocks:
                     "media_type": "application/pdf",
                 },
             ),
+            (
+                FileMentionBlock(
+                    type="file_mention",
+                    path="src/app.py",
+                    status="inlined",
+                    text="print('hi')",
+                    size_bytes=11,
+                ),
+                {
+                    "type": "file_mention",
+                    "path": "src/app.py",
+                    "status": "inlined",
+                    "text": "print('hi')",
+                    "size_bytes": 11,
+                },
+            ),
+            (
+                FileMentionBlock(
+                    type="file_mention",
+                    path="big.log",
+                    status="too_large",
+                    text=None,
+                    size_bytes=9_000_000,
+                ),
+                {
+                    "type": "file_mention",
+                    "path": "big.log",
+                    "status": "too_large",
+                    "text": None,
+                    "size_bytes": 9_000_000,
+                },
+            ),
         ],
     )
     def test_round_trip_for_each_block_type(self, block, expected):
@@ -68,9 +101,32 @@ class TestContentBlocks:
             {"type": "text"},
             {"type": "media", "attachment_id": "att_1", "filename": "photo.png"},
             {"type": "file", "attachment_id": "att_2", "media_type": "application/pdf"},
+            {"type": "file_mention", "status": "inlined", "text": "x"},
         ],
     )
     def test_missing_required_fields_raise_content_block_error(self, payload):
+        with pytest.raises(ContentBlockError):
+            content_block_from_dict(payload)
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            # Unknown status value.
+            {"type": "file_mention", "path": "a.py", "status": "weird", "text": None},
+            # Inlined must carry text; degraded must not.
+            {"type": "file_mention", "path": "a.py", "status": "inlined", "text": None},
+            {"type": "file_mention", "path": "a.py", "status": "missing", "text": "body"},
+            # size_bytes must be an integer or null.
+            {
+                "type": "file_mention",
+                "path": "a.py",
+                "status": "inlined",
+                "text": "body",
+                "size_bytes": "4",
+            },
+        ],
+    )
+    def test_invalid_file_mention_payloads_raise_content_block_error(self, payload):
         with pytest.raises(ContentBlockError):
             content_block_from_dict(payload)
 

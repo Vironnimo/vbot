@@ -595,6 +595,15 @@ a.inline-attachment:focus-visible {
   color: var(--text-med);
 }
 
+.inline-file-status {
+  flex-shrink: 0;
+  color: var(--text-lo);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-style: italic;
+  white-space: nowrap;
+}
+
 @media (max-width: 640px) {
   .tool-event-body {
     max-width: 100%;

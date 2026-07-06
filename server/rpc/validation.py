@@ -45,6 +45,17 @@ def _parse_chat_content(params: JsonObject, key: str) -> str | list[ContentBlock
     )
 
 
+def _optional_file_mentions(params: JsonObject) -> list[str]:
+    """Read the optional ``file_mentions`` list on the chat send/queue RPCs.
+
+    Paths of files the user ``@``-mentioned in the composer, to be snapshotted
+    into the message at send time. Absent → empty list (no expansion).
+    """
+    if "file_mentions" not in params:
+        return []
+    return _required_string_list(params, "file_mentions")
+
+
 def _required_agent_address(params: JsonObject, key: str) -> tuple[str, str | None]:
     """Read a required agent-address param and split it into ``(agent_id, project_id)``.
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 
 from core.chat import (
@@ -13,6 +14,7 @@ from core.chat import (
     parse_handoff_argument,
 )
 from core.chat.content_blocks import ContentBlock, TextBlock
+from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.projects import (
     AgentResolutionError,
     InvalidAgentAddressError,
@@ -58,6 +60,7 @@ from server.rpc.runtime_access import (
 from server.rpc.validation import (
     _ensure_model_usable,
     _optional_chat_input_origin,
+    _optional_file_mentions,
     _optional_positive_integer,
     _optional_string,
     _parse_chat_content,
@@ -842,11 +845,43 @@ async def _handle_move_session_command(
     )
 
 
+async def _expand_content_file_mentions(
+    state: Any,
+    agent_id: str,
+    project_id: str | None,
+    session_id: str,
+    content: str | list[ContentBlock],
+    file_mentions: list[str],
+) -> str | list[ContentBlock]:
+    """Snapshot ``@``-mentioned files into the outgoing content, if any.
+
+    Runs before Run start *and* before busy-session enqueue, so a queued message
+    carries the files as they were when the user hit send. File I/O runs in a
+    worker thread to keep the event loop free.
+    """
+    if not file_mentions:
+        return content
+    runtime = state.runtime
+    try:
+        root = resolve_mention_root(runtime, agent_id, project_id)
+        return await asyncio.to_thread(
+            expand_file_mentions,
+            content,
+            file_mentions,
+            root=root,
+            session_id=session_id,
+            file_state=runtime.file_read_state,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
+    file_mentions = _optional_file_mentions(params)
 
     command_text = _extract_command_text(content)
     if command_text is not None:
@@ -860,6 +895,10 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
         )
         if command_response is not None:
             return command_response
+
+    content = await _expand_content_file_mentions(
+        state, agent_id, project_id, session_id, content, file_mentions
+    )
 
     try:
         if input_origin is None:
@@ -912,6 +951,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     session_id = _required_string(params, "session_id")
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
+    file_mentions = _optional_file_mentions(params)
 
     command_text = _extract_command_text(content)
     if command_text is not None:
@@ -925,6 +965,10 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
         )
         if command_response is not None:
             return command_response
+
+    content = await _expand_content_file_mentions(
+        state, agent_id, project_id, session_id, content, file_mentions
+    )
 
     streaming_chat_loop = _streaming_chat_loop(state)
     try:
@@ -1110,9 +1154,10 @@ def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True}
 
 
-def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
+async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
     unsupported_fields = sorted(
-        set(params) - {"agent_id", "session_id", "item_id", "content", "input_origin"}
+        set(params)
+        - {"agent_id", "session_id", "item_id", "content", "input_origin", "file_mentions"}
     )
     if unsupported_fields:
         raise RpcError(
@@ -1125,6 +1170,11 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
     item_id = _required_string(params, "item_id")
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
+    # An edit replaces the queued content wholesale, so mentions are re-expanded
+    # against the edited text — a fresh snapshot at edit time.
+    content = await _expand_content_file_mentions(
+        state, agent_id, project_id, session_id, content, _optional_file_mentions(params)
+    )
 
     try:
         chat_runs = _state_chat_runs(state)

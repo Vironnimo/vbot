@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
     from core.skills.skills import SkillMetadata, SkillRegistry
     from core.storage import StorageManager
+    from core.tools.file_state import FileReadState
     from core.tools.process_manager import ProcessManager
     from core.tools.tools import ToolRegistry
 
@@ -192,6 +193,11 @@ class RuntimeServices(Protocol):
     @property
     def process_manager(self) -> ProcessManager:
         """Shared host process lifecycle management."""
+        ...
+
+    @property
+    def file_read_state(self) -> FileReadState:
+        """Shared per-session read-before-write guard (read/write/edit tools)."""
         ...
 
     @property
