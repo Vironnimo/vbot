@@ -705,6 +705,12 @@ class StubStorage:
     def load_debug_settings(self) -> JsonObject:
         return {"enabled": False, "trace_limit": 50}
 
+    def load_local_models_settings(self) -> JsonObject:
+        stored = self._settings.get("local_models")
+        if isinstance(stored, dict) and isinstance(stored.get("context_windows"), dict):
+            return {"context_windows": dict(stored["context_windows"])}
+        return {"context_windows": {}}
+
     def load_reflection_settings(self) -> JsonObject:
         defaults: JsonObject = {
             "enabled": False,
@@ -1567,6 +1573,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "skill_tool_call_interval": 25,
         },
         "model_tasks": {},
+        "local_models": {"context_windows": {}},
         "skills": {
             "default_directory": str(tmp_path / "skills"),
             "directories": [],
@@ -2413,6 +2420,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                         ],
                     },
                     "context_window": 200000,
+                    "effective_context_window": 200000,
                     "max_output_tokens": 64000,
                     "connections": [],
                 },
@@ -2432,6 +2440,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                         "task_types": ["chat", "text_output"],
                     },
                     "context_window": 128000,
+                    "effective_context_window": 128000,
                     "max_output_tokens": 8192,
                     "connections": [],
                 },
@@ -2451,6 +2460,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                         "task_types": ["chat", "text_output"],
                     },
                     "context_window": 128000,
+                    "effective_context_window": 128000,
                     "max_output_tokens": 16000,
                     "connections": [],
                 },
@@ -2475,6 +2485,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                         ],
                     },
                     "context_window": 256000,
+                    "effective_context_window": 256000,
                     "max_output_tokens": 32000,
                     "connections": [],
                 },
@@ -2516,6 +2527,7 @@ async def test_model_list_filters_by_connection_usability(
                         "task_types": ["chat", "text_output"],
                     },
                     "context_window": 128000,
+                    "effective_context_window": 128000,
                     "max_output_tokens": 16000,
                     "connections": [],
                 },
@@ -2540,6 +2552,7 @@ async def test_model_list_filters_by_connection_usability(
                         ],
                     },
                     "context_window": 256000,
+                    "effective_context_window": 256000,
                     "max_output_tokens": 32000,
                     "connections": [],
                 },

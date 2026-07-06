@@ -32,6 +32,7 @@ from core.settings.normalizers import (
     normalize_defaults_settings,
     normalize_extensions_settings,
     normalize_json_object,
+    normalize_local_models_settings,
     normalize_model_task_settings,
     normalize_recall_settings,
     normalize_reflection_settings,
@@ -73,6 +74,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "debug",
         "extensions",
         "reflection",
+        "local_models",
     }
 )
 PHASE_TWO_DIRECTORIES = (
@@ -351,6 +353,11 @@ class StorageManager:
                     settings,
                     settings_update["reflection"],
                 )
+            if "local_models" in settings_update:
+                updated_sections["local_models"] = self._apply_local_models_settings(
+                    settings,
+                    settings_update["local_models"],
+                )
             return dict(updated_sections)
 
         return self.update_settings(apply_update)
@@ -455,6 +462,55 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_recall_settings(settings.get("recall"))
+
+    def load_local_models_settings(self) -> dict[str, Any]:
+        """Return normalized persisted local-models settings.
+
+        Shape: ``{"context_windows": {"<provider>/<model_id>": positive int}}``.
+        Read live at call time (no reload hook) by the effective-context-window
+        resolution and the Ollama adapter's ``num_ctx`` enforcement.
+        """
+
+        settings = self.load_settings()
+        return normalize_local_models_settings(settings.get("local_models"))
+
+    def _apply_local_models_settings(
+        self,
+        settings: dict[str, Any],
+        local_models: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge local-models settings into an in-memory settings mapping.
+
+        Sparse per-key merge: a ``null`` window removes the key (the model
+        falls back to the default cap), an integer sets it, and unmentioned
+        keys are preserved.
+        """
+
+        if not isinstance(local_models, Mapping):
+            raise StorageError("Local-models settings must be a mapping")
+
+        unsupported_fields = sorted(set(local_models) - {"context_windows"})
+        if unsupported_fields:
+            raise StorageError(
+                f"Unsupported local_models settings: {', '.join(unsupported_fields)}"
+            )
+
+        update_windows = local_models.get("context_windows")
+        if not isinstance(update_windows, Mapping):
+            raise StorageError("local_models.context_windows must be a mapping")
+
+        merged = dict(
+            normalize_local_models_settings(settings.get("local_models"))["context_windows"]
+        )
+        for key, value in update_windows.items():
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = value
+
+        normalized = normalize_local_models_settings({"context_windows": merged})
+        settings["local_models"] = normalized
+        return dict(normalized)
 
     def load_debug_settings(self) -> dict[str, Any]:
         """Return normalized persisted debug settings."""

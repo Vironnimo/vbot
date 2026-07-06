@@ -56,6 +56,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "web_search",
         "extensions",
         "reflection",
+        "local_models",
     }
 )
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
@@ -116,7 +117,47 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "reflection" in params:
         parsed_update["reflection"] = _parse_reflection_update(params["reflection"])
 
+    if "local_models" in params:
+        parsed_update["local_models"] = _parse_local_models_update(params["local_models"])
+
     return parsed_update
+
+
+def _parse_local_models_update(local_models: Any) -> JsonObject:
+    """Parse the local-models section (sparse per-key merge, ``null`` removes).
+
+    ``context_windows`` maps ``"<provider>/<model_id>"`` to the user-configured
+    effective context window. A ``null`` value removes the key so the model
+    falls back to the default cap; unmentioned keys are preserved by storage.
+    """
+    if not isinstance(local_models, dict):
+        raise SettingsValidationError("params.local_models must be an object")
+
+    unsupported_fields = sorted(set(local_models) - {"context_windows"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported local_models settings: {', '.join(unsupported_fields)}"
+        )
+    if "context_windows" not in local_models:
+        raise SettingsValidationError("params.local_models requires context_windows")
+
+    context_windows = local_models["context_windows"]
+    if not isinstance(context_windows, dict):
+        raise SettingsValidationError("params.local_models.context_windows must be an object")
+
+    parsed_windows: JsonObject = {}
+    for key, value in context_windows.items():
+        if not isinstance(key, str) or "/" not in key or not key.strip():
+            raise SettingsValidationError(
+                "params.local_models.context_windows keys must be '<provider>/<model_id>' strings"
+            )
+        if value is None:
+            parsed_windows[key] = None
+            continue
+        parsed_windows[key] = _positive_integer(
+            value, f"params.local_models.context_windows['{key}']"
+        )
+    return {"context_windows": parsed_windows}
 
 
 def _parse_reflection_update(reflection: Any) -> JsonObject:

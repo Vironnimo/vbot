@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Any, cast
 
 from core.chat import ChatMessage, parse_bare_model
-from core.providers.providers import resolve_context_window
+from core.providers.providers import (
+    model_is_local,
+    resolve_effective_context_window,
+)
 from core.runs import QueuedRunItem, Run
 from core.tools import tool_is_ready
 
@@ -51,10 +54,11 @@ def _resolve_context_window(state: Any, model: str) -> int | None:
     """Resolve a model string (provider/model-id) to the usable context window.
 
     This is the *active agent's* window for the WebUI token badge, so it
-    resolves through the shared default chain (model window → provider-config
-    default → global floor, see :func:`resolve_context_window`): a model whose
-    window is unknown still yields a usable number instead of ``None``/NaN.
-    Returns ``None`` only when the model string is unusable or the model/provider
+    resolves through the shared effective chain (user-set/capped for
+    flagged-local models, else model window → provider-config default → global
+    floor, see :func:`resolve_effective_context_window`): a model whose window
+    is unknown still yields a usable number instead of ``None``/NaN. Returns
+    ``None`` only when the model string is unusable or the model/provider
     cannot be found in the registry.
     """
     bare_model = parse_bare_model(model)
@@ -67,10 +71,21 @@ def _resolve_context_window(state: Any, model: str) -> int | None:
         model_entry = state.runtime.models.get(provider_id, model_id)
     except (KeyError, AttributeError):
         return None
-    return resolve_context_window(
+    return resolve_effective_context_window(
         model_entry.context_window,
         _provider_config(state, provider_id),
+        model_metadata=model_entry.metadata,
+        model_key=f"{provider_id}/{model_id}",
+        local_context_windows=_local_context_windows(state),
     )
+
+
+def _local_context_windows(state: Any) -> Any:
+    """Return the live local-model window map from settings, or empty."""
+    try:
+        return state.runtime.storage.load_local_models_settings()["context_windows"]
+    except (AttributeError, KeyError):
+        return {}
 
 
 def _provider_config(state: Any, provider_id: str) -> Any:
@@ -124,7 +139,13 @@ def _agent_effective(state: Any, agent_id: str) -> JsonObject:
     return cast(JsonObject, state.runtime.agent_resolver.effective_config(None, agent_id))
 
 
-def _model_response(provider_id: str, model: Any) -> JsonObject:
+def _model_response(
+    provider_id: str,
+    model: Any,
+    *,
+    provider_config: Any = None,
+    local_context_windows: Any = None,
+) -> JsonObject:
     return {
         "id": f"{provider_id}/{model.model_id}",
         "provider_id": provider_id,
@@ -145,9 +166,34 @@ def _model_response(provider_id: str, model: Any) -> JsonObject:
             "task_types": list(model.capabilities.task_types),
         },
         "context_window": model.context_window,
+        # The window vBot actually budgets against: resolved (user-set/capped)
+        # for flagged-local models, else the raw window (null when unknown) —
+        # the picker suitability filter consumes this field.
+        "effective_context_window": _effective_context_window_field(
+            provider_id, model, provider_config, local_context_windows
+        ),
         "max_output_tokens": model.max_output_tokens,
         "connections": list(model.connections),
     }
+
+
+def _effective_context_window_field(
+    provider_id: str,
+    model: Any,
+    provider_config: Any,
+    local_context_windows: Any,
+) -> int | None:
+    if not model_is_local(model.metadata):
+        # Deliberately the RAW window for non-local models (null stays null —
+        # the WebUI shows an honest "context unknown" badge, never a floor).
+        return cast("int | None", model.context_window)
+    return resolve_effective_context_window(
+        model.context_window,
+        provider_config,
+        model_metadata=model.metadata,
+        model_key=f"{provider_id}/{model.model_id}",
+        local_context_windows=local_context_windows,
+    )
 
 
 def _tool_response(tool: Any) -> JsonObject:

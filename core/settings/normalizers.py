@@ -383,6 +383,44 @@ def _normalize_debug_trace_limit(value: Any) -> int:
     return value
 
 
+# --- local models ---------------------------------------------------------------
+
+
+def normalize_local_models_settings(local_models: Any) -> dict[str, Any]:
+    """Return the normalized local-models settings section.
+
+    Shape: ``{"context_windows": {"<provider>/<model_id>": positive int}}`` —
+    the user-configured effective context window per flagged-local model
+    (see ``resolve_effective_context_window`` in ``core/providers``).
+    """
+
+    section = _coerce_local_models_section(local_models)
+    raw_windows = section.get("context_windows")
+    if raw_windows is None:
+        return {"context_windows": {}}
+    if not isinstance(raw_windows, Mapping):
+        raise StorageError("Expected settings.local_models.context_windows to be an object")
+
+    context_windows: dict[str, int] = {}
+    for key, value in raw_windows.items():
+        if not isinstance(key, str) or "/" not in key or not key.strip():
+            raise StorageError(
+                "local_models.context_windows keys must be '<provider>/<model_id>' strings"
+            )
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise StorageError(f"local_models.context_windows['{key}'] must be a positive integer")
+        context_windows[key] = value
+    return {"context_windows": context_windows}
+
+
+def _coerce_local_models_section(local_models: Any) -> dict[str, Any]:
+    if local_models is None:
+        return {}
+    if not isinstance(local_models, Mapping):
+        raise StorageError("Expected settings.local_models to be an object")
+    return dict(local_models)
+
+
 # --- reflection ----------------------------------------------------------------
 
 

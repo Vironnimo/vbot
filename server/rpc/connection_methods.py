@@ -84,9 +84,15 @@ def _list_models(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         runtime = state.runtime
+        local_context_windows = runtime.storage.load_local_models_settings()["context_windows"]
         models = sorted(
             (
-                _model_response(provider_id, model)
+                _model_response(
+                    provider_id,
+                    model,
+                    provider_config=_provider_config_or_none(runtime, provider_id),
+                    local_context_windows=local_context_windows,
+                )
                 for provider_id, model in runtime.models.query(model_query)
                 if _provider_has_credentials(runtime, provider_id)
             ),
@@ -95,6 +101,13 @@ def _list_models(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"models": models}
+
+
+def _provider_config_or_none(runtime: Any, provider_id: str) -> Any:
+    try:
+        return runtime.providers.get(provider_id)
+    except (KeyError, AttributeError):
+        return None
 
 
 def _list_connections(state: Any, params: JsonObject) -> JsonObject:
