@@ -22,8 +22,43 @@ from core.utils.retry import (
     JITTER_FACTOR,
     MAX_RETRIES,
     MAX_RETRY_AFTER_SECONDS,
+    compute_retry_delay,
     retry_async,
 )
+
+# ----- compute_retry_delay — shared backoff math -----
+
+
+def test_compute_retry_delay_backoff_without_hint():
+    """Without a hint the delay is exponential backoff plus bounded jitter."""
+    for attempt in range(3):
+        base = INITIAL_DELAY_SECONDS * (BACKOFF_FACTOR**attempt)
+        delay, honored = compute_retry_delay(attempt)
+        assert base <= delay <= base * (1 + JITTER_FACTOR)
+        assert honored is False
+
+
+def test_compute_retry_delay_honors_retry_after_as_floor():
+    """A hint above the computed backoff becomes the delay and is flagged."""
+    delay, honored = compute_retry_delay(0, retry_after=30.0)
+    assert delay == 30.0
+    assert honored is True
+
+
+def test_compute_retry_delay_ignores_smaller_retry_after():
+    """A hint below the computed backoff never shortens the wait."""
+    delay, honored = compute_retry_delay(2, retry_after=0.001)
+    base = INITIAL_DELAY_SECONDS * (BACKOFF_FACTOR**2)
+    assert delay >= base
+    assert honored is False
+
+
+def test_compute_retry_delay_caps_retry_after():
+    """An excessive hint is clamped to ``MAX_RETRY_AFTER_SECONDS``."""
+    delay, honored = compute_retry_delay(0, retry_after=10_000.0)
+    assert delay == MAX_RETRY_AFTER_SECONDS
+    assert honored is True
+
 
 # ----- Success path -----
 

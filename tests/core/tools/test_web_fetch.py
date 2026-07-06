@@ -22,6 +22,7 @@ from core.tools.web_fetch import (
     register_web_fetch_tool,
     web_fetch_handler,
 )
+from core.utils.retry import MAX_RETRIES
 
 
 def make_context(workspace: Path, tool_name: str = WEB_FETCH_TOOL_NAME) -> ToolContext:
@@ -255,8 +256,8 @@ async def test_web_fetch_handler_retries_retryable_statuses(
     workspace.mkdir()
     url = "https://example.com/retry"
 
-    async def no_retry_sleep(attempt: int) -> None:
-        del attempt
+    async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
 
     monkeypatch.setattr(web_fetch_module, "_sleep_for_retry", no_retry_sleep)
 
@@ -290,8 +291,8 @@ async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
     workspace.mkdir()
     url = "https://example.com/always-busy"
 
-    async def no_retry_sleep(attempt: int) -> None:
-        del attempt
+    async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
 
     monkeypatch.setattr(web_fetch_module, "_sleep_for_retry", no_retry_sleep)
 
@@ -308,9 +309,51 @@ async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
 
     error = assert_failure_envelope(result, "request_error")
     assert error["retryable"] is True
-    assert error["attempts_made"] == web_fetch_module._RETRY_MAX_RETRIES + 1
+    assert error["attempts_made"] == MAX_RETRIES + 1
     # All attempts were spent before the tool gave up.
-    assert calls == web_fetch_module._RETRY_MAX_RETRIES + 1
+    assert calls == MAX_RETRIES + 1
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_honors_retry_after_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/rate-limited"
+
+    observed_hints: list[float | None] = []
+
+    async def recording_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt
+        observed_hints.append(retry_after)
+
+    monkeypatch.setattr(web_fetch_module, "_sleep_for_retry", recording_sleep)
+
+    attempts = 0
+
+    def responder(_url: str) -> _FetchResult:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return make_result(
+                status_code=429,
+                headers={"Retry-After": "7"},
+                text="rate limited",
+            )
+        return make_result(
+            status_code=200,
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+            text="recovered",
+        )
+
+    install_http_get(monkeypatch, responder)
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "recovered"
+    assert observed_hints == [7.0]
 
 
 @pytest.mark.asyncio
