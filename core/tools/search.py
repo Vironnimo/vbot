@@ -34,9 +34,13 @@ class SearchBudget:
     three stop reasons (user cancel, run cancel, wall-clock timeout) into one
     check and records which one fired, so the handler can decide between a
     cancel failure envelope and partial results with a timeout marker.
+
+    ``context=None`` builds a timeout-only budget for walks that run outside a
+    tool call (e.g. the ``files.list`` RPC listing) — no cancel signals exist
+    there, so only the wall clock stops the walk.
     """
 
-    def __init__(self, context: ToolContext, timeout_seconds: float | None = None) -> None:
+    def __init__(self, context: ToolContext | None, timeout_seconds: float | None = None) -> None:
         # Resolved at call time (not import time) so tests can shrink the
         # module-level timeout via monkeypatch.
         if timeout_seconds is None:
@@ -53,12 +57,13 @@ class SearchBudget:
 
     def keep_going(self) -> bool:
         """Poll all stop conditions; record and return False on the first hit."""
-        if self._context.was_cancelled_by_user():
-            self.cancelled_by_user = True
-            return False
-        if self._context.is_cancelled():
-            self.run_cancelled = True
-            return False
+        if self._context is not None:
+            if self._context.was_cancelled_by_user():
+                self.cancelled_by_user = True
+                return False
+            if self._context.is_cancelled():
+                self.run_cancelled = True
+                return False
         if time.monotonic() > self._deadline:
             self.timed_out = True
             return False

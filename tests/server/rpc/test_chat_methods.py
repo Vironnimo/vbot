@@ -22,9 +22,11 @@ import pytest
 
 from core.automation.reflection import REFLECTION_COUNTERS_META_KEY, ReflectionService
 from core.chat import ChatMessage, CommandAction
+from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.projects import AgentResolutionError, format_agent_address
 from core.runs import ActiveRunError
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SESSION_MOVE_STRIP_META_KEYS
+from core.tools.file_state import FileReadState
 from server.events import ServerEventBus
 from server.rpc.chat_methods import (
     _chat_queue_remove,
@@ -111,6 +113,61 @@ async def test_send_qualified_agent_runs_project_scoped(
 
     assert loop.start_calls[0]["agent_id"] == "builder"
     assert loop.start_calls[0]["project_id"] == "vbot"
+
+
+@pytest.mark.asyncio
+async def test_send_expands_file_mentions_into_snapshot_blocks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    # An @-mentioned file is snapshotted before the loop sees the content: the
+    # string message becomes blocks (original text first, then the snapshot),
+    # and the file is stamped as read for the session.
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "notes.md").write_text("snapshot body", encoding="utf-8")
+    file_state = FileReadState()
+    loop = _RecordingLoop()
+    state = _make_state(loop)
+    state.runtime = SimpleNamespace(
+        projects=SimpleNamespace(get=lambda project_id: SimpleNamespace(cwd="")),
+        agent_resolver=SimpleNamespace(
+            resolve_agent=lambda project_id, agent_id: SimpleNamespace(workspace=str(workspace))
+        ),
+        storage=SimpleNamespace(data_dir=str(tmp_path)),
+        file_read_state=file_state,
+    )
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    await _send_chat(
+        state,
+        {
+            "agent_id": "builder",
+            "session_id": "s1",
+            "content": "look at @notes.md",
+            "file_mentions": ["notes.md"],
+        },
+    )
+
+    content = loop.start_calls[0]["content"]
+    assert isinstance(content, list)
+    assert content[0] == TextBlock(type="text", text="look at @notes.md")
+    assert isinstance(content[1], FileMentionBlock)
+    assert content[1].status == "inlined"
+    assert content[1].text == "snapshot body"
+    assert file_state.check_stale("s1", (workspace / "notes.md").resolve()) is None
+
+
+@pytest.mark.asyncio
+async def test_send_without_file_mentions_keeps_string_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop = _RecordingLoop()
+    state = _make_state(loop)
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    await _send_chat(state, {"agent_id": "builder", "session_id": "s1", "content": "hi"})
+
+    assert loop.start_calls[0]["content"] == "hi"
 
 
 @pytest.mark.asyncio
@@ -848,13 +905,14 @@ def test_queue_remove_publishes_queue_resource_changed() -> None:
     ]
 
 
-def test_queue_update_scopes_on_resolved_session_id() -> None:
+@pytest.mark.asyncio
+async def test_queue_update_scopes_on_resolved_session_id() -> None:
     # build_queue_update resolves the target session, which can differ from the
     # raw input; the queue signal must be scoped on the resolved id, not the input.
     loop = _QueueOnBusyLoop(resolved_session_id="resolved-s1")
     state = _make_queue_state(loop)
 
-    _chat_queue_update(
+    await _chat_queue_update(
         state,
         {"agent_id": "builder", "session_id": "s1", "item_id": "q-1", "content": "edit"},
     )
@@ -864,14 +922,15 @@ def test_queue_update_scopes_on_resolved_session_id() -> None:
     ]
 
 
-def test_queue_update_rebuilds_against_address_project() -> None:
+@pytest.mark.asyncio
+async def test_queue_update_rebuilds_against_address_project() -> None:
     # The queue key carries the project anchor, so the edit's params name it in the
     # agent address. The rebuild must run against that same anchor; without this, a
     # project session is looked up in the identity anchor and fails.
     loop = _QueueOnBusyLoop()
     state = _make_queue_state(loop)
 
-    _chat_queue_update(
+    await _chat_queue_update(
         state,
         {"agent_id": "builder@vbot", "session_id": "s1", "item_id": "q-1", "content": "edit"},
     )
@@ -881,12 +940,13 @@ def test_queue_update_rebuilds_against_address_project() -> None:
     assert state.chat_runs.list_project_ids[-1] == "vbot"
 
 
-def test_queue_update_identity_item_rebuilds_without_project() -> None:
+@pytest.mark.asyncio
+async def test_queue_update_identity_item_rebuilds_without_project() -> None:
     # A bare identity address keeps the rebuild and the queue key project-less.
     loop = _QueueOnBusyLoop()
     state = _make_queue_state(loop)
 
-    _chat_queue_update(
+    await _chat_queue_update(
         state,
         {"agent_id": "builder", "session_id": "s1", "item_id": "q-1", "content": "edit"},
     )

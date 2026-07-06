@@ -192,6 +192,32 @@ export const isFileContentBlock = (block) =>
   block.type === 'file' &&
   trimmedString(block.attachment_id) !== '';
 
+export const isFileMentionContentBlock = (block) =>
+  isPlainObject(block) &&
+  block.type === 'file_mention' &&
+  trimmedString(block.path) !== '';
+
+// Status hint for a degraded mention snapshot; an inlined one needs none —
+// the chip itself says the file rode along.
+export const fileMentionStatusLabel = (block) => {
+  if (block?.status === 'too_large') {
+    return t(
+      'chat.fileMention.tooLarge',
+      'too large to attach — referenced by path',
+    );
+  }
+  if (block?.status === 'not_text') {
+    return t(
+      'chat.fileMention.notText',
+      'not a text file — referenced by path',
+    );
+  }
+  if (block?.status === 'missing') {
+    return t('chat.fileMention.missing', 'file was not found at send time');
+  }
+  return '';
+};
+
 export const attachmentUrlForBlock = (block) =>
   attachmentUrlForId(block?.attachment_id);
 
@@ -954,7 +980,8 @@ function isRenderableUserContentBlock(block) {
   return (
     isTextContentBlock(block) ||
     isMediaContentBlock(block) ||
-    isFileContentBlock(block)
+    isFileContentBlock(block) ||
+    isFileMentionContentBlock(block)
   );
 }
 

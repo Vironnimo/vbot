@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 from core.attachments import AttachmentStore
 from core.chat.errors import ChatError
+from core.chat.file_mentions import file_mention_request_text
 from core.model_tasks import SpeechError
 from core.utils.logging import get_logger
 
@@ -126,6 +127,10 @@ class ContentBlockResolver:
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
             )
+        if block_type == "file_mention":
+            # A durable send-time snapshot: rendered the same on every turn, so
+            # replayed history stays byte-identical (prompt-cache friendly).
+            return [{"type": "text", "text": file_mention_request_text(block)}]
         raise ChatError(f"unsupported content block type: {block_type}")
 
     async def _resolve_media_block(

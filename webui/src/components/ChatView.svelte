@@ -17,6 +17,10 @@
     mergeBoundedEntries,
     subAgentGuardKeysForEvictedStatuses,
   } from '$lib/clientCaches.js';
+  import {
+    extractMentionTokens,
+    matchMentionCandidates,
+  } from '$lib/fileMentions.js';
   import { t } from '$lib/i18n.js';
   import {
     resolveSubAgentCancelPlan,
@@ -1841,6 +1845,17 @@
     await sendStream(agent, sessionState, content, options);
   };
 
+  // File list for the composer's @-mention picker: the active session's cwd
+  // decides the tree (project repo or agent workspace), so the address is all
+  // the server needs. Fetched per picker open; the composer filters locally.
+  const handleListFiles = async () => {
+    const sessionState = activeSessionState;
+    if (!sessionState?.agentId) {
+      return { files: [], truncated: false };
+    }
+    return await rpc('files.list', { agent_id: sessionState.agentId });
+  };
+
   const handleTranscriptionError = (message) => {
     actionError = message;
   };
@@ -1871,6 +1886,12 @@
       };
       if (options.inputOrigin) {
         params.input_origin = options.inputOrigin;
+      }
+      if (
+        Array.isArray(options.fileMentions) &&
+        options.fileMentions.length > 0
+      ) {
+        params.file_mentions = options.fileMentions;
       }
       const run = await rpc('chat.stream', params);
       if (run?.command_handled) {
@@ -2122,15 +2143,37 @@
     try {
       // `chat.queue_update` parses an agent address (trap 2): the session's
       // stored `agentId` is already the right spelling for both worlds.
+      // The edit replaces the queued content wholesale, so @-mentions in the
+      // edited text are re-collected against a fresh file list and the server
+      // re-snapshots them at edit time.
       await updateQueueItem(
         sessionState.agentId,
         sessionState.sessionId,
         queuedMessageId,
         newContent,
+        { fileMentions: await collectQueueEditFileMentions(newContent) },
       );
       updateQueuedMessageContent(sessionState, queuedMessageId, newContent);
     } catch (error) {
       actionError = `${t('queue.editError', 'Queued message could not be edited.')} ${error.message}`;
+    }
+  };
+
+  const collectQueueEditFileMentions = async (text) => {
+    const tokens = extractMentionTokens(typeof text === 'string' ? text : '');
+    if (tokens.length === 0) {
+      return [];
+    }
+    try {
+      const result = await handleListFiles();
+      return matchMentionCandidates(
+        tokens,
+        Array.isArray(result?.files) ? result.files : [],
+      );
+    } catch {
+      // Without a file list nothing can be verified as a mention; the edit
+      // still goes through as plain text.
+      return [];
     }
   };
 
@@ -2395,6 +2438,7 @@
               onSendMessage={handleSendMessage}
               onCancelRun={handleCancelRun}
               onTranscriptionError={handleTranscriptionError}
+              onListFiles={handleListFiles}
             />
           </div>
         </div>

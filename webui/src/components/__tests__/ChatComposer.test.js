@@ -857,6 +857,90 @@ describe('ChatComposer', () => {
     expect(stopButton).toBeTruthy();
     expect(stopButton.disabled).toBe(true);
   });
+
+  it('opens the file picker on @ and inserts the chosen path', async () => {
+    const onListFiles = vi.fn().mockResolvedValue({
+      files: ['docs/guide.md', 'src/session_search.py'],
+      truncated: false,
+    });
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onListFiles },
+    });
+    flushSync();
+
+    const input = composerInput();
+    typeInComposer(input, 'look at @search');
+    await flushComposerAsyncWork();
+
+    expect(onListFiles).toHaveBeenCalledTimes(1);
+    const options = Array.from(
+      document.body.querySelectorAll('.file-autocomplete__option'),
+    );
+    expect(options.length).toBe(1);
+    expect(options[0].textContent).toContain('session_search.py');
+
+    options[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushComposerAsyncWork();
+
+    expect(input.value).toBe('look at @src/session_search.py ');
+  });
+
+  it('does not open the file picker inside an email address', async () => {
+    const onListFiles = vi.fn().mockResolvedValue({ files: ['a.txt'] });
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onListFiles },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), 'mail user@example');
+    await flushComposerAsyncWork();
+
+    expect(onListFiles).not.toHaveBeenCalled();
+    expect(document.body.querySelector('.file-autocomplete')).toBeNull();
+  });
+
+  it('sends verified @-mentions as fileMentions with the message', async () => {
+    const onSendMessage = vi.fn();
+    const onListFiles = vi.fn().mockResolvedValue({
+      files: ['notes.md'],
+      truncated: false,
+    });
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage, onListFiles },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), 'check @notes.md and @nofile.txt');
+    submitComposer();
+    await flushComposerAsyncWork();
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      'check @notes.md and @nofile.txt',
+      { fileMentions: ['notes.md'] },
+    );
+    expect(composerInput().value).toBe('');
+  });
+
+  it('sends without options when no @-token is a real file', async () => {
+    const onSendMessage = vi.fn();
+    const onListFiles = vi.fn().mockResolvedValue({ files: [] });
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage, onListFiles },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), 'ping @nobody');
+    submitComposer();
+    await flushComposerAsyncWork();
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).toHaveBeenCalledWith('ping @nobody');
+  });
 });
 
 function typeInComposer(input, value, caret = value.length) {

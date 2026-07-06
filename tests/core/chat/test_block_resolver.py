@@ -151,6 +151,72 @@ def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> No
     }
 
 
+def test_file_mention_block_resolves_to_snapshot_text(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    resolver = ContentBlockResolver(store)
+    messages = [
+        {
+            "id": "user-current",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look at @src/app.py"},
+                {
+                    "type": "file_mention",
+                    "path": "src/app.py",
+                    "status": "inlined",
+                    "text": "value = 1\n",
+                    "size_bytes": 10,
+                },
+            ],
+        }
+    ]
+
+    # Act
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_ONLY,
+    )
+
+    # Assert — the snapshot renders as plain text with origin framing + content.
+    mention_text = resolved[0]["content"][1]
+    assert mention_text["type"] == "text"
+    assert "@src/app.py" in mention_text["text"]
+    assert mention_text["text"].endswith("value = 1\n")
+
+
+def test_file_mention_block_resolves_identically_on_historical_turns(tmp_path: Path) -> None:
+    # The snapshot is durable: replayed history must render byte-identically to
+    # the current turn (prompt-cache invariant), unlike media attachments.
+    store = AttachmentStore(tmp_path)
+    resolver = ContentBlockResolver(store)
+    block = {
+        "type": "file_mention",
+        "path": "notes.md",
+        "status": "too_large",
+        "text": None,
+        "size_bytes": 999_999,
+    }
+    message = {"id": "user-old", "role": "user", "content": [block]}
+
+    current = _resolve(
+        resolver,
+        [dict(message)],
+        current_user_message_id="user-old",
+        input_modalities=TEXT_ONLY,
+    )
+    historical = _resolve(
+        resolver,
+        [dict(message)],
+        current_user_message_id="another-turn",
+        input_modalities=TEXT_ONLY,
+    )
+
+    assert current[0]["content"] == historical[0]["content"]
+
+
 def test_historical_turn_image_resolves_to_placeholder_text(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
