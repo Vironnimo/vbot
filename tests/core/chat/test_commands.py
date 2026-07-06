@@ -236,7 +236,9 @@ async def test_dispatch_stop_with_active_run_returns_cancelled_reply() -> None:
         run.raise_if_cancelled()
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await started.wait()
 
     dispatcher = CommandDispatcher(manager)
@@ -739,7 +741,9 @@ async def test_recognizes_does_not_execute_command_side_effects() -> None:
         run.raise_if_cancelled()
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await started.wait()
 
     dispatcher = CommandDispatcher(manager)
@@ -822,7 +826,9 @@ async def test_dispatch_status_reports_active_run_timestamps() -> None:
         await release.wait()
         return "done"
 
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
     await started.wait()
     dispatcher = CommandDispatcher(
         manager,

@@ -497,10 +497,10 @@
   }
 
   // A session state's `agentId` is the agent's outside spelling: a bare id for
-  // an identity session, `agent@projekt` for a project-agent session. The
-  // queue/cancel-tool RPCs key on the BARE id (trap 2), so strip any `@projekt`
-  // suffix. An identity id has no `@`, so this returns it unchanged — the
-  // identity path is byte-identical.
+  // an identity session, `agent@projekt` for a project-agent session. Server
+  // push events (`queue` resource scope) carry the BARE id, so strip any
+  // `@projekt` suffix for scope matching. An identity id has no `@`, so this
+  // returns it unchanged.
   function bareIdFromSessionAgentId(sessionAgentId) {
     const value = typeof sessionAgentId === 'string' ? sessionAgentId : '';
     const separatorIndex = value.indexOf('@');
@@ -973,15 +973,19 @@
   };
 
   // Whether a queued sub-agent spawn's queue item is still pending in the
-  // child session's queue. `chat.queue_list` keys on the BARE agent id
-  // (trap 2), which the descriptor's agent_id already is; a sub-agent spawn's
+  // child session's queue. `chat.queue_list` parses an agent address (trap 2):
+  // a project run's child is queued under the same project anchor, so the bare
+  // descriptor id is qualified with the displayed project; a sub-agent spawn's
   // queue item is public, so the list contains it.
   const queuedSubAgentStillPending = async (
     agentId,
     sessionId,
     queueItemId,
   ) => {
-    const result = await listQueue(agentId, sessionId);
+    const result = await listQueue(
+      qualifiedChildAgentAddress(agentId),
+      sessionId,
+    );
     const items = Array.isArray(result?.items) ? result.items : [];
     return items.some((item) => item?.id === queueItemId);
   };
@@ -1048,10 +1052,10 @@
       return;
     }
     try {
-      // `chat.queue_list` keys the run/queue on the BARE agent id (trap 2), so
-      // strip any `@projekt` from the session's stored address.
+      // `chat.queue_list` parses an agent address (trap 2): the session's
+      // stored `agentId` is already the right spelling for both worlds.
       const result = await listQueue(
-        bareIdFromSessionAgentId(sessionState.agentId),
+        sessionState.agentId,
         sessionState.sessionId,
       );
       syncQueueFromServer(sessionState, result?.items ?? []);
@@ -1986,9 +1990,14 @@
         return;
       }
       try {
-        // `chat.queue_remove` keys on the BARE agent id (trap 2), which the
-        // descriptor's agent_id already is.
-        await removeFromQueue(plan.agentId, plan.sessionId, plan.queueItemId);
+        // `chat.queue_remove` parses an agent address (trap 2): qualify the
+        // descriptor's bare agent_id with the displayed project — a project
+        // run's child is queued under the same project anchor.
+        await removeFromQueue(
+          qualifiedChildAgentAddress(plan.agentId),
+          plan.sessionId,
+          plan.queueItemId,
+        );
         // Nothing will ever report this never-started child (no run, no
         // summary), so settle the row's run-id-less session key here.
         applySubAgentRunStatusUpdates({
@@ -2089,9 +2098,10 @@
 
     actionError = '';
     try {
-      // `chat.queue_remove` keys on the BARE agent id (trap 2).
+      // `chat.queue_remove` parses an agent address (trap 2): the session's
+      // stored `agentId` is already the right spelling for both worlds.
       await removeFromQueue(
-        bareIdFromSessionAgentId(sessionState.agentId),
+        sessionState.agentId,
         sessionState.sessionId,
         queuedMessageId,
       );
@@ -2110,9 +2120,10 @@
 
     actionError = '';
     try {
-      // `chat.queue_update` keys on the BARE agent id (trap 2).
+      // `chat.queue_update` parses an agent address (trap 2): the session's
+      // stored `agentId` is already the right spelling for both worlds.
       await updateQueueItem(
-        bareIdFromSessionAgentId(sessionState.agentId),
+        sessionState.agentId,
         sessionState.sessionId,
         queuedMessageId,
         newContent,

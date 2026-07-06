@@ -143,7 +143,10 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
             ]
             if not remaining_agents:
                 raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent")
-            if _state_chat_runs(state).has_activity_for_agent(agent_id):
+            # Identity scope only: identity runs always carry ``project_id=None``,
+            # and a same-named project team agent's activity must not block
+            # deleting this unrelated identity agent.
+            if _state_chat_runs(state).has_activity_for_agent(agent_id, project_id=None):
                 raise RpcError(
                     RPC_ERROR_AGENT_BUSY,
                     f"cannot delete agent with active or queued runs: {agent_id}",
@@ -219,7 +222,9 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
         # One resolver seam validates both agent sources, exactly like
         # session.create, so an unknown agent fails before any file work.
         state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
-        if _state_chat_runs(state).has_activity_for_session(agent_id, session_id):
+        if _state_chat_runs(state).has_activity_for_session(
+            agent_id, session_id, project_id=project_id
+        ):
             raise RpcError(
                 RPC_ERROR_SESSION_BUSY,
                 f"cannot delete session with an active or queued run: {session_id}",

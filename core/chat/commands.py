@@ -523,7 +523,7 @@ class CommandDispatcher:
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandHandled:
         try:
-            self._chat_runs.cancel_by_session(agent_id, session_id)
+            self._chat_runs.cancel_by_session(agent_id, session_id, project_id=project_id)
         except RunNotFoundError:
             return CommandHandled(reply="No active run to cancel.", output="toast")
         return CommandHandled(reply="Run cancelled.", output="toast")
@@ -589,7 +589,7 @@ class CommandDispatcher:
             messages = []
 
         model_details = resolve_status_model_details(agent, self._models, self._providers)
-        activity = resolve_status_activity(self._chat_runs, agent_id, session_id)
+        activity = resolve_status_activity(self._chat_runs, agent_id, session_id, project_id)
         text = build_status_reply(
             agent,
             messages,
@@ -849,9 +849,10 @@ def resolve_status_activity(
     chat_runs: ChatRunManager,
     agent_id: str,
     session_id: str,
+    project_id: str | None,
 ) -> StatusActivity:
-    """Return running/idle activity for one Session."""
-    run = chat_runs.active_run(agent_id=agent_id, session_id=session_id)
+    """Return running/idle activity for one Session (project-scoped run key)."""
+    run = chat_runs.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
     if run is None:
         return StatusActivity(
             activity="idle",

@@ -88,16 +88,20 @@ class QueueManagerStub:
         self._items = list(items or [])
         self._remove_result = remove_result
         self._update_result = update_result
-        self.list_calls: list[tuple[str, str]] = []
-        self.remove_calls: list[tuple[str, str, str]] = []
-        self.update_calls: list[tuple[str, str, str, Any, str]] = []
+        self.list_calls: list[tuple[str, str, str | None]] = []
+        self.remove_calls: list[tuple[str, str, str, str | None]] = []
+        self.update_calls: list[tuple[str, str, str, Any, str, str | None]] = []
 
-    def list_queued(self, agent_id: str, session_id: str) -> list[QueuedRunItem]:
-        self.list_calls.append((agent_id, session_id))
+    def list_queued(
+        self, agent_id: str, session_id: str, *, project_id: str | None
+    ) -> list[QueuedRunItem]:
+        self.list_calls.append((agent_id, session_id, project_id))
         return list(self._items)
 
-    def remove_queued(self, agent_id: str, session_id: str, item_id: str) -> bool:
-        self.remove_calls.append((agent_id, session_id, item_id))
+    def remove_queued(
+        self, agent_id: str, session_id: str, item_id: str, *, project_id: str | None
+    ) -> bool:
+        self.remove_calls.append((agent_id, session_id, item_id, project_id))
         return self._remove_result
 
     def update_queued(
@@ -107,8 +111,12 @@ class QueueManagerStub:
         item_id: str,
         new_executor: Any,
         new_display_content: str,
+        *,
+        project_id: str | None,
     ) -> bool:
-        self.update_calls.append((agent_id, session_id, item_id, new_executor, new_display_content))
+        self.update_calls.append(
+            (agent_id, session_id, item_id, new_executor, new_display_content, project_id)
+        )
         return self._update_result
 
 
@@ -594,7 +602,7 @@ async def test_chat_queue_list_returns_queued_items(monkeypatch: pytest.MonkeyPa
             "items": [queued_item.to_dict()],
         },
     }
-    assert queue_manager.list_calls == [("agent-1", "session-1")]
+    assert queue_manager.list_calls == [("agent-1", "session-1", None)]
 
 
 @pytest.mark.asyncio
@@ -621,7 +629,7 @@ async def test_chat_queue_list_hides_internal_items(monkeypatch: pytest.MonkeyPa
             "items": [public_item.to_dict()],
         },
     }
-    assert queue_manager.list_calls == [("agent-1", "session-1")]
+    assert queue_manager.list_calls == [("agent-1", "session-1", None)]
 
 
 @pytest.mark.asyncio
@@ -650,8 +658,8 @@ async def test_chat_queue_remove_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
             "ok": True,
         },
     }
-    assert queue_manager.list_calls == [("agent-1", "session-1")]
-    assert queue_manager.remove_calls == [("agent-1", "session-1", "queue-1")]
+    assert queue_manager.list_calls == [("agent-1", "session-1", None)]
+    assert queue_manager.remove_calls == [("agent-1", "session-1", "queue-1", None)]
 
 
 @pytest.mark.asyncio
@@ -678,7 +686,7 @@ async def test_chat_queue_remove_returns_error_for_unknown_item(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "queue_item_not_found"
-    assert queue_manager.list_calls == [("agent-1", "session-1")]
+    assert queue_manager.list_calls == [("agent-1", "session-1", None)]
     assert queue_manager.remove_calls == []
 
 
@@ -706,7 +714,7 @@ async def test_chat_queue_remove_returns_not_found_for_internal_item(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "queue_item_not_found"
-    assert queue_manager.list_calls == [("agent-1", "session-1")]
+    assert queue_manager.list_calls == [("agent-1", "session-1", None)]
     assert queue_manager.remove_calls == []
 
 
@@ -762,7 +770,7 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
             "ok": True,
         },
     }
-    assert queue_manager.list_calls == [("agent-1", "session-1")]
+    assert queue_manager.list_calls == [("agent-1", "session-1", None)]
     assert captured == {
         "agent_id": "agent-1",
         "session_id": "session-1",
@@ -771,7 +779,7 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         "project_id": None,
     }
     assert queue_manager.update_calls == [
-        ("agent-1", "session-1", "queue-1", fake_executor, "Updated queued message")
+        ("agent-1", "session-1", "queue-1", fake_executor, "Updated queued message", None)
     ]
 
 
@@ -809,6 +817,6 @@ async def test_chat_queue_update_returns_not_found_for_internal_item(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "queue_item_not_found"
-    assert queue_manager.list_calls == [("agent-1", "session-1")]
+    assert queue_manager.list_calls == [("agent-1", "session-1", None)]
     assert build_called is False
     assert queue_manager.update_calls == []

@@ -762,30 +762,38 @@ class _QueueOnBusyLoop:
 
 
 class _FakeQueueRuns:
-    """Minimal ChatRunManager stand-in for the queue remove/update handlers."""
+    """Minimal ChatRunManager stand-in for the queue remove/update handlers.
 
-    def __init__(self, project_id: str | None = None) -> None:
-        # The queued item carries the project anchor it was enqueued under, exactly
-        # like the real QueuedRunItem, so the update handler can rebuild against it.
-        self._project_id = project_id
+    The queue key carries the project anchor, so the fake records the
+    ``project_id`` each call was scoped with (the handlers parse it from the
+    agent address).
+    """
 
-    def list_queued(self, agent_id: str, session_id: str) -> list[Any]:
-        return [SimpleNamespace(item_id="q-1", internal=False, project_id=self._project_id)]
+    def __init__(self) -> None:
+        self.list_project_ids: list[str | None] = []
+        self.update_project_ids: list[str | None] = []
 
-    def remove_queued(self, agent_id: str, session_id: str, item_id: str) -> bool:
+    def list_queued(self, agent_id: str, session_id: str, *, project_id: str | None) -> list[Any]:
+        self.list_project_ids.append(project_id)
+        return [SimpleNamespace(item_id="q-1", internal=False)]
+
+    def remove_queued(
+        self, agent_id: str, session_id: str, item_id: str, *, project_id: str | None
+    ) -> bool:
         return True
 
     def update_queued(self, *args: Any, **kwargs: Any) -> bool:
+        self.update_project_ids.append(kwargs.get("project_id"))
         return True
 
 
-def _make_queue_state(loop: Any, *, queue_project_id: str | None = None) -> SimpleNamespace:
+def _make_queue_state(loop: Any) -> SimpleNamespace:
     return SimpleNamespace(
         chat_loop=loop,
         streaming_chat_loop=loop,
         runtime=SimpleNamespace(),
         event_bus=ServerEventBus(),
-        chat_runs=_FakeQueueRuns(queue_project_id),
+        chat_runs=_FakeQueueRuns(),
         command_dispatcher=_NoCommandDispatcher(),
     )
 
@@ -856,25 +864,27 @@ def test_queue_update_scopes_on_resolved_session_id() -> None:
     ]
 
 
-def test_queue_update_rebuilds_against_queued_item_project() -> None:
-    # A project session's queued item carries its own project_id. The queue is keyed on the
-    # bare agent id, so the edit's params carry no project — the rebuild must take it from the
-    # item. Without this, the project session is looked up in the identity anchor and fails.
+def test_queue_update_rebuilds_against_address_project() -> None:
+    # The queue key carries the project anchor, so the edit's params name it in the
+    # agent address. The rebuild must run against that same anchor; without this, a
+    # project session is looked up in the identity anchor and fails.
     loop = _QueueOnBusyLoop()
-    state = _make_queue_state(loop, queue_project_id="vbot")
+    state = _make_queue_state(loop)
 
     _chat_queue_update(
         state,
-        {"agent_id": "builder", "session_id": "s1", "item_id": "q-1", "content": "edit"},
+        {"agent_id": "builder@vbot", "session_id": "s1", "item_id": "q-1", "content": "edit"},
     )
 
     assert loop.build_calls[-1]["project_id"] == "vbot"
+    assert state.chat_runs.update_project_ids[-1] == "vbot"
+    assert state.chat_runs.list_project_ids[-1] == "vbot"
 
 
 def test_queue_update_identity_item_rebuilds_without_project() -> None:
-    # An identity-session item has project_id=None, so the rebuild stays project-less.
+    # A bare identity address keeps the rebuild and the queue key project-less.
     loop = _QueueOnBusyLoop()
-    state = _make_queue_state(loop, queue_project_id=None)
+    state = _make_queue_state(loop)
 
     _chat_queue_update(
         state,
@@ -882,6 +892,7 @@ def test_queue_update_identity_item_rebuilds_without_project() -> None:
     )
 
     assert loop.build_calls[-1]["project_id"] is None
+    assert state.chat_runs.update_project_ids[-1] is None
 
 
 # ---------------------------------------------------------------------------
@@ -970,10 +981,10 @@ class _FakeMoveRuns:
         self._active = active
         self._queued = queued or []
 
-    def active_run(self, *, agent_id: str, session_id: str) -> Any:
+    def active_run(self, *, agent_id: str, session_id: str, project_id: str | None) -> Any:
         return self._active
 
-    def list_queued(self, agent_id: str, session_id: str) -> list[Any]:
+    def list_queued(self, agent_id: str, session_id: str, *, project_id: str | None) -> list[Any]:
         return list(self._queued)
 
 

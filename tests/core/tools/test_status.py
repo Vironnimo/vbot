@@ -287,9 +287,7 @@ async def test_status_tool_reports_running_target_session(tmp_path: Path) -> Non
         return "done"
 
     run = await chat_runs.start(
-        agent_id="reviewer",
-        session_id="session-two",
-        executor=execute,
+        agent_id="reviewer", session_id="session-two", executor=execute, project_id=None
     )
     await started.wait()
     registry = ToolRegistry()
