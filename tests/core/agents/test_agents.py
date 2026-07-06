@@ -708,12 +708,35 @@ def test_delete_archives_agent_data_and_workspace(store: AgentStore) -> None:
 
     archive_dir = store.delete("coder")
 
-    assert archive_dir == store.data_dir / "archive" / "coder"
+    assert archive_dir == store.data_dir / "archive" / "agents" / "coder"
     assert not (store.data_dir / "agents" / "coder").exists()
     assert not Path(agent.workspace).exists()
     assert (archive_dir / "agent" / "agent.json").exists()
     assert (archive_dir / "agent" / "sessions" / "session.jsonl").exists()
     assert (archive_dir / "workspace" / "SOUL.md").exists()
+
+
+def test_delete_agent_named_like_sibling_archive_roots_never_touches_them(
+    store: AgentStore,
+) -> None:
+    # ``archive/sessions`` and ``archive/projects`` are the session/project archive
+    # roots. An agent id equal to those names must archive under the agents subtree
+    # instead of replace-deleting the sibling roots wholesale.
+    archived_session = store.data_dir / "archive" / "sessions" / "agents" / "other" / "s1.jsonl"
+    archived_session.parent.mkdir(parents=True)
+    archived_session.write_text('{"role":"user"}\n', encoding="utf-8")
+    archived_project = store.data_dir / "archive" / "projects" / "vbot" / "project.json"
+    archived_project.parent.mkdir(parents=True)
+    archived_project.write_text("{}\n", encoding="utf-8")
+
+    for reserved_like_id in ("sessions", "projects"):
+        store.create(reserved_like_id, f"Agent {reserved_like_id}")
+        archive_dir = store.delete(reserved_like_id)
+        assert archive_dir == store.data_dir / "archive" / "agents" / reserved_like_id
+        assert (archive_dir / "agent" / "agent.json").exists()
+
+    assert archived_session.exists()
+    assert archived_project.exists()
 
 
 def test_delete_missing_agent_raises_not_found(store: AgentStore) -> None:
