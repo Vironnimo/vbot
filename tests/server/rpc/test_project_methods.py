@@ -65,14 +65,21 @@ class _FakeProviderConfig:
     connections: list[_FakeConnection]
 
 
+class _FakeCatalogModel:
+    """Catalog-model stub with no connection allowlist (every connection allowed)."""
+
+    def allows_connection(self, connection_id: str) -> bool:
+        return True
+
+
 class _FakeModels:
     def __init__(self, known: set[tuple[str, str]]) -> None:
         self._known = known
 
-    def get(self, provider_id: str, model_id: str) -> object:
+    def get(self, provider_id: str, model_id: str) -> _FakeCatalogModel:
         if (provider_id, model_id) not in self._known:
             raise KeyError(f"{provider_id}/{model_id}")
-        return object()
+        return _FakeCatalogModel()
 
 
 class _FakeProviders:
