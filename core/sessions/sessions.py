@@ -73,6 +73,12 @@ SESSION_MOVE_STRIP_META_KEYS = SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS | frozen
     {"visited_projects"}
 )
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
+# The ``skill`` tool's message name and its fresh-activation status, matched as
+# literals when scanning tool-result carriers (same rationale as the strip-key
+# literals above: importing the tool module here would cycle through core/tools
+# into the skills domain). Drift is guarded by tests against the tool's constants.
+SKILL_TOOL_MESSAGE_NAME = "skill"
+SKILL_TOOL_LOADED_STATUS = "loaded"
 PARTIAL_THINKING_NOTE_PREFIX = "[partial-thinking] "
 CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
 SKILL_AVAILABLE_NOTE_PREFIX = "[skill-available] "
@@ -154,23 +160,28 @@ class ChatSession:
         self._pending_notes.clear()
         return notes
 
-    def activate_skill_context(self, name: str, data: JsonObject) -> JsonObject:
-        """Store skill context once per session and return a result envelope."""
-        from core.tools.tools import tool_success
+    def register_skill_activation(self, name: str, content: str) -> bool:
+        """Record a skill activation; return ``False`` when it was already active.
 
+        Dedup seam for the ``skill`` tool: the tool result itself is the durable
+        content carrier, so nothing is persisted here. The in-memory record keeps
+        ``activated_skill_contents`` complete for same-process consumers (the
+        post-compaction rebuild) before the tool message reaches the file.
+        """
         activated_contents = self._load_activated_skill_contents()
         if name in activated_contents:
-            return tool_success(
-                {
-                    "content": (
-                        f"Skill '{name}' was already activated in this session. "
-                        "Skipping re-activation."
-                    ),
-                    "resources": [],
-                    "already_active": True,
-                }
-            )
+            return False
+        self._activated_skill_names.add(name)
+        self._activated_skill_contents[name] = content
+        return True
 
+    def activate_skill_context(self, name: str, data: JsonObject) -> bool:
+        """Persist a user-triggered skill activation; ``False`` when already active.
+
+        The trigger path's carrier: a ``[skill-context] `` note appended at the
+        activation point (right after the triggering user message), rendered in
+        place as a ``<skill_content>`` context message at request build.
+        """
         content = data.get("content")
         resources = data.get("resources", [])
         if not isinstance(content, str):
@@ -178,24 +189,22 @@ class ChatSession:
         if not isinstance(resources, list):
             raise ChatSessionError("skill activation resources must be a list")
 
-        self._activated_skill_names.add(name)
-        self._activated_skill_contents[name] = content
+        if not self.register_skill_activation(name, content):
+            return False
         self._persist_skill_context_note(name, content)
-        return tool_success({"content": content, "resources": list(resources)})
+        return True
 
-    def skill_context_messages(
+    def activated_skill_contents(
         self,
         messages: list[ChatMessage] | None = None,
-    ) -> list[JsonObject]:
-        """Return currently activated skill context as provider request messages.
+    ) -> dict[str, str]:
+        """Return activated skill contents by name, in activation order.
 
-        Callers that already hold this session's loaded messages may pass them
-        to avoid a second full session read. Messages are ordered by activation
-        (persisted note order), matching the mid-run sync insertion order so the
-        request prefix stays byte-identical across the run boundary.
+        Scans both carriers — trigger notes and ``skill`` tool results. Callers
+        that already hold this session's loaded messages may pass them to avoid
+        a second full session read.
         """
-        activated_contents = self._load_activated_skill_contents(messages)
-        return [{"role": "user", "content": content} for content in activated_contents.values()]
+        return self._load_activated_skill_contents(messages)
 
     def _load_activated_skill_contents(
         self,
@@ -826,6 +835,18 @@ def skill_context_note_name(message: ChatMessage) -> str | None:
     that is not a skill-context note or whose payload is malformed or nameless, so
     a corrupt line is skipped rather than raising.
     """
+    payload = skill_context_note_payload(message)
+    return payload[0] if payload is not None else None
+
+
+def skill_context_note_payload(message: ChatMessage) -> tuple[str, str] | None:
+    """Return ``(name, content)`` from a skill-context note, or ``None``.
+
+    The single prefix/JSON parse for the trigger carrier: the request build uses
+    it to render the note in place as a ``<skill_content>`` context message.
+    Malformed or incomplete payloads yield ``None`` so a corrupt line is skipped
+    rather than raising.
+    """
     if not is_skill_context_note(message) or not isinstance(message.content, str):
         return None
     try:
@@ -835,7 +856,55 @@ def skill_context_note_name(message: ChatMessage) -> str | None:
     if not isinstance(payload, dict):
         return None
     name = payload.get("name")
-    return name if isinstance(name, str) and name else None
+    content = payload.get("content")
+    if isinstance(name, str) and name and isinstance(content, str):
+        return name, content
+    return None
+
+
+def skill_tool_activation(message: ChatMessage) -> tuple[str, str] | None:
+    """Return ``(name, content)`` from a loading ``skill`` tool result, or ``None``.
+
+    The tool carrier: a fresh ``skill`` tool activation persists the full skill
+    content inside its success envelope (``data.status == "loaded"``). Already-
+    active stubs, failures, list-mode results, and any malformed content yield
+    ``None``. The tool name and envelope fields are matched as literals here —
+    importing the tool module would pull the whole skills domain into sessions.
+    """
+    if message.role != "tool" or message.name != SKILL_TOOL_MESSAGE_NAME:
+        return None
+    if not isinstance(message.content, str):
+        return None
+    try:
+        envelope = json.loads(message.content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(envelope, dict) or envelope.get("ok") is not True:
+        return None
+    data = envelope.get("data")
+    if not isinstance(data, dict) or data.get("status") != SKILL_TOOL_LOADED_STATUS:
+        return None
+    name = data.get("name")
+    content = data.get("content")
+    if isinstance(name, str) and name and isinstance(content, str) and content:
+        return name, content
+    return None
+
+
+def skill_tool_activation_name(message: ChatMessage) -> str | None:
+    """Return the skill name from a loading ``skill`` tool result, or ``None``."""
+    activation = skill_tool_activation(message)
+    return activation[0] if activation is not None else None
+
+
+def skill_activation_names(messages: list[ChatMessage]) -> frozenset[str]:
+    """Return the names of every skill activation carried in *messages*.
+
+    Covers both carriers (trigger notes and ``skill`` tool results). The chat
+    loop uses it on the preserved compaction tail to avoid front-injecting a
+    skill whose carrier already survives verbatim.
+    """
+    return frozenset(_skill_contexts_from_messages(messages))
 
 
 def is_partial_thinking_note(message: ChatMessage) -> bool:
@@ -866,23 +935,12 @@ def is_skill_available_note(message: ChatMessage) -> bool:
 
 
 def _skill_contexts_from_messages(messages: list[ChatMessage]) -> dict[str, str]:
+    """Collect activated skill contents from both carriers, in activation order."""
     contexts: dict[str, str] = {}
     for message in messages:
-        if not is_skill_context_note(message):
-            continue
-        content = message.content
-        if not isinstance(content, str):
-            continue
-        try:
-            payload = json.loads(content.removeprefix(SKILL_CONTEXT_NOTE_PREFIX))
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        name = payload.get("name")
-        content = payload.get("content")
-        if isinstance(name, str) and isinstance(content, str):
-            contexts[name] = content
+        activation = skill_context_note_payload(message) or skill_tool_activation(message)
+        if activation is not None:
+            contexts.setdefault(activation[0], activation[1])
     return contexts
 
 

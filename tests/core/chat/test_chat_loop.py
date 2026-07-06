@@ -1825,8 +1825,10 @@ async def test_slash_skill_trigger_activates_before_provider_request(tmp_path: P
     await ChatLoop(runtime).send("coder", "/debugging fix this", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
-    assert request_messages[1]["content"].startswith('<skill_content name="debugging">')
-    assert request_messages[2]["content"] == "/debugging fix this"
+    # The skill content sits directly under the triggering user message — in
+    # place, not hoisted to the front of the request.
+    assert request_messages[1]["content"] == "/debugging fix this"
+    assert request_messages[2]["content"].startswith('<skill_content name="debugging">')
     request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
     assert "[skill-context]" not in request_text
     assert "<system-reminder>\n[skill-context]" not in request_text
@@ -1856,7 +1858,10 @@ async def test_skill_context_persists_across_later_sends_without_visible_user_me
     await ChatLoop(runtime).send("coder", "continue", session_id="session-one")
 
     second_request_messages = adapter.requests[1]["messages"]
-    assert second_request_messages[1]["content"].startswith('<skill_content name="debugging">')
+    # The activation note replays at its chronological position: right after the
+    # triggering user message, before the first assistant reply.
+    assert second_request_messages[1]["content"] == "/debugging fix this"
+    assert second_request_messages[2]["content"].startswith('<skill_content name="debugging">')
     assert second_request_messages[-1]["content"] == "continue"
     persisted_messages = runtime.chat_sessions.get("coder", "session-one").load()
     visible_messages = [message for message in persisted_messages if message.role != "note"]
@@ -1896,8 +1901,73 @@ async def test_inline_skill_trigger_preserves_original_message(tmp_path: Path) -
     )
 
     request_messages = adapter.requests[0]["messages"]
-    assert request_messages[1]["content"].startswith('<skill_content name="debugging">')
-    assert request_messages[2]["content"] == "Please use $debugging on this issue"
+    assert request_messages[1]["content"] == "Please use $debugging on this issue"
+    assert request_messages[2]["content"].startswith('<skill_content name="debugging">')
+
+
+def test_activated_skill_reinjected_ahead_of_compaction_summary(tmp_path: Path) -> None:
+    # A skill whose carrier was folded into the summarized region stays loaded:
+    # its content is re-injected ahead of the summary reminder in the rebuilt
+    # request instead of being lost with the summarized history.
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+
+    session.append(ChatMessage.user("Old question"))
+    session.activate_skill_context(
+        "debugging", {"content": '<skill_content name="debugging">Steps</skill_content>'}
+    )
+    session.append(ChatMessage.assistant(model=agent.model, content="Old answer"))
+    tail_user = ChatMessage.user("Tail question")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail answer"))
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Compacted historical context.",
+            tail_boundary_id=tail_user.id,
+            compacted_token_count=123,
+        )
+    )
+
+    request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
+
+    contents = [message.get("content", "") or "" for message in request_messages]
+    assert contents[1] == '<skill_content name="debugging">Steps</skill_content>'
+    assert contents[2] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
+    assert contents[3] == "Tail question"
+    assert sum("<skill_content" in content for content in contents) == 1
+
+
+def test_skill_carried_in_tail_not_duplicated_after_compaction(tmp_path: Path) -> None:
+    # A skill activated inside the preserved tail keeps its chronological carrier
+    # and must not additionally be re-injected ahead of the summary.
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+
+    session.append(ChatMessage.user("Old question"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Old answer"))
+    tail_user = ChatMessage.user("/debugging fix this")
+    session.append(tail_user)
+    session.activate_skill_context(
+        "debugging", {"content": '<skill_content name="debugging">Steps</skill_content>'}
+    )
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail answer"))
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Compacted historical context.",
+            tail_boundary_id=tail_user.id,
+            compacted_token_count=123,
+        )
+    )
+
+    request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
+
+    contents = [message.get("content", "") or "" for message in request_messages]
+    assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
+    assert contents[2] == "/debugging fix this"
+    assert contents[3] == '<skill_content name="debugging">Steps</skill_content>'
+    assert sum("<skill_content" in content for content in contents) == 1
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,11 @@ from core.sessions.sessions import (
     is_partial_thinking_note,
     is_skill_available_note,
     is_skill_context_note,
+    skill_activation_names,
     skill_context_note_name,
+    skill_context_note_payload,
+    skill_tool_activation,
+    skill_tool_activation_name,
 )
 
 __all__ = [
@@ -35,5 +39,9 @@ __all__ = [
     "is_partial_thinking_note",
     "is_skill_available_note",
     "is_skill_context_note",
+    "skill_activation_names",
     "skill_context_note_name",
+    "skill_context_note_payload",
+    "skill_tool_activation",
+    "skill_tool_activation_name",
 ]

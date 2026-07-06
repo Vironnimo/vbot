@@ -8,10 +8,17 @@ from typing import Any, Protocol, cast
 
 from core.chat.chat import ChatMessage
 from core.chat.content_blocks import content_block_to_dict
+from core.sessions import skill_context_note_name
 from core.utils.errors import VBotError
 from core.utils.tokens import estimate_message_tokens
 
 TOOL_RESULT_CONTENT_PLACEHOLDER = "[tool result content omitted during compaction]"
+# Skill instructions are standing context, not conversation to summarize: the
+# chat loop re-injects activated skills into the rebuilt request after a
+# checkpoint, so the summary prompt only needs the activation fact, never the
+# skill body. (A skill loaded via the ``skill`` tool is already covered by the
+# generic tool-result placeholder above.)
+SKILL_ACTIVATION_CONTENT_PLACEHOLDER = "[skill '{name}' activated - content omitted]"
 
 
 @dataclass(frozen=True)
@@ -311,6 +318,10 @@ def _render_message_entry(message: ChatMessage) -> str:
 def _render_message_content(message: ChatMessage) -> str | None:
     if message.role == "tool":
         return TOOL_RESULT_CONTENT_PLACEHOLDER
+
+    skill_name = skill_context_note_name(message)
+    if skill_name is not None:
+        return SKILL_ACTIVATION_CONTENT_PLACEHOLDER.format(name=skill_name)
 
     content = message.content
     if content is None:

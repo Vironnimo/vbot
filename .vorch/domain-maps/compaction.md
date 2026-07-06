@@ -41,6 +41,7 @@ The chat loop decides when compaction is safe to run. The compaction domain deci
 - Tail boundaries must start on user messages so preserved history resumes at a complete user turn.
 - Compaction must not split unresolved assistant tool-call cycles.
 - Tool messages are represented in compaction prompts with `TOOL_RESULT_CONTENT_PLACEHOLDER`; raw tool result content can be large or sensitive and is not copied into the summary prompt.
+- Skill activations are excluded from the summary prompt the same way: a `[skill-context] ` trigger note renders as `SKILL_ACTIVATION_CONTENT_PLACEHOLDER` (keeping the activation fact + skill name visible, never the body), and a `skill` tool result is already covered by the generic tool placeholder. Skill instructions are standing context, not conversation to summarize — the chat loop re-injects activated skills into the rebuilt request after a checkpoint (see `chat.md`), so nothing is lost by omitting them here.
 - Tail-boundary token estimates must include structured tool-call arguments and content-block payloads rather than only `message.content`, so tool-heavy turns are not undercounted.
 - Summary adapter responses may be raw provider dicts or adapter-normalized dicts. If an adapter exposes `normalize_response()`, the strategy uses it before extracting summary text.
 - `summary_model` fallback behavior is owned by callers because they know the active runtime/provider context. Invalid or unavailable summary models should fall back to the active run model rather than failing the user turn.

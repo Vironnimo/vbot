@@ -26,7 +26,9 @@ ToolCancelCheckHook = Callable[[], bool]
 ToolCallCancelRegistrar = Callable[[str, Callable[[], None]], None]
 ToolCallCancelCheck = Callable[[str], bool]
 ToolNoteHook = Callable[[str], None]
-ToolSkillActivationHook = Callable[[str, JsonObject], JsonObject]
+# (skill_name, wrapped_content) -> newly_activated. The content is passed for the
+# session's in-memory activation record only; the tool result is the durable carrier.
+ToolSkillActivationHook = Callable[[str, str], bool]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
 ToolReadinessPredicate = Callable[[], bool]
 ToolSummaryBuilder = Callable[[JsonObject], str | None]
@@ -188,12 +190,17 @@ class ToolContext:
 
         self.note_hook(content)
 
-    def activate_skill(self, name: str, data: JsonObject) -> JsonObject | None:
-        """Activate skill context through the runtime hook, when present."""
+    def activate_skill(self, name: str, content: str) -> bool | None:
+        """Record a skill activation through the session hook, when present.
+
+        Returns ``True`` for a fresh activation, ``False`` when the skill was
+        already active in the session, ``None`` when no hook is wired (the
+        caller then treats the activation as fresh).
+        """
         if self.skill_activation_hook is None:
             return None
 
-        return self.skill_activation_hook(name, data)
+        return self.skill_activation_hook(name, content)
 
 
 @dataclass(frozen=True)
