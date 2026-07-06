@@ -33,7 +33,8 @@ class ProviderAccount:
         id: Account identifier (``"default"`` for the unnamed slot).
         usable: Whether the account currently has a usable credential.
         source: Where the credential lives — ``"process_env"``,
-            ``"data_dir"``, or ``"oauth"``.
+            ``"data_dir"``, ``"oauth"``, or ``"none"`` (keyless connection,
+            no credential exists by design).
         credential_key: The derived environment key for env-backed
             accounts; empty for OAuth token-store accounts.
     """
