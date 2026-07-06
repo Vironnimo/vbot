@@ -23,5 +23,5 @@ Fetches public HTTP(S) content and returns readable text.
 - The session carries an automatic cookie jar across redirect hops, so a challenge/clearance cookie set on one hop is presented on the next.
 - Follows redirects manually with validation per hop (redirects disabled on the session; each hop re-validated and re-pinned).
 - The single network call is the `_http_get(session, url)` seam — tests substitute it to feed canned `_FetchResult`s without touching the network (curl_cffi is not respx-mockable).
-- Retries transient HTTP 429/5xx up to 3 times with exponential backoff and jitter.
+- Retries transient HTTP 429/5xx up to 3 times with exponential backoff and jitter, honoring a server `Retry-After` hint as a floor (parsed via `core/utils/http_status.parse_retry_after`, delay math via `core/utils/retry.compute_retry_delay`).
 - Non-HTML or `raw: true` responses return truncated response text unchanged.

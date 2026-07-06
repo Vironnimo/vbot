@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -23,7 +21,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.utils.http_status import is_retryable_status
+from core.utils.http_status import is_retryable_status, parse_retry_after
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -148,65 +146,8 @@ class _CaptureByteStream(httpx.AsyncByteStream):
             self._capture.finalize()
 
 
-# ---------------------------------------------------------------------------
-# Retry-After parsing
-# ---------------------------------------------------------------------------
-
-
-def parse_retry_after(headers: httpx.Headers) -> float | None:
-    """Parse a provider's requested retry delay from response headers.
-
-    On 429/503 (and similar) providers commonly signal how long to wait before
-    retrying. Honored forms, in priority order:
-
-    1. ``retry-after-ms`` — a millisecond hint some providers send (e.g. OpenAI).
-    2. ``Retry-After`` as ``delay-seconds`` — a non-negative number of seconds
-       (RFC 9110).
-    3. ``Retry-After`` as an ``HTTP-date`` — converted to seconds from now.
-
-    Args:
-        headers: The response's case-insensitive ``httpx.Headers`` mapping.
-
-    Returns:
-        The delay in seconds, clamped to ``>= 0``, or ``None`` when no usable
-        hint is present or the value cannot be parsed (a malformed header is
-        ignored rather than treated as an error).
-    """
-    milliseconds = headers.get("retry-after-ms")
-    if milliseconds is not None:
-        try:
-            from_ms = float(milliseconds) / 1000.0
-        except ValueError:
-            from_ms = None
-        if from_ms is not None and from_ms >= 0:
-            return from_ms
-
-    raw = headers.get("retry-after")
-    if raw is None:
-        return None
-    raw = raw.strip()
-    if not raw:
-        return None
-
-    # delay-seconds form: a plain (non-negative) number of seconds.
-    try:
-        seconds = float(raw)
-    except ValueError:
-        seconds = None
-    if seconds is not None:
-        return seconds if seconds >= 0 else None
-
-    # HTTP-date form: seconds from now, never negative (a past date means "now").
-    try:
-        retry_at = parsedate_to_datetime(raw)
-    except (TypeError, ValueError):
-        return None
-    if retry_at is None:
-        return None
-    if retry_at.tzinfo is None:
-        retry_at = retry_at.replace(tzinfo=UTC)
-    delta = (retry_at - datetime.now(UTC)).total_seconds()
-    return delta if delta > 0 else 0.0
+# Retry-After parsing lives in core.utils.http_status (shared with the HTTP
+# tools); ``parse_retry_after`` is re-imported above for the callers here.
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import random
 import re
 import socket
 from dataclasses import dataclass
@@ -26,8 +25,9 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
-from core.utils.http_status import is_retryable_status
+from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
+from core.utils.retry import MAX_RETRIES, compute_retry_delay
 
 _LOGGER = get_logger("tools.web_fetch")
 
@@ -96,10 +96,6 @@ _CHILD_BLOCK_NAMES: frozenset[str] = (
 
 _SELF_RENDERED_TAGS: frozenset[str] = _HEADING_NAMES | frozenset({"a", "img", "pre", "tr", "li"})
 
-_RETRY_MAX_RETRIES = 3
-_RETRY_INITIAL_DELAY_SECONDS = 1.0
-_RETRY_BACKOFF_FACTOR = 2
-_RETRY_JITTER_FACTOR = 0.5
 _CONNECT_TIMEOUT_SECONDS = 5.0
 _TOTAL_TIMEOUT_SECONDS = 30.0
 _REQUEST_TIMEOUT = (_CONNECT_TIMEOUT_SECONDS, _TOTAL_TIMEOUT_SECONDS)
@@ -764,23 +760,22 @@ async def _validate_public_target(scheme: str, host: str | None, port: int) -> t
     return normalized_host, str(resolved_addresses[0])
 
 
-async def _sleep_for_retry(attempt: int) -> None:
-    base_delay = _RETRY_INITIAL_DELAY_SECONDS * (_RETRY_BACKOFF_FACTOR**attempt)
-    jitter = random.uniform(0, base_delay * _RETRY_JITTER_FACTOR)
-    await asyncio.sleep(base_delay + jitter)
+async def _sleep_for_retry(attempt: int, retry_after: float | None = None) -> None:
+    delay, _ = compute_retry_delay(attempt, retry_after=retry_after)
+    await asyncio.sleep(delay)
 
 
 async def _request_with_retry(session: AsyncSession, url: str) -> _FetchResult:
     """Fetch a URL and retry retryable status codes with backoff and jitter."""
-    for attempt in range(_RETRY_MAX_RETRIES + 1):
+    for attempt in range(MAX_RETRIES + 1):
         result = await _http_get(session, url)
         # GET is idempotent — safe to repeat (includes a transient 500).
         if (
             result.status_code >= 400
-            and attempt < _RETRY_MAX_RETRIES
+            and attempt < MAX_RETRIES
             and is_retryable_status(result.status_code, idempotent=True)
         ):
-            await _sleep_for_retry(attempt)
+            await _sleep_for_retry(attempt, parse_retry_after(result.headers))
             continue
 
         return result
@@ -888,7 +883,7 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
             "request_error",
             f"HTTP {status} while fetching URL: {url}",
             retryable=retryable,
-            attempts_made=(_RETRY_MAX_RETRIES + 1) if retryable else None,
+            attempts_made=(MAX_RETRIES + 1) if retryable else None,
         )
 
     raw_body = result.text
