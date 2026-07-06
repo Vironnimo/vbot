@@ -34,6 +34,7 @@ from core.projects.resolver import (
     RuntimeAgent,
     build_agent_resolver,
     resolve_prompt_project,
+    resolve_skill_scope,
     runtime_agent_body,
 )
 from core.projects.store import ProjectStore, project_sessions_dir
@@ -61,6 +62,7 @@ __all__ = [
     "project_from_dict",
     "project_sessions_dir",
     "resolve_prompt_project",
+    "resolve_skill_scope",
     "runtime_agent_body",
     "slugify_agent_id",
     "slugify_project_id",

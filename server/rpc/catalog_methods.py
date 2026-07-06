@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.chat import CommandDispatcher
+from core.projects import resolve_prompt_project, resolve_skill_scope
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -95,21 +96,23 @@ def _command_skill_suggestions(state: Any, address: tuple[str, str | None] | Non
 
     ``address is None`` → the global skill list (no agent scope). With an address,
     the agent is resolved and its effective skills are filtered against the
-    agent-aware project-scoped registry, so a project agent's suggestions are exactly
-    the skills it could actually activate — for an identity agent including its own
-    private skills, which are always allowed for their owner. A project address names
-    a config agent: private skills are identity-only, so no agent layer applies (a
-    team slug colliding with an identity agent's id must not surface that agent's
-    private skills here).
+    agent-aware project-scoped registry, so an agent's suggestions are exactly the
+    skills it could actually activate. The scope comes from the same shared policy
+    a run uses (``resolve_prompt_project`` + ``resolve_skill_scope``): a project
+    address suggests that project's pool, a rooted identity agent additionally sees
+    its home project's skills, and the private-skill layer applies to identity
+    agents only (a team slug colliding with an identity agent's id must not surface
+    that agent's private skills here).
     """
     if address is None:
         return _sorted_filtered_skills(state.runtime.skills, ["*"])
     agent_id, project_id = address
     agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
     allowed_skills = getattr(agent, "allowed_skills", ["*"])
-    identity_agent_id = agent_id if project_id is None else None
+    prompt_project = resolve_prompt_project(state.runtime.projects, project_id, agent)
+    skill_project_id, identity_agent_id = resolve_skill_scope(project_id, prompt_project, agent_id)
     return _sorted_filtered_skills(
-        state.runtime.skills_for(project_id, identity_agent_id), allowed_skills
+        state.runtime.skills_for(skill_project_id, identity_agent_id), allowed_skills
     )
 
 

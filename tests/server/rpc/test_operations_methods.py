@@ -454,6 +454,34 @@ async def test_preview_includes_extension_block(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> None:
+    # A rooted identity agent (workspace == a registered repo) must preview against
+    # its home project's skill pool — the same scope a run resolves — not the bare
+    # global registry (the old drift the shared ``resolve_skill_scope`` seam fixes).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agent = StubAgent(id="coder", name="Coder", workspace=str(repo))
+    manager = _manager(tmp_path, agents=[agent])
+    home_project = SimpleNamespace(project_id="vbot", cwd=str(repo), auto_load=())
+    skills_for_calls: list[tuple[str | None, str | None]] = []
+
+    def skills_for(project_id: str | None, agent_id: str | None = None) -> StubSkills:
+        skills_for_calls.append((project_id, agent_id))
+        return StubSkills()
+
+    runtime_extra = {
+        "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
+        "projects": SimpleNamespace(find_by_cwd=lambda _cwd: home_project),
+        "skills_for": skills_for,
+    }
+    state = _state(manager, runtime_extra=runtime_extra)
+
+    await _preview_prompt(state, {"agent_id": "coder"})
+
+    assert skills_for_calls == [("vbot", "coder")]
+
+
+@pytest.mark.asyncio
 async def test_preview_rejects_unsupported_field(tmp_path: Path) -> None:
     state = _state(_manager(tmp_path))
 
