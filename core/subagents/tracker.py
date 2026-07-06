@@ -147,12 +147,21 @@ class SubAgentBatchTracker:
         return True
 
     def remove_queued(self, parent_key: ParentKey, queue_item_id: str) -> None:
-        """Remove a queued sub-agent entry that will never start."""
+        """Remove a queued sub-agent entry that will never start.
+
+        Removal can be the event that completes the batch: when every remaining
+        sibling has already finished, the promised automatic completion delivery
+        must fire now — no later "child finished" event is left to re-evaluate
+        it, so skipping the check would strand the notification and leak the
+        finished batch for the process lifetime.
+        """
         batch = self._batches.get(parent_key)
         if batch is None:
             return
-        batch.entries.pop(_queue_entry_key(queue_item_id), None)
+        if batch.entries.pop(_queue_entry_key(queue_item_id), None) is None:
+            return
         self._prune_if_empty(parent_key, batch)
+        self._notify_or_prune_if_complete(parent_key, batch)
 
     def discard_parent(self, parent_key: ParentKey) -> None:
         """Discard all in-memory tracking for a parent run."""
@@ -188,6 +197,15 @@ class SubAgentBatchTracker:
 
         entry.complete = True
         entry.result = dict(result_dict)
+        self._notify_or_prune_if_complete(parent_key, batch)
+
+    def _notify_or_prune_if_complete(self, parent_key: ParentKey, batch: _SubAgentBatch) -> None:
+        """Fire the one batch-completion trigger when the batch just became complete.
+
+        Shared by ``on_sub_agent_complete`` and ``remove_queued`` — every event
+        that can turn "some entries still open" into "all complete" must run this
+        same check, or the promised automatic delivery is lost.
+        """
         if batch.notification_sent or not self._all_complete(batch):
             self._prune_if_finished(parent_key, batch)
             return
