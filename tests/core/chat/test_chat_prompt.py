@@ -238,6 +238,23 @@ async def test_rooted_identity_agent_resolves_skills_against_home_project(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_project_run_resolves_skills_without_identity_agent_layer(tmp_path: Path) -> None:
+    # A project run executes a config agent. Its project-local slug must never pull
+    # a same-named identity agent's private skill home into the run (private skills
+    # bypass the project skill whitelist as always-allowed), so the loop resolves
+    # skills with no identity agent id — the project pool only.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime, _adapter = _project_runtime(tmp_path, repo, [], body="Body.")
+    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
+
+    await ChatLoop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
+
+    assert (PROJECT_ID, None) in runtime.skills_for_calls
+    assert all(identity_agent is None for _pid, identity_agent in runtime.skills_for_calls)
+
+
+@pytest.mark.asyncio
 async def test_identity_agent_workspace_not_a_project_stays_unchanged(tmp_path: Path) -> None:
     # An identity agent whose workspace is its own home (not any registered repo)
     # gets no project context — the prompt is the unchanged identity prompt.

@@ -84,6 +84,27 @@ def test_skill_tool_unknown_skill_fails(tmp_path: Path) -> None:
     assert result == tool_failure("skill_not_found", "Skill not found: missing")
 
 
+def test_skill_tool_passes_identity_agent_only_for_identity_runs(tmp_path: Path) -> None:
+    # Private skill homes are identity-only: an identity run resolves with its agent
+    # id (own skills apply), while a project run's config-agent slug must reach the
+    # resolver as ``None`` so a same-named identity agent's private home never leaks
+    # past the project skill whitelist.
+    calls: list[tuple[str | None, str | None]] = []
+    registry = SkillRegistry.load(_skills_dir(tmp_path))
+
+    def resolver(project_id: str | None, identity_agent_id: str | None) -> SkillRegistry:
+        calls.append((project_id, identity_agent_id))
+        return registry
+
+    tools = ToolRegistry()
+    register_skill_tool(tools, resolver)
+
+    asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
+    asyncio.run(async_dispatch(tools, _context(tmp_path, project_id="vbot"), {"name": "debugging"}))
+
+    assert calls == [(None, "coder"), ("vbot", None)]
+
+
 def test_skill_tool_unavailable_skill_fails_with_missing_requirements(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"
     skill_dir = skills_dir / "openai-helper"

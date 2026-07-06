@@ -1063,6 +1063,22 @@ def test_agent_own_skills_isolated_between_agents(config: Config) -> None:
     assert "main-only" not in {skill.name for skill in other_registry.list_all()}
 
 
+def test_skills_for_ignores_private_home_of_nonexistent_identity_agent(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    # A skills directory under ``agents/<id>/`` that belongs to no stored identity
+    # agent (left behind, or crafted for a project-team slug) must never be layered:
+    # private skills are identity-only and always-allowed for their owner, so an
+    # unowned home would bypass every allow-list.
+    _write_agent_skill(runtime.storage.data_dir, "ghost", "ghost-skill", "Nobody's playbook.")
+
+    registry = runtime.skills_for(None, "ghost")
+
+    assert "ghost-skill" not in {skill.name for skill in registry.list_all()}
+    assert registry is runtime.skills
+
+
 def test_skills_for_identity_without_own_skills_is_global(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)

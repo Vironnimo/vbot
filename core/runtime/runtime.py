@@ -990,22 +990,39 @@ class Runtime:
             raise RuntimeError("Storage service not available")
         return self._storage.data_dir / _SKILLS_DIRNAME
 
-    def skills_for(self, project_id: str | None, agent_id: str | None = None) -> SkillRegistry:
+    def skills_for(
+        self, project_id: str | None, identity_agent_id: str | None = None
+    ) -> SkillRegistry:
         """Return the skill registry a run should use, scoped to project and agent.
 
-        ``project_id is None`` and ``agent_id is None`` (a plain identity run) returns
-        the global registry byte-for-byte. A set ``project_id`` returns the project's
-        merged registry — the project's own ``.opencode/skills`` first, then the
-        bundled pool. When ``agent_id`` names an agent that has its own private skills
-        home, that home is layered on top (agent > project > global > bundled) and the
-        agent's own skills are always-allowed for it; an agent with no private skills
-        falls through to the project/global path unchanged. This is the single seam
-        every run-time skill consumer (prompt assembly, triggers, the ``skill`` tool,
-        autocomplete) resolves through, so scoping lives in exactly one place.
+        ``project_id is None`` and ``identity_agent_id is None`` (a plain identity
+        run) returns the global registry byte-for-byte. A set ``project_id`` returns
+        the project's merged registry — the project's own ``.opencode/skills`` first,
+        then the bundled pool. When ``identity_agent_id`` names an **identity** agent
+        that has its own private skills home, that home is layered on top (agent >
+        project > global > bundled) and the agent's own skills are always-allowed for
+        it; an agent with no private skills falls through to the project/global path
+        unchanged. This is the single seam every run-time skill consumer (prompt
+        assembly, triggers, the ``skill`` tool, autocomplete) resolves through, so
+        scoping lives in exactly one place.
+
+        **Contract:** ``identity_agent_id`` carries the run's agent id only when the
+        run executes as an identity agent (plain or rooted — a rooted run passes its
+        home project as ``project_id``). A config-agent run passes ``None``: config
+        agents own no private home, and agent ids are project-local, so a team slug
+        that merely collides with an identity agent's id must never pull that
+        identity agent's private skills into the project run (the project skill
+        whitelist is a trust boundary; private skills bypass it as always-allowed).
+        The identity-store existence check below is defense in depth against a stray
+        ``agents/<id>/skills`` directory that belongs to no stored agent.
         """
         self._ensure_started()
-        if agent_id is not None and self.agent_skills_dir(agent_id).is_dir():
-            return self._agent_skill_registry(project_id, agent_id)
+        if (
+            identity_agent_id is not None
+            and self.agents.exists(identity_agent_id)
+            and self.agent_skills_dir(identity_agent_id).is_dir()
+        ):
+            return self._agent_skill_registry(project_id, identity_agent_id)
         if project_id is None:
             return self.skills
         return self._project_skill_bundle(project_id).registry

@@ -28,12 +28,15 @@ _AGENT_SCOPE_PREFIX = "agent:"
 _HUMAN_AUTHOR = "human"
 
 
-def _validated_scope(params: JsonObject) -> str:
+def _validated_scope(state: Any, params: JsonObject) -> str:
     """Return the request's ``scope``, rejecting anything but global / agent:<id>.
 
     The ``agent:<id>`` id becomes a filesystem path segment, so it is validated with
-    the canonical (traversal-safe) agent-id rule before any path is built. A project
-    or repo scope is rejected here — v1 write surfaces never target the repo.
+    the canonical (traversal-safe) agent-id rule before any path is built, and it
+    must name an **existing identity agent**: private skill homes are identity-only,
+    so writing to an unknown id (e.g. a project-team slug) would create a stray
+    ``agents/<id>/skills`` directory that no agent owns. A project or repo scope is
+    rejected here — v1 write surfaces never target the repo.
     """
     scope = _required_string(params, "scope")
     if scope == _GLOBAL_SCOPE:
@@ -42,6 +45,11 @@ def _validated_scope(params: JsonObject) -> str:
         agent_id = scope[len(_AGENT_SCOPE_PREFIX) :]
         if not is_valid_agent_id(agent_id):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"invalid agent scope id: {agent_id!r}")
+        if not state.runtime.agents.exists(agent_id):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"unknown agent for skill scope: {agent_id!r} (private skills are identity-only)",
+            )
         return scope
     raise RpcError(
         RPC_ERROR_INVALID_REQUEST,
@@ -83,7 +91,7 @@ def _skill_read(state: Any, params: JsonObject) -> JsonObject:
     private home), so bundled and project skills never appear — those are not
     editable here. The content lets the UI view and pre-fill an edit form.
     """
-    scope = _validated_scope(params)
+    scope = _validated_scope(state, params)
     registry = SkillRegistry.load(_scope_root(state, scope))
     skills: list[JsonObject] = []
     for skill in registry.list_all():
@@ -96,7 +104,7 @@ def _skill_read(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _skill_create(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(params)
+    scope = _validated_scope(state, params)
     name = _required_string(params, "name")
     content = _required_string(params, "content")
     source = _optional_string(params, "source")
@@ -110,7 +118,7 @@ def _skill_create(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _skill_update(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(params)
+    scope = _validated_scope(state, params)
     name = _required_string(params, "name")
     content = _required_string(params, "content")
     source = _optional_string(params, "source")
@@ -124,13 +132,13 @@ def _skill_update(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _skill_delete(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(params)
+    scope = _validated_scope(state, params)
     name = _required_string(params, "name")
     return _write(state, scope, lambda root: state.runtime.skill_authoring.delete(root, name))
 
 
 def _skill_write_file(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(params)
+    scope = _validated_scope(state, params)
     name = _required_string(params, "name")
     path = _required_string(params, "path")
     content = params.get("content")
@@ -144,7 +152,7 @@ def _skill_write_file(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _skill_remove_file(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(params)
+    scope = _validated_scope(state, params)
     name = _required_string(params, "name")
     path = _required_string(params, "path")
     return _write(
