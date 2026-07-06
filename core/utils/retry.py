@@ -39,6 +39,35 @@ JITTER_FACTOR = 0.5
 MAX_RETRY_AFTER_SECONDS = 60.0
 
 
+def compute_retry_delay(
+    attempt: int,
+    *,
+    initial_delay: float = INITIAL_DELAY_SECONDS,
+    retry_after: float | None = None,
+) -> tuple[float, bool]:
+    """Return the backoff delay for *attempt* and whether Retry-After was honored.
+
+    One home for the backoff math shared by ``retry_async`` and the HTTP tools'
+    internal retry loops: exponential backoff with jitter, with a server
+    ``retry_after`` hint honored as a floor (never wait less than the server
+    asked) and capped at ``MAX_RETRY_AFTER_SECONDS``.
+
+    Args:
+        attempt: Zero-based retry attempt number.
+        initial_delay: Base delay in seconds for the first retry.
+        retry_after: Optional server-requested wait in seconds.
+
+    Returns:
+        ``(delay_seconds, honored_retry_after)``.
+    """
+    base_delay = initial_delay * (BACKOFF_FACTOR**attempt)
+    jitter = random.uniform(0, base_delay * JITTER_FACTOR)
+    delay = base_delay + jitter
+    if retry_after is not None and retry_after > delay:
+        return min(float(retry_after), MAX_RETRY_AFTER_SECONDS), True
+    return delay, False
+
+
 async def retry_async(
     async_fn: Callable[..., Awaitable[T]],
     *args: Any,
@@ -72,14 +101,12 @@ async def retry_async(
                 raise
             last_error = error
             if attempt < max_retries:
-                base_delay = initial_delay * (BACKOFF_FACTOR**attempt)
-                jitter = random.uniform(0, base_delay * JITTER_FACTOR)
-                delay = base_delay + jitter
                 retry_after = getattr(error, "retry_after", None)
-                honored_retry_after = False
-                if isinstance(retry_after, (int, float)) and retry_after > delay:
-                    delay = min(float(retry_after), MAX_RETRY_AFTER_SECONDS)
-                    honored_retry_after = True
+                if not isinstance(retry_after, (int, float)):
+                    retry_after = None
+                delay, honored_retry_after = compute_retry_delay(
+                    attempt, initial_delay=initial_delay, retry_after=retry_after
+                )
                 _LOGGER.warning(
                     "Retryable error on attempt %d/%d (%s: %s); retrying in %.2fs%s",
                     attempt + 1,
