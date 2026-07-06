@@ -301,7 +301,7 @@ class AgentStore:
     def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> Agent:
         """Re-point an identity agent's current session after one is gone.
 
-        Invoked as the final step of removing a session from this home â€” a move
+        Invoked as the final step of removing a session from this home — a move
         to another agent, or a deletion. If the removed session was this agent's
         current session, the pointer lands on the most recently active
         *remaining* session (max ``last_active_at``), or a fresh empty session
@@ -343,7 +343,12 @@ class AgentStore:
         return self._data_dir / f"workspace-{agent_id}"
 
     def _archive_dir(self, agent_id: str) -> Path:
-        return self._data_dir / "archive" / agent_id
+        # Agent archives live under their own ``agents/`` subtree, mirroring the
+        # session (``archive/sessions/``) and project (``archive/projects/``)
+        # archive roots: a flat ``archive/<agent-id>`` would let an agent named
+        # ``sessions`` or ``projects`` collide with those roots — and delete's
+        # replace-archive rmtree would then wipe them wholesale.
+        return self._data_dir / "archive" / "agents" / agent_id
 
     def _write_agent(self, agent: Agent) -> None:
         agent_path = self._agent_path(agent.id)
