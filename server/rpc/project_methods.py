@@ -382,7 +382,9 @@ def _ensure_not_busy(state: Any, project_id: str) -> None:
     """
     chat_runs = _state_chat_runs(state)
     for agent_id in _projects(state).session_owning_agents(project_id):
-        if chat_runs.has_activity_for_agent(agent_id):
+        # Scoped to this project: a same-named identity agent's (or another
+        # project's) activity must not block removing this project.
+        if chat_runs.has_activity_for_agent(agent_id, project_id=project_id):
             raise RpcError(
                 RPC_ERROR_PROJECT_BUSY,
                 f"cannot remove project with active or queued runs: agent {agent_id}",

@@ -234,9 +234,7 @@ async def test_run_event_bridge_publishes_non_rpc_runs() -> None:
 
     try:
         run = await chat_runs.start(
-            agent_id="coder",
-            session_id="session-one",
-            executor=execute,
+            agent_id="coder", session_id="session-one", executor=execute, project_id=None
         )
         await run.wait()
         await _wait_for_events(state.event_bus, 2)

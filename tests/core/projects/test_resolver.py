@@ -1002,11 +1002,17 @@ class _ProjectStub:
     project_id: str
 
 
+def _stub_project(project_id: str) -> Any:
+    # Typed ``Any``: ``resolve_skill_scope`` takes a ``Project`` but only reads
+    # ``project_id``, mirroring the ``_ws_agent`` stub pattern above.
+    return _ProjectStub(project_id=project_id)
+
+
 def test_resolve_skill_scope_project_run_drops_private_layer() -> None:
     # A project run scopes to its own project and never carries an identity layer:
     # a team slug colliding with an identity agent's id must not pull that agent's
     # private skills past the project skill whitelist.
-    scope = resolve_skill_scope("vbot", _ProjectStub("vbot"), "builder")
+    scope = resolve_skill_scope("vbot", _stub_project("vbot"), "builder")
 
     assert scope == ("vbot", None)
 
@@ -1014,7 +1020,7 @@ def test_resolve_skill_scope_project_run_drops_private_layer() -> None:
 def test_resolve_skill_scope_rooted_identity_uses_home_project() -> None:
     # A rooted identity run (project_id None, prompt project resolved by rooting)
     # sees its home project's skills plus its own private layer.
-    scope = resolve_skill_scope(None, _ProjectStub("vbot"), "main")
+    scope = resolve_skill_scope(None, _stub_project("vbot"), "main")
 
     assert scope == ("vbot", "main")
 

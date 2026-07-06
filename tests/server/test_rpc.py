@@ -4764,9 +4764,7 @@ async def test_agent_delete_rejects_agent_with_active_run(tmp_path: Path) -> Non
         return "done"
 
     run = await state.chat_runs.start(
-        agent_id="coder",
-        session_id=coder.current_session_id,
-        executor=hold_run,
+        agent_id="coder", session_id=coder.current_session_id, executor=hold_run, project_id=None
     )
 
     response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
@@ -4954,9 +4952,7 @@ async def test_chat_history_includes_active_run_descriptor(tmp_path: Path) -> No
         return "done"
 
     active_run = await state.chat_runs.start(
-        agent_id="coder",
-        session_id="active-session",
-        executor=_blocking_executor,
+        agent_id="coder", session_id="active-session", executor=_blocking_executor, project_id=None
     )
     await started.wait()
 
@@ -5305,9 +5301,7 @@ async def test_chat_methods_reject_compact_command_while_session_run_is_active(
         return "done"
 
     active_run = await state.chat_runs.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=_blocking_run_executor,
+        agent_id="coder", session_id="session-one", executor=_blocking_run_executor, project_id=None
     )
     await started.wait()
 
@@ -5866,7 +5860,9 @@ async def test_second_run_in_same_session_is_queued_while_active(
     assert queued_item["id"]
     assert len(adapter.stream_requests) == 1
 
-    removed = state.chat_runs.remove_queued("coder", "session-one", queued_item["id"])
+    removed = state.chat_runs.remove_queued(
+        "coder", "session-one", queued_item["id"], project_id=None
+    )
     assert removed is True
 
     run = state.chat_runs.get(first_response["result"]["run_id"])
@@ -6772,9 +6768,7 @@ async def test_chat_methods_reject_handoff_command_while_session_run_is_active(
         return "done"
 
     active_run = await state.chat_runs.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=_blocking_run_executor,
+        agent_id="coder", session_id="session-one", executor=_blocking_run_executor, project_id=None
     )
     await started.wait()
 

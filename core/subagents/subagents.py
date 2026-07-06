@@ -255,6 +255,7 @@ async def _handle_subagent(
                             queued_item=item,
                             queued_agent_id=target_agent_id,
                             queued_session_id=session.id,
+                            queued_project_id=context.project_id,
                             batch_tracker=batch_tracker,
                             parent_key=parent_key,
                         )
@@ -277,12 +278,13 @@ async def _handle_subagent(
                     queued_item=item,
                     queued_agent_id=target_agent_id,
                     queued_session_id=session.id,
+                    queued_project_id=context.project_id,
                 )
                 try:
                     sub_run = await item.future
                 except asyncio.CancelledError:
                     runtime.chat_run_manager.remove_queued(
-                        target_agent_id, session.id, item.item_id
+                        target_agent_id, session.id, item.item_id, project_id=context.project_id
                     )
                     raise
 
@@ -740,6 +742,7 @@ def _attach_parent_cancellation(
     queued_item: Any | None = None,
     queued_agent_id: str | None = None,
     queued_session_id: str | None = None,
+    queued_project_id: str | None = None,
     batch_tracker: SubAgentBatchTracker | None = None,
     parent_key: ParentKey | None = None,
 ) -> None:
@@ -754,6 +757,7 @@ def _attach_parent_cancellation(
             queued_item=queued_item,
             queued_agent_id=queued_agent_id,
             queued_session_id=queued_session_id,
+            queued_project_id=queued_project_id,
             batch_tracker=batch_tracker,
             parent_key=parent_key,
             parent_reason=parent_run.cancel_reason,
@@ -768,6 +772,7 @@ def _cancel_subagent_child(
     queued_item: Any | None,
     queued_agent_id: str | None,
     queued_session_id: str | None,
+    queued_project_id: str | None = None,
     batch_tracker: SubAgentBatchTracker | None,
     parent_key: ParentKey | None,
     parent_reason: str | None = None,
@@ -784,6 +789,7 @@ def _cancel_subagent_child(
             queued_agent_id,
             queued_session_id,
             queued_item.item_id,
+            project_id=queued_project_id,
         )
         if batch_tracker is not None and parent_key is not None:
             batch_tracker.remove_queued(parent_key, queued_item.item_id)
