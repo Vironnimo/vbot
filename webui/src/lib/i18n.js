@@ -67,7 +67,7 @@ export const englishCatalog = Object.freeze({
   'chat.historyEmpty': 'No messages yet. Send the first message to this agent.',
   'chat.composerLabel': 'Message',
   'chat.composerPlaceholder':
-    'Ask this agent to do something… (/ for commands, $ for skills)',
+    'Ask this agent to do something… (/ for commands, $ for skills, @ for files)',
   'chat.sendMessage': 'Send message',
   'chat.queueMessage': 'Queue message',
   'chat.attachment.addFile': 'Add file',
@@ -204,6 +204,15 @@ export const englishCatalog = Object.freeze({
   'skillAutocomplete.eyebrow.commandsAndSkills': 'commands & skills',
   'skillAutocomplete.eyebrow.skills': 'skills',
   'skillAutocomplete.noDescription': 'No description available',
+
+  'fileAutocomplete.label': 'File suggestions',
+  'fileAutocomplete.eyebrow': 'files',
+  'fileAutocomplete.truncated': 'list truncated — keep typing',
+
+  'chat.fileMention.label': 'Mentioned file',
+  'chat.fileMention.tooLarge': 'too large to attach — referenced by path',
+  'chat.fileMention.notText': 'not a text file — referenced by path',
+  'chat.fileMention.missing': 'file was not found at send time',
 
   'queue.title': 'Queued messages',
   'queue.pending': 'Waiting for the active run to finish.',

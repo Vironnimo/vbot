@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
-from server.rpc.catalog_methods import _list_commands, _list_tools
+from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
 from server.rpc.errors import RpcError
 
 
@@ -278,3 +278,57 @@ def test_tool_list_surfaces_ready_hint_and_extension_fields() -> None:
 
 def _raise_ready() -> bool:
     raise RuntimeError("readiness probe blew up")
+
+
+# ---------------------------------------------------------------------------
+# files.list — cwd file candidates for the composer's @-mention picker.
+# ---------------------------------------------------------------------------
+
+
+def _files_state(*, project_cwd: str, workspace: str, data_dir: str) -> Any:
+    runtime = SimpleNamespace(
+        projects=SimpleNamespace(get=lambda project_id: SimpleNamespace(cwd=project_cwd)),
+        agent_resolver=SimpleNamespace(
+            resolve_agent=lambda project_id, agent_id: SimpleNamespace(workspace=workspace)
+        ),
+        storage=SimpleNamespace(data_dir=data_dir),
+    )
+    return SimpleNamespace(runtime=runtime)
+
+
+@pytest.mark.asyncio
+async def test_files_list_returns_project_repo_files(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "app.py").write_text("x", encoding="utf-8")
+    state = _files_state(
+        project_cwd=str(repo), workspace=str(tmp_path / "ws"), data_dir=str(tmp_path)
+    )
+
+    result = await _list_files(state, {"agent_id": "builder@vbot"})
+
+    assert result["files"] == ["src/app.py"]
+    assert result["truncated"] is False
+    assert result["root"] == str(repo)
+
+
+@pytest.mark.asyncio
+async def test_files_list_identity_address_lists_workspace(tmp_path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("x", encoding="utf-8")
+    state = _files_state(
+        project_cwd=str(tmp_path / "repo"), workspace=str(workspace), data_dir=str(tmp_path)
+    )
+
+    result = await _list_files(state, {"agent_id": "main"})
+
+    assert result["files"] == ["MEMORY.md"]
+
+
+@pytest.mark.asyncio
+async def test_files_list_rejects_unknown_params(tmp_path) -> None:
+    state = _files_state(project_cwd=str(tmp_path), workspace=str(tmp_path), data_dir=str(tmp_path))
+
+    with pytest.raises(RpcError):
+        await _list_files(state, {"agent_id": "main", "limit": 5})

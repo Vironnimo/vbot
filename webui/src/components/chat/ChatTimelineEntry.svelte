@@ -5,6 +5,7 @@
     attachmentFilename,
     attachmentPreviewLabel,
     attachmentUrlForBlock,
+    fileMentionStatusLabel,
     avatarForItem,
     compactToolValue,
     errorMessagePresentation,
@@ -15,6 +16,7 @@
     isAssistantItem,
     isFailedToolEvent,
     isFileContentBlock,
+    isFileMentionContentBlock,
     isImageMediaContentBlock,
     isMediaContentBlock,
     isReasoningOnlyAssistantMessage,
@@ -166,6 +168,37 @@
         </a>
       {:else}
         <span class="inline-file-name">{attachmentFilename(block)}</span>
+      {/if}
+    </div>
+  {:else if isFileMentionContentBlock(block)}
+    {@const statusLabel = fileMentionStatusLabel(block)}
+    <div
+      class="inline-file"
+      title={t('chat.fileMention.label', 'Mentioned file')}
+    >
+      <svg
+        class="inline-file-icon"
+        viewBox="0 0 16 16"
+        width="14"
+        height="14"
+        aria-hidden="true"
+      >
+        <path
+          d="M3.5 1.5h6.5l2.5 2.5v10.5H3.5z"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.2"
+        />
+        <path
+          d="M10 1.5V4h2.5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.2"
+        />
+      </svg>
+      <span class="inline-file-name" title={block.path}>@{block.path}</span>
+      {#if statusLabel}
+        <span class="inline-file-status">({statusLabel})</span>
       {/if}
     </div>
   {/if}

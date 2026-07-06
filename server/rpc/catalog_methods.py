@@ -1,10 +1,12 @@
-"""Tool, skill, and command catalog RPC handlers."""
+"""Tool, skill, command, and cwd-file catalog RPC handlers."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from core.chat import CommandDispatcher
+from core.chat.file_mentions import list_mention_files, resolve_mention_root
 from core.projects import resolve_prompt_project, resolve_skill_scope
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from server.rpc.dispatcher import RpcMethodHandler
@@ -123,6 +125,30 @@ def _sorted_filtered_skills(skill_registry: Any, allowed_skills: list[str]) -> l
     return sorted(skill_registry.list_all(), key=lambda skill: skill.name)
 
 
+async def _list_files(state: Any, params: JsonObject) -> JsonObject:
+    """List cwd files for the composer's ``@``-mention picker.
+
+    Resolves the address's working directory exactly like tool path resolution
+    (project repo for a project agent, else the agent workspace) and returns
+    gitignore-filtered relative paths. The client fetches once per picker open
+    and filters locally, so this stays a single call per interaction. The walk
+    runs in a worker thread — a large tree must not block the event loop.
+    """
+    unsupported_fields = sorted(set(params) - {"agent_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported files.list fields: {', '.join(unsupported_fields)}",
+        )
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    try:
+        root = resolve_mention_root(state.runtime, agent_id, project_id)
+        files, truncated = await asyncio.to_thread(list_mention_files, root)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"root": str(root), "files": files, "truncated": truncated}
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return read-only catalog RPC handlers."""
 
@@ -130,4 +156,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "tool.list": _list_tools,
         "skill.list": _list_skills,
         "chat.commands": _list_commands,
+        "files.list": _list_files,
     }
