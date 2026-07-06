@@ -14,6 +14,7 @@ registry instance without re-reading disk.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,16 @@ from core.utils.errors import ConfigError
 # modern chat model clears. This is a read-side FLOOR, never written into the
 # catalog as a discovered fact (see ``resolve_context_window``).
 GLOBAL_CONTEXT_WINDOW_FLOOR = 8192
+
+# Default cap for the EFFECTIVE context window of flagged-local models (e.g.
+# Ollama). A local endpoint reports the model's *theoretical* max (262k for an
+# 8B model), which says nothing about the user's hardware — and Ollama silently
+# truncates the prompt when the real window is smaller. Capping the effective
+# window keeps assumption == reality: vBot budgets against this window AND
+# requests exactly it from the local server (``options.num_ctx``). Per-model
+# user overrides live in settings ``local_models.context_windows`` (see
+# ``resolve_effective_context_window``).
+LOCAL_CONTEXT_DEFAULT_CAP = 32768
 
 # ---------------------------------------------------------------------------
 # Nested dataclass for auth configuration
@@ -213,6 +224,69 @@ def resolve_context_window(
         if provider_default is not None and provider_default > 0:
             return provider_default
     return GLOBAL_CONTEXT_WINDOW_FLOOR
+
+
+def model_is_local(model_metadata: Mapping[str, Any] | None) -> bool:
+    """Return whether a model is flagged as running on local hardware.
+
+    Locality is a model fact stamped at refresh into the provider-scoped
+    metadata blob (``metadata.<provider>.local: true`` — Ollama today, any
+    future local provider the same way). The check is provider-agnostic: any
+    provider blob carrying ``local: true`` flags the model.
+    """
+
+    if not model_metadata:
+        return False
+    for provider_blob in model_metadata.values():
+        if isinstance(provider_blob, Mapping) and provider_blob.get("local") is True:
+            return True
+    return False
+
+
+def resolve_effective_context_window(
+    model_context_window: int | None,
+    provider_config: ProviderConfig | None,
+    *,
+    model_metadata: Mapping[str, Any] | None = None,
+    model_key: str = "",
+    local_context_windows: Mapping[str, Any] | None = None,
+) -> int:
+    """Resolve the context window vBot actually budgets against.
+
+    For models NOT flagged local this is exactly :func:`resolve_context_window`
+    (trust the reported window — applies to remote providers, proxied ``:cloud``
+    models, and the direct cloud connection alike).
+
+    For flagged-local models (see :func:`model_is_local`) the *theoretical* max
+    the endpoint reports is not trusted as a budget. The effective window is:
+
+    1. The user-configured value from settings ``local_models.context_windows``
+       (keyed ``"<provider>/<model_id>"``), when positive.
+    2. Else ``min(LOCAL_CONTEXT_DEFAULT_CAP, resolved chain value)`` — the
+       conservative default that fits commodity hardware.
+
+    The same value is enforced on the wire (Ollama ``options.num_ctx``), used
+    for compaction budgeting, ``/status``, and the picker suitability filter,
+    so assumption and reality never drift apart.
+
+    Args:
+        model_context_window: The model's raw ``context_window`` fact.
+        provider_config: The model's provider config (for the default chain).
+        model_metadata: The model's ``metadata`` blob (locality flag source).
+        model_key: The settings key ``"<provider>/<model_id>"``.
+        local_context_windows: The live ``local_models.context_windows`` map.
+    """
+
+    if not model_is_local(model_metadata):
+        return resolve_context_window(model_context_window, provider_config)
+
+    configured = (local_context_windows or {}).get(model_key)
+    if isinstance(configured, int) and not isinstance(configured, bool) and configured > 0:
+        return configured
+    return min(
+        LOCAL_CONTEXT_DEFAULT_CAP,
+        resolve_context_window(model_context_window, provider_config),
+    )
 
 
 # ---------------------------------------------------------------------------

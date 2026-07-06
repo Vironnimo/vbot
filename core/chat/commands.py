@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.usage import aggregate_session_usage
 from core.projects import format_agent_address
-from core.providers.providers import resolve_context_window
+from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
     REASONING_INTENT_DEFAULT,
@@ -293,6 +293,7 @@ class CommandDispatcher:
         providers: ProviderRegistry | None = None,
         projects: ProjectStore | None = None,
         agents: AgentStore | None = None,
+        local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         self._chat_runs = chat_runs
         self._agent_resolver = agent_resolver
@@ -302,6 +303,9 @@ class CommandDispatcher:
         self._providers = providers
         self._projects = projects
         self._agents = agents
+        # Live loader for the user-configured local-model window map, read at
+        # dispatch time so a settings change applies to the next /status.
+        self._local_context_windows_loader = local_context_windows_loader
         self._commands: dict[str, CommandHandler] = {
             "agent": self._handle_agent,
             "compact": self._handle_compact,
@@ -591,7 +595,12 @@ class CommandDispatcher:
             )
             messages = []
 
-        model_details = resolve_status_model_details(agent, self._models, self._providers)
+        model_details = resolve_status_model_details(
+            agent,
+            self._models,
+            self._providers,
+            local_context_windows=self._load_local_context_windows(),
+        )
         activity = resolve_status_activity(self._chat_runs, agent_id, session_id, project_id)
         text = build_status_reply(
             agent,
@@ -609,6 +618,16 @@ class CommandDispatcher:
             project_label=resolve_status_project_label(self._projects, project_id),
         )
         return CommandHandled(reply=text, output="transient")
+
+    def _load_local_context_windows(self) -> Mapping[str, Any]:
+        """Return the live local-model window map, empty when no loader is wired."""
+        if self._local_context_windows_loader is None:
+            return {}
+        try:
+            return self._local_context_windows_loader()
+        except Exception:
+            _LOGGER.warning("Failed to load local-model context windows", exc_info=True)
+            return {}
 
 
 @dataclass(frozen=True)
@@ -635,6 +654,7 @@ def resolve_status_model_details(
     agent: RuntimeAgent | None,
     models: ModelRegistry | None,
     providers: ProviderRegistry | None = None,
+    local_context_windows: Mapping[str, Any] | None = None,
 ) -> StatusModelDetails:
     """Resolve model facts for status output from the model registry.
 
@@ -642,11 +662,11 @@ def resolve_status_model_details(
     ladder. A missing agent/registry/model yields empty details so status
     rendering degrades to placeholders instead of failing.
 
-    ``context_window`` is the *resolved* window through the read-side default
-    chain (model window → provider-config default → global floor, see
-    :func:`resolve_context_window`), so ``/status`` reports the budget compaction
-    actually uses rather than ``unknown`` for a window-less model. It stays
-    ``None`` only when no model could be resolved at all.
+    ``context_window`` is the *effective* window (user-set/capped for
+    flagged-local models, else the read-side default chain — see
+    :func:`resolve_effective_context_window`), so ``/status`` reports the budget
+    compaction actually uses rather than ``unknown`` for a window-less model.
+    It stays ``None`` only when no model could be resolved at all.
     """
     if agent is None or models is None:
         return StatusModelDetails(context_window=None, display_name=None)
@@ -674,9 +694,12 @@ def resolve_status_model_details(
         return StatusModelDetails(context_window=None, display_name=None)
 
     return StatusModelDetails(
-        context_window=resolve_context_window(
+        context_window=resolve_effective_context_window(
             model.context_window,
             _status_provider_config(providers, provider_id),
+            model_metadata=model.metadata,
+            model_key=f"{provider_id}/{model_id}",
+            local_context_windows=local_context_windows,
         ),
         display_name=model.name,
         reasoning_levels=tuple(model.capabilities.reasoning.levels),
