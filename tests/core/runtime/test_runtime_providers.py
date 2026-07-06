@@ -828,6 +828,98 @@ def test_ollama_local_connection_reports_credentials_configured(runtime: Runtime
     assert runtime.provider_credentials.get_credentials("ollama", "ollama:local") == ""
 
 
+# ------------------------------------------------------------------
+# Local catalog auto-refresh
+# ------------------------------------------------------------------
+
+
+def test_auto_refresh_targets_include_ollama_local(runtime: Runtime) -> None:
+    """The shipped Ollama local connection is an auto-refresh target."""
+    # Act
+    targets = runtime._auto_refresh_targets()
+
+    # Assert
+    assert [(provider_id, connection.id) for provider_id, _, connection in targets] == [
+        ("ollama", "local")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_maybe_refresh_local_catalogs_throttles_within_ttl(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two calls inside the TTL run exactly one refresh sweep."""
+    # Arrange
+    import core.models.discovery as discovery_module
+
+    calls: list[str] = []
+
+    async def _fake_refresh(provider, credential, resources_dir, **kwargs):
+        calls.append(provider.id)
+        return {"provider_id": provider.id, "model_count": 0}
+
+    monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
+    reloads: list[object] = []
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: reloads.append(1))
+
+    # Act
+    await runtime.maybe_refresh_local_catalogs()
+    await runtime.maybe_refresh_local_catalogs()
+
+    # Assert — one sweep, one in-place registry reload.
+    assert calls == ["ollama"]
+    assert len(reloads) == 1
+
+
+@pytest.mark.asyncio
+async def test_maybe_refresh_local_catalogs_refreshes_again_after_ttl(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange
+    import core.models.discovery as discovery_module
+
+    calls: list[str] = []
+
+    async def _fake_refresh(provider, credential, resources_dir, **kwargs):
+        calls.append(provider.id)
+        return {"provider_id": provider.id, "model_count": 0}
+
+    monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: None)
+
+    # Act — expire the throttle between the calls.
+    await runtime.maybe_refresh_local_catalogs()
+    runtime._local_catalog_refresh_at = runtime._local_catalog_refresh_at - 31.0
+    await runtime.maybe_refresh_local_catalogs()
+
+    # Assert
+    assert calls == ["ollama", "ollama"]
+
+
+@pytest.mark.asyncio
+async def test_maybe_refresh_local_catalogs_degrades_when_server_down(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing local server logs, throttles, and keeps the stale catalog."""
+    # Arrange
+    import core.models.discovery as discovery_module
+    from core.models.discovery import ModelDiscoveryError
+
+    async def _fake_refresh(provider, credential, resources_dir, **kwargs):
+        raise ModelDiscoveryError("connection refused")
+
+    monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
+    reloads: list[object] = []
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: reloads.append(1))
+
+    # Act — must not raise.
+    await runtime.maybe_refresh_local_catalogs()
+
+    # Assert — no reload of an unchanged catalog; failure stamped the throttle.
+    assert reloads == []
+    assert runtime._local_catalog_refresh_at is not None
+
+
 @pytest.mark.asyncio
 async def test_get_connection_token_getter_returns_oauth_for_subscription(
     runtime: Runtime,

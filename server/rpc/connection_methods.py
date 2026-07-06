@@ -69,7 +69,7 @@ MODEL_LIST_FILTER_FIELDS = frozenset(
 )
 
 
-def _list_models(state: Any, params: JsonObject) -> JsonObject:
+async def _list_models(state: Any, params: JsonObject) -> JsonObject:
     unsupported_fields = sorted(set(params) - MODEL_LIST_FILTER_FIELDS)
     if unsupported_fields:
         raise RpcError(
@@ -81,6 +81,12 @@ def _list_models(state: Any, params: JsonObject) -> JsonObject:
         model_query = ModelQuery.from_filters(params)
     except (KeyError, ValueError) as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+    # Give local auto-refresh catalogs (e.g. Ollama) a small window to update
+    # before listing; on timeout the sweep finishes in the background and this
+    # call serves the last known catalog. The runtime method is throttled and
+    # never raises.
+    await _await_local_catalog_refresh(state.runtime)
 
     try:
         runtime = state.runtime
@@ -108,6 +114,34 @@ def _provider_config_or_none(runtime: Any, provider_id: str) -> Any:
         return runtime.providers.get(provider_id)
     except (KeyError, AttributeError):
         return None
+
+
+# Wall-clock budget model.list grants the local-catalog auto-refresh before
+# serving the stale catalog and letting the sweep finish in the background.
+LOCAL_CATALOG_REFRESH_WAIT_SECONDS = 3.0
+
+# Strong references to background refresh sweeps that outlived their
+# model.list call, so the tasks are not garbage-collected mid-flight.
+_BACKGROUND_REFRESH_TASKS: set[asyncio.Task[None]] = set()
+
+
+async def _await_local_catalog_refresh(runtime: Any) -> None:
+    maybe_refresh = getattr(runtime, "maybe_refresh_local_catalogs", None)
+    if not callable(maybe_refresh):
+        return
+    refresh_task = asyncio.ensure_future(maybe_refresh())
+    # ``asyncio.wait`` (unlike ``wait_for``) does not cancel on timeout — the
+    # sweep keeps running in the background and later calls see its result.
+    done, pending = await asyncio.wait({refresh_task}, timeout=LOCAL_CATALOG_REFRESH_WAIT_SECONDS)
+    for task in done:
+        # The runtime method is designed never to raise; consume a defensive
+        # surprise so it degrades to a logged stale-catalog listing.
+        exception = task.exception()
+        if exception is not None:
+            _LOGGER.warning("Local catalog auto-refresh failed: %s", exception)
+    if pending:
+        _BACKGROUND_REFRESH_TASKS.add(refresh_task)
+        refresh_task.add_done_callback(_BACKGROUND_REFRESH_TASKS.discard)
 
 
 def _list_connections(state: Any, params: JsonObject) -> JsonObject:
