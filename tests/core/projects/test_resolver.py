@@ -22,6 +22,7 @@ from core.projects.resolver import (
     ConfigAgent,
     ModelConfigurationChecker,
     resolve_prompt_project,
+    resolve_skill_scope,
 )
 from core.projects.scan_report import FindingType
 from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
@@ -988,6 +989,40 @@ def test_resolve_prompt_project_none_for_empty_workspace(tmp_path: Path) -> None
     store.create("vbot", "vBot", repo)
 
     assert resolve_prompt_project(store, None, _ws_agent("")) is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_skill_scope — the skill-scoping policy shared by chat loop, prompt
+# preview, and $-autocomplete.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ProjectStub:
+    project_id: str
+
+
+def test_resolve_skill_scope_project_run_drops_private_layer() -> None:
+    # A project run scopes to its own project and never carries an identity layer:
+    # a team slug colliding with an identity agent's id must not pull that agent's
+    # private skills past the project skill whitelist.
+    scope = resolve_skill_scope("vbot", _ProjectStub("vbot"), "builder")
+
+    assert scope == ("vbot", None)
+
+
+def test_resolve_skill_scope_rooted_identity_uses_home_project() -> None:
+    # A rooted identity run (project_id None, prompt project resolved by rooting)
+    # sees its home project's skills plus its own private layer.
+    scope = resolve_skill_scope(None, _ProjectStub("vbot"), "main")
+
+    assert scope == ("vbot", "main")
+
+
+def test_resolve_skill_scope_plain_identity_stays_global() -> None:
+    scope = resolve_skill_scope(None, None, "main")
+
+    assert scope == (None, "main")
 
 
 # ---------------------------------------------------------------------------

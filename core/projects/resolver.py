@@ -720,6 +720,30 @@ def resolve_prompt_project(
     return projects.find_by_cwd(workspace)
 
 
+def resolve_skill_scope(
+    project_id: str | None, prompt_project: Project | None, agent_id: str
+) -> tuple[str | None, str | None]:
+    """Return ``(skill_project_id, identity_agent_id)`` for a run's skill pool.
+
+    The one skill-scoping policy shared by the chat loop, the prompt-preview RPC,
+    and ``$``-autocomplete, so no surface can drift from the pool a run actually
+    activates against. ``prompt_project`` is the already-resolved rooting result
+    from :func:`resolve_prompt_project` (pure — no second store lookup here):
+
+    - ``skill_project_id`` — the effective skill project: the run's own project,
+      or, for a **rooted identity** agent (``project_id is None`` but homed in a
+      registered repo), its home project; else ``None``.
+    - ``identity_agent_id`` — the agent's private-skill layer applies to identity
+      runs only: a project run executes a config agent whose project-local slug
+      must never resolve a same-named identity agent's private home (private
+      skills bypass the project skill whitelist as always-allowed).
+    """
+    if project_id is not None:
+        return project_id, None
+    rooted_project_id = prompt_project.project_id if prompt_project is not None else None
+    return rooted_project_id, agent_id
+
+
 def _effective_allowed_tools(project: Project, scanned: ScannedAgent) -> list[str]:
     """Return the config agent's tools: the project ceiling minus the agent's denials.
 
