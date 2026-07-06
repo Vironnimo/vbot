@@ -190,13 +190,12 @@ class ChatSession:
         """Return currently activated skill context as provider request messages.
 
         Callers that already hold this session's loaded messages may pass them
-        to avoid a second full session read.
+        to avoid a second full session read. Messages are ordered by activation
+        (persisted note order), matching the mid-run sync insertion order so the
+        request prefix stays byte-identical across the run boundary.
         """
         activated_contents = self._load_activated_skill_contents(messages)
-        return [
-            {"role": "user", "content": content}
-            for _name, content in sorted(activated_contents.items())
-        ]
+        return [{"role": "user", "content": content} for content in activated_contents.values()]
 
     def _load_activated_skill_contents(
         self,

@@ -224,6 +224,20 @@ class TestChatSession:
             {"role": "user", "content": "Skill body"}
         ]
 
+    def test_skill_context_messages_preserve_activation_order(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.activate_skill_context("zeta", {"content": "Zeta body", "resources": []})
+        session.activate_skill_context("alpha", {"content": "Alpha body", "resources": []})
+
+        expected = [
+            {"role": "user", "content": "Zeta body"},
+            {"role": "user", "content": "Alpha body"},
+        ]
+        assert session.skill_context_messages() == expected
+
+        fresh_handle = ChatSession(session.path)
+        assert fresh_handle.skill_context_messages() == expected
+
     def test_load_rejects_invalid_json_line(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         session.path.write_text("{not-json}\n", encoding="utf-8")
