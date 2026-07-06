@@ -33,6 +33,7 @@ from core.sessions import (
     is_channel_message_note,
     is_partial_thinking_note,
     is_skill_context_note,
+    skill_context_note_payload,
 )
 from core.tools import tool_failure
 from core.utils.tokens import estimate_message_tokens
@@ -721,8 +722,6 @@ def _assemble_request_history(
 
     for index, message in enumerate(messages):
         if message.role == "note":
-            if is_skill_context_note(message):
-                continue
             # A partial-thinking note is the only trace of an interrupted run
             # (no assistant message is persisted for it). Embed it one-shot:
             # only while no assistant turn follows it; once the next run
@@ -762,11 +761,11 @@ def _assemble_request_history(
             continue
 
         if deferred_until_after_tools:
-            request_messages.append(_notes_to_synthetic_user_message(deferred_until_after_tools))
+            request_messages.extend(_notes_to_request_messages(deferred_until_after_tools))
             deferred_until_after_tools = []
 
         if pending_notes:
-            request_messages.append(_notes_to_synthetic_user_message(pending_notes))
+            request_messages.extend(_notes_to_request_messages(pending_notes))
             pending_notes = []
         request_messages.append(
             _message_to_request_dict(
@@ -777,10 +776,10 @@ def _assemble_request_history(
         )
 
     if deferred_until_after_tools:
-        request_messages.append(_notes_to_synthetic_user_message(deferred_until_after_tools))
+        request_messages.extend(_notes_to_request_messages(deferred_until_after_tools))
 
     if pending_notes:
-        request_messages.append(_notes_to_synthetic_user_message(pending_notes))
+        request_messages.extend(_notes_to_request_messages(pending_notes))
 
     return request_messages
 
@@ -855,6 +854,33 @@ def _synthesize_interrupted_tool_result(tool_call: JsonObject) -> JsonObject:
         "name": name,
         "content": json.dumps(envelope, ensure_ascii=False, separators=(",", ":")),
     }
+
+
+def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
+    """Render a run of drained notes as request messages, in note order.
+
+    Ordinary notes fold into synthetic ``<system-reminder>`` user messages as
+    before; each skill-context note instead becomes its own ``<skill_content>``
+    user message at its chronological position — the trigger carrier rendered in
+    place, right where the activation happened. A malformed skill note is
+    dropped from the request (it stays in JSONL for debugging).
+    """
+    request_messages: list[JsonObject] = []
+    reminder_run: list[ChatMessage] = []
+    for note in notes:
+        if is_skill_context_note(note):
+            payload = skill_context_note_payload(note)
+            if payload is None:
+                continue
+            if reminder_run:
+                request_messages.append(_notes_to_synthetic_user_message(reminder_run))
+                reminder_run = []
+            request_messages.append({"role": "user", "content": payload[1]})
+            continue
+        reminder_run.append(note)
+    if reminder_run:
+        request_messages.append(_notes_to_synthetic_user_message(reminder_run))
+    return request_messages
 
 
 def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:

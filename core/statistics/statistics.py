@@ -32,7 +32,7 @@ from typing import Any, Protocol
 
 from core.chat.messages import ChatMessage
 from core.chat.model_resolution import parse_bare_model
-from core.sessions import skill_context_note_name
+from core.sessions import skill_context_note_name, skill_tool_activation_name
 from core.statistics.skills import (
     SkillInventorySource,
     SkillsSection,
@@ -776,10 +776,14 @@ class _Aggregator:
         self, display_key: str, summary: JsonObject, messages: list[ChatMessage]
     ) -> None:
         created_at = summary.get("created_at")
+        # Both activation carriers count: user-trigger notes and loading ``skill``
+        # tool results (a (session, skill) pair still counts at most once — the
+        # accumulator dedups).
         activations: list[tuple[str, str | None]] = [
             (name, message.timestamp)
             for message in messages
-            if (name := skill_context_note_name(message)) is not None
+            if (name := skill_context_note_name(message) or skill_tool_activation_name(message))
+            is not None
         ]
         self._skill_usage.observe_session(
             display_key=display_key,
