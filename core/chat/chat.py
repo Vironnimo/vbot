@@ -129,7 +129,7 @@ from core.extensions import HookContext
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import PinnedSkillCatalog, ProjectPromptContext
 from core.providers.errors import NetworkError
-from core.providers.providers import resolve_context_window
+from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
 from core.runs import (
     COMPACTION_COMPLETED_EVENT,
@@ -1575,8 +1575,9 @@ class ChatLoop:
 
         Returns ``None`` only when the model string is unusable (no
         ``provider/model`` form). Otherwise the value always resolves through the
-        shared default chain (model window → provider-config default → global
-        floor, see :func:`resolve_context_window`), so a model whose window is
+        shared effective chain (user-set/capped window for flagged-local models,
+        else model window → provider-config default → global floor, see
+        :func:`resolve_effective_context_window`), so a model whose window is
         ``None`` still gets a usable budget and auto-compaction keeps working
         instead of silently disabling itself.
         """
@@ -1593,10 +1594,24 @@ class ChatLoop:
         except (KeyError, AttributeError):
             return None
 
-        return resolve_context_window(
+        return resolve_effective_context_window(
             model_entry.context_window,
             self._lookup_provider_config(provider_id),
+            model_metadata=model_entry.metadata,
+            model_key=f"{provider_id}/{resolved_model_id}",
+            local_context_windows=self._load_local_context_windows(),
         )
+
+    def _load_local_context_windows(self) -> Any:
+        """Return the live user-configured local-model window map, or empty.
+
+        Read at call time (no reload hook) so a settings change applies to the
+        next request; tolerant of a partial runtime in tests.
+        """
+        try:
+            return self._runtime.storage.load_local_models_settings()["context_windows"]
+        except (AttributeError, KeyError):
+            return {}
 
     def _lookup_provider_config(self, provider_id: str) -> Any:
         """Return the ProviderConfig for the read-side window default, or None.

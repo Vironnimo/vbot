@@ -227,6 +227,9 @@ class IntegrationStorage:
     def load_debug_settings(self) -> JsonObject:
         return {"enabled": False, "trace_limit": 50}
 
+    def load_local_models_settings(self) -> JsonObject:
+        return {"context_windows": {}}
+
     def load_reflection_settings(self) -> JsonObject:
         return {"enabled": False, "memory_turn_interval": 10, "skill_tool_call_interval": 25}
 
@@ -471,6 +474,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                         ],
                     },
                     "context_window": 256000,
+                    "effective_context_window": 256000,
                     "max_output_tokens": 32000,
                     "connections": ["api-key"],
                 }
@@ -595,6 +599,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "skill_tool_call_interval": 25,
             },
             "model_tasks": {},
+            "local_models": {"context_windows": {}},
         },
     }
     assert "env_key" not in json.dumps(settings_response.json())

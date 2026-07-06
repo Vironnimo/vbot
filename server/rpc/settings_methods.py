@@ -334,6 +334,7 @@ def _settings_response(state: Any) -> JsonObject:
         },
         "reflection": dict(reflection),
         "model_tasks": model_tasks,
+        "local_models": runtime.storage.load_local_models_settings(),
     }
     skill_directory_loader = getattr(runtime.storage, "load_skill_directory_settings", None)
     if callable(skill_directory_loader):

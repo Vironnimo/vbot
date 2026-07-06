@@ -21,17 +21,21 @@ from core.providers.errors import (
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
     GLOBAL_CONTEXT_WINDOW_FLOOR,
+    LOCAL_CONTEXT_DEFAULT_CAP,
     AuthConfig,
     ConnectionConfig,
     ProviderConfig,
     ProviderRegistry,
+    model_is_local,
     resolve_context_window,
+    resolve_effective_context_window,
 )
 from core.providers.reasoning import (
     REASONING_REPLAY_CURRENT_RUN,
@@ -44,6 +48,7 @@ from core.providers.reasoning import (
 __all__ = [
     "DEFAULT_ACCOUNT_ID",
     "GLOBAL_CONTEXT_WINDOW_FLOOR",
+    "LOCAL_CONTEXT_DEFAULT_CAP",
     "REASONING_REPLAY_CURRENT_RUN",
     "REASONING_REPLAY_FULL_HISTORY",
     "REASONING_REPLAY_NONE",
@@ -54,6 +59,7 @@ __all__ = [
     "GitHubCopilotAdapter",
     "MiniMaxAdapter",
     "MistralAdapter",
+    "OllamaAdapter",
     "OpenAIAdapter",
     "OpenAICompatibleAdapter",
     "OpenCodeGoAdapter",
@@ -71,7 +77,9 @@ __all__ = [
     "ReasoningReplayPolicy",
     "compose_connection_id",
     "derive_credential_key",
+    "model_is_local",
     "resolve_context_window",
+    "resolve_effective_context_window",
     "split_connection_id",
     "validate_account_id",
 ]

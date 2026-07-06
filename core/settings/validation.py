@@ -46,6 +46,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "defaults",
         "extension_directories",
         "extensions",
+        "local_models",
         "max_subagent_depth",
         "max_subagents_per_turn",
         "model_tasks",
@@ -76,6 +77,7 @@ MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
 DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
 MAX_TRACE_LIMIT = 500
 REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_tool_call_interval"})
+LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
 
 AGENT_FIELDS = frozenset(
@@ -377,6 +379,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_model_tasks(diagnostics, data.get("model_tasks"))
     _validate_debug(diagnostics, data.get("debug"))
     _validate_reflection(diagnostics, data.get("reflection"))
+    _validate_local_models(diagnostics, data.get("local_models"))
     return diagnostics
 
 
@@ -972,6 +975,31 @@ def _validate_debug(diagnostics: list[JsonDiagnostic], value: Any) -> None:
                 "$.debug.trace_limit",
                 f"must be at most {MAX_TRACE_LIMIT}",
             )
+
+
+def _validate_local_models(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.local_models", "must be an object")
+        return
+
+    _warn_unknown_keys(
+        diagnostics, "$.local_models", value, LOCAL_MODELS_FIELDS, "local_models field"
+    )
+    context_windows = value.get("context_windows")
+    if context_windows is None:
+        return
+    if not isinstance(context_windows, Mapping):
+        _error(diagnostics, "$.local_models.context_windows", "must be an object")
+        return
+    for key, window in context_windows.items():
+        key_path = f"$.local_models.context_windows['{key}']"
+        if not isinstance(key, str) or "/" not in key or not key.strip():
+            _error(diagnostics, key_path, "key must be a '<provider>/<model_id>' string")
+            continue
+        if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
+            _error(diagnostics, key_path, "must be a positive integer")
 
 
 def _validate_reflection(diagnostics: list[JsonDiagnostic], value: Any) -> None:

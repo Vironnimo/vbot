@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -594,6 +594,7 @@ class StubProviderCredentials:
 class StubModelEntry:
     context_window: int | None
     connections: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class StubModels:
@@ -617,6 +618,9 @@ class StubStorage:
 
     def load_compaction_settings(self) -> JsonObject:
         return dict(self._compaction_settings)
+
+    def load_local_models_settings(self) -> JsonObject:
+        return {"context_windows": {}}
 
 
 class StubCompactionService:

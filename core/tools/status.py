@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from datetime import datetime
+from typing import Any
 
 from core.chat.commands import (
     build_status_reply,
@@ -62,8 +64,18 @@ def make_status_handler(
     started_at: datetime | None,
     providers: ProviderRegistry | None = None,
     projects: ProjectStore | None = None,
+    local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
 ):
     """Create a status tool handler bound to runtime services."""
+
+    def _load_local_context_windows() -> Mapping[str, Any]:
+        if local_context_windows_loader is None:
+            return {}
+        try:
+            return local_context_windows_loader()
+        except Exception:
+            _LOGGER.warning("Failed to load local-model context windows", exc_info=True)
+            return {}
 
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         try:
@@ -102,7 +114,9 @@ def make_status_handler(
             )
 
         activity = resolve_status_activity(chat_runs, agent_id, session_id, context.project_id)
-        model_details = resolve_status_model_details(agent, models, providers)
+        model_details = resolve_status_model_details(
+            agent, models, providers, local_context_windows=_load_local_context_windows()
+        )
 
         try:
             text = build_status_reply(
@@ -148,6 +162,7 @@ def register_status_tool(
     started_at: datetime | None,
     providers: ProviderRegistry | None = None,
     projects: ProjectStore | None = None,
+    local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
 ) -> None:
     """Register the status tool with a vBot tool registry."""
     registry.register(
@@ -155,7 +170,14 @@ def register_status_tool(
         STATUS_TOOL_DESCRIPTION,
         STATUS_TOOL_PARAMETERS,
         make_status_handler(
-            agent_resolver, sessions, models, chat_runs, started_at, providers, projects
+            agent_resolver,
+            sessions,
+            models,
+            chat_runs,
+            started_at,
+            providers,
+            projects,
+            local_context_windows_loader,
         ),
         display=ToolDisplay(),
     )
