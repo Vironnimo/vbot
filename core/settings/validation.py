@@ -47,6 +47,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "model_tasks",
         "port",
         "recall",
+        "reflection",
         "server_port",
         "skill_directories",
         "speech_upload_max_size_bytes",
@@ -70,6 +71,8 @@ WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
 MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
 DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
 MAX_TRACE_LIMIT = 500
+REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_tool_call_interval"})
+REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
 
 AGENT_FIELDS = frozenset(
     {
@@ -369,6 +372,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_web_search(diagnostics, data.get("web_search"))
     _validate_model_tasks(diagnostics, data.get("model_tasks"))
     _validate_debug(diagnostics, data.get("debug"))
+    _validate_reflection(diagnostics, data.get("reflection"))
     return diagnostics
 
 
@@ -952,6 +956,26 @@ def _validate_debug(diagnostics: list[JsonDiagnostic], value: Any) -> None:
                 "$.debug.trace_limit",
                 f"must be at most {MAX_TRACE_LIMIT}",
             )
+
+
+def _validate_reflection(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.reflection", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.reflection", value, REFLECTION_FIELDS, "reflection field")
+    if "enabled" in value and not isinstance(value["enabled"], bool):
+        _error(diagnostics, "$.reflection.enabled", "must be a boolean")
+    for field in REFLECTION_INTERVAL_FIELDS:
+        if field not in value:
+            continue
+        interval = value[field]
+        if isinstance(interval, bool) or not isinstance(interval, int):
+            _error(diagnostics, f"$.reflection.{field}", "must be a positive integer")
+        elif interval <= 0:
+            _error(diagnostics, f"$.reflection.{field}", "must be at least 1")
 
 
 def _validate_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:

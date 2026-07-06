@@ -679,6 +679,19 @@ export const englishCatalog = Object.freeze({
   'settings.subagents.timeoutMinutesDescription':
     'Maximum wait time for foreground sub-agent calls before they fail.',
   'settings.subagents.saveSuccess': 'Sub-agent settings updated.',
+  'settings.reflection.title': 'Reflection',
+  'settings.reflection.subtitle':
+    'Automatic background self-review that saves durable memory and skill updates from finished conversations.',
+  'settings.reflection.enabled': 'Enable background reflection',
+  'settings.reflection.enabledDescription':
+    'After a run finishes, the agent periodically reviews the conversation in a forked session and saves durable memory and skill updates. The original conversation is never touched.',
+  'settings.reflection.memoryInterval': 'Memory review interval (turns)',
+  'settings.reflection.memoryIntervalDescription':
+    'A memory review becomes due after this many of your messages in a conversation.',
+  'settings.reflection.skillInterval': 'Skill review interval (tool calls)',
+  'settings.reflection.skillIntervalDescription':
+    'A skill review becomes due after this many tool calls in a conversation.',
+  'settings.reflection.saveSuccess': 'Reflection settings updated.',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.subtitle':
     'Automatic summarizing when a conversation nears the model context limit.',

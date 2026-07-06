@@ -34,6 +34,7 @@ from core.settings.normalizers import (
     normalize_json_object,
     normalize_model_task_settings,
     normalize_recall_settings,
+    normalize_reflection_settings,
     normalize_skill_directories,
     normalize_subagent_integer,
     normalize_web_search_settings,
@@ -71,6 +72,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "web_search",
         "debug",
         "extensions",
+        "reflection",
     }
 )
 PHASE_TWO_DIRECTORIES = (
@@ -344,6 +346,11 @@ class StorageManager:
                     settings,
                     settings_update["extensions"],
                 )
+            if "reflection" in settings_update:
+                updated_sections["reflection"] = self._apply_reflection_settings(
+                    settings,
+                    settings_update["reflection"],
+                )
             return dict(updated_sections)
 
         return self.update_settings(apply_update)
@@ -454,6 +461,37 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_debug_settings(settings.get("debug"))
+
+    def load_reflection_settings(self) -> dict[str, Any]:
+        """Return normalized persisted background-reflection settings."""
+
+        settings = self.load_settings()
+        return normalize_reflection_settings(settings.get("reflection"))
+
+    def _apply_reflection_settings(
+        self,
+        settings: dict[str, Any],
+        reflection: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge reflection settings into an in-memory settings mapping."""
+
+        if not isinstance(reflection, Mapping):
+            raise StorageError("Reflection settings must be a mapping")
+
+        unsupported_fields = sorted(
+            set(reflection) - {"enabled", "memory_turn_interval", "skill_tool_call_interval"}
+        )
+        if unsupported_fields:
+            raise StorageError(f"Unsupported reflection settings: {', '.join(unsupported_fields)}")
+
+        normalized_reflection = normalize_reflection_settings(
+            {
+                **normalize_reflection_settings(settings.get("reflection")),
+                **dict(reflection),
+            }
+        )
+        settings["reflection"] = normalized_reflection
+        return dict(normalized_reflection)
 
     def load_web_search_settings(self) -> dict[str, Any]:
         """Return normalized persisted web search provider settings."""

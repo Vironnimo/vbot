@@ -11,6 +11,7 @@
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
   import SettingsProvidersPanel from './settings/SettingsProvidersPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
+  import SettingsReflectionPanel from './settings/SettingsReflectionPanel.svelte';
   import SettingsSkillsPanel from './settings/SettingsSkillsPanel.svelte';
   import SettingsSpecializedModelsPanel from './settings/SettingsSpecializedModelsPanel.svelte';
   import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
@@ -127,6 +128,17 @@
         t(
           'settings.subagents.subtitle',
           'Depth, fan-out, and timeout limits for spawned agent sessions.',
+        ),
+    },
+    {
+      id: 'reflection',
+      labelKey: 'settings.reflection.title',
+      labelFallback: 'Reflection',
+      label: () => t('settings.reflection.title', 'Reflection'),
+      subtitle: () =>
+        t(
+          'settings.reflection.subtitle',
+          'Automatic background self-review that saves durable memory and skill updates from finished conversations.',
         ),
     },
     {
@@ -354,6 +366,13 @@
           />
         {:else if activePanelId === 'subagents'}
           <SettingsSubAgentsPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => reportSettingsError(message)}
+          />
+        {:else if activePanelId === 'reflection'}
+          <SettingsReflectionPanel
             {settings}
             onCommit={commitSettings}
             {onToast}

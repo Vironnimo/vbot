@@ -40,6 +40,38 @@ SESSION_TITLE_MAX_LENGTH = 200
 # copied from and the fork point. Written on every fork (even when the source had no
 # sidecar) so a fork is self-describing.
 FORK_SOURCE_META_KEY = "fork_source"
+# Fork strip policy, owned beside the fork primitive. A fork is a plain, unbound
+# session: it must never inherit a channel binding, a sub-agent parent linkage, or
+# accumulated reflection cadence counters. The key names are literals on purpose —
+# the writing domains (channels engine, sub-agent coordinator, reflection service)
+# own the authoritative constants, and importing them here would cycle back through
+# ``core/chat``; drift is guarded by tests comparing against those constants.
+SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
+    {
+        "source_channel_id",
+        "platform",
+        "platform_conv_id",
+        "last_reply_target",
+        "is_subagent_session",
+        "subagent_parent",
+        "reflection_counters",
+    }
+)
+# Additionally stripped when a fork re-homes to a *different* agent: the pinned
+# skill catalog and its seen-skills set belong to the source agent's skill pool,
+# so a different agent must re-pin its own catalog on the fork's first run. A
+# same-agent fork (e.g. ``/reflect``) deliberately keeps them, so the fork stays
+# prompt-cache-warm against the source.
+SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS = frozenset({"pinned_skill_catalog", "seen_skills"})
+# Strip policy for the ``/agent`` move, which is cross-agent by definition (a
+# same-pair move is refused before any relocation): the cross-agent skill keys
+# above, plus the visited-projects record — the recorded visit injections were
+# made for the source agent's runs, so the destination agent must re-trigger
+# them fresh. Same literal-key rationale as the fork sets: ``visited_projects``
+# is owned by ``core/chat`` and importing it here would cycle.
+SESSION_MOVE_STRIP_META_KEYS = SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS | frozenset(
+    {"visited_projects"}
+)
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 PARTIAL_THINKING_NOTE_PREFIX = "[partial-thinking] "
 CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
@@ -683,7 +715,7 @@ class ChatSessionManager:
 
         Mirrors the live layout beneath a dedicated archive root so a hand
         restore knows the origin, and so it never collides with the agent
-        archive (``archive/<agent-id>/``) or the project archive
+        archive (``archive/agents/<agent-id>/``) or the project archive
         (``archive/projects/<project-id>/``):
 
         - identity: ``archive/sessions/agents/<agent-id>/``
