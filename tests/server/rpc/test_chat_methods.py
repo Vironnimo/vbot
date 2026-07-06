@@ -16,13 +16,15 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from core.automation.reflection import REFLECTION_COUNTERS_META_KEY, ReflectionService
 from core.chat import ChatMessage, CommandAction
 from core.projects import AgentResolutionError, format_agent_address
 from core.runs import ActiveRunError
+from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SESSION_MOVE_STRIP_META_KEYS
 from server.events import ServerEventBus
 from server.rpc.chat_methods import (
     _chat_queue_remove,
@@ -366,7 +368,17 @@ def _make_reflect_state(
     *,
     workspace: str = "/home/agent",
     active: bool = False,
+    titles: list[tuple[str, str]] | None = None,
+    metadata_writes: list[tuple[str, dict[str, Any]]] | None = None,
 ) -> SimpleNamespace:
+    """State stub whose runtime carries a REAL ``ReflectionService``.
+
+    The handler delegates fork + review to ``runtime.reflection``, so the test
+    wires the genuine service against stubbed sessions/loop/storage — the
+    orchestration (fork, fork title, restricted internal run, counter reset)
+    is exercised for real while I/O stays captured in the lists.
+    """
+
     async def start_run(agent_id: str, content: Any, **kwargs: Any) -> _FakeRun:
         captured.append({"agent_id": agent_id, "message": content, **kwargs})
         return _FakeRun()
@@ -375,15 +387,29 @@ def _make_reflect_state(
         forked.append({"source_agent_id": source_agent_id, "session_id": session_id, **kwargs})
         return SimpleNamespace(id="fork-1")
 
+    title_log = titles if titles is not None else []
+    metadata_log = metadata_writes if metadata_writes is not None else []
+    chat_sessions = SimpleNamespace(
+        fork=fork,
+        get_metadata=lambda agent_id, session_id, project_id=None: {},
+        set_metadata=lambda agent_id, session_id, data, project_id=None: metadata_log.append(
+            (session_id, data)
+        ),
+        set_title=lambda agent_id, session_id, title, project_id=None: title_log.append(
+            (session_id, title)
+        ),
+    )
     runtime = SimpleNamespace(
         agent_resolver=SimpleNamespace(
             resolve_agent=lambda project_id, agent_id: SimpleNamespace(
                 id=agent_id, workspace=workspace
             )
         ),
-        chat_sessions=SimpleNamespace(fork=fork),
+        chat_sessions=chat_sessions,
         storage=_fragment_storage(),
+        streaming_chat_loop=SimpleNamespace(start_run=start_run),
     )
+    runtime.reflection = ReflectionService(cast("Any", runtime))
     active_run = _FakeRun() if active else None
     return SimpleNamespace(
         chat_loop=SimpleNamespace(start_run=start_run),
@@ -399,7 +425,9 @@ def _make_reflect_state(
 async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[dict[str, Any]] = []
     forked: list[dict[str, Any]] = []
-    state = _make_reflect_state(captured, forked)
+    titles: list[tuple[str, str]] = []
+    metadata_writes: list[tuple[str, dict[str, Any]]] = []
+    state = _make_reflect_state(captured, forked, titles=titles, metadata_writes=metadata_writes)
     monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
 
     response = await _send_chat(
@@ -410,6 +438,7 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
     # The source session is forked once; the review run targets the NEW fork id.
     assert forked[0]["source_agent_id"] == "builder"
     assert forked[0]["session_id"] == "s1"
+    assert forked[0]["strip_meta_keys"] == SESSION_FORK_ALWAYS_STRIP_META_KEYS
     assert len(captured) == 1
     assert captured[0]["session_id"] == "fork-1"
     assert captured[0]["session_id"] != "s1"
@@ -418,6 +447,21 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
     # The brief carries the fragment marker plus the focus text.
     assert "Review this session" in captured[0]["message"]
     assert "focus on the memory side" in captured[0]["message"]
+    # The fork is titled recognizably instead of inheriting the source title.
+    assert titles == [("fork-1", "Reflection")]
+    # A manual review covers both dimensions, so the cadence counters reset on
+    # the SOURCE session.
+    assert metadata_writes == [
+        (
+            "s1",
+            {
+                REFLECTION_COUNTERS_META_KEY: {
+                    "turns_since_memory_review": 0,
+                    "tool_calls_since_skill_review": 0,
+                }
+            },
+        )
+    ]
     # The reply is the run's final message, and the fork id rides in ``data``.
     assert response["command_handled"] is True
     assert response["reply"] == "handoff text"
@@ -972,7 +1016,7 @@ def _make_move_state(
         streaming_chat_loop=task_loop,
         runtime=runtime,
         chat_runs=_FakeMoveRuns(active, queued),
-        event_bus=SimpleNamespace(publish=lambda *a, **k: None),
+        event_bus=ServerEventBus(),
         command_dispatcher=_NoCommandDispatcher(),
     )
     state._sessions = sessions  # type: ignore[attr-defined]
@@ -1011,8 +1055,14 @@ async def test_move_directions_relocate_and_re_home_pointers(
     assert move_call["source_project_id"] == source_project
     assert move_call["target_agent_id"] == target_agent
     assert move_call["target_project_id"] == target_project
-    # Cross-world identity residue is stripped on the move.
-    assert "visited_projects" in move_call["strip_meta_keys"]
+    # A move is always cross-agent, so the source agent's residue is stripped:
+    # the pinned skill catalog + seen-skills set (the target re-pins its own
+    # catalog, like a cross-agent fork) and the visited-projects record (visit
+    # injections re-trigger fresh for the target).
+    assert move_call["strip_meta_keys"] == set(SESSION_MOVE_STRIP_META_KEYS)
+    assert {"pinned_skill_catalog", "seen_skills", "visited_projects"} <= move_call[
+        "strip_meta_keys"
+    ]
 
     # The "current" pointer follows the session on each identity side only.
     assert (state._agents.reset_calls == [("builder", "s1")]) is reset
@@ -1020,6 +1070,15 @@ async def test_move_directions_relocate_and_re_home_pointers(
         assert state._agents.update_calls == [(target_agent, {"current_session_id": "s1"})]
     else:
         assert state._agents.update_calls == []
+
+    # The relocation is announced like session.create/delete: a sessions signal
+    # for each side's list, plus one agents signal when an identity current
+    # pointer was re-aimed on either side.
+    resource_events = _queue_resource_events(state)
+    assert {"kind": "sessions", "scope": {"agent_id": "builder"}} in resource_events
+    assert {"kind": "sessions", "scope": {"agent_id": target_agent}} in resource_events
+    agents_events = [event for event in resource_events if event["kind"] == "agents"]
+    assert (agents_events == [{"kind": "agents"}]) is (reset or update)
 
     # A visible takeover divider and the silent note are persisted at the destination.
     assert len(state._sessions.destination.appended) == 1
@@ -1047,6 +1106,8 @@ async def test_move_to_same_pair_is_a_no_op_hint() -> None:
 
     assert "already belongs" in result["reply"]
     assert state._sessions.move_calls == []
+    # A refused move announces nothing — the signals fire only after relocation.
+    assert _queue_resource_events(state) == []
 
 
 @pytest.mark.asyncio
