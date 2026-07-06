@@ -780,6 +780,8 @@ def test_dispatch_status_with_no_deps_returns_degraded_reply() -> None:
     assert "Activity: idle" in result.reply
     assert f"Run created at: {STATUS_PLACEHOLDER}" in result.reply
     assert f"Run updated at: {STATUS_PLACEHOLDER}" in result.reply
+    assert f"Last request cache: {STATUS_PLACEHOLDER}" in result.reply
+    assert f"Session cache: {STATUS_PLACEHOLDER}" in result.reply
     assert "Current time:" in result.reply
 
 
@@ -790,7 +792,12 @@ def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> 
         ChatMessage.assistant(
             model="openai/gpt-5.2",
             content="All systems go.",
-            usage={"input_tokens": 1234, "output_tokens": 42},
+            usage={
+                "input_tokens": 1234,
+                "output_tokens": 42,
+                "cache_read_tokens": 800,
+                "cache_write_tokens": 100,
+            },
             timestamp=session_started,
         ),
     ]
@@ -812,6 +819,8 @@ def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> 
     assert f"Run created at: {STATUS_PLACEHOLDER}" in result.reply
     assert f"Run updated at: {STATUS_PLACEHOLDER}" in result.reply
     assert "Context usage: 1234 / 200000" in result.reply
+    assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in result.reply
+    assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in result.reply
     assert "Current time:" in result.reply
 
 
@@ -945,6 +954,8 @@ def test_build_status_text_degraded_with_no_data() -> None:
     assert f"Actual model thinking effort: {STATUS_PLACEHOLDER}" in text
     assert f"Temperature: {STATUS_PLACEHOLDER}" in text
     assert f"Context usage: {STATUS_PLACEHOLDER}" in text
+    assert f"Last request cache: {STATUS_PLACEHOLDER}" in text
+    assert f"Session cache: {STATUS_PLACEHOLDER}" in text
     assert f"Activity: {STATUS_PLACEHOLDER}" in text
     assert f"Run created at: {STATUS_PLACEHOLDER}" in text
     assert f"Run updated at: {STATUS_PLACEHOLDER}" in text
@@ -983,10 +994,47 @@ def test_build_status_text_with_full_data() -> None:
     assert f"Run created at: {STATUS_PLACEHOLDER}" in text
     assert f"Run updated at: {STATUS_PLACEHOLDER}" in text
     assert "Context usage: ~987 / 200000" in text
+    assert f"Last request cache: {STATUS_PLACEHOLDER}" in text
+    assert f"Session cache: {STATUS_PLACEHOLDER}" in text
     assert "Session started:" in text
     assert "Turn count: 1" in text
     assert "App uptime:" in text
     assert "Current time:" in text
+
+
+def test_build_status_text_reports_latest_and_session_cache() -> None:
+    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+    messages = [
+        ChatMessage.user("Status check", timestamp=session_started),
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="First answer.",
+            usage={
+                "input_tokens": 1000,
+                "output_tokens": 12,
+                "cache_read_tokens": 800,
+                "cache_write_tokens": 100,
+            },
+            timestamp=session_started,
+        ),
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Second answer.",
+            usage={"input_tokens": 500, "output_tokens": 8, "cache_read_tokens": 200},
+            timestamp=session_started,
+        ),
+    ]
+
+    text = build_status_text(
+        _make_agent(),
+        messages,
+        context_window=200_000,
+        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+    )
+
+    assert "Context usage: 500 / 200000" in text
+    assert "Last request cache: read 200 / 500 (40.0% hit), write 0" in text
+    assert "Session cache: read 1000 / 1500 (66.7% hit), write 100, turns 2" in text
 
 
 def test_build_status_text_handles_unresolved_nullable_defaults() -> None:

@@ -187,7 +187,12 @@ def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
         ChatMessage.assistant(
             model="openai/gpt-5.2",
             content="All systems go.",
-            usage={"input_tokens": 1234, "output_tokens": 42},
+            usage={
+                "input_tokens": 1234,
+                "output_tokens": 42,
+                "cache_read_tokens": 800,
+                "cache_write_tokens": 100,
+            },
             timestamp=session_started,
         ),
     ]
@@ -213,6 +218,17 @@ def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
     assert "Activity: idle" in text
     assert f"Run created at: {STATUS_PLACEHOLDER}" in text
     assert f"Run updated at: {STATUS_PLACEHOLDER}" in text
+    assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in text
+    assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in text
+    assert set(data) == {
+        "text",
+        "agent_id",
+        "session_id",
+        "activity",
+        "run_id",
+        "created_at",
+        "updated_at",
+    }
     assert data["activity"] == "idle"
     assert data["agent_id"] == "coder"
     assert data["session_id"] == "session-one"
