@@ -324,6 +324,7 @@ def _settings_response(state: Any) -> JsonObject:
         "web_search": {
             "provider": web_search["provider"],
             "available_providers": sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS),
+            "default_count": web_search["default_count"],
             "searxng": dict(web_search["searxng"]),
         },
         "debug": {

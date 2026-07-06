@@ -487,6 +487,7 @@ def test_load_web_search_settings_defaults_to_brave(tmp_path: Path) -> None:
 
     assert storage.load_web_search_settings() == {
         "provider": "brave",
+        "default_count": 12,
         "searxng": {"base_url": "http://localhost:8888"},
     }
 
@@ -499,6 +500,7 @@ def test_update_web_search_settings_persists_provider_and_searxng_url(tmp_path: 
         {
             "web_search": {
                 "provider": "searxng",
+                "default_count": 15,
                 "searxng": {"base_url": " http://localhost:9999/ "},
             }
         }
@@ -506,6 +508,7 @@ def test_update_web_search_settings_persists_provider_and_searxng_url(tmp_path: 
 
     assert updated["web_search"] == {
         "provider": "searxng",
+        "default_count": 15,
         "searxng": {"base_url": "http://localhost:9999/"},
     }
     assert storage.load_settings() == {
@@ -522,6 +525,7 @@ def test_update_web_search_settings_preserves_searxng_url_when_switching_provide
         {
             "web_search": {
                 "provider": "searxng",
+                "default_count": 15,
                 "searxng": {"base_url": "http://localhost:9999"},
             }
         }
@@ -531,6 +535,7 @@ def test_update_web_search_settings_preserves_searxng_url_when_switching_provide
 
     assert updated["web_search"] == {
         "provider": "brave",
+        "default_count": 15,
         "searxng": {"base_url": "http://localhost:9999"},
     }
 
@@ -547,6 +552,10 @@ def test_update_web_search_settings_preserves_searxng_url_when_switching_provide
         (
             {"provider": "searxng", "searxng": {"base_url": ""}},
             "SearXNG base_url must be a non-empty string",
+        ),
+        (
+            {"provider": "brave", "default_count": 21},
+            "Web search default_count must be an integer between 1 and 20",
         ),
     ],
 )

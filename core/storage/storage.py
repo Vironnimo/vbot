@@ -581,7 +581,7 @@ class StorageManager:
         if not isinstance(web_search, Mapping):
             raise StorageError("Web search settings must be a mapping")
 
-        unsupported_fields = sorted(set(web_search) - {"provider", "searxng"})
+        unsupported_fields = sorted(set(web_search) - {"provider", "default_count", "searxng"})
         if unsupported_fields:
             raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
 

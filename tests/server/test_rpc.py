@@ -675,6 +675,7 @@ class StubStorage:
         stored = self._settings.get("web_search")
         defaults: JsonObject = {
             "provider": "brave",
+            "default_count": 12,
             "searxng": {"base_url": "http://localhost:8888"},
         }
         if not isinstance(stored, dict):
@@ -683,6 +684,10 @@ class StubStorage:
         provider = stored.get("provider")
         if not isinstance(provider, str) or provider not in {"brave", "searxng"}:
             provider = "brave"
+
+        default_count = stored.get("default_count")
+        if not isinstance(default_count, int) or isinstance(default_count, bool):
+            default_count = 12
 
         searxng = stored.get("searxng")
         if not isinstance(searxng, dict):
@@ -693,6 +698,7 @@ class StubStorage:
 
         return {
             "provider": provider,
+            "default_count": default_count,
             "searxng": {"base_url": base_url.strip()},
         }
 
@@ -1547,6 +1553,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         "web_search": {
             "provider": "brave",
             "available_providers": ["brave", "searxng"],
+            "default_count": 12,
             "searxng": {"base_url": "http://localhost:8888"},
         },
         "debug": {
@@ -3827,11 +3834,13 @@ async def test_settings_update_persists_web_search_provider(tmp_path: Path) -> N
     assert response["ok"] is True, response
     assert state.runtime.storage.load_web_search_settings() == {
         "provider": "searxng",
+        "default_count": 12,
         "searxng": {"base_url": "http://localhost:9999"},
     }
     assert response["result"]["web_search"] == {
         "provider": "searxng",
         "available_providers": ["brave", "searxng"],
+        "default_count": 12,
         "searxng": {"base_url": "http://localhost:9999"},
     }
 
