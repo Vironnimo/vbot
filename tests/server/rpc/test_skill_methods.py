@@ -29,7 +29,7 @@ def _skill_md(
 
 
 class _SkillRuntime:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, known_agents: set[str]) -> None:
         self._root = root
         self.global_skills_dir = root / "skills"
         self.skill_authoring = SkillAuthoringService(
@@ -37,6 +37,9 @@ class _SkillRuntime:
         )
         self.reload_calls = 0
         self.invalidated: list[str] = []
+        # The identity-store probe the agent-scope validation consults: private
+        # skill homes are identity-only, so only known agents accept writes.
+        self.agents = SimpleNamespace(exists=lambda agent_id: agent_id in known_agents)
 
     def agent_skills_dir(self, agent_id: str) -> Path:
         return self._root / "agents" / agent_id / "skills"
@@ -48,8 +51,9 @@ class _SkillRuntime:
         self.invalidated.append(agent_id)
 
 
-def _state(tmp_path: Path) -> Any:
-    return SimpleNamespace(runtime=_SkillRuntime(tmp_path))
+def _state(tmp_path: Path, known_agents: set[str] | None = None) -> Any:
+    known = known_agents if known_agents is not None else {"builder"}
+    return SimpleNamespace(runtime=_SkillRuntime(tmp_path, known))
 
 
 def test_create_global_writes_and_reloads(tmp_path: Path) -> None:
@@ -137,6 +141,20 @@ def test_invalid_agent_scope_id_is_rejected(tmp_path: Path) -> None:
         _skill_create(state, {"scope": "agent:../escape", "name": "demo", "content": _skill_md()})
 
     assert exc.value.code == RPC_ERROR_INVALID_REQUEST
+
+
+def test_unknown_agent_scope_is_rejected(tmp_path: Path) -> None:
+    # Private skill homes are identity-only. A well-formed id that names no stored
+    # identity agent (e.g. a project-team slug) must be refused — a write would
+    # create a stray ``agents/<id>/skills`` home that no agent owns.
+    state = _state(tmp_path, known_agents={"builder"})
+
+    with pytest.raises(RpcError) as exc:
+        _skill_create(state, {"scope": "agent:ghost", "name": "demo", "content": _skill_md()})
+
+    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
+    assert "ghost" in exc.value.message
+    assert not state.runtime.agent_skills_dir("ghost").exists()
 
 
 def test_bad_content_returns_authoring_diagnostics(tmp_path: Path) -> None:
