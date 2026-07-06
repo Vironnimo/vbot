@@ -16,6 +16,7 @@ from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.ollama import OllamaAdapter
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -714,21 +715,45 @@ def test_get_connection_token_getter_returns_static_for_api_key(runtime: Runtime
 @pytest.mark.asyncio
 async def test_token_getter_for_none_connection_is_static_and_empty(runtime: Runtime) -> None:
     """A keyless ``none`` connection yields a StaticTokenGetter with an empty token."""
-    # Arrange — fabricated keyless connection (public-path coverage arrives with
-    # the first shipped ``none`` provider config).
-    connection = ConnectionConfig(
-        id="local",
-        type="none",
-        label="Local",
-        auth=AuthConfig(header="", prefix="", credential_key=""),
-    )
-
-    # Act
-    getter = runtime._get_token_getter("ollama", "ollama:local", connection, None)
+    # Act — the shipped Ollama config carries a keyless local connection.
+    getter = runtime.get_connection_token_getter("ollama", "ollama:local")
 
     # Assert
     assert isinstance(getter, StaticTokenGetter)
     assert await getter() == ""
+
+
+def test_runtime_wires_ollama_adapter_for_keyless_local_connection(runtime: Runtime) -> None:
+    """get_adapter wires the Ollama adapter without any configured credential."""
+    # Act
+    adapter = runtime.get_adapter("ollama", "ollama:local")
+
+    # Assert
+    assert isinstance(adapter, OllamaAdapter)
+
+
+def test_ollama_provider_config_fields(runtime: Runtime) -> None:
+    """The shipped Ollama provider config parses with both connections."""
+    # Act
+    config = runtime.providers.get("ollama")
+
+    # Assert
+    assert config.adapter == "ollama"
+    assert config.base_url == "http://localhost:11434"
+    assert config.models_endpoint == "/api/tags"
+    local = config.get_connection("local")
+    cloud = config.get_connection("cloud")
+    assert local.type == "none"
+    assert cloud.type == "api_key"
+    assert cloud.base_url == "https://ollama.com"
+    assert cloud.auth.credential_key == "OLLAMA_API_KEY"
+
+
+def test_ollama_local_connection_reports_credentials_configured(runtime: Runtime) -> None:
+    """The keyless local connection passes the credential gate with no env at all."""
+    # Assert
+    assert runtime.provider_credentials.has_credentials("ollama", "ollama:local") is True
+    assert runtime.provider_credentials.get_credentials("ollama", "ollama:local") == ""
 
 
 @pytest.mark.asyncio
