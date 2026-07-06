@@ -339,6 +339,7 @@ class Runtime:
         self._tools: ToolRegistry | None = None
         self._tool_prompt_blocks: ToolPromptBlockRegistry | None = None
         self._memory_service: MemoryService | None = None
+        self._file_state: FileReadState | None = None
         self._process_manager: ProcessManager | None = None
         self._skills: SkillRegistry | None = None
         # Per-project merged skill registries + project-skill names, cached by
@@ -701,6 +702,7 @@ class Runtime:
         self._agents = None
         self._tools = None
         self._memory_service = None
+        self._file_state = None
         self._process_manager = None
         self._skills = None
         self._project_skills = {}
@@ -1654,6 +1656,18 @@ class Runtime:
         if self._process_manager is None:
             raise RuntimeError("Process manager service not available")
         return self._process_manager
+
+    @property
+    def file_read_state(self) -> FileReadState:
+        """Access to the shared per-session read-before-write guard.
+
+        The same instance the read/write/edit tools use, so an ``@``-mention
+        snapshot at send time counts as a read for the session's later edits.
+        """
+        self._ensure_started()
+        if self._file_state is None:
+            raise RuntimeError("File read state service not available")
+        return self._file_state
 
     @property
     def skills(self) -> SkillRegistry:

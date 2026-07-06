@@ -851,16 +851,19 @@ export function updateQueueItem(
     );
   }
 
-  return rpc(
-    'chat.queue_update',
-    {
-      agent_id: agentId,
-      session_id: sessionId,
-      item_id: itemId,
-      content,
-    },
-    options,
-  );
+  // `fileMentions` rides in the options bag (the tail params are transport
+  // options); it becomes the RPC's `file_mentions` param, not a fetch option.
+  const { fileMentions, ...requestOptions } = options;
+  const params = {
+    agent_id: agentId,
+    session_id: sessionId,
+    item_id: itemId,
+    content,
+  };
+  if (Array.isArray(fileMentions) && fileMentions.length > 0) {
+    params.file_mentions = fileMentions;
+  }
+  return rpc('chat.queue_update', params, requestOptions);
 }
 
 export function deleteChannel(channelId, options = {}) {

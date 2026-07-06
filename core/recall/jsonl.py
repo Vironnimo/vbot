@@ -7,7 +7,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
+from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
 from core.recall.recall import JsonObject, RecallRequest
 from core.sessions import ChatSessionManager, is_skill_context_note
 
@@ -539,6 +539,10 @@ def content_block_to_text(block: Any) -> str:
         return block.text
     if isinstance(block, (FileBlock, MediaBlock)):
         return f"{block.filename} {block.media_type}"
+    if isinstance(block, FileMentionBlock):
+        # Index the mentioned path only: the snapshot text is repo content, not
+        # conversation content, and would bloat the recall index.
+        return block.path
     return ""
 
 
