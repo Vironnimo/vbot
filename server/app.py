@@ -116,6 +116,14 @@ def create_app(
         app_runtime.start()
         _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
         await _fire_extension_startup(app_runtime)
+        # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
+        # in the background — never blocking startup; the method itself is
+        # throttled and swallows failures. Guarded for stub runtimes in tests.
+        maybe_refresh_local_catalogs = getattr(app_runtime, "maybe_refresh_local_catalogs", None)
+        if callable(maybe_refresh_local_catalogs):
+            app.state.local_catalog_refresh_task = asyncio.create_task(
+                maybe_refresh_local_catalogs()
+            )
         server_logger = logging.getLogger("vbot.server.app")
         server_logger.info(
             "Server application ready on %s:%s",
