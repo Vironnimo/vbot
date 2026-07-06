@@ -101,7 +101,7 @@ def make_status_handler(
                 f"session does not exist for agent {agent_id}: {session_id}",
             )
 
-        activity = resolve_status_activity(chat_runs, agent_id, session_id)
+        activity = resolve_status_activity(chat_runs, agent_id, session_id, context.project_id)
         model_details = resolve_status_model_details(agent, models, providers)
 
         try:

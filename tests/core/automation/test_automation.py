@@ -357,7 +357,9 @@ async def test_has_active_run_reports_active_run_presence() -> None:
 
     # Assert
     assert result is True
-    chat_run_manager.active_run.assert_called_once_with(agent_id="coder", session_id="session-one")
+    chat_run_manager.active_run.assert_called_once_with(
+        agent_id="coder", session_id="session-one", project_id=None
+    )
 
 
 async def test_has_active_run_reports_idle_session() -> None:

@@ -41,6 +41,7 @@ class TestChatCancelToolCall:
             agent_id="coder",
             session_id="session-one",
             executor=_hold_forever_executor,
+            project_id=None,
         )
         invocations: list[str] = []
 
@@ -91,6 +92,7 @@ class TestChatCancelToolCall:
             agent_id="coder",
             session_id="session-one",
             executor=_hold_forever_executor,
+            project_id=None,
         )
 
         response = await dispatch_rpc(
@@ -118,6 +120,7 @@ class TestChatCancelToolCall:
             agent_id="coder",
             session_id="session-one",
             executor=_hold_forever_executor,
+            project_id=None,
         )
 
         response = await dispatch_rpc(
@@ -169,6 +172,7 @@ class TestChatCancelReason:
             agent_id="coder",
             session_id="session-one",
             executor=_hold_forever_executor,
+            project_id=None,
         )
         await asyncio.sleep(0)
 
@@ -203,6 +207,7 @@ class TestChatCancelReason:
             agent_id="coder",
             session_id="session-one",
             executor=_hold_forever_executor,
+            project_id=None,
         )
         await asyncio.sleep(0)
 

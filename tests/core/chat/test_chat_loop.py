@@ -1642,9 +1642,7 @@ async def test_compact_session_refuses_while_run_is_active(tmp_path: Path) -> No
         return "done"
 
     active_run = await runtime.chat_runs.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=blocked_executor,
+        agent_id="coder", session_id="session-one", executor=blocked_executor, project_id=None
     )
     loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
 
