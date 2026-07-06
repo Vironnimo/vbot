@@ -527,7 +527,10 @@ def _build_headers(
     connection = credential_connection or next(iter(provider_config.connections), None)
     if connection is not None:
         auth = connection.auth
-        headers[auth.header] = f"{auth.prefix}{credential_value}"
+        # Keyless connections (type "none") have an empty auth header and an
+        # empty credential — sending "Bearer " garbage would be wrong.
+        if auth.header and credential_value:
+            headers[auth.header] = f"{auth.prefix}{credential_value}"
     discovery_headers = getattr(adapter_class, "discovery_headers", None)
     if callable(discovery_headers):
         return dict(discovery_headers(provider_config, credential_value, headers))
