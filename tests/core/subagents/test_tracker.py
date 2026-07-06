@@ -212,3 +212,62 @@ async def test_batch_with_fetched_entries_prunes_without_second_note() -> None:
     assert "first output" not in trigger_service.calls[0][1]
     assert "second output" in trigger_service.calls[0][1]
     assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+
+
+async def test_remove_queued_fires_completion_when_siblings_already_finished() -> None:
+    # Arrange: sibling B completes first (no note yet — queued A still open), then
+    # queued A's item is removed (chat.queue_remove). The removal is the last event
+    # that can complete the batch, so it must deliver B's result and drop the batch.
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, "worker", "session-b", "run-b")
+    tracker.register_queued(parent_key, "worker", "session-a", "queue-item-a")
+    tracker.on_sub_agent_complete(parent_key, "run-b", {"result": "b output"})
+    assert trigger_service.calls == []
+
+    # Act
+    tracker.remove_queued(parent_key, "queue-item-a")
+    await asyncio.sleep(0)
+
+    # Assert: the promised automatic delivery fired and nothing leaks.
+    assert len(trigger_service.calls) == 1
+    assert "b output" in trigger_service.calls[0][1]
+    assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+
+
+async def test_remove_queued_stays_silent_while_siblings_still_run() -> None:
+    # Arrange: removing queued A while live sibling B is still running must not
+    # notify — B's own completion event fires the note later, exactly once.
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, "worker", "session-b", "run-b")
+    tracker.register_queued(parent_key, "worker", "session-a", "queue-item-a")
+
+    # Act
+    tracker.remove_queued(parent_key, "queue-item-a")
+    tracker.on_sub_agent_complete(parent_key, "run-b", {"result": "b output"})
+    await asyncio.sleep(0)
+
+    # Assert
+    assert len(trigger_service.calls) == 1
+    assert "b output" in trigger_service.calls[0][1]
+    assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+
+
+async def test_remove_queued_only_entry_prunes_batch_without_note() -> None:
+    # Arrange: the batch's single entry is the queued item being removed — the
+    # batch just empties out; an empty batch never notifies.
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register_queued(parent_key, "worker", "session-a", "queue-item-a")
+
+    # Act
+    tracker.remove_queued(parent_key, "queue-item-a")
+    await asyncio.sleep(0)
+
+    # Assert
+    assert trigger_service.calls == []
+    assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
