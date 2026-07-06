@@ -39,10 +39,15 @@ def _state(
     project_names: list[str] | None = None,
     agent_allowed: list[str] | None = None,
     resolvable: bool = True,
+    agent_workspace: str = "",
+    rooted_project_id: str | None = None,
 ) -> Any:
     global_registry = _Registry(global_names)
     project_registry = _Registry(project_names or [])
-    agent = SimpleNamespace(allowed_skills=agent_allowed if agent_allowed is not None else ["*"])
+    agent = SimpleNamespace(
+        allowed_skills=agent_allowed if agent_allowed is not None else ["*"],
+        workspace=agent_workspace,
+    )
 
     def resolve_agent(project_id: str | None, agent_id: str) -> object:
         if not resolvable:
@@ -54,10 +59,20 @@ def _state(
     def skills_for(project_id: str | None, agent_id: str | None = None) -> _Registry:
         return project_registry if project_id is not None else global_registry
 
+    # ``resolve_prompt_project`` reaches through this store: ``get`` for a project
+    # address, ``find_by_cwd`` for the rooted-identity lookup.
+    rooted = (
+        SimpleNamespace(project_id=rooted_project_id) if rooted_project_id is not None else None
+    )
+    projects = SimpleNamespace(
+        get=lambda project_id: SimpleNamespace(project_id=project_id),
+        find_by_cwd=lambda _cwd: rooted,
+    )
     runtime = SimpleNamespace(
         skills=global_registry,
         skills_for=skills_for,
         agent_resolver=SimpleNamespace(resolve_agent=resolve_agent),
+        projects=projects,
     )
     return SimpleNamespace(runtime=runtime)
 
@@ -96,6 +111,23 @@ def test_project_agent_address_uses_project_registry() -> None:
     result = _list_commands(state, {"agent_id": "builder@vbot"})
 
     assert _skill_names(result) == ["proj-a", "proj-b"]
+
+
+def test_rooted_identity_agent_suggests_home_project_skills() -> None:
+    # A rooted identity agent (workspace == a registered repo, bare address) must
+    # autocomplete against its home project's pool — the same scope a run resolves —
+    # not the bare global registry.
+    state = _state(
+        global_names=["bundled-only"],
+        project_names=["home-skill"],
+        agent_allowed=["*"],
+        agent_workspace="/srv/repo",
+        rooted_project_id="vbot",
+    )
+
+    result = _list_commands(state, {"agent_id": "main"})
+
+    assert _skill_names(result) == ["home-skill"]
 
 
 def test_commands_are_always_present() -> None:

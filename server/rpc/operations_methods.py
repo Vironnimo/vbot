@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.projects import resolve_prompt_project, runtime_agent_body
+from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
 from core.utils.log_viewer import LogViewer
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
@@ -179,9 +179,26 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
-        project_context = _preview_project_context(state, project_id, agent)
+        # The preview resolves through the same shared rooting policy a run uses
+        # (:func:`core.projects.resolve_prompt_project`), so it matches what is
+        # actually sent: a project-qualified preview carries that project's cwd and
+        # auto-load list; a bare identity preview carries the files of the project
+        # the agent is *rooted* in (workspace == a registered repo), or nothing —
+        # in which case ``{project_files}`` collapses and the prompt is unchanged.
+        prompt_project = resolve_prompt_project(state.runtime.projects, project_id, agent)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    project_context = (
+        ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
+        if prompt_project is not None
+        else None
+    )
+    # Skill scope mirrors the chat loop through the shared policy: a rooted
+    # identity preview sees its home project's skills like the run would, and the
+    # private-skill layer applies to identity previews only (a project-qualified
+    # preview renders a config agent, whose slug must not resolve a same-named
+    # identity agent's private home).
+    skill_project_id, identity_agent_id = resolve_skill_scope(project_id, prompt_project, agent_id)
 
     try:
         prompt_manager = state.runtime.system_prompts
@@ -190,12 +207,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
             scope=prompt_scope,
             agent_body=runtime_agent_body(agent),
             project_context=project_context,
-            # Private skills are identity-only: a project-qualified preview renders
-            # a config agent, whose slug must not resolve a same-named identity
-            # agent's private skill home (mirrors the chat loop's gating).
-            skill_registry=state.runtime.skills_for(
-                project_id, agent_id if project_id is None else None
-            ),
+            skill_registry=state.runtime.skills_for(skill_project_id, identity_agent_id),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -212,24 +224,6 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         "tool_count": len(tool_definitions),
         "estimated": estimated,
     }
-
-
-def _preview_project_context(
-    state: Any, project_id: str | None, agent: Any
-) -> ProjectPromptContext | None:
-    """Build the prompt-time project context for a preview, mirroring the chat loop.
-
-    Resolves through the same shared rooting policy a run uses
-    (:func:`core.projects.resolve_prompt_project`), so the preview matches what is
-    actually sent: a project-qualified preview carries that project's cwd and
-    auto-load list; a bare identity preview carries the files of the project the
-    agent is *rooted* in (workspace == a registered repo), or nothing — in which
-    case ``{project_files}`` collapses and the prompt is unchanged.
-    """
-    project = resolve_prompt_project(state.runtime.projects, project_id, agent)
-    if project is None:
-        return None
-    return ProjectPromptContext.from_project(project.cwd, project.auto_load)
 
 
 def _log_viewer(state: Any) -> LogViewer:

@@ -127,7 +127,7 @@ from core.chat.tool_dispatch import (
 from core.chat.usage import aggregate_session_usage
 from core.debug import DebugContext
 from core.extensions import HookContext
-from core.projects import resolve_prompt_project, runtime_agent_body
+from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import PinnedSkillCatalog, ProjectPromptContext
 from core.providers.errors import NetworkError
 from core.providers.providers import resolve_context_window
@@ -619,17 +619,15 @@ class ChatLoop:
         )
         # The agent- and project-scoped skill registry (agent's own skills first,
         # then project, then bundled) for every skill consumer in this run: triggers,
-        # the prompt skills block, and the provider skill-tool gate. The effective
-        # skill project is the run's own project or, for a rooted identity agent
-        # (``project_id is None`` but homed in a repo), its home project — so a rooted
-        # agent sees its project skills. A plain identity run with no agent-own skills
-        # is byte-identical to before.
-        skill_project_id = project_id if project_id is not None else rooted_project_id
-        # The agent's private-skill layer applies to identity runs only: a project
-        # run executes a config agent, whose project-local slug must not resolve a
-        # same-named identity agent's private home (trust boundary — private skills
-        # would bypass the project skill whitelist as always-allowed).
-        identity_agent_id = run.agent_id if project_id is None else None
+        # the prompt skills block, and the provider skill-tool gate. The scope comes
+        # from the shared policy (``resolve_skill_scope``, also used by the prompt
+        # preview and ``$``-autocomplete): the run's own project or, for a rooted
+        # identity agent, its home project — and the private-skill layer for
+        # identity runs only. A plain identity run with no agent-own skills is
+        # byte-identical to before.
+        skill_project_id, identity_agent_id = resolve_skill_scope(
+            project_id, prompt_project, run.agent_id
+        )
         skill_registry = self._runtime.skills_for(skill_project_id, identity_agent_id)
         # The catalog block and skill-tool presence are pinned per session on the
         # first build, so a skill written mid-session never shifts this session's
