@@ -749,6 +749,78 @@ def test_ollama_provider_config_fields(runtime: Runtime) -> None:
     assert cloud.auth.credential_key == "OLLAMA_API_KEY"
 
 
+def test_local_context_resolver_enforces_effective_window(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The injected resolver returns the effective window only for flagged-local models."""
+    # Arrange
+    local_model = Model(
+        model_id="ministral-3:8b",
+        name="ministral-3:8b",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+        ),
+        context_window=262144,
+        max_output_tokens=None,
+        metadata={"ollama": {"local": True}},
+    )
+    cloud_model = Model(
+        model_id="kimi-k2.6:cloud",
+        name="kimi-k2.6:cloud",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=True),
+        ),
+        context_window=262144,
+        max_output_tokens=None,
+        metadata={"ollama": {"remote": True}},
+    )
+    entries = {"ministral-3:8b": local_model, "kimi-k2.6:cloud": cloud_model}
+    monkeypatch.setattr(
+        runtime.models, "get", lambda provider_id, model_id: entries[model_id]
+    )
+    runtime.storage.update_settings_sections(
+        {"local_models": {"context_windows": {"ollama/ministral-3:8b": 16384}}}
+    )
+
+    # Act
+    resolver = runtime._local_context_resolver_for("ollama")
+
+    # Assert — user-set window for the local model, None for the proxied cloud one.
+    assert resolver("ministral-3:8b") == 16384
+    assert resolver("kimi-k2.6:cloud") is None
+
+
+def test_local_context_resolver_defaults_to_cap_without_setting(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange
+    local_model = Model(
+        model_id="big-local",
+        name="big-local",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+        ),
+        context_window=262144,
+        max_output_tokens=None,
+        metadata={"ollama": {"local": True}},
+    )
+    monkeypatch.setattr(
+        runtime.models, "get", lambda provider_id, model_id: local_model
+    )
+
+    # Act / Assert
+    assert runtime._local_context_resolver_for("ollama")("big-local") == 32768
+
+
 def test_ollama_local_connection_reports_credentials_configured(runtime: Runtime) -> None:
     """The keyless local connection passes the credential gate with no env at all."""
     # Assert

@@ -15,13 +15,16 @@ import pytest
 
 from core.providers.providers import (
     GLOBAL_CONTEXT_WINDOW_FLOOR,
+    LOCAL_CONTEXT_DEFAULT_CAP,
     AuthConfig,
     ConnectionConfig,
     OAuthConfig,
     ProviderConfig,
     ProviderRegistry,
     _registry_cache,
+    model_is_local,
     resolve_context_window,
+    resolve_effective_context_window,
 )
 from core.utils.errors import ConfigError
 
@@ -1226,3 +1229,116 @@ class TestResolveContextWindow:
 
     def test_return_is_always_positive(self) -> None:
         assert resolve_context_window(None, None) > 0
+
+
+# ---------------------------------------------------------------------------
+# Effective context window — flagged-local models (Ollama et al.)
+# ---------------------------------------------------------------------------
+
+
+class TestModelIsLocal:
+    def test_local_flag_in_any_provider_blob_counts(self) -> None:
+        assert model_is_local({"ollama": {"local": True}}) is True
+
+    def test_remote_flag_is_not_local(self) -> None:
+        assert model_is_local({"ollama": {"remote": True}}) is False
+
+    def test_empty_or_none_metadata_is_not_local(self) -> None:
+        assert model_is_local({}) is False
+        assert model_is_local(None) is False
+
+    def test_non_mapping_blob_is_ignored(self) -> None:
+        assert model_is_local({"ollama": "local"}) is False
+
+
+class TestResolveEffectiveContextWindow:
+    LOCAL_METADATA = {"ollama": {"local": True}}
+    REMOTE_METADATA = {"ollama": {"remote": True}}
+
+    def test_non_local_model_uses_plain_chain(self) -> None:
+        """Remote models trust the reported window — no cap, no knob."""
+        assert (
+            resolve_effective_context_window(
+                262144, None, model_metadata=self.REMOTE_METADATA, model_key="ollama/kimi:cloud"
+            )
+            == 262144
+        )
+
+    def test_local_model_defaults_to_capped_window(self) -> None:
+        """A local model's theoretical max is capped to the default."""
+        assert (
+            resolve_effective_context_window(
+                262144, None, model_metadata=self.LOCAL_METADATA, model_key="ollama/m"
+            )
+            == LOCAL_CONTEXT_DEFAULT_CAP
+        )
+
+    def test_local_model_below_cap_keeps_own_window(self) -> None:
+        assert (
+            resolve_effective_context_window(
+                8192, None, model_metadata=self.LOCAL_METADATA, model_key="ollama/small"
+            )
+            == 8192
+        )
+
+    def test_user_setting_wins_over_cap(self) -> None:
+        assert (
+            resolve_effective_context_window(
+                262144,
+                None,
+                model_metadata=self.LOCAL_METADATA,
+                model_key="ollama/ministral-3:8b",
+                local_context_windows={"ollama/ministral-3:8b": 16384},
+            )
+            == 16384
+        )
+
+    def test_user_setting_may_exceed_cap(self) -> None:
+        """The knob is a user decision — it is not clamped to the default cap."""
+        assert (
+            resolve_effective_context_window(
+                262144,
+                None,
+                model_metadata=self.LOCAL_METADATA,
+                model_key="ollama/m",
+                local_context_windows={"ollama/m": 65536},
+            )
+            == 65536
+        )
+
+    def test_setting_for_other_model_is_ignored(self) -> None:
+        assert (
+            resolve_effective_context_window(
+                262144,
+                None,
+                model_metadata=self.LOCAL_METADATA,
+                model_key="ollama/m",
+                local_context_windows={"ollama/other": 65536},
+            )
+            == LOCAL_CONTEXT_DEFAULT_CAP
+        )
+
+    def test_invalid_setting_value_falls_back_to_cap(self) -> None:
+        for bad_value in (0, -1, "16384", True, None):
+            assert (
+                resolve_effective_context_window(
+                    262144,
+                    None,
+                    model_metadata=self.LOCAL_METADATA,
+                    model_key="ollama/m",
+                    local_context_windows={"ollama/m": bad_value},
+                )
+                == LOCAL_CONTEXT_DEFAULT_CAP
+            )
+
+    def test_local_model_with_unknown_window_caps_the_floor(self) -> None:
+        """Unknown local window resolves through the chain, then the cap."""
+        assert resolve_effective_context_window(
+            None, None, model_metadata=self.LOCAL_METADATA, model_key="ollama/m"
+        ) == min(LOCAL_CONTEXT_DEFAULT_CAP, GLOBAL_CONTEXT_WINDOW_FLOOR)
+
+    def test_no_metadata_behaves_like_plain_chain(self) -> None:
+        assert (
+            resolve_effective_context_window(None, None)
+            == GLOBAL_CONTEXT_WINDOW_FLOOR
+        )

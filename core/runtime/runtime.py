@@ -51,7 +51,13 @@ from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
-from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.providers import (
+    ConnectionConfig,
+    ProviderConfig,
+    ProviderRegistry,
+    model_is_local,
+    resolve_effective_context_window,
+)
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
 from core.recall import (
@@ -106,7 +112,7 @@ from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
-from core.utils.errors import ConfigError
+from core.utils.errors import ConfigError, StorageError
 from core.utils.logging import LogManager
 
 # ---------------------------------------------------------------------------
@@ -552,6 +558,7 @@ class Runtime:
             providers=self._providers,
             projects=self._projects,
             agents=self._agents,
+            local_context_windows_loader=self.local_context_windows,
         )
         self.chat_runs = self._chat_run_manager
         if self._attachment_store is None:
@@ -611,6 +618,7 @@ class Runtime:
             self._started_at,
             self._providers,
             self._projects,
+            self.local_context_windows,
         )
         # Built-ins are all registered now; apply extension tools last so a
         # collision with any built-in name is skipped (built-in wins), right
@@ -1842,6 +1850,13 @@ class Runtime:
 
         debug_recorder = self._build_debug_recorder()
 
+        extra_kwargs: dict[str, Any] = {}
+        if adapter_class is OllamaAdapter:
+            # The Ollama adapter enforces the effective context window on the
+            # wire (options.num_ctx) for flagged-local models; the resolver
+            # reads the live settings per call (no reload hook needed).
+            extra_kwargs["local_context_resolver"] = self._local_context_resolver_for(provider_id)
+
         adapter = cast(Any, adapter_class)(
             provider_config,
             token_getter,
@@ -1850,6 +1865,7 @@ class Runtime:
             model_lookup=self._model_lookup_for(provider_id),
             debug_recorder=debug_recorder,
             connection_mode=connection.mode,
+            **extra_kwargs,
         )
 
         return cast(ProviderAdapter, adapter)
@@ -1939,6 +1955,54 @@ class Runtime:
                 return None
 
         return _lookup
+
+    def local_context_windows(self) -> Mapping[str, Any]:
+        """Return the live user-configured local-model window map, or empty.
+
+        Read from settings at every call (no reload hook) so a change applies
+        to the next request/status/list without a restart.
+        """
+        if self._storage is None:
+            return {}
+        try:
+            windows = self._storage.load_local_models_settings()["context_windows"]
+        except StorageError as error:
+            if self.logger is not None:
+                self.logger.warning(
+                    f"Failed to load local-model context windows from settings: {error}"
+                )
+            return {}
+        return cast("Mapping[str, Any]", windows)
+
+    def _local_context_resolver_for(self, provider_id: str) -> Callable[[str], int | None]:
+        """Build the per-provider resolver the Ollama adapter enforces num_ctx with.
+
+        Returns the effective context window for flagged-local models and
+        ``None`` for everything else (proxied ``:cloud`` models, unknown
+        models) — the adapter then omits ``options.num_ctx`` entirely.
+        """
+
+        def _resolve(model_id: str) -> int | None:
+            bare_model_id = model_id.split("::", 1)[0]
+            try:
+                model = self.models.get(provider_id, bare_model_id)
+            except (KeyError, AttributeError):
+                return None
+            if not model_is_local(model.metadata):
+                return None
+            try:
+                provider_config = self.providers.get(provider_id)
+            except (KeyError, AttributeError):
+                provider_config = None
+            return resolve_effective_context_window(
+                model.context_window,
+                provider_config,
+                model_metadata=model.metadata,
+                model_key=f"{provider_id}/{bare_model_id}",
+                local_context_windows=self.local_context_windows(),
+            )
+
+        return _resolve
 
     def _get_token_getter(
         self,
