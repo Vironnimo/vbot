@@ -951,6 +951,133 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_refresh_models_ollama_enriches_from_api_show(self, tmp_path: Path):
+        """Ollama refresh normalizes /api/tags and enriches via POST /api/show."""
+        keyless_connection = ConnectionConfig(
+            id="local",
+            type="none",
+            label="Local",
+            auth=AuthConfig(header="", prefix="", credential_key=""),
+        )
+        provider_config = ProviderConfig(
+            id="ollama",
+            name="Ollama",
+            adapter="ollama",
+            base_url="http://localhost:11434",
+            connections=[keyless_connection],
+            models_endpoint="/api/tags",
+        )
+        respx.get("http://localhost:11434/api/tags").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "name": "ministral-3:8b",
+                            "model": "ministral-3:8b",
+                            "details": {"family": "mistral3"},
+                        },
+                        {
+                            "name": "kimi-k2.6:cloud",
+                            "model": "kimi-k2.6:cloud",
+                            "remote_model": "kimi-k2.6",
+                            "remote_host": "https://ollama.com:443",
+                            "details": {"family": "kimi"},
+                        },
+                    ]
+                },
+            )
+        )
+        show_responses = {
+            "ministral-3:8b": {
+                "capabilities": ["completion", "vision", "tools"],
+                "model_info": {
+                    "general.architecture": "mistral3",
+                    "mistral3.context_length": 262144,
+                    "mistral3.rope.scaling.original_context_length": 16384,
+                },
+            },
+            "kimi-k2.6:cloud": {
+                "capabilities": ["completion", "tools", "thinking"],
+                "model_info": {},
+            },
+        }
+
+        def _show_side_effect(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(200, json=show_responses[body["model"]])
+
+        show_route = respx.post("http://localhost:11434/api/show").mock(
+            side_effect=_show_side_effect
+        )
+
+        result = await refresh_models(
+            provider_config,
+            "",
+            tmp_path / "resources",
+            credential_connection=keyless_connection,
+        )
+
+        registry = ModelRegistry.load(tmp_path / "resources")
+        local_model = registry.get("ollama", "ministral-3:8b")
+        cloud_model = registry.get("ollama", "kimi-k2.6:cloud")
+        raw_data = json.loads(
+            (tmp_path / "resources" / "models" / "ollama.raw.json").read_text(encoding="utf-8")
+        )
+        assert result["model_count"] == 2
+        assert show_route.call_count == 2
+        assert local_model.capabilities.tools is True
+        assert local_model.capabilities.vision is True
+        assert local_model.context_window == 262144
+        assert local_model.metadata["ollama"] == {"local": True}
+        assert local_model.connections == ("local",)
+        assert cloud_model.capabilities.reasoning.supported is True
+        assert cloud_model.metadata["ollama"] == {"remote": True}
+        assert len(raw_data["raw_enrichment_responses"]) == 2
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_ollama_show_failure_keeps_baseline(self, tmp_path: Path):
+        """A failing /api/show degrades to the conservative catalog, not a failed refresh."""
+        keyless_connection = ConnectionConfig(
+            id="local",
+            type="none",
+            label="Local",
+            auth=AuthConfig(header="", prefix="", credential_key=""),
+        )
+        provider_config = ProviderConfig(
+            id="ollama",
+            name="Ollama",
+            adapter="ollama",
+            base_url="http://localhost:11434",
+            connections=[keyless_connection],
+            models_endpoint="/api/tags",
+        )
+        respx.get("http://localhost:11434/api/tags").mock(
+            return_value=httpx.Response(
+                200,
+                json={"models": [{"model": "ministral-3:8b", "details": {"family": "mistral3"}}]},
+            )
+        )
+        respx.post("http://localhost:11434/api/show").mock(
+            return_value=httpx.Response(404, json={"error": "model not found"})
+        )
+
+        result = await refresh_models(
+            provider_config,
+            "",
+            tmp_path / "resources",
+            credential_connection=keyless_connection,
+        )
+
+        registry = ModelRegistry.load(tmp_path / "resources")
+        model = registry.get("ollama", "ministral-3:8b")
+        assert result["model_count"] == 1
+        assert model.capabilities.tools is False
+        assert model.context_window is None
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_refresh_models_uses_tolerant_normalizer_for_github_copilot(
         self,
         tmp_path: Path,
