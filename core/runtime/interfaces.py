@@ -154,15 +154,20 @@ class RuntimeServices(Protocol):
         """Loaded skill metadata registry (the global/identity pool)."""
         ...
 
-    def skills_for(self, project_id: str | None, agent_id: str | None = None) -> SkillRegistry:
+    def skills_for(
+        self, project_id: str | None, identity_agent_id: str | None = None
+    ) -> SkillRegistry:
         """Return the skill registry for a run, scoped to its project and agent.
 
-        ``project_id``/``agent_id`` both ``None`` returns the global registry
-        (identity runs, unchanged); a set ``project_id`` returns the project's
-        merged registry (its own ``.opencode/skills`` first, then the bundled pool);
-        an ``agent_id`` with a private skills home layers that on top (always-allowed
-        for the owner). The single seam every run-time skill consumer resolves
-        through.
+        ``project_id``/``identity_agent_id`` both ``None`` returns the global
+        registry (identity runs, unchanged); a set ``project_id`` returns the
+        project's merged registry (its own ``.opencode/skills`` first, then the
+        bundled pool); an ``identity_agent_id`` with a private skills home layers
+        that on top (always-allowed for the owner). Callers pass the run's agent id
+        here **only for identity runs** — a config-agent run passes ``None``, so a
+        project-local team slug can never pull a same-named identity agent's private
+        skills past the project skill whitelist. The single seam every run-time
+        skill consumer resolves through.
         """
         ...
 

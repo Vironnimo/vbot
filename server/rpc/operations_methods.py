@@ -190,7 +190,12 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
             scope=prompt_scope,
             agent_body=runtime_agent_body(agent),
             project_context=project_context,
-            skill_registry=state.runtime.skills_for(project_id, agent_id),
+            # Private skills are identity-only: a project-qualified preview renders
+            # a config agent, whose slug must not resolve a same-named identity
+            # agent's private skill home (mirrors the chat loop's gating).
+            skill_registry=state.runtime.skills_for(
+                project_id, agent_id if project_id is None else None
+            ),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

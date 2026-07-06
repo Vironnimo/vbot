@@ -190,6 +190,18 @@ class AgentStore:
 
         return self._load_raw_agent(agent_path)
 
+    def exists(self, agent_id: str) -> bool:
+        """Return whether an identity agent with this id is persisted in the store.
+
+        A cheap existence probe that never raises: an id failing the agent-id
+        format cannot name a stored agent and yields ``False``, so gating callers
+        (e.g. the runtime's private-skill layering) can probe ids that originate
+        outside the identity store — such as project-team slugs — safely.
+        """
+        if not is_valid_agent_id(agent_id):
+            return False
+        return self._agent_path(agent_id).exists()
+
     def list(self) -> list[Agent]:
         """Return all persisted agents sorted by ID."""
         agents_dir = self._data_dir / "agents"
@@ -289,7 +301,7 @@ class AgentStore:
     def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> Agent:
         """Re-point an identity agent's current session after one is gone.
 
-        Invoked as the final step of removing a session from this home — a move
+        Invoked as the final step of removing a session from this home â€” a move
         to another agent, or a deletion. If the removed session was this agent's
         current session, the pointer lands on the most recently active
         *remaining* session (max ``last_active_at``), or a fresh empty session

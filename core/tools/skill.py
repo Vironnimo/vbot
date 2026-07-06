@@ -23,10 +23,11 @@ from core.tools.tools import (
 )
 
 # Resolves the skill registry a call should use from its run's effective skill
-# project (``None`` → the global/identity registry) and its agent. The runtime
-# wires this to ``Runtime.skills_for`` so the ``skill`` tool activates project
-# skills in a project run, an agent's own private skills for their owner, and
-# global skills everywhere else, without re-registering per run.
+# project (``None`` → the global/identity registry) and its identity agent
+# (``None`` for a config-agent run — private skills are identity-only). The
+# runtime wires this to ``Runtime.skills_for`` so the ``skill`` tool activates
+# project skills in a project run, an identity agent's own private skills for
+# their owner, and global skills everywhere else, without re-registering per run.
 SkillRegistryResolver = Callable[[str | None, str | None], SkillRegistry]
 
 SKILL_TOOL_NAME = "skill"
@@ -77,7 +78,12 @@ def make_skill_handler(resolve_registry: SkillRegistryResolver) -> Any:
             names = ", ".join(sorted(unknown_arguments))
             return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
-        skill_registry = resolve_registry(context.skill_project_id, context.agent_id)
+        # Identity runs only (``project_id is None``): a config agent's
+        # project-local slug must not resolve a same-named identity agent's
+        # private skill home (those skills bypass the project whitelist as
+        # always-allowed for their owner).
+        identity_agent_id = context.agent_id if context.project_id is None else None
+        skill_registry = resolve_registry(context.skill_project_id, identity_agent_id)
 
         skill_name = arguments.get("name")
         # No name → list mode: report the live, agent-aware catalog instead of
