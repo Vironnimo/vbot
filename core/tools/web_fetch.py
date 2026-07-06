@@ -7,13 +7,15 @@ import ipaddress
 import random
 import re
 import socket
-from typing import Any
+from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urljoin, urlparse
 
-import httpcore
-import httpx
 from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import NavigableString, PageElement
+from curl_cffi import CurlOpt
+from curl_cffi.requests import AsyncSession
+from curl_cffi.requests.exceptions import RequestException
 
 from core.tools.arguments import coerce_bool
 from core.tools.tools import (
@@ -33,25 +35,11 @@ _MAX_URL_BYTES = 100 * 1024
 _RESPONSE_TRUNCATED_MARKER = "\n\n[... response truncated ...]"
 _CONTENT_TRUNCATED_MARKER = "\n\n[... content truncated ...]"
 
-_BROWSER_HEADERS: dict[str, str] = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-}
+# Impersonate a recent real Chrome so the TLS/HTTP-2 fingerprint matches a
+# browser. Header-only spoofing does not fool fingerprint-based bot walls
+# (Cloudflare, Akamai, DataDome) — the request has to *look* like Chrome at the
+# transport layer, which is exactly what curl_cffi's impersonation provides.
+_IMPERSONATE_TARGET: Literal["chrome"] = "chrome"
 
 _STRIP_TAGS: frozenset[str] = frozenset(
     {
@@ -112,7 +100,9 @@ _RETRY_MAX_RETRIES = 3
 _RETRY_INITIAL_DELAY_SECONDS = 1.0
 _RETRY_BACKOFF_FACTOR = 2
 _RETRY_JITTER_FACTOR = 0.5
-_REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+_CONNECT_TIMEOUT_SECONDS = 5.0
+_TOTAL_TIMEOUT_SECONDS = 30.0
+_REQUEST_TIMEOUT = (_CONNECT_TIMEOUT_SECONDS, _TOTAL_TIMEOUT_SECONDS)
 _MAX_REDIRECTS = 10
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 
@@ -148,84 +138,54 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-def _make_client(pins: dict[str, str]) -> httpx.AsyncClient:
-    """Create an AsyncClient with browser-like headers and manual redirects.
+@dataclass(frozen=True)
+class _FetchResult:
+    """Normalized outcome of a single GET, decoupled from the HTTP library.
 
-    *pins* maps each request host to the public IP that ``_validate_public_target``
-    already resolved and cleared. The client connects to that pinned IP instead
-    of resolving the host a second time, so a DNS-rebinding answer cannot swap in
-    a private address between validation and connection. The original hostname
-    still drives the Host header and the TLS SNI / certificate check.
+    Header keys are lower-cased so lookups (``content-type``, ``location``) are
+    case-insensitive.
     """
-    return httpx.AsyncClient(
-        headers=_BROWSER_HEADERS,
-        follow_redirects=False,
-        timeout=_REQUEST_TIMEOUT,
-        transport=_build_pinned_transport(pins),
+
+    status_code: int
+    headers: dict[str, str]
+    text: str
+    url: str
+
+
+class _RedirectLimitExceededError(Exception):
+    """Raised when a redirect chain exceeds ``_MAX_REDIRECTS`` hops."""
+
+
+def _make_session() -> AsyncSession:
+    """Create a browser-impersonating session with an automatic cookie jar.
+
+    ``impersonate`` gives every request a real Chrome TLS/HTTP-2 fingerprint,
+    which is what gets past the fingerprint-based bot walls (Cloudflare, Akamai,
+    DataDome) that reject a plain HTTP client no matter how browser-like its
+    headers are. The session also keeps cookies across redirect hops, so a
+    challenge cookie set on one hop is presented on the next. The connect target
+    of each hop is pinned to a pre-validated public IP per request via
+    ``CurlOpt.RESOLVE`` (see ``_fetch_with_retry``), so a DNS-rebinding answer
+    cannot swap in a private address between validation and connection while the
+    hostname still drives the Host header and TLS SNI / certificate check.
+    """
+    return AsyncSession(impersonate=_IMPERSONATE_TARGET)
+
+
+async def _http_get(session: AsyncSession, url: str) -> _FetchResult:
+    """Perform one GET with redirects disabled — the patchable network seam.
+
+    Tests substitute this coroutine to feed canned responses without touching
+    the network; production drives the impersonating session.
+    """
+    response = await session.get(url, allow_redirects=False, timeout=_REQUEST_TIMEOUT)
+    headers = {name.lower(): value for name, value in response.headers.items()}
+    return _FetchResult(
+        status_code=response.status_code,
+        headers=headers,
+        text=response.text,
+        url=str(response.url),
     )
-
-
-def _build_pinned_transport(pins: dict[str, str]) -> httpx.AsyncHTTPTransport:
-    """Build a transport that connects to the pre-validated, pinned IPs.
-
-    httpcore exposes the connection pool's network backend; wrapping it is the
-    one seam where the socket target can be pinned without disturbing the request
-    line, Host header, or TLS hostname. respx-based tests patch
-    ``handle_async_request`` (above this backend), so the pin map is inert there
-    and the existing request-level mocks keep matching by hostname.
-    """
-    transport = httpx.AsyncHTTPTransport()
-    transport._pool._network_backend = _PinnedResolutionBackend(  # noqa: SLF001 - httpcore backend injection seam
-        transport._pool._network_backend, pins
-    )
-    return transport
-
-
-class _PinnedResolutionBackend(httpcore.AsyncNetworkBackend):
-    """Connects to pre-validated IPs instead of re-resolving request hosts.
-
-    ``_validate_public_target`` resolves each hop's host and rejects private or
-    loopback addresses before the request is sent. Without pinning, httpcore
-    would resolve the host *again* at connect time, so a low-TTL DNS-rebinding
-    record could return a public IP during validation and a private one for the
-    real connection. This wrapper substitutes the validated IP (looked up in the
-    per-fetch pin map) for the connect target, leaving the hostname intact for
-    the Host header and TLS verification.
-    """
-
-    def __init__(self, inner: httpcore.AsyncNetworkBackend, pins: dict[str, str]) -> None:
-        self._inner = inner
-        self._pins = pins
-
-    async def connect_tcp(
-        self,
-        host: str,
-        port: int,
-        timeout: float | None = None,
-        local_address: str | None = None,
-        socket_options: Any = None,
-    ) -> httpcore.AsyncNetworkStream:
-        pinned = self._pins.get(host, host)
-        return await self._inner.connect_tcp(
-            pinned,
-            port,
-            timeout=timeout,
-            local_address=local_address,
-            socket_options=socket_options,
-        )
-
-    async def connect_unix_socket(
-        self,
-        path: str,
-        timeout: float | None = None,
-        socket_options: Any = None,
-    ) -> httpcore.AsyncNetworkStream:
-        return await self._inner.connect_unix_socket(
-            path, timeout=timeout, socket_options=socket_options
-        )
-
-    async def sleep(self, seconds: float) -> None:
-        await self._inner.sleep(seconds)
 
 
 def _attr_to_text(value: object) -> str:
@@ -769,18 +729,18 @@ async def _resolve_host_addresses(host: str, port: int) -> list[IpAddress]:
     return addresses
 
 
-async def _validate_public_target(url: httpx.URL) -> str:
-    """Validate a URL against the SSRF blocklist and return the IP to connect to.
+async def _validate_public_target(scheme: str, host: str | None, port: int) -> tuple[str, str]:
+    """Validate a target against the SSRF blocklist and return ``(host, ip)``.
 
     Resolves the host, rejects any private/loopback/reserved address, and returns
-    the single public IP the connection must be pinned to. Returning the resolved
-    address (rather than re-resolving at connect time) is what closes the
-    DNS-rebinding window — see :class:`_PinnedResolutionBackend`.
+    the normalized host together with the single public IP the connection must be
+    pinned to. Returning the resolved address (rather than re-resolving at connect
+    time) is what closes the DNS-rebinding window — the caller pins this exact IP
+    via ``CurlOpt.RESOLVE`` (see ``_fetch_with_retry``).
     """
-    if url.scheme not in {"http", "https"}:
+    if scheme not in {"http", "https"}:
         raise ValueError("only http/https URLs are allowed")
 
-    host = url.host
     if host is None:
         raise ValueError("url must include a valid host")
 
@@ -795,14 +755,13 @@ async def _validate_public_target(url: httpx.URL) -> str:
     if literal_address is not None:
         if _is_blocked_ip(literal_address):
             raise ValueError("URL blocked (private/loopback address)")
-        return str(literal_address)
+        return normalized_host, str(literal_address)
 
-    port = url.port if url.port is not None else _default_port_for_scheme(url.scheme)
     resolved_addresses = await _resolve_host_addresses(normalized_host, port)
     for resolved in resolved_addresses:
         if _is_blocked_ip(resolved):
             raise ValueError("URL blocked (private/loopback address)")
-    return str(resolved_addresses[0])
+    return normalized_host, str(resolved_addresses[0])
 
 
 async def _sleep_for_retry(attempt: int) -> None:
@@ -811,55 +770,62 @@ async def _sleep_for_retry(attempt: int) -> None:
     await asyncio.sleep(base_delay + jitter)
 
 
-async def _request_with_retry(client: httpx.AsyncClient, url: httpx.URL) -> httpx.Response:
+async def _request_with_retry(session: AsyncSession, url: str) -> _FetchResult:
     """Fetch a URL and retry retryable status codes with backoff and jitter."""
     for attempt in range(_RETRY_MAX_RETRIES + 1):
-        response = await client.get(url)
-        if response.status_code >= 400:
-            # GET is idempotent — safe to repeat (includes a transient 500).
-            if attempt >= _RETRY_MAX_RETRIES or not is_retryable_status(
-                response.status_code, idempotent=True
-            ):
-                response.raise_for_status()
+        result = await _http_get(session, url)
+        # GET is idempotent — safe to repeat (includes a transient 500).
+        if (
+            result.status_code >= 400
+            and attempt < _RETRY_MAX_RETRIES
+            and is_retryable_status(result.status_code, idempotent=True)
+        ):
             await _sleep_for_retry(attempt)
             continue
 
-        return response
+        return result
 
     raise RuntimeError("unreachable retry loop state")
 
 
 async def _fetch_with_retry(
-    client: httpx.AsyncClient, url: str, pins: dict[str, str]
-) -> httpx.Response:
+    session: AsyncSession, url: str, resolve_map: dict[tuple[str, int], str]
+) -> _FetchResult:
     """Fetch a URL, validating each redirect hop against SSRF rules.
 
-    Each hop's host is pinned to the IP that just cleared validation, so the
-    transport connects to exactly the address that was checked.
+    Each hop's host is pinned to the IP that just cleared validation via curl's
+    ``RESOLVE`` map, so the session connects to exactly the address that was
+    checked while the hostname still drives Host header and TLS verification.
+    ``resolve_map`` accumulates ``(host, port) -> ip`` across hops so an earlier
+    hop's pin survives a same-host redirect.
     """
-    current_url = httpx.URL(url)
+    current_url = url
 
     for redirect_count in range(_MAX_REDIRECTS + 1):
-        pinned_ip = await _validate_public_target(current_url)
-        if current_url.host:
-            pins[current_url.host] = pinned_ip
+        parsed = urlparse(current_url)
+        port = parsed.port if parsed.port is not None else _default_port_for_scheme(parsed.scheme)
+        normalized_host, pinned_ip = await _validate_public_target(
+            parsed.scheme, parsed.hostname, port
+        )
+        resolve_map[(normalized_host, port)] = pinned_ip
+        # curl's RESOLVE is an slist option and accepts a list; the type stub
+        # narrows the dict value to str, so the assignment is annotated away.
+        session.curl_options[CurlOpt.RESOLVE] = [  # type: ignore[assignment]
+            f"{host}:{host_port}:{ip}" for (host, host_port), ip in resolve_map.items()
+        ]
 
-        response = await _request_with_retry(client, current_url)
-        if response.status_code not in _REDIRECT_STATUS_CODES:
-            return response
+        result = await _request_with_retry(session, current_url)
+        if result.status_code not in _REDIRECT_STATUS_CODES:
+            return result
 
-        next_request = response.next_request
-        if next_request is None:
-            return response
+        location = result.headers.get("location")
+        if not location:
+            return result
 
         if redirect_count >= _MAX_REDIRECTS:
-            raise httpx.HTTPStatusError(
-                "too many redirects while fetching URL",
-                request=response.request,
-                response=response,
-            )
+            raise _RedirectLimitExceededError(f"too many redirects while fetching URL: {url}")
 
-        current_url = next_request.url
+        current_url = urljoin(current_url, location)
 
     raise RuntimeError("unreachable retry loop state")
 
@@ -893,25 +859,15 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
         return tool_failure("validation_error", "url must include a valid host", retryable=False)
 
     try:
-        pins: dict[str, str] = {}
-        async with _make_client(pins) as client:
-            response = await _fetch_with_retry(client, url, pins)
+        resolve_map: dict[tuple[str, int], str] = {}
+        async with _make_session() as session:
+            result = await _fetch_with_retry(session, url, resolve_map)
     except ValueError as error:
         return tool_failure("validation_error", str(error), retryable=False)
-    except httpx.HTTPStatusError as error:
-        status_code = error.response.status_code if error.response is not None else None
-        status = status_code if status_code is not None else "unknown"
-        _LOGGER.warning("web_fetch request failed: HTTP %s for %s", status, url)
-        # A retryable status only reaches here after the retry loop exhausted its
-        # attempts; a non-retryable status (e.g. 404) failed on the first try.
-        retryable = status_code is not None and is_retryable_status(status_code, idempotent=True)
-        return tool_failure(
-            "request_error",
-            f"HTTP {status} while fetching URL: {url}",
-            retryable=retryable,
-            attempts_made=(_RETRY_MAX_RETRIES + 1) if retryable else None,
-        )
-    except httpx.RequestError as error:
+    except _RedirectLimitExceededError as error:
+        _LOGGER.warning("web_fetch redirect limit exceeded for %s", url)
+        return tool_failure("request_error", str(error), retryable=False)
+    except RequestException as error:
         # Transport errors are not retried by web_fetch's status-only retry loop,
         # so the tool made a single attempt; the failure is still transient.
         _LOGGER.warning("web_fetch request failed for %s: %s", url, error)
@@ -922,10 +878,23 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
             attempts_made=1,
         )
 
-    raw_body = response.text
+    if result.status_code >= 400:
+        status = result.status_code
+        _LOGGER.warning("web_fetch request failed: HTTP %s for %s", status, url)
+        # A retryable status only reaches here after the retry loop exhausted its
+        # attempts; a non-retryable status (e.g. 404) failed on the first try.
+        retryable = is_retryable_status(status, idempotent=True)
+        return tool_failure(
+            "request_error",
+            f"HTTP {status} while fetching URL: {url}",
+            retryable=retryable,
+            attempts_made=(_RETRY_MAX_RETRIES + 1) if retryable else None,
+        )
+
+    raw_body = result.text
     raw_size = len(raw_body.encode("utf-8"))
 
-    content_type = response.headers.get("Content-Type", "")
+    content_type = result.headers.get("content-type", "")
     if raw or "html" not in content_type.lower():
         content = _truncate_utf8_with_suffix(
             raw_body,
@@ -934,7 +903,7 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
         )
         return tool_success({"content": content})
 
-    final_url = str(response.url)
+    final_url = result.url
     text, metadata = extract_content(raw_body, final_url, include_links=include_links)
     clean_size = len(text.encode("utf-8"))
 

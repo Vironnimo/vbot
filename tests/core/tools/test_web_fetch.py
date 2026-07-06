@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import cast
 
-import httpcore
-import httpx
 import pytest
-import respx
+from curl_cffi import CurlOpt
+from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 
 import core.tools.web_fetch as web_fetch_module
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
@@ -18,6 +17,7 @@ from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
     WEB_FETCH_TOOL_PARAMETERS,
+    _FetchResult,
     extract_content,
     register_web_fetch_tool,
     web_fetch_handler,
@@ -36,6 +36,35 @@ def make_context(workspace: Path, tool_name: str = WEB_FETCH_TOOL_NAME) -> ToolC
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
     )
+
+
+def make_result(
+    *,
+    status_code: int = 200,
+    headers: dict[str, str] | None = None,
+    text: str = "",
+    url: str = "https://example.com/",
+) -> _FetchResult:
+    """Build a normalized fetch result with lower-cased header keys."""
+    normalized = {name.lower(): value for name, value in (headers or {}).items()}
+    return _FetchResult(status_code=status_code, headers=normalized, text=text, url=url)
+
+
+def install_http_get(
+    monkeypatch: pytest.MonkeyPatch,
+    responder: Callable[[str], _FetchResult],
+) -> None:
+    """Replace the network seam so no real request is made.
+
+    *responder* maps a requested URL to a canned result; it may raise to simulate
+    a transport error.
+    """
+
+    async def _fake_http_get(session: object, url: str) -> _FetchResult:
+        del session
+        return responder(url)
+
+    monkeypatch.setattr(web_fetch_module, "_http_get", _fake_http_get)
 
 
 @pytest.fixture(autouse=True)
@@ -150,40 +179,43 @@ async def test_web_fetch_handler_rejects_obfuscated_private_hosts(tmp_path: Path
     assert "blocked" in error["message"].lower()
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_web_fetch_handler_rejects_redirect_to_private_host(tmp_path: Path) -> None:
+async def test_web_fetch_handler_rejects_redirect_to_private_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     start_url = "https://public.example/start"
     blocked_redirect = "http://127.0.0.1/admin"
 
-    def mock_redirect(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(302, request=request, headers={"Location": blocked_redirect})
+    fetched: list[str] = []
 
-    respx.get(start_url).mock(side_effect=mock_redirect)
-    private_route = respx.get(blocked_redirect).mock(
-        return_value=httpx.Response(200, text="should not be fetched")
-    )
+    def responder(url: str) -> _FetchResult:
+        fetched.append(url)
+        if url == start_url:
+            return make_result(status_code=302, headers={"Location": blocked_redirect})
+        return make_result(status_code=200, text="should not be fetched")
+
+    install_http_get(monkeypatch, responder)
 
     result = await web_fetch_handler(make_context(workspace), {"url": start_url})
 
     error = assert_failure_envelope(result, "validation_error")
     assert "blocked" in error["message"].lower()
-    assert private_route.called is False
+    assert blocked_redirect not in fetched
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_web_fetch_handler_http_error(tmp_path: Path) -> None:
+async def test_web_fetch_handler_http_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     url = "https://example.com/not-found"
 
-    def mock_not_found(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404, request=request, text="missing")
-
-    respx.get(url).mock(side_effect=mock_not_found)
+    install_http_get(
+        monkeypatch, lambda _url: make_result(status_code=404, text="missing", url=url)
+    )
 
     result = await web_fetch_handler(make_context(workspace), {"url": url})
 
@@ -191,19 +223,18 @@ async def test_web_fetch_handler_http_error(tmp_path: Path) -> None:
     assert "404" in error["message"]
 
 
-@respx.mock
 @pytest.mark.asyncio
 async def test_web_fetch_handler_network_error(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     url = "https://example.com/network-fail"
 
-    def mock_connect_error(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused", request=request)
+    def responder(_url: str) -> _FetchResult:
+        raise CurlConnectionError("connection refused")
 
-    respx.get(url).mock(side_effect=mock_connect_error)
+    install_http_get(monkeypatch, responder)
 
     with caplog.at_level(logging.WARNING, logger="vbot.tools.web_fetch"):
         result = await web_fetch_handler(make_context(workspace), {"url": url})
@@ -216,7 +247,6 @@ async def test_web_fetch_handler_network_error(
     )
 
 
-@respx.mock
 @pytest.mark.asyncio
 async def test_web_fetch_handler_retries_retryable_statuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -232,19 +262,18 @@ async def test_web_fetch_handler_retries_retryable_statuses(
 
     attempts = 0
 
-    def mock_flaky_response(request: httpx.Request) -> httpx.Response:
+    def responder(_url: str) -> _FetchResult:
         nonlocal attempts
         attempts += 1
         if attempts < 3:
-            return httpx.Response(503, request=request, text="try later")
-        return httpx.Response(
-            200,
-            request=request,
+            return make_result(status_code=503, text="try later")
+        return make_result(
+            status_code=200,
             headers={"Content-Type": "text/plain; charset=utf-8"},
             text="retried success",
         )
 
-    respx.get(url).mock(side_effect=mock_flaky_response)
+    install_http_get(monkeypatch, responder)
 
     result = await web_fetch_handler(make_context(workspace), {"url": url})
 
@@ -253,7 +282,6 @@ async def test_web_fetch_handler_retries_retryable_statuses(
     assert attempts == 3
 
 
-@respx.mock
 @pytest.mark.asyncio
 async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -269,12 +297,12 @@ async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
 
     calls = 0
 
-    def mock_busy(request: httpx.Request) -> httpx.Response:
+    def responder(_url: str) -> _FetchResult:
         nonlocal calls
         calls += 1
-        return httpx.Response(503, request=request, text="busy")
+        return make_result(status_code=503, text="busy")
 
-    respx.get(url).mock(side_effect=mock_busy)
+    install_http_get(monkeypatch, responder)
 
     result = await web_fetch_handler(make_context(workspace), {"url": url})
 
@@ -285,16 +313,15 @@ async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
     assert calls == web_fetch_module._RETRY_MAX_RETRIES + 1
 
 
-@respx.mock
 @pytest.mark.asyncio
 async def test_web_fetch_handler_non_retryable_status_signals_not_retryable(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     url = "https://example.com/not-found"
 
-    respx.get(url).mock(return_value=httpx.Response(404, text="missing"))
+    install_http_get(monkeypatch, lambda _url: make_result(status_code=404, text="missing"))
 
     result = await web_fetch_handler(make_context(workspace), {"url": url})
 
@@ -303,19 +330,18 @@ async def test_web_fetch_handler_non_retryable_status_signals_not_retryable(
     assert "attempts_made" not in error
 
 
-@respx.mock
 @pytest.mark.asyncio
 async def test_web_fetch_handler_transport_error_signals_retryable_single_attempt(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     url = "https://example.com/network-fail"
 
-    def mock_connect_error(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused", request=request)
+    def responder(_url: str) -> _FetchResult:
+        raise CurlConnectionError("connection refused")
 
-    respx.get(url).mock(side_effect=mock_connect_error)
+    install_http_get(monkeypatch, responder)
 
     result = await web_fetch_handler(make_context(workspace), {"url": url})
 
@@ -323,6 +349,31 @@ async def test_web_fetch_handler_transport_error_signals_retryable_single_attemp
     # web_fetch does not loop on transport errors, so it tried exactly once.
     assert error["retryable"] is True
     assert error["attempts_made"] == 1
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_redirect_limit_signals_not_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/loop"
+
+    # A same-host redirect that never terminates exhausts the hop budget.
+    def responder(request_url: str) -> _FetchResult:
+        return make_result(
+            status_code=302,
+            headers={"Location": "https://example.com/loop-next"},
+            url=request_url,
+        )
+
+    install_http_get(monkeypatch, responder)
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    error = assert_failure_envelope(result, "request_error")
+    assert error["retryable"] is False
+    assert "too many redirects" in error["message"].lower()
 
 
 @pytest.mark.asyncio
@@ -338,9 +389,10 @@ async def test_web_fetch_handler_validation_error_signals_not_retryable(
     assert error["retryable"] is False
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_web_fetch_handler_html_extraction(tmp_path: Path) -> None:
+async def test_web_fetch_handler_html_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     url = "https://example.com/page"
@@ -354,12 +406,14 @@ async def test_web_fetch_handler_html_extraction(tmp_path: Path) -> None:
     </html>
     """
 
-    respx.get(url).mock(
-        return_value=httpx.Response(
-            200,
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
             headers={"Content-Type": "text/html; charset=utf-8"},
             text=html,
-        )
+            url=url,
+        ),
     )
 
     result = await web_fetch_handler(make_context(workspace), {"url": url})
@@ -373,20 +427,18 @@ async def test_web_fetch_handler_html_extraction(tmp_path: Path) -> None:
     assert "<p>" not in content
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_web_fetch_handler_raw_mode(tmp_path: Path) -> None:
+async def test_web_fetch_handler_raw_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     url = "https://example.com/raw"
     html = "<html><body><h1>Raw Heading</h1></body></html>"
 
-    respx.get(url).mock(
-        return_value=httpx.Response(
-            200,
-            headers={"Content-Type": "text/html"},
-            text=html,
-        )
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200, headers={"Content-Type": "text/html"}, text=html, url=url
+        ),
     )
 
     result = await web_fetch_handler(make_context(workspace), {"url": url, "raw": True})
@@ -395,9 +447,10 @@ async def test_web_fetch_handler_raw_mode(tmp_path: Path) -> None:
     assert data["content"] == html
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_web_fetch_handler_include_links_false(tmp_path: Path) -> None:
+async def test_web_fetch_handler_include_links_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     page_url = "https://example.com/links"
@@ -410,12 +463,11 @@ async def test_web_fetch_handler_include_links_false(tmp_path: Path) -> None:
     </html>
     """
 
-    respx.get(page_url).mock(
-        return_value=httpx.Response(
-            200,
-            headers={"Content-Type": "text/html"},
-            text=html,
-        )
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200, headers={"Content-Type": "text/html"}, text=html, url=page_url
+        ),
     )
 
     result = await web_fetch_handler(
@@ -432,83 +484,36 @@ async def test_web_fetch_handler_include_links_false(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_validate_public_target_returns_resolved_ip() -> None:
-    pinned = await web_fetch_module._validate_public_target(httpx.URL("https://example.com/path"))
+    host, pinned = await web_fetch_module._validate_public_target("https", "example.com", 443)
 
+    assert host == "example.com"
     assert pinned == "93.184.216.34"
 
 
 @pytest.mark.asyncio
 async def test_validate_public_target_returns_literal_ip() -> None:
-    pinned = await web_fetch_module._validate_public_target(httpx.URL("https://93.184.216.34/path"))
+    host, pinned = await web_fetch_module._validate_public_target("https", "93.184.216.34", 443)
 
+    assert host == "93.184.216.34"
     assert pinned == "93.184.216.34"
 
 
 @pytest.mark.asyncio
-async def test_pinned_resolution_backend_substitutes_validated_ip() -> None:
-    captured: dict[str, object] = {}
-
-    class _FakeInner:
-        async def connect_tcp(
-            self,
-            host: str,
-            port: int,
-            timeout: float | None = None,
-            local_address: str | None = None,
-            socket_options: object = None,
-        ) -> str:
-            captured["host"] = host
-            captured["port"] = port
-            return "stream"
-
-    backend = web_fetch_module._PinnedResolutionBackend(
-        cast(httpcore.AsyncNetworkBackend, _FakeInner()), {"example.com": "93.184.216.34"}
-    )
-
-    result = await backend.connect_tcp("example.com", 443)
-
-    assert captured == {"host": "93.184.216.34", "port": 443}
-    assert result == "stream"
-
-
-@pytest.mark.asyncio
-async def test_pinned_resolution_backend_passes_through_unpinned_host() -> None:
-    captured: dict[str, object] = {}
-
-    class _FakeInner:
-        async def connect_tcp(
-            self,
-            host: str,
-            port: int,
-            timeout: float | None = None,
-            local_address: str | None = None,
-            socket_options: object = None,
-        ) -> str:
-            captured["host"] = host
-            return "stream"
-
-    backend = web_fetch_module._PinnedResolutionBackend(
-        cast(httpcore.AsyncNetworkBackend, _FakeInner()), {}
-    )
-
-    await backend.connect_tcp("other.example", 80)
-
-    assert captured["host"] == "other.example"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_fetch_with_retry_pins_validated_ip(tmp_path: Path) -> None:
-    del tmp_path
+async def test_fetch_with_retry_pins_validated_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     url = "https://example.com/page"
-    respx.get(url).mock(return_value=httpx.Response(200, text="ok"))
 
-    pins: dict[str, str] = {}
-    async with web_fetch_module._make_client(pins) as client:
-        response = await web_fetch_module._fetch_with_retry(client, url, pins)
+    install_http_get(monkeypatch, lambda _url: make_result(status_code=200, text="ok", url=url))
 
-    assert response.status_code == 200
-    assert pins["example.com"] == "93.184.216.34"
+    resolve_map: dict[tuple[str, int], str] = {}
+    async with web_fetch_module._make_session() as session:
+        result = await web_fetch_module._fetch_with_retry(session, url, resolve_map)
+
+        # The validated IP is both recorded and handed to curl's RESOLVE map so
+        # the connection targets exactly the address that cleared validation.
+        assert resolve_map[("example.com", 443)] == "93.184.216.34"
+        assert session.curl_options[CurlOpt.RESOLVE] == ["example.com:443:93.184.216.34"]
+
+    assert result.status_code == 200
 
 
 def test_extract_content_strips_scripts_and_styles() -> None:
