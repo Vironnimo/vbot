@@ -1051,6 +1051,43 @@ class TestNoneConnectionType:
         with pytest.raises(ConfigError, match="missing required field 'auth'"):
             ProviderRegistry.load(resources)
 
+    def test_auto_refresh_flag_parses(self, tmp_path: Path) -> None:
+        """The per-connection auto_refresh flag parses from JSON."""
+        # Arrange
+        resources = self._write_provider(
+            tmp_path,
+            {"id": "local", "type": "none", "label": "Local", "auto_refresh": True},
+        )
+
+        # Act
+        connection = ProviderRegistry.load(resources).get("ollama").get_connection("local")
+
+        # Assert
+        assert connection.auto_refresh is True
+
+    def test_auto_refresh_defaults_to_false(self, tmp_path: Path) -> None:
+        # Arrange
+        resources = self._write_provider(
+            tmp_path, {"id": "local", "type": "none", "label": "Local"}
+        )
+
+        # Act / Assert
+        assert (
+            ProviderRegistry.load(resources).get("ollama").get_connection("local").auto_refresh
+            is False
+        )
+
+    def test_non_boolean_auto_refresh_raises_config_error(self, tmp_path: Path) -> None:
+        # Arrange
+        resources = self._write_provider(
+            tmp_path,
+            {"id": "local", "type": "none", "label": "Local", "auto_refresh": "yes"},
+        )
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="auto_refresh must be a boolean"):
+            ProviderRegistry.load(resources)
+
 
 # ---------------------------------------------------------------------------
 # models_dev_id — vBot↔models.dev provider-id mapping (Phase 3 consumer)

@@ -102,6 +102,10 @@ class ConnectionConfig:
         models_endpoint: Optional per-connection discovery endpoint path
             (e.g. ``"/codex/models"``). Overrides the provider-level
             ``models_endpoint`` when set.
+        auto_refresh: Whether the runtime refreshes this connection's model
+            catalog automatically (at startup and on picker open, throttled).
+            Meant for local endpoints (e.g. Ollama) whose installed-model set
+            changes outside vBot; remote catalogs stay explicit-refresh only.
     """
 
     id: str
@@ -112,6 +116,7 @@ class ConnectionConfig:
     oauth: OAuthConfig | None = None
     mode: str | None = None
     models_endpoint: str | None = None
+    auto_refresh: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +477,13 @@ class ProviderRegistry:
                     f"must be a string when set, got {type(models_endpoint).__name__}"
                 )
 
+            auto_refresh = connection_data.get("auto_refresh", False)
+            if not isinstance(auto_refresh, bool):
+                raise ConfigError(
+                    f"Provider '{provider_id}' connection '{local_id}' auto_refresh "
+                    f"must be a boolean when set, got {type(auto_refresh).__name__}"
+                )
+
             connections.append(
                 ConnectionConfig(
                     id=local_id,
@@ -482,6 +494,7 @@ class ProviderRegistry:
                     oauth=oauth,
                     mode=mode,
                     models_endpoint=models_endpoint,
+                    auto_refresh=auto_refresh,
                 )
             )
 

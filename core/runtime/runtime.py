@@ -7,6 +7,7 @@ all core services and manages the application lifecycle.
 import asyncio
 import os
 import sqlite3
+import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -283,6 +284,11 @@ class _StorageManagerBlockStore:
 # Adapter factory mapping
 # ---------------------------------------------------------------------------
 
+# At most one auto-refresh sweep of local model catalogs per this window —
+# successes AND failures count, so a stopped local server (e.g. Ollama down)
+# is not re-probed on every picker open.
+_LOCAL_CATALOG_REFRESH_TTL_SECONDS = 30.0
+
 _ADAPTER_MAP: dict[
     str,
     type[ProviderAdapter],
@@ -332,6 +338,11 @@ class Runtime:
         self._log_manager = LogManager(level=log_level, data_dir=self._data_dir)
         self.logger: LoggerProtocol | None = None
         self._started: bool = False
+        # Auto-refresh throttle state for local model catalogs (see
+        # ``maybe_refresh_local_catalogs``). The lock is created lazily inside
+        # the first call so it binds to the running event loop.
+        self._local_catalog_refresh_lock: asyncio.Lock | None = None
+        self._local_catalog_refresh_at: float | None = None
         self._providers: ProviderRegistry | None = None
         self._provider_credentials: ProviderCredentialResolverProtocol | None = None
         self._token_store: TokenStore | None = None
@@ -1955,6 +1966,97 @@ class Runtime:
                 return None
 
         return _lookup
+
+    async def maybe_refresh_local_catalogs(self) -> None:
+        """Refresh every ``auto_refresh`` connection's model catalog, throttled.
+
+        Local providers (e.g. Ollama) change their installed-model set outside
+        vBot, so their catalogs refresh automatically — at startup
+        (fire-and-forget) and when a model picker opens (``model.list``,
+        awaited with a small time budget). Semantics:
+
+        - **Throttled**: at most one refresh sweep per
+          :data:`_LOCAL_CATALOG_REFRESH_TTL_SECONDS`, counting failures too —
+          a stopped local server must not be re-probed on every picker open.
+        - **Never raises**: a refresh failure (server down, malformed catalog)
+          logs and leaves the last known catalog untouched.
+        - **Serialized**: concurrent callers share one sweep; the second
+          caller waits for the in-flight sweep and returns.
+        """
+
+        if not self._started:
+            return
+        if self._local_catalog_refresh_lock is None:
+            self._local_catalog_refresh_lock = asyncio.Lock()
+        async with self._local_catalog_refresh_lock:
+            now = time.monotonic()
+            last = self._local_catalog_refresh_at
+            if last is not None and now - last < _LOCAL_CATALOG_REFRESH_TTL_SECONDS:
+                return
+
+            targets = self._auto_refresh_targets()
+            if not targets:
+                return
+            # Stamp before the work so a failing local server is also throttled.
+            self._local_catalog_refresh_at = now
+
+            # Local import: core.models.discovery imports core.providers.* at
+            # module load; importing it lazily here keeps runtime import time flat.
+            from core.models.discovery import ModelDiscoveryError, refresh_models
+
+            resources_dir = self._resolve_resources_path()
+            refreshed_any = False
+            for provider_id, provider, connection in targets:
+                connection_id = f"{provider_id}:{connection.id}"
+                try:
+                    credential_value = self.provider_credentials.get_credentials(
+                        provider_id, connection_id
+                    )
+                except ConfigError as error:
+                    if self.logger is not None:
+                        self.logger.debug(
+                            f"Skipping local catalog refresh for {connection_id}: {error}"
+                        )
+                    continue
+                try:
+                    await refresh_models(
+                        provider,
+                        credential_value,
+                        resources_dir,
+                        credential_connection=connection,
+                    )
+                except ModelDiscoveryError as error:
+                    # Expected when the local server is not running — keep the
+                    # last known catalog, never block or error the caller.
+                    if self.logger is not None:
+                        self.logger.debug(
+                            f"Local catalog refresh failed for {connection_id}: {error}"
+                        )
+                    continue
+                refreshed_any = True
+
+            if refreshed_any:
+                # In-place reload so services holding the registry instance
+                # (task targets, status, recall) see the fresh catalog.
+                self.models.reload(resources_dir)
+
+    def _auto_refresh_targets(self) -> list[tuple[str, ProviderConfig, ConnectionConfig]]:
+        """Return ``(provider_id, provider, connection)`` for auto-refresh connections."""
+
+        targets: list[tuple[str, ProviderConfig, ConnectionConfig]] = []
+        for provider_id in self.providers.list_ids():
+            provider = self.providers.get(provider_id)
+            for connection in provider.connections:
+                if not connection.auto_refresh:
+                    continue
+                if not (connection.models_endpoint or provider.models_endpoint):
+                    continue
+                if not self.provider_credentials.has_credentials(
+                    provider_id, f"{provider_id}:{connection.id}"
+                ):
+                    continue
+                targets.append((provider_id, provider, connection))
+        return targets
 
     def local_context_windows(self) -> Mapping[str, Any]:
         """Return the live user-configured local-model window map, or empty.
