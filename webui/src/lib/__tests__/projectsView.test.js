@@ -699,6 +699,7 @@ describe('buildToolToggleList', () => {
     expect(rows).toEqual([
       {
         name: 'edit',
+        description: '',
         enabled: false,
         ready: true,
         readiness_hint: null,
@@ -706,6 +707,7 @@ describe('buildToolToggleList', () => {
       },
       {
         name: 'read',
+        description: '',
         enabled: true,
         ready: true,
         readiness_hint: null,
@@ -713,6 +715,7 @@ describe('buildToolToggleList', () => {
       },
       {
         name: 'skill',
+        description: '',
         enabled: true,
         ready: true,
         readiness_hint: null,
@@ -726,6 +729,7 @@ describe('buildToolToggleList', () => {
       catalog: [
         {
           name: 'home_assistant',
+          description: 'Talk to Home Assistant.',
           ready: false,
           readiness_hint: 'Set the Home Assistant token first.',
           extension: 'homeassistant',
@@ -737,6 +741,7 @@ describe('buildToolToggleList', () => {
     expect(rows).toEqual([
       {
         name: 'home_assistant',
+        description: 'Talk to Home Assistant.',
         enabled: false,
         ready: false,
         readiness_hint: 'Set the Home Assistant token first.',

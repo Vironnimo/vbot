@@ -1475,7 +1475,7 @@ describe('AgentsView', () => {
     expect(document.body.textContent).toContain('missing description');
 
     const skillToggle = Array.from(
-      document.body.querySelectorAll('button.tl-toggle'),
+      document.body.querySelectorAll('button'),
     ).find((button) =>
       button.getAttribute('aria-label')?.includes('Toggle skill warning-skill'),
     );

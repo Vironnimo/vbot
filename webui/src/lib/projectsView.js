@@ -238,6 +238,7 @@ export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
     }
     byName.set(name, {
       name,
+      description: isObject ? (tool.description ?? '') : '',
       enabled: enabled.has(name),
       ready: isObject ? tool.ready !== false : true,
       readiness_hint: isObject ? (tool.readiness_hint ?? null) : null,

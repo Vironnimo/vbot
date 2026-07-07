@@ -264,11 +264,6 @@
   padding: 10px 16px 8px;
 }
 
-.agents-view .tl-actions {
-  display: flex;
-  gap: 6px;
-}
-
 .agents-view .btn-tertiary {
   padding: 2px 8px;
   font-family: var(--font-mono);
@@ -526,14 +521,6 @@
   font-size: 11px;
   line-height: 1.35;
   text-align: right;
-}
-
-/* A not-ready tool row is greyed but its toggle stays interactive. */
-.agents-view .agents-view__tool-row--not-ready .tl-item-name,
-.agents-view
-  .agents-view__tool-row--not-ready
-  .agents-view__access-description {
-  opacity: 0.55;
 }
 
 @media (max-width: 960px) {

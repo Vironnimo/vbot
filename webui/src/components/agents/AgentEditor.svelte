@@ -8,7 +8,7 @@
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
-  import ToolReadinessNotice from '../ui/ToolReadinessNotice.svelte';
+  import ToggleChipList from '../ui/ToggleChipList.svelte';
   import { rpc } from '$lib/api.js';
   import {
     AGENT_MEMORY_PROMPT_MODES,
@@ -99,6 +99,15 @@
   );
   let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(skillAccessItems());
+  // The shared chip list keys off `allowed`; the access items track it as
+  // `isAllowed`, so map it across (everything else — description, readiness,
+  // warnings — passes through unchanged).
+  let toolChipItems = $derived(
+    visibleToolItems.map((tool) => ({ ...tool, allowed: tool.isAllowed })),
+  );
+  let skillChipItems = $derived(
+    visibleSkillItems.map((skill) => ({ ...skill, allowed: skill.isAllowed })),
+  );
   // The memory tool from the catalog (if present), rendered as a display-only
   // first row: it follows the Memory setting and is never an allow-list toggle.
   let memoryToolItem = $derived(
@@ -1108,90 +1117,42 @@
           <span class="tl-section-label">
             {t('agents.form.allowedTools', 'Allowed tools')}
           </span>
-          <div class="tl-actions">
-            <Button
-              variant="tertiary"
-              disabled={visibleToolItems.length === 0}
-              onClick={() => setAccessItems('allowed_tools', true)}
-            >
-              {t('agents.access.allOn', 'all on')}
-            </Button>
-            <Button
-              variant="tertiary"
-              disabled={visibleToolItems.length === 0}
-              onClick={() => setAccessItems('allowed_tools', false)}
-            >
-              {t('agents.access.allOff', 'all off')}
-            </Button>
-          </div>
         </div>
-        {#if toolsAreWildcard && visibleToolItems.length > 0}
-          <small class="agents-view__field-help">
-            {t(
-              'agents.form.wildcardNote',
-              'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
-            )}
-          </small>
-        {/if}
-        {#if memoryToolItem || visibleToolItems.length > 0}
+        {#if memoryToolItem}
           <div class="tl-items">
-            {#if memoryToolItem}
-              <div class="tl-item agents-view__memory-tool-row">
-                <div class="agents-view__access-copy">
-                  <span class="tl-item-name">{memoryToolItem.name}</span>
-                  {#if memoryToolItem.description}
-                    <span class="agents-view__access-description">
-                      {t('agents.access.descriptionLabel', '{description}', {
-                        description: memoryToolItem.description,
-                      })}
-                    </span>
-                  {/if}
-                </div>
-                <span
-                  class="agents-view__memory-tool-state"
-                  data-testid="memory-tool-row-state"
-                >
-                  {memoryToolRowText()}
-                </span>
+            <div class="tl-item agents-view__memory-tool-row">
+              <div class="agents-view__access-copy">
+                <span class="tl-item-name">{memoryToolItem.name}</span>
+                {#if memoryToolItem.description}
+                  <span class="agents-view__access-description">
+                    {memoryToolItem.description}
+                  </span>
+                {/if}
               </div>
-            {/if}
-            {#each visibleToolItems as item (item.name)}
-              <div
-                class="tl-item"
-                class:agents-view__tool-row--not-ready={item.ready === false}
+              <span
+                class="agents-view__memory-tool-state"
+                data-testid="memory-tool-row-state"
               >
-                <div class="agents-view__access-copy">
-                  <span class="tl-item-name">{item.name}</span>
-                  {#if item.description}
-                    <span class="agents-view__access-description">
-                      {t('agents.access.descriptionLabel', '{description}', {
-                        description: item.description,
-                      })}
-                    </span>
-                  {/if}
-                  <ToolReadinessNotice
-                    ready={item.ready}
-                    readinessHint={item.readiness_hint}
-                    extension={item.extension}
-                    onOpenExtensions={navigateToExtensions}
-                  />
-                </div>
-                <Toggle
-                  size="sm"
-                  checked={item.isAllowed}
-                  ariaLabel={t(
-                    'agents.access.toggleTool',
-                    'Toggle tool {name}',
-                    { name: item.name },
-                  )}
-                  disabled={item.isWildcard}
-                  onChange={(next) =>
-                    updateAccessItem('allowed_tools', item.name, next)}
-                />
-              </div>
-            {/each}
+                {memoryToolRowText()}
+              </span>
+            </div>
           </div>
         {/if}
+        <ToggleChipList
+          items={toolChipItems}
+          note={toolsAreWildcard && visibleToolItems.length > 0
+            ? t(
+                'agents.form.wildcardNote',
+                'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
+              )
+            : ''}
+          ariaToggleLabel={(name) =>
+            t('agents.access.toggleTool', 'Toggle tool {name}', { name })}
+          onToggle={(name, next) =>
+            updateAccessItem('allowed_tools', name, next)}
+          onSetAll={(next) => setAccessItems('allowed_tools', next)}
+          onOpenExtensions={navigateToExtensions}
+        />
       </div>
 
       <div class="tl-section">
@@ -1199,77 +1160,25 @@
           <span class="tl-section-label">
             {t('agents.form.allowedSkills', 'Allowed skills')}
           </span>
-          <div class="tl-actions">
-            <Button
-              variant="tertiary"
-              disabled={visibleSkillItems.length === 0}
-              onClick={() => setAccessItems('allowed_skills', true)}
-            >
-              {t('agents.access.allOn', 'all on')}
-            </Button>
-            <Button
-              variant="tertiary"
-              disabled={visibleSkillItems.length === 0}
-              onClick={() => setAccessItems('allowed_skills', false)}
-            >
-              {t('agents.access.allOff', 'all off')}
-            </Button>
-          </div>
         </div>
-        {#if skillsAreWildcard && visibleSkillItems.length > 0}
-          <small class="agents-view__field-help">
-            {t(
-              'agents.form.wildcardNote',
-              'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
-            )}
-          </small>
-        {/if}
-        {#if visibleSkillItems.length > 0}
-          <div class="tl-items">
-            {#each visibleSkillItems as item (item.name)}
-              <div class="tl-item">
-                <div class="agents-view__access-copy">
-                  <span class="tl-item-name">{item.name}</span>
-                  {#if item.description}
-                    <span class="agents-view__access-description">
-                      {t('agents.access.descriptionLabel', '{description}', {
-                        description: item.description,
-                      })}
-                    </span>
-                  {/if}
-                  {#if item.valid === false && item.warnings.length > 0}
-                    <div class="agents-view__skill-warnings">
-                      <span class="agents-view__warning-label">
-                        {t('agents.access.skillWarnings', 'Warnings')}
-                      </span>
-                      <ul>
-                        {#each item.warnings as warning, index (`${item.name}-warning-${index}`)}
-                          <li>{warning}</li>
-                        {/each}
-                      </ul>
-                    </div>
-                  {/if}
-                </div>
-                <Toggle
-                  size="sm"
-                  checked={item.isAllowed}
-                  ariaLabel={t(
-                    'agents.access.toggleSkill',
-                    'Toggle skill {name}',
-                    { name: item.name },
-                  )}
-                  disabled={item.isWildcard}
-                  onChange={(next) =>
-                    updateAccessItem('allowed_skills', item.name, next)}
-                />
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <p class="agents-view__placeholder-row">
-            {t('agents.access.noSkills', 'No loadable skills are available.')}
-          </p>
-        {/if}
+        <ToggleChipList
+          items={skillChipItems}
+          emptyLabel={t(
+            'agents.access.noSkills',
+            'No loadable skills are available.',
+          )}
+          note={skillsAreWildcard && visibleSkillItems.length > 0
+            ? t(
+                'agents.form.wildcardNote',
+                'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
+              )
+            : ''}
+          ariaToggleLabel={(name) =>
+            t('agents.access.toggleSkill', 'Toggle skill {name}', { name })}
+          onToggle={(name, next) =>
+            updateAccessItem('allowed_skills', name, next)}
+          onSetAll={(next) => setAccessItems('allowed_skills', next)}
+        />
         {#if invalidSkills.length > 0}
           <div class="agents-view__invalid-skills">
             <div class="agents-view__invalid-skills-title">
