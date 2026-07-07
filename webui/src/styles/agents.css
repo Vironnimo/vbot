@@ -270,25 +270,6 @@
   font-size: 10px;
 }
 
-.agents-view .tl-items {
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--border);
-}
-
-.agents-view .tl-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.agents-view .tl-item:last-child {
-  border-bottom: 0;
-}
-
 .agents-view .tl-item-name {
   color: var(--text-med);
   font-family: var(--font-mono);
@@ -346,12 +327,6 @@
   flex: 1;
   flex-direction: column;
   gap: 3px;
-}
-
-.agents-view .agents-view__access-description {
-  color: var(--text-lo);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 .agents-view .agents-view__skill-warnings {
@@ -511,16 +486,6 @@
   flex-shrink: 0;
   padding: 4px 10px;
   font-family: var(--font-mono);
-}
-
-/* The display-only memory tool row: its status text stands in for a toggle. */
-.agents-view .agents-view__memory-tool-state {
-  flex-shrink: 0;
-  max-width: 45%;
-  color: var(--text-lo);
-  font-size: 11px;
-  line-height: 1.35;
-  text-align: right;
 }
 
 @media (max-width: 960px) {

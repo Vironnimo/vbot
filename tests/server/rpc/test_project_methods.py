@@ -446,15 +446,20 @@ def test_show_reflects_a_newly_added_repo_skill(tmp_path: Path) -> None:
 
     # The first open primes the per-project skill cache against the current repo.
     primed = _show_project(state, {"project_id": "p"})
-    assert primed["scan"]["skills"]["project"] == ["alpha"]
+    assert primed["scan"]["skills"]["project"] == [
+        {"name": "alpha", "description": "Alpha playbook."},
+    ]
 
     # A new project skill lands in the repo after that first open.
     _write_project_skill(repo, "beta", "Beta playbook.")
 
     refreshed = _show_project(state, {"project_id": "p"})
 
-    # The editor pool reflects the new skill...
-    assert refreshed["scan"]["skills"]["project"] == ["alpha", "beta"]
+    # The editor pool reflects the new skill (name + description carried per entry)...
+    assert refreshed["scan"]["skills"]["project"] == [
+        {"name": "alpha", "description": "Alpha playbook."},
+        {"name": "beta", "description": "Beta playbook."},
+    ]
     # ...and so does project_skill_names, which is exactly what the resolver feeds
     # into a config agent's effective skills, so the next resolve sees it too.
     assert runtime.project_skill_names("p") == frozenset({"alpha", "beta"})
@@ -606,23 +611,34 @@ def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
     state.runtime.project_skill_names = lambda _project_id: frozenset({"refactoring", "glossary"})
+    state.runtime.project_own_skills = lambda _project_id: [
+        SimpleNamespace(name="refactoring", description="Refactor code safely."),
+        SimpleNamespace(name="glossary", description="Maintain the glossary."),
+    ]
     state.runtime.skills = SimpleNamespace(
         list_all=lambda: [
-            SimpleNamespace(name="glossary", origin=SKILL_ORIGIN_BUNDLED),
-            SimpleNamespace(name="pdf", origin=SKILL_ORIGIN_BUNDLED),
-            SimpleNamespace(name="deploy", origin=SKILL_ORIGIN_GLOBAL),
+            SimpleNamespace(name="glossary", description="", origin=SKILL_ORIGIN_BUNDLED),
+            SimpleNamespace(name="pdf", description="Work with PDFs.", origin=SKILL_ORIGIN_BUNDLED),
+            SimpleNamespace(
+                name="deploy", description="Deploy the app.", origin=SKILL_ORIGIN_GLOBAL
+            ),
         ]
     )
 
     result = _show_project(state, {"project_id": "vbot"})
 
+    # Each pool entry carries name + description so the editor's chips can show the
+    # description on hover, like the tool pool.
     assert result["scan"]["skills"] == {
-        "project": ["glossary", "refactoring"],
+        "project": [
+            {"name": "glossary", "description": "Maintain the glossary."},
+            {"name": "refactoring", "description": "Refactor code safely."},
+        ],
         # "glossary" is shadowed by the project skill of the same name, so it is not
         # offered again as a bundled opt-in.
-        "bundled": ["pdf"],
+        "bundled": [{"name": "pdf", "description": "Work with PDFs."}],
         # Global-home skills are a separate opt-in pool, split out by origin.
-        "global": ["deploy"],
+        "global": [{"name": "deploy", "description": "Deploy the app."}],
     }
 
 

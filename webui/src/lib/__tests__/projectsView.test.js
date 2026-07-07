@@ -765,25 +765,35 @@ describe('buildToolToggleList', () => {
 describe('buildSkillToggleSections', () => {
   it('defaults project skills on (off when disabled) and bundled/global off (on when enabled)', () => {
     const sections = buildSkillToggleSections({
-      projectSkills: ['refactoring', 'debugging'],
-      bundledSkills: ['pdf', 'xlsx'],
-      globalSkills: ['deploy', 'audit'],
+      projectSkills: [
+        { name: 'refactoring', description: 'Refactor.' },
+        { name: 'debugging', description: 'Debug.' },
+      ],
+      bundledSkills: [
+        { name: 'pdf', description: 'PDFs.' },
+        { name: 'xlsx', description: 'Sheets.' },
+      ],
+      globalSkills: [
+        { name: 'deploy', description: 'Deploy.' },
+        { name: 'audit', description: 'Audit.' },
+      ],
       skillsBundledEnabled: ['pdf'],
       skillsGlobalEnabled: ['deploy'],
       skillsProjectDisabled: ['debugging'],
     });
 
+    // Each entry carries the skill's description through for the chip hover card.
     expect(sections.project).toEqual([
-      { name: 'refactoring', enabled: true },
-      { name: 'debugging', enabled: false },
+      { name: 'refactoring', description: 'Refactor.', enabled: true },
+      { name: 'debugging', description: 'Debug.', enabled: false },
     ]);
     expect(sections.bundled).toEqual([
-      { name: 'pdf', enabled: true },
-      { name: 'xlsx', enabled: false },
+      { name: 'pdf', description: 'PDFs.', enabled: true },
+      { name: 'xlsx', description: 'Sheets.', enabled: false },
     ]);
     expect(sections.global).toEqual([
-      { name: 'deploy', enabled: true },
-      { name: 'audit', enabled: false },
+      { name: 'deploy', description: 'Deploy.', enabled: true },
+      { name: 'audit', description: 'Audit.', enabled: false },
     ]);
   });
 
@@ -811,12 +821,20 @@ describe('setListMembership', () => {
 });
 
 describe('normalizeScanSkills', () => {
-  it('extracts the project, bundled, and global skill pools', () => {
+  it('extracts the project, bundled, and global skill pools with descriptions', () => {
     expect(
       normalizeScanSkills({
-        skills: { project: ['a', ' '], bundled: ['b'], global: ['c'] },
+        skills: {
+          project: [{ name: 'a', description: 'A skill.' }, ' '],
+          bundled: ['b'],
+          global: [{ name: 'c', description: '' }],
+        },
       }),
-    ).toEqual({ project: ['a'], bundled: ['b'], global: ['c'] });
+    ).toEqual({
+      project: [{ name: 'a', description: 'A skill.' }],
+      bundled: [{ name: 'b', description: '' }],
+      global: [{ name: 'c', description: '' }],
+    });
     expect(normalizeScanSkills(undefined)).toEqual({
       project: [],
       bundled: [],
