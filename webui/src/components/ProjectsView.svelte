@@ -9,7 +9,7 @@
   import StatusChip from './ui/StatusChip.svelte';
   import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
-  import ToolReadinessNotice from './ui/ToolReadinessNotice.svelte';
+  import ToggleChipList from './ui/ToggleChipList.svelte';
   import {
     addProject,
     clearOverride,
@@ -315,6 +315,29 @@
       skillsGlobalEnabled: editForm.skills_global_enabled,
       skillsProjectDisabled: editForm.skills_project_disabled,
     }),
+  );
+  // The shared chip list keys off `allowed`; the toggle builders track it as
+  // `enabled`, so map it across for each list.
+  let toolChipItems = $derived(
+    toolToggleRows.map((tool) => ({ ...tool, allowed: tool.enabled })),
+  );
+  let projectSkillChips = $derived(
+    skillToggleSections.project.map((skill) => ({
+      ...skill,
+      allowed: skill.enabled,
+    })),
+  );
+  let bundledSkillChips = $derived(
+    skillToggleSections.bundled.map((skill) => ({
+      ...skill,
+      allowed: skill.enabled,
+    })),
+  );
+  let globalSkillChips = $derived(
+    skillToggleSections.global.map((skill) => ({
+      ...skill,
+      allowed: skill.enabled,
+    })),
   );
 
   onMount(() => {
@@ -808,6 +831,37 @@
   // Reset the Tool Whitelist to the base list (the server-provided default).
   function resetToolsToDefaults() {
     editForm.allowed_tools = [...defaultProjectTools];
+    editError = '';
+  }
+
+  // Bulk "all on / all off" for each whitelist list. Tools and bundled/global
+  // skills store the enabled names; project skills store the *disabled* names,
+  // so all-on clears the disabled list and all-off names every project skill.
+  function setAllTools(enabled) {
+    editForm.allowed_tools = enabled
+      ? toolToggleRows.map((tool) => tool.name)
+      : [];
+    editError = '';
+  }
+
+  function setAllProjectSkills(enabled) {
+    editForm.skills_project_disabled = enabled
+      ? []
+      : skillToggleSections.project.map((skill) => skill.name);
+    editError = '';
+  }
+
+  function setAllBundledSkills(enabled) {
+    editForm.skills_bundled_enabled = enabled
+      ? skillToggleSections.bundled.map((skill) => skill.name)
+      : [];
+    editError = '';
+  }
+
+  function setAllGlobalSkills(enabled) {
+    editForm.skills_global_enabled = enabled
+      ? skillToggleSections.global.map((skill) => skill.name)
+      : [];
     editError = '';
   }
 
@@ -2172,61 +2226,44 @@
               </div>
               <div class="detail-section-body">
                 <div class="projects-field">
-                  <div class="projects-field-header">
-                    <span class="projects-label">
-                      {t('projects.manage.allowedTools', 'Tool whitelist')}
-                    </span>
-                    <Button
-                      variant="tertiary"
-                      data-testid="project-tools-reset"
-                      disabled={editSaving}
-                      onClick={resetToolsToDefaults}
-                    >
-                      {t('projects.manage.resetDefaults', 'Reset to defaults')}
-                    </Button>
-                  </div>
+                  <span class="projects-label">
+                    {t('projects.manage.allowedTools', 'Tool whitelist')}
+                  </span>
                   <p class="projects-help">
                     {t(
                       'projects.manage.allowedToolsHelp',
                       'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
                     )}
                   </p>
-                  {#if toolToggleRows.length > 0}
-                    <ul class="projects-file-list">
-                      {#each toolToggleRows as tool (tool.name)}
-                        <li
-                          class="projects-file-row"
-                          class:projects-file-row--not-ready={tool.ready ===
-                            false}
-                        >
-                          <div class="projects-tool-copy">
-                            <span class="projects-file-name">{tool.name}</span>
-                            <ToolReadinessNotice
-                              ready={tool.ready}
-                              readinessHint={tool.readiness_hint}
-                              extension={tool.extension}
-                              onOpenExtensions={navigateToExtensions}
-                            />
-                          </div>
-                          <Toggle
-                            size="sm"
-                            checked={tool.enabled}
-                            disabled={editSaving}
-                            ariaLabel={t(
-                              'projects.manage.toggleTool',
-                              'Toggle tool {name}',
-                              { name: tool.name },
-                            )}
-                            onChange={(next) => toggleTool(tool.name, next)}
-                          />
-                        </li>
-                      {/each}
-                    </ul>
-                  {:else}
-                    <p class="projects-file-empty">
-                      {t('projects.manage.toolsEmpty', 'No tools available')}
-                    </p>
-                  {/if}
+                  <ToggleChipList
+                    items={toolChipItems}
+                    disabled={editSaving}
+                    emptyLabel={t(
+                      'projects.manage.toolsEmpty',
+                      'No tools available',
+                    )}
+                    ariaToggleLabel={(name) =>
+                      t('projects.manage.toggleTool', 'Toggle tool {name}', {
+                        name,
+                      })}
+                    onToggle={(name, next) => toggleTool(name, next)}
+                    onSetAll={setAllTools}
+                    onOpenExtensions={navigateToExtensions}
+                  >
+                    {#snippet headerActions()}
+                      <Button
+                        variant="tertiary"
+                        data-testid="project-tools-reset"
+                        disabled={editSaving}
+                        onClick={resetToolsToDefaults}
+                      >
+                        {t(
+                          'projects.manage.resetDefaults',
+                          'Reset to defaults',
+                        )}
+                      </Button>
+                    {/snippet}
+                  </ToggleChipList>
                 </div>
               </div>
             </div>
@@ -2251,73 +2288,58 @@
                     <span class="projects-sublabel">
                       {t('projects.manage.projectSkills', 'Project skills')}
                     </span>
-                    <ul class="projects-file-list">
-                      {#each skillToggleSections.project as skill (skill.name)}
-                        <li class="projects-file-row">
-                          <span class="projects-file-name">{skill.name}</span>
-                          <Toggle
-                            size="sm"
-                            checked={skill.enabled}
-                            disabled={editSaving}
-                            ariaLabel={t(
-                              'projects.manage.toggleSkill',
-                              'Toggle skill {name}',
-                              { name: skill.name },
-                            )}
-                            onChange={(next) =>
-                              toggleProjectSkill(skill.name, next)}
-                          />
-                        </li>
-                      {/each}
-                    </ul>
+                    <ToggleChipList
+                      items={projectSkillChips}
+                      disabled={editSaving}
+                      ariaToggleLabel={(name) =>
+                        t(
+                          'projects.manage.toggleSkill',
+                          'Toggle skill {name}',
+                          {
+                            name,
+                          },
+                        )}
+                      onToggle={(name, next) => toggleProjectSkill(name, next)}
+                      onSetAll={setAllProjectSkills}
+                    />
                   {/if}
                   {#if skillToggleSections.bundled.length > 0}
                     <span class="projects-sublabel">
                       {t('projects.manage.bundledSkills', 'Bundled skills')}
                     </span>
-                    <ul class="projects-file-list">
-                      {#each skillToggleSections.bundled as skill (skill.name)}
-                        <li class="projects-file-row">
-                          <span class="projects-file-name">{skill.name}</span>
-                          <Toggle
-                            size="sm"
-                            checked={skill.enabled}
-                            disabled={editSaving}
-                            ariaLabel={t(
-                              'projects.manage.toggleSkill',
-                              'Toggle skill {name}',
-                              { name: skill.name },
-                            )}
-                            onChange={(next) =>
-                              toggleBundledSkill(skill.name, next)}
-                          />
-                        </li>
-                      {/each}
-                    </ul>
+                    <ToggleChipList
+                      items={bundledSkillChips}
+                      disabled={editSaving}
+                      ariaToggleLabel={(name) =>
+                        t(
+                          'projects.manage.toggleSkill',
+                          'Toggle skill {name}',
+                          {
+                            name,
+                          },
+                        )}
+                      onToggle={(name, next) => toggleBundledSkill(name, next)}
+                      onSetAll={setAllBundledSkills}
+                    />
                   {/if}
                   {#if skillToggleSections.global.length > 0}
                     <span class="projects-sublabel">
                       {t('projects.manage.globalSkills', 'Global skills')}
                     </span>
-                    <ul class="projects-file-list">
-                      {#each skillToggleSections.global as skill (skill.name)}
-                        <li class="projects-file-row">
-                          <span class="projects-file-name">{skill.name}</span>
-                          <Toggle
-                            size="sm"
-                            checked={skill.enabled}
-                            disabled={editSaving}
-                            ariaLabel={t(
-                              'projects.manage.toggleSkill',
-                              'Toggle skill {name}',
-                              { name: skill.name },
-                            )}
-                            onChange={(next) =>
-                              toggleGlobalSkill(skill.name, next)}
-                          />
-                        </li>
-                      {/each}
-                    </ul>
+                    <ToggleChipList
+                      items={globalSkillChips}
+                      disabled={editSaving}
+                      ariaToggleLabel={(name) =>
+                        t(
+                          'projects.manage.toggleSkill',
+                          'Toggle skill {name}',
+                          {
+                            name,
+                          },
+                        )}
+                      onToggle={(name, next) => toggleGlobalSkill(name, next)}
+                      onSetAll={setAllGlobalSkills}
+                    />
                   {/if}
                   {#if skillToggleSections.project.length === 0 && skillToggleSections.bundled.length === 0 && skillToggleSections.global.length === 0}
                     <p class="projects-file-empty">

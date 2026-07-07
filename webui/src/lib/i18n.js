@@ -319,6 +319,15 @@ export const englishCatalog = Object.freeze({
   'agents.access.invalidSkillsTitle': 'Unavailable skills',
   'agents.access.unknownSkillName': 'Unknown skill',
   'agents.access.notLoadable': 'not loadable',
+
+  // Shared toggle-chip allow-list (tools/skills) — Agent editor + Projects.
+  'access.searchPlaceholder': 'Filter…',
+  'access.count': '{on} / {total} on',
+  'access.allOn': 'all on',
+  'access.allOff': 'all off',
+  'access.noMatches': 'No matches.',
+  'access.toggle': 'Toggle {name}',
+
   'agents.tools.memoryFollowsActive':
     'Follows the Memory setting — currently available.',
   'agents.tools.memoryFollowsOff':
