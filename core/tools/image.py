@@ -26,7 +26,15 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
         "prompt": {
             "type": "string",
             "minLength": 1,
-            "description": "The text prompt describing the image to generate.",
+            "description": (
+                "The text prompt describing the image to generate. Be specific "
+                "and concrete — name the subject and its key attributes, the "
+                "setting, composition/framing, lighting, mood, and the visual "
+                "medium or style (e.g. photo, oil painting, 3D render, flat "
+                "vector). Detailed prompts produce markedly better images than "
+                "short vague ones; spell the scene out fully rather than "
+                "referring to things from the conversation."
+            ),
         }
     },
     "required": ["prompt"],
