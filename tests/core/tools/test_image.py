@@ -42,6 +42,38 @@ async def test_image_generation_tool_rejects_empty_prompt(tmp_path: Path) -> Non
     assert result["error"]["code"] == "invalid_arguments"
 
 
+@pytest.mark.asyncio
+async def test_image_generation_tool_forwards_per_call_knobs(tmp_path: Path) -> None:
+    service = _ImageService(tmp_path / "artifact-1.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+    context = _make_context(tmp_path)
+
+    result = await registry.dispatch(
+        context,
+        {"prompt": "a red fox", "aspect_ratio": "16:9", "resolution": "4K"},
+    )
+
+    assert result["ok"] is True
+    assert service.received_call_options == {"aspect_ratio": "16:9", "resolution": "4K"}
+
+
+@pytest.mark.asyncio
+async def test_image_generation_tool_omits_blank_knobs(tmp_path: Path) -> None:
+    service = _ImageService(tmp_path / "artifact-1.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+    context = _make_context(tmp_path)
+
+    result = await registry.dispatch(
+        context,
+        {"prompt": "a red fox", "aspect_ratio": "  ", "resolution": ""},
+    )
+
+    assert result["ok"] is True
+    assert service.received_call_options == {}
+
+
 def _make_context(tmp_path: Path) -> ToolContext:
     return ToolContext(
         agent_id="agent",
@@ -70,8 +102,17 @@ _ARTIFACT_PAYLOAD = {
 class _ImageService:
     def __init__(self, file_path: Path) -> None:
         self._file_path = file_path
+        self.received_prompt: str | None = None
+        self.received_call_options: dict[str, object] | None = None
 
-    async def generate_artifacts(self, _prompt: str) -> tuple[object, ...]:
+    async def generate_artifacts(
+        self,
+        prompt: str,
+        *,
+        call_options: dict[str, object] | None = None,
+    ) -> tuple[object, ...]:
+        self.received_prompt = prompt
+        self.received_call_options = call_options
         return (
             SimpleNamespace(
                 file_path=self._file_path,
