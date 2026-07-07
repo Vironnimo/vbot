@@ -77,6 +77,14 @@
   let disableCustomPromptConfirmOpen = $state(false);
 
   let canDeleteSelectedAgent = $derived(Boolean(agent) && agentsCount > 1);
+  // The agent points at a custom (e.g. repo-rooted) workspace rather than its
+  // default home under the agent folder — gates the "set to default" action.
+  let workspaceIsCustom = $derived(
+    formMode === AGENT_FORM_MODE_EDIT &&
+      Boolean(agent?.workspace) &&
+      Boolean(agent?.default_workspace) &&
+      agent.workspace !== agent.default_workspace,
+  );
   let submitLabel = $derived(
     formMode === AGENT_FORM_MODE_CREATE
       ? t('agents.form.submitCreate', 'Create agent')
@@ -304,6 +312,18 @@
 
   function agentPayloadHasChanges(payload) {
     return Object.keys(payload).some((fieldName) => fieldName !== 'id');
+  }
+
+  async function resetWorkspaceToDefault() {
+    if (!agent?.default_workspace || isSaving || isDeleting) {
+      return;
+    }
+
+    // Repoint the workspace to the default home and persist. Files at the
+    // previous custom location are left untouched — it may be a repo the agent
+    // was rooted in — so this only changes which directory the agent uses.
+    formValues.workspace = agent.default_workspace;
+    await saveAgent(null, { source: 'manual' });
   }
 
   function clearAgentAutoSaveTimer() {
@@ -831,6 +851,16 @@
                   "Workspace path used by this agent's tools.",
                 )}
           </small>
+          {#if workspaceIsCustom}
+            <Button
+              variant="tertiary"
+              class="agents-view__reset-inherit"
+              disabled={isSaving || isDeleting}
+              onClick={resetWorkspaceToDefault}
+            >
+              {t('agents.form.workspaceSetToDefault', 'Set to default')}
+            </Button>
+          {/if}
           {#if formErrors.workspace}
             <small id="agent-workspace-error" class="agents-view__field-error">
               {fieldError('workspace')}

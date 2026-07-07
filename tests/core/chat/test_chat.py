@@ -351,7 +351,7 @@ async def test_project_session_tool_resolves_relative_path_against_project_cwd(
     # The relative path resolved against the project cwd (the repo), not the
     # agent workspace.
     repo_file = Path(project.cwd) / "out.txt"
-    workspace_file = tmp_path / "workspace-coder" / "out.txt"
+    workspace_file = tmp_path / "agents" / "coder" / "workspace" / "out.txt"
     assert repo_file.read_text(encoding="utf-8") == "in-repo"
     assert not workspace_file.exists()
 
@@ -386,7 +386,7 @@ async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path)
     await ChatLoop(runtime).send("coder", "Write a file", session_id="session-one")
 
     identity_session = tmp_path / "agents" / "coder" / "sessions" / "session-one.jsonl"
-    workspace_file = tmp_path / "workspace-coder" / "out.txt"
+    workspace_file = tmp_path / "agents" / "coder" / "workspace" / "out.txt"
     assert identity_session.exists()
     assert workspace_file.read_text(encoding="utf-8") == "in-workspace"
 

@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.agents import default_workspace_dir
 from core.chat.events import _emit_tool_context_event, _timing_payload
 from core.chat.messages import ChatMessage, JsonObject, ToolCall
 from core.extensions import ExtensionRegistry, HookContext
@@ -598,7 +599,7 @@ def _agent_workspace(agent: Any, data_root: Path) -> Path:
     if workspace is not None:
         return Path(workspace)
 
-    return data_root / f"workspace-{agent.id}"
+    return default_workspace_dir(data_root, agent.id)
 
 
 def _resolve_tool_cwd(project_cwd: Path | None, workspace: Path) -> Path:

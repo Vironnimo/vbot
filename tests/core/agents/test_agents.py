@@ -74,7 +74,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["name"] == "Coder Agent"
     assert data["model"] == ""
     assert data["fallback_model"] == ""
-    assert data["workspace"] == str((store.data_dir / "workspace-coder").resolve())
+    assert data["workspace"] == str((store.data_dir / "agents" / "coder" / "workspace").resolve())
     assert data["temperature"] is None
     assert data["thinking_effort"] is None
     assert data["memory_prompt_mode"] == "agent_user"
@@ -95,6 +95,16 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     workspace_path = Path(agent.workspace)
     for filename in TEMPLATE_FILES:
         assert (workspace_path / filename).read_text(encoding="utf-8") == f"# {filename}\n"
+
+
+def test_default_workspace_matches_created_agent_workspace(store: AgentStore) -> None:
+    agent = store.create("coder", "Coder Agent")
+
+    default = store.default_workspace("coder")
+    assert default == str((store.data_dir / "agents" / "coder" / "workspace").resolve())
+    # A default-created agent's stored workspace equals the reported default, so
+    # the WebUI's "uses a custom workspace" check (workspace != default) is False.
+    assert agent.workspace == default
 
 
 def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: Path) -> None:
@@ -660,7 +670,7 @@ def test_legacy_agent_without_current_session_id_is_normalized(store: AgentStore
 def test_agent_without_workspace_is_normalized_to_default_workspace(store: AgentStore) -> None:
     store.create("missing_workspace", "Missing Workspace Agent")
     agent_path = store.data_dir / "agents" / "missing_workspace" / "agent.json"
-    workspace_path = store.data_dir / "workspace-missing_workspace"
+    workspace_path = store.data_dir / "agents" / "missing_workspace" / "workspace"
     shutil.rmtree(workspace_path)
     data = json.loads(agent_path.read_text(encoding="utf-8"))
     data.pop("workspace")
@@ -713,6 +723,23 @@ def test_delete_archives_agent_data_and_workspace(store: AgentStore) -> None:
     assert not Path(agent.workspace).exists()
     assert (archive_dir / "agent" / "agent.json").exists()
     assert (archive_dir / "agent" / "sessions" / "session.jsonl").exists()
+    # The default workspace lives inside the agent directory, so it is archived
+    # within the agent tree, not as a separate ``workspace/`` sibling.
+    assert (archive_dir / "agent" / "workspace" / "SOUL.md").exists()
+
+
+def test_delete_archives_external_workspace_beside_agent(store: AgentStore, tmp_path: Path) -> None:
+    # A custom workspace outside the agent tree (e.g. a repo an identity agent is
+    # rooted in) is not swept up by the agent-directory move, so delete archives
+    # it separately as ``workspace/``.
+    external_workspace = tmp_path / "rooted-repo"
+    store.create("coder", "Coder Agent", workspace=external_workspace)
+
+    archive_dir = store.delete("coder")
+
+    assert not (store.data_dir / "agents" / "coder").exists()
+    assert not external_workspace.exists()
+    assert (archive_dir / "agent" / "agent.json").exists()
     assert (archive_dir / "workspace" / "SOUL.md").exists()
 
 

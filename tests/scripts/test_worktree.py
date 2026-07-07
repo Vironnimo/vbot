@@ -22,9 +22,10 @@ def _load_worktree_module():
 def _write_data_dir_template(root: Path) -> Path:
     template_dir = root / ".data-dir-base"
     main_agent_path = template_dir / "agents" / "main" / "agent.json"
+    workspace_dir = main_agent_path.parent / "workspace"
 
     main_agent_path.parent.mkdir(parents=True, exist_ok=True)
-    (template_dir / "workspace-main").mkdir(parents=True, exist_ok=True)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
 
     (template_dir / ".env").write_text("TEMPLATE=1\n", encoding="utf-8")
     (template_dir / "settings.json").write_text(
@@ -37,12 +38,12 @@ def _write_data_dir_template(root: Path) -> Path:
                 "id": "main",
                 "name": "Main",
                 "model": "template-model",
-                "workspace": "C:\\placeholder\\workspace-main",
+                "workspace": "C:\\placeholder\\workspace",
             }
         ),
         encoding="utf-8",
     )
-    (template_dir / "workspace-main" / "USER.md").write_text(
+    (workspace_dir / "USER.md").write_text(
         "template workspace\n",
         encoding="utf-8",
     )
@@ -234,11 +235,13 @@ def test_cmd_create_seeds_data_dir_and_rewrites_main_agent_workspace(tmp_path, m
     )
     (data_dir / "agents" / "main").mkdir(parents=True, exist_ok=True)
     (data_dir / "agents" / "main" / "agent.json").write_text(
-        json.dumps({"id": "main", "workspace": "C:\\stale\\workspace-main"}),
+        json.dumps({"id": "main", "workspace": "C:\\stale\\workspace"}),
         encoding="utf-8",
     )
-    (data_dir / "workspace-main").mkdir(parents=True, exist_ok=True)
-    (data_dir / "workspace-main" / "USER.md").write_text("stale workspace\n", encoding="utf-8")
+    (data_dir / "agents" / "main" / "workspace").mkdir(parents=True, exist_ok=True)
+    (data_dir / "agents" / "main" / "workspace" / "USER.md").write_text(
+        "stale workspace\n", encoding="utf-8"
+    )
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
     monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", template_dir)
@@ -267,9 +270,9 @@ def test_cmd_create_seeds_data_dir_and_rewrites_main_agent_workspace(tmp_path, m
         "id": "main",
         "name": "Main",
         "model": "template-model",
-        "workspace": str(data_dir / "workspace-main"),
+        "workspace": str(data_dir / "agents" / "main" / "workspace"),
     }
-    assert (data_dir / "workspace-main" / "USER.md").read_text(encoding="utf-8") == (
+    assert (data_dir / "agents" / "main" / "workspace" / "USER.md").read_text(encoding="utf-8") == (
         "template workspace\n"
     )
 
