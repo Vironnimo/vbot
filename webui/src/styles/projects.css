@@ -405,18 +405,6 @@
   white-space: nowrap;
 }
 
-.projects-view .projects-tool-copy {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.projects-view .projects-file-row--not-ready .projects-file-name {
-  opacity: 0.55;
-}
-
 .projects-view .projects-file-remove {
   flex-shrink: 0;
   width: 20px;
