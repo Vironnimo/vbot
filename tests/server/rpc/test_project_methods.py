@@ -43,6 +43,7 @@ from server.rpc.methods import build_method_handlers
 from server.rpc.project_methods import (
     _add_project,
     _clear_override,
+    _detect_project,
     _list_projects,
     _remove_project,
     _set_override,
@@ -142,6 +143,14 @@ def _make_repo(tmp_path: Path, name: str, *agents: str) -> Path:
     for agent in agents:
         _write_agent(repo, agent)
     return repo
+
+
+def _write_claude_agent(repo: Path, filename: str, name: str) -> None:
+    agents_dir = repo / ".claude" / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / filename).write_text(
+        f"---\nname: {name}\ndescription: A Claude agent.\n---\nBody.\n", encoding="utf-8"
+    )
 
 
 def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNamespace:
@@ -281,6 +290,119 @@ def test_add_rejects_unknown_field(tmp_path: Path) -> None:
 
     with pytest.raises(RpcError, match="unsupported project.add fields: bogus"):
         _add_project(state, {"cwd": str(repo), "bogus": 1})
+
+
+# ---------------------------------------------------------------------------
+# source format: auto-detection at add, explicit set, switch, detect.
+# ---------------------------------------------------------------------------
+
+
+def test_add_auto_detects_claude_only_repo(tmp_path: Path) -> None:
+    # No explicit source_format + exactly one format present → that one, silently.
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "claude-repo")
+    _write_claude_agent(repo, "reviewer.md", "reviewer")
+
+    result = _add_project(state, {"cwd": str(repo)})
+
+    assert result["project"]["source_format"] == "claude"
+    assert [member["agent_id"] for member in result["scan"]["team"]] == ["reviewer"]
+    assert state.runtime.projects.get("claude-repo").source_format == "claude"
+
+
+def test_add_defaults_to_opencode_when_both_formats_present(tmp_path: Path) -> None:
+    # Deterministic non-interactive default (decision 2): both present → opencode.
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "mixed", "builder.md")
+    _write_claude_agent(repo, "reviewer.md", "reviewer")
+
+    result = _add_project(state, {"cwd": str(repo)})
+
+    assert result["project"]["source_format"] == "opencode"
+    assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder"]
+
+
+def test_add_defaults_to_opencode_when_neither_format_present(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "bare")
+
+    result = _add_project(state, {"cwd": str(repo)})
+
+    assert result["project"]["source_format"] == "opencode"
+
+
+def test_add_accepts_explicit_source_format(tmp_path: Path) -> None:
+    # An explicit choice wins over auto-detection.
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "mixed", "builder.md")
+    _write_claude_agent(repo, "reviewer.md", "reviewer")
+
+    result = _add_project(state, {"cwd": str(repo), "source_format": "claude"})
+
+    assert result["project"]["source_format"] == "claude"
+    assert [member["agent_id"] for member in result["scan"]["team"]] == ["reviewer"]
+
+
+def test_add_rejects_unknown_source_format(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot")
+
+    with pytest.raises(RpcError) as exc_info:
+        _add_project(state, {"cwd": str(repo), "source_format": "cursor"})
+
+    assert exc_info.value.code == "invalid_request"
+    assert "source_format" in exc_info.value.message
+
+
+def test_set_source_format_switches_team_without_restart(tmp_path: Path) -> None:
+    # A format switch invalidates like a cwd change, so the returned scan (and any
+    # later show) reflects the other format's team immediately.
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "mixed", "builder.md")
+    _write_claude_agent(repo, "reviewer.md", "reviewer")
+    _add_project(state, {"cwd": str(repo)})
+
+    switched = _set_project(state, {"project_id": "mixed", "source_format": "claude"})
+
+    assert switched["project"]["source_format"] == "claude"
+    assert [member["agent_id"] for member in switched["scan"]["team"]] == ["reviewer"]
+    shown = _show_project(state, {"project_id": "mixed"})
+    assert [member["agent_id"] for member in shown["scan"]["team"]] == ["reviewer"]
+
+
+def test_detect_reports_formats_and_context_files(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "mixed", "builder.md")
+    _write_claude_agent(repo, "reviewer.md", "reviewer")
+    _write_claude_agent(repo, "helper.md", "helper")
+    (repo / "CLAUDE.md").write_text("# Claude\n", encoding="utf-8")
+
+    result = _detect_project(state, {"cwd": str(repo)})
+
+    assert result["cwd_exists"] is True
+    assert result["formats"]["opencode"] == {"agents": 1, "skills": 0}
+    assert result["formats"]["claude"] == {"agents": 2, "skills": 0}
+    assert result["context_files"] == {"agents_md": False, "claude_md": "CLAUDE.md"}
+
+
+def test_detect_nonexistent_cwd_is_success_with_empty_data(tmp_path: Path) -> None:
+    # The add dialog calls this while the user types — never an error envelope.
+    state = _make_state(tmp_path)
+
+    result = _detect_project(state, {"cwd": str(tmp_path / "nope")})
+
+    assert result == {
+        "cwd_exists": False,
+        "formats": {},
+        "context_files": {"agents_md": False, "claude_md": None},
+    }
+
+
+def test_detect_rejects_unknown_field(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+
+    with pytest.raises(RpcError, match="unsupported project.detect fields: bogus"):
+        _detect_project(state, {"cwd": str(tmp_path), "bogus": 1})
 
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1120,7 @@ def test_project_methods_are_registered() -> None:
         "project.set_override",
         "project.clear_override",
         "project.rm",
+        "project.detect",
     ):
         assert method in handlers
     # The retired override handler is gone from the method table.

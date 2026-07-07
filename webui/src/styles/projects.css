@@ -721,6 +721,67 @@
   max-width: calc(100vw - 40px);
 }
 
+/* ── Add dialog: source-format choice + CLAUDE.md suggestion ─────────────────
+   The format pick renders as modal pick-list cards (DESIGN.md → Modal pick
+   lists) with a persistent selected state, since the choice stays visible
+   until submit rather than advancing a step. */
+.projects-format-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.projects-format-option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  cursor: pointer;
+  text-align: left;
+}
+
+.projects-format-option:hover,
+.projects-format-option:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.projects-format-option--selected {
+  border-color: rgba(232, 135, 10, 0.5);
+  background: var(--accent-dim);
+}
+
+.projects-format-option__name {
+  color: var(--text-hi);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.projects-format-option--selected .projects-format-option__name {
+  color: var(--accent);
+}
+
+.projects-format-option__detail {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.projects-claude-md-suggestion {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-med);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 
 @media (max-width: 960px) {

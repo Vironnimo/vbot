@@ -91,6 +91,25 @@ def test_build_project_rejects_non_list_skills_global(tmp_path: Path) -> None:
         build_project("vbot", "vBot", tmp_path, skills_global_enabled="pdf")  # type: ignore[arg-type]
 
 
+def test_build_project_defaults_source_format_to_opencode(tmp_path: Path) -> None:
+    project = build_project("vbot", "vBot", tmp_path)
+
+    assert project.source_format == "opencode"
+
+
+def test_build_project_accepts_claude_source_format(tmp_path: Path) -> None:
+    project = build_project("vbot", "vBot", tmp_path, source_format="claude")
+
+    assert project.source_format == "claude"
+    assert project.to_dict()["source_format"] == "claude"
+    assert project_from_dict(project.to_dict()).source_format == "claude"
+
+
+def test_build_project_rejects_unknown_source_format(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError):
+        build_project("vbot", "vBot", tmp_path, source_format="cursor")
+
+
 def test_override_fields_constant_is_the_three_overridable_fields() -> None:
     assert frozenset({"model", "temperature", "thinking_effort"}) == OVERRIDE_FIELDS
 
@@ -315,6 +334,7 @@ def test_to_dict_has_stable_field_set(tmp_path: Path) -> None:
         "default_model",
         "default_temperature",
         "default_thinking_effort",
+        "source_format",
         "auto_load",
         "allowed_tools",
         "skills_bundled_enabled",
@@ -341,6 +361,8 @@ def test_project_from_dict_defaults_optional_fields() -> None:
     assert project.default_model == ""
     assert project.default_temperature is None
     assert project.default_thinking_effort is None
+    # An old project.json without the field loads at the default format.
+    assert project.source_format == "opencode"
     assert project.auto_load == []
     # An old project.json without the whitelist fields loads at the same defaults a
     # new project is seeded with: base tool list, empty skill lists (decision 10).

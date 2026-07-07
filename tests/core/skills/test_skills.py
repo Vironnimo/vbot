@@ -593,3 +593,50 @@ class TestSkillOrigin:
             "agent",
             None,
         ]
+
+
+class TestProjectSkillLocations:
+    def test_subpaths_cover_exactly_the_canonical_source_formats(self) -> None:
+        # The dict keys are the core.settings vocabulary — asserted here so the two
+        # can never drift (a new format must land in both places).
+        from core.settings import PROJECT_SOURCE_FORMATS
+        from core.skills.skills import PROJECT_SKILLS_SUBPATHS
+
+        assert set(PROJECT_SKILLS_SUBPATHS) == set(PROJECT_SOURCE_FORMATS)
+
+    def test_project_skills_dir_resolves_per_format(self, tmp_path: Path) -> None:
+        from core.skills.skills import project_skills_dir
+
+        assert project_skills_dir(tmp_path, "opencode") == tmp_path / ".opencode" / "skills"
+        assert project_skills_dir(tmp_path, "claude") == tmp_path / ".claude" / "skills"
+
+    def test_project_skills_dir_rejects_unknown_format(self, tmp_path: Path) -> None:
+        from core.skills.skills import project_skills_dir
+
+        with pytest.raises(KeyError):
+            project_skills_dir(tmp_path, "cursor")
+
+    def test_scan_project_skill_names_reads_the_chosen_format_only(self, tmp_path: Path) -> None:
+        from core.skills.skills import scan_project_skill_names
+
+        write_skill(
+            tmp_path / ".opencode" / "skills", "deploy", "---\nname: deploy\ndescription: D.\n---\n"
+        )
+        write_skill(
+            tmp_path / ".claude" / "skills", "review", "---\nname: review\ndescription: R.\n---\n"
+        )
+
+        assert scan_project_skill_names(tmp_path, "opencode") == frozenset({"deploy"})
+        assert scan_project_skill_names(tmp_path, "claude") == frozenset({"review"})
+
+    def test_load_project_skill_registry_uses_format_directory(self, tmp_path: Path) -> None:
+        from core.skills.skills import load_project_skill_registry
+
+        write_skill(
+            tmp_path / ".claude" / "skills", "review", "---\nname: review\ndescription: R.\n---\n"
+        )
+        write_skill(tmp_path / "bundled", "teach", "---\nname: teach\ndescription: T.\n---\n")
+
+        registry = load_project_skill_registry(tmp_path, "claude", [tmp_path / "bundled"])
+
+        assert {skill.name for skill in registry.list_all()} == {"review", "teach"}

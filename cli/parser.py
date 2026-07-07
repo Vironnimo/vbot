@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.settings import PROJECT_SOURCE_FORMATS
 from core.utils.config import DEFAULT_HOST
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
@@ -376,6 +377,15 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Clear the project default thinking effort (fall through to the global default)",
     )
     add_parser.add_argument(
+        "--format",
+        choices=PROJECT_SOURCE_FORMATS,
+        help=(
+            "Source format the project's agents and skills come from "
+            "(.opencode/ or .claude/); omitted: auto-detected from the repo, "
+            "defaulting to opencode when both or neither are present"
+        ),
+    )
+    add_parser.add_argument(
         "--auto-load",
         nargs="*",
         metavar="<file>",
@@ -428,6 +438,14 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "--clear-default-thinking-effort",
         action="store_true",
         help="Clear the project default thinking effort (fall through to the global default)",
+    )
+    set_parser.add_argument(
+        "--format",
+        choices=PROJECT_SOURCE_FORMATS,
+        help=(
+            "Switch the project's source format; team and skills re-derive "
+            "from the new format's directories on the next show/run"
+        ),
     )
     set_parser.add_argument(
         "--auto-load",
