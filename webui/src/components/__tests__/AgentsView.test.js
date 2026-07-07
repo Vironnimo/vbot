@@ -789,7 +789,7 @@ describe('AgentsView', () => {
     });
   });
 
-  it('renders memory as a display-only first tool row that is never a toggle', async () => {
+  it('renders memory as a display-only first tool chip that is never a toggle', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         tools: [
@@ -806,7 +806,7 @@ describe('AgentsView', () => {
     await waitForText('write');
 
     // The memory tool is shown, but never as an allow-list toggle — it renders
-    // as the first, display-only row that follows the Memory setting.
+    // as the first, display-only "auto" chip that follows the Memory setting.
     expect(document.body.textContent).toContain('Run shell commands.');
     expect(document.body.textContent).toContain('Write files.');
     expect(document.body.textContent).toContain('Manage pinned memory.');
@@ -815,17 +815,17 @@ describe('AgentsView', () => {
     ).toBeNull();
 
     const memoryState = document.body.querySelector(
-      '[data-testid="memory-tool-row-state"]',
+      '[data-testid="access-chip-locked-note"]',
     );
     expect(memoryState).toBeTruthy();
     // baseAgent() uses memory_prompt_mode 'agent_user' (not off) → available.
     expect(memoryState.textContent).toContain('currently available');
 
-    // The memory row is the first row in the tool list.
-    const firstRowName = document.body
-      .querySelector('.tl-items .tl-item .tl-item-name')
+    // Memory is the first chip in the tools cloud.
+    const firstChipName = document.body
+      .querySelector('.access-chip__name')
       ?.textContent?.trim();
-    expect(firstRowName).toBe('memory');
+    expect(firstChipName).toBe('memory');
   });
 
   it('switches the memory tool row text when Memory is set to off', async () => {
@@ -845,7 +845,7 @@ describe('AgentsView', () => {
     await waitForText('Run shell commands.');
 
     const memoryState = document.body.querySelector(
-      '[data-testid="memory-tool-row-state"]',
+      '[data-testid="access-chip-locked-note"]',
     );
     expect(memoryState).toBeTruthy();
     expect(memoryState.textContent).toContain('currently unavailable');
