@@ -23,6 +23,8 @@
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
+    filterModelSelectOptions,
+    modelFilterFooterLabel,
     modelSelectionValue,
     parseModelSelectionValue,
     selectModelValue,
@@ -99,14 +101,42 @@
   // that flipping any single toggle collapses the wildcard into a fixed list.
   let toolsAreWildcard = $derived(isWildcardAccess(formValues.allowed_tools));
   let skillsAreWildcard = $derived(isWildcardAccess(formValues.allowed_skills));
-  let modelOptions = $derived(
+  let showAllModels = $state(false);
+  let showAllFallbackModels = $state(false);
+  let allModelOptions = $derived(
     selectModelOptions(formValues.model, inheritModelLabel('model')),
   );
-  let fallbackModelOptions = $derived(
+  let allFallbackModelOptions = $derived(
     selectModelOptions(
       formValues.fallback_model,
       inheritModelLabel('fallback_model'),
     ),
+  );
+  let modelOptions = $derived(
+    filterModelSelectOptions(allModelOptions, {
+      showAll: showAllModels,
+      selectedModelValue: formValues.model,
+    }),
+  );
+  let fallbackModelOptions = $derived(
+    filterModelSelectOptions(allFallbackModelOptions, {
+      showAll: showAllFallbackModels,
+      selectedModelValue: formValues.fallback_model,
+    }),
+  );
+  let modelFilterFooter = $derived(
+    modelFilterFooterLabel({
+      showAll: showAllModels,
+      hiddenCount: allModelOptions.length - modelOptions.length,
+      translate: t,
+    }),
+  );
+  let fallbackModelFilterFooter = $derived(
+    modelFilterFooterLabel({
+      showAll: showAllFallbackModels,
+      hiddenCount: allFallbackModelOptions.length - fallbackModelOptions.length,
+      translate: t,
+    }),
   );
   let modelSelectValue = $derived(
     selectModelValue(formValues.model, modelOptions),
@@ -830,6 +860,8 @@
             ariaLabel={t('agents.form.model', 'Model')}
             triggerClass="agents-view__dropdown"
             panelClass="agents-view__search-panel"
+            footerActionLabel={modelFilterFooter}
+            onFooterAction={() => (showAllModels = !showAllModels)}
             onOpenChange={onModelDropdownOpenChange}
             onValueChange={(selectedValue) =>
               updateModelSelection('model', selectedValue)}
@@ -854,6 +886,9 @@
             ariaLabel={t('agents.form.fallbackModel', 'Fallback model')}
             triggerClass="agents-view__dropdown"
             panelClass="agents-view__search-panel"
+            footerActionLabel={fallbackModelFilterFooter}
+            onFooterAction={() =>
+              (showAllFallbackModels = !showAllFallbackModels)}
             onOpenChange={onModelDropdownOpenChange}
             onValueChange={(selectedValue) =>
               updateModelSelection('fallback_model', selectedValue)}

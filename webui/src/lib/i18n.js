@@ -270,6 +270,11 @@ export const englishCatalog = Object.freeze({
   'agents.form.modelUnavailableOption': 'Unavailable / custom: {model}',
   'agents.form.modelUnavailableConnectionOption':
     'Unavailable / custom: {model} ({connection})',
+  'models.filter.noTools': 'no tool calling',
+  'models.filter.belowMinContext': 'below 32k context',
+  'models.filter.contextUnknown': 'context unknown',
+  'models.filter.showAll': 'Show all models ({count} hidden)',
+  'models.filter.showSuitable': 'Show only suitable models',
   'agents.form.editAgentPrompt': "Edit this agent's prompt",
   'agents.form.thinkingEffortOption.none': 'none',
   'agents.form.thinkingEffortOption.minimal': 'minimal',
@@ -805,6 +810,15 @@ export const englishCatalog = Object.freeze({
     'OAuth device authorization managed by the provider.',
   'settings.providers.oauthTokenDescription':
     'OAuth token configured from environment or data directory.',
+  'settings.providers.keylessDescription':
+    'No key required — this endpoint is keyless.',
+  'settings.providers.localContext.title': 'Local model context',
+  'settings.providers.localContext.description':
+    'The context window vBot budgets against and requests from the local server per call. Empty uses the default (32k, capped at the model max).',
+  'settings.providers.localContext.inputLabel': 'Context window for {model}',
+  'settings.providers.localContext.maxHint': 'model max {max}',
+  'settings.providers.localContext.invalidValue':
+    'Context window must be a positive whole number',
   'settings.providers.device_flow.title': 'Connect {provider}',
   'settings.providers.device_flow.instructions':
     'Enter this code at the link below:',

@@ -15,6 +15,8 @@
   import { t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
+    filterModelSelectOptions,
+    modelFilterFooterLabel,
     modelSelectionValue,
     parseModelSelectionValue,
     selectModelValue,
@@ -38,13 +40,27 @@
   let formErrors = $state({});
   let errorMessage = $state('');
   let isSaving = $state(false);
+  let showAllModels = $state(false);
   let modelInheritLabel = $derived(inheritLabelForDefault('model'));
-  let modelOptions = $derived(
+  let allModelOptions = $derived(
     buildModelSelectOptions({
       models: availableModels,
       connections: availableConnections,
       selectedModelValue: formValues.model,
       emptyLabel: modelInheritLabel,
+      translate: t,
+    }),
+  );
+  let modelOptions = $derived(
+    filterModelSelectOptions(allModelOptions, {
+      showAll: showAllModels,
+      selectedModelValue: formValues.model,
+    }),
+  );
+  let modelFilterFooter = $derived(
+    modelFilterFooterLabel({
+      showAll: showAllModels,
+      hiddenCount: allModelOptions.length - modelOptions.length,
       translate: t,
     }),
   );
@@ -235,6 +251,8 @@
             disabled={isSaving}
             triggerClass="agents-view__dropdown"
             panelClass="agents-view__search-panel agents-view__modal-search-panel"
+            footerActionLabel={modelFilterFooter}
+            onFooterAction={() => (showAllModels = !showAllModels)}
             onValueChange={updateModelSelection}
           />
         </label>

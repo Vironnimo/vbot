@@ -210,6 +210,77 @@ describe('SettingsView', () => {
     );
   });
 
+  it('renders a keyless connection and the local model context editor', async () => {
+    const ollama = {
+      id: 'ollama',
+      name: 'Ollama',
+      base_url: 'http://localhost:11434',
+      models_endpoint: '/api/tags',
+      connections: [
+        {
+          id: 'ollama:local',
+          type: 'none',
+          label: 'Local',
+          configured: true,
+          accounts: [{ id: 'default', usable: true, source: 'none' }],
+        },
+      ],
+      credentials_configured: true,
+      status: 'configured',
+      model_count: 1,
+      kind: 'remote',
+      editable: false,
+    };
+    const settings = settingsPayload();
+    settings.providers.items.push(ollama);
+    settings.local_models = { context_windows: {} };
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        settings,
+        models: [
+          {
+            id: 'ollama/ministral-3:8b',
+            provider_id: 'ollama',
+            model_id: 'ministral-3:8b',
+            name: 'ministral-3:8b',
+            capabilities: { tools: true },
+            context_window: 262144,
+            effective_context_window: 32768,
+            local: true,
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openProvidersPanel();
+
+    // Keyless connection: descriptive text, no key management actions.
+    await waitForCondition(() =>
+      document.body.textContent.includes('No key required'),
+    );
+    expect(providerRow('Ollama').textContent).not.toContain('Replace key');
+
+    // The local-context editor lists the flagged-local model.
+    await waitForCondition(() =>
+      document.body.textContent.includes('Local model context'),
+    );
+    const input = document.body.querySelector('.s-local-context-input');
+    expect(input).toBeTruthy();
+    expect(input.placeholder).toBe('32768');
+
+    // Setting a value writes the sparse local_models update.
+    input.value = '16384';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      local_models: {
+        context_windows: { 'ollama/ministral-3:8b': 16384 },
+      },
+    });
+  });
+
   it('renders and saves the Defaults section', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
 
@@ -1795,18 +1866,27 @@ function modelsPayload() {
       provider_id: 'openai',
       model_id: 'gpt-5.2',
       name: 'GPT-5.2',
+      capabilities: { tools: true },
+      context_window: 256000,
+      effective_context_window: 256000,
     },
     {
       id: 'openai/gpt-5.2-mini',
       provider_id: 'openai',
       model_id: 'gpt-5.2-mini',
       name: 'GPT-5.2 Mini',
+      capabilities: { tools: true },
+      context_window: 128000,
+      effective_context_window: 128000,
     },
     {
       id: 'openrouter/fresh-model',
       provider_id: 'openrouter',
       model_id: 'fresh-model',
       name: 'Fresh Model',
+      capabilities: { tools: true },
+      context_window: 128000,
+      effective_context_window: 128000,
     },
   ];
 }
