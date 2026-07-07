@@ -56,9 +56,7 @@ class TestUpdateLocalModelsSettings:
             {"local_models": {"context_windows": {"ollama/ministral-3:8b": 16384}}}
         )
 
-        assert updated["local_models"] == {
-            "context_windows": {"ollama/ministral-3:8b": 16384}
-        }
+        assert updated["local_models"] == {"context_windows": {"ollama/ministral-3:8b": 16384}}
         assert storage.load_local_models_settings() == {
             "context_windows": {"ollama/ministral-3:8b": 16384}
         }
@@ -69,9 +67,7 @@ class TestUpdateLocalModelsSettings:
             {"local_models": {"context_windows": {"ollama/a": 8192, "ollama/b": 16384}}}
         )
 
-        storage.update_settings_sections(
-            {"local_models": {"context_windows": {"ollama/a": 4096}}}
-        )
+        storage.update_settings_sections({"local_models": {"context_windows": {"ollama/a": 4096}}})
 
         assert storage.load_local_models_settings() == {
             "context_windows": {"ollama/a": 4096, "ollama/b": 16384}
@@ -83,13 +79,9 @@ class TestUpdateLocalModelsSettings:
             {"local_models": {"context_windows": {"ollama/a": 8192, "ollama/b": 16384}}}
         )
 
-        storage.update_settings_sections(
-            {"local_models": {"context_windows": {"ollama/a": None}}}
-        )
+        storage.update_settings_sections({"local_models": {"context_windows": {"ollama/a": None}}})
 
-        assert storage.load_local_models_settings() == {
-            "context_windows": {"ollama/b": 16384}
-        }
+        assert storage.load_local_models_settings() == {"context_windows": {"ollama/b": 16384}}
 
     def test_removing_unknown_key_is_a_no_op(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
@@ -112,6 +104,4 @@ class TestUpdateLocalModelsSettings:
         storage = StorageManager(tmp_path)
 
         with pytest.raises(StorageError, match="Unsupported local_models settings"):
-            storage.update_settings_sections(
-                {"local_models": {"context_windows": {}, "extra": 1}}
-            )
+            storage.update_settings_sections({"local_models": {"context_windows": {}, "extra": 1}})
