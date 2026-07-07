@@ -413,6 +413,30 @@ def test_include_unsafe_path_raises(tmp_path: Path) -> None:
         expand_workspace_includes("{include:../secret.md}", str(tmp_path))
 
 
+def test_include_reports_inlined_file_via_on_read(tmp_path: Path) -> None:
+    # The read observer sees the resolved absolute path of an inlined file, so the
+    # chat loop can stamp it read-before-write.
+    (tmp_path / "SOUL.md").write_text("Soul text", encoding="utf-8")
+    seen: list[Path] = []
+
+    expand_workspace_includes("{include:SOUL.md}", str(tmp_path), on_read=seen.append)
+
+    assert seen == [(tmp_path / "SOUL.md").resolve()]
+
+
+def test_include_on_read_not_called_for_missing_or_unreadable(tmp_path: Path) -> None:
+    # A dropped include (missing / unreadable) reports nothing — its content never
+    # reached the prompt, so it must not be treated as read.
+    (tmp_path / "DIR.md").mkdir()
+    seen: list[Path] = []
+
+    expand_workspace_includes(
+        "{include:GONE.md}{include:DIR.md}", str(tmp_path), on_read=seen.append
+    )
+
+    assert seen == []
+
+
 @pytest.mark.parametrize("filename", ["SOUL.md", "my-notes.txt", "notes.json"])
 def test_validate_workspace_include_accepts_flat_names(filename: str) -> None:
     validate_workspace_include(filename)  # should not raise

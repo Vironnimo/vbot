@@ -19,7 +19,7 @@ from core.projects.resolver import AgentResolutionError
 from core.providers.accounts import ProviderAccount
 from core.runs import ChatRunManager
 from core.skills.skills import SkillRegistry
-from core.tools import ToolContext, ToolRegistry, tool_success
+from core.tools import FileReadState, ToolContext, ToolRegistry, tool_success
 from server.app import create_app
 from server.rpc.methods import dispatch_rpc
 
@@ -251,6 +251,7 @@ class IntegrationPrompts:
         project_context: object = None,
         skill_registry: object = None,
         skill_catalog: object = None,
+        read_paths: list[Path] | None = None,
     ) -> str:
         return f"System prompt for {agent.id}"
 
@@ -368,6 +369,7 @@ class IntegrationRuntime:
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.storage = IntegrationStorage(tmp_path)
         self.system_prompts = IntegrationPrompts(self.tools)
+        self.file_read_state = FileReadState()
         self.providers = IntegrationProviders()
         self.models = IntegrationModels()
         adapter_list = adapters if isinstance(adapters, list) else [adapters]

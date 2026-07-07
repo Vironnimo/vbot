@@ -987,6 +987,24 @@ class ChatLoop:
         metadata[SEEN_SKILLS_META_KEY] = sorted(set(seen) | set(new_names))
         self._runtime.chat_sessions.set_metadata(agent_id, session_id, metadata, project_id)
 
+    def _stamp_prompt_files_read(self, session_id: str, paths: list[Path]) -> None:
+        """Register auto-injected prompt files as read-before-write for a session.
+
+        Files whose content vBot places into the model's context on its own — the
+        SOUL / pinned-memory files, a project's auto-load files, workspace includes,
+        and a visited project's files — are treated as already read, so the agent can
+        edit one directly with ``write``/``edit`` without a redundant ``read`` call.
+        The guard still forces a re-read if such a file changes on disk afterwards
+        (its ``(mtime, size)`` no longer matches), so the "only while unchanged"
+        contract holds. ``paths`` is the resolved-absolute-path list the prompt build
+        / visiting render reported; empty is a no-op.
+        """
+        if not paths:
+            return
+        file_state = self._runtime.file_read_state
+        for path in paths:
+            file_state.record_read(session_id, path)
+
     def inject_visiting_project_files(
         self,
         session: ChatSession,
@@ -1014,7 +1032,13 @@ class ChatLoop:
         ``_inject_visiting_projects``, which calls this when an identity session's
         file tools reach into a registered project's repo.
         """
-        rendered_files = self._runtime.system_prompts.render_project_files(project_context)
+        read_paths: list[Path] = []
+        rendered_files = self._runtime.system_prompts.render_project_files(
+            project_context, on_read=read_paths.append
+        )
+        # Files inlined into the visiting reminder are auto-shown to the agent, so
+        # stamp them as read — same treatment as a project-born session's prompt files.
+        self._stamp_prompt_files_read(session.id, read_paths)
         rendered_skills = self._runtime.system_prompts.render_visiting_project_skills(
             project_name, project_skills
         )
@@ -1098,13 +1122,21 @@ class ChatLoop:
         # ``skill_registry`` scopes the skills block to the project pool (``None`` =
         # the global registry); ``skill_catalog`` is the session-pinned snapshot the
         # skills block renders from, so a mid-session skill write never shifts it.
+        prompt_read_paths: list[Path] = []
         system_prompt = self._runtime.system_prompts.build_system_prompt(
             agent,
             agent_body=agent_body,
             project_context=project_context,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
+            read_paths=prompt_read_paths,
         )
+        # Auto-injected prompt files (SOUL, pinned memory, project auto-load files,
+        # workspace includes) count as read for this session, so the agent can edit
+        # one directly without a redundant read call. Rebuilt every request, so the
+        # stamp always reflects what the model currently sees; a later on-disk change
+        # still trips the stale guard and forces a re-read.
+        self._stamp_prompt_files_read(session.id, prompt_read_paths)
         system_messages = (
             [ChatMessage.system(system_prompt, agent.model).to_dict()]
             if system_prompt.strip()

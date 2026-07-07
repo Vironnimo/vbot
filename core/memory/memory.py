@@ -253,6 +253,28 @@ def read_memory_files(
     return provider.read_prompt_files(Path(workspace), mode)
 
 
+def memory_prompt_file_paths(workspace: Path, mode: MemoryPromptMode) -> list[Path]:
+    """Resolved absolute paths of the pinned-memory files a mode injects that exist.
+
+    The prompt renders every file a mode selects — a not-yet-created one via its
+    default "no entries" content — but only an on-disk file can be stamped as
+    read-before-write: a still-absent file has nothing whose ``(mtime, size)`` to
+    record, and a later ``write`` to it is a new-file write (exempt) anyway. So this
+    returns just the existing selected files, resolved the same way ``read_prompt_files``
+    reads them (``workspace / filename``), for the chat loop to stamp. ``off`` mode
+    selects no file, so it returns ``[]``. The caller must not pass an empty-string
+    workspace (a config agent) — that would resolve against ``Path(".")``; config
+    agents are ``off`` mode and gated out upstream regardless.
+    """
+    workspace_path = Path(workspace)
+    paths: list[Path] = []
+    for filename in MEMORY_PROMPT_FILES[validate_memory_prompt_mode(mode)]:
+        path = (workspace_path / filename).resolve()
+        if path.is_file():
+            paths.append(path)
+    return paths
+
+
 def memory_block_definition() -> BlockDefinition:
     """Return the ``memory:guidance`` block declaration (D6).
 
