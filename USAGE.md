@@ -128,8 +128,7 @@ It contains, among other things:
 - `.env` for API keys and tokens
 - `settings.json` for instance settings
 - `extensions/` for local Python hooks and extensions
-- `agents/` for agent configurations and sessions
-- `workspace-<agent-id>/` for agent workspaces
+- `agents/<agent-id>/` for each agent's configuration, sessions, and workspace
 - `oauth/` for stored OAuth tokens
 - `attachments/` for uploaded files
 - `logs/` for daily log files
@@ -392,7 +391,7 @@ Each agent gets:
 
 - `~/.vbot/agents/<agent-id>/agent.json`
 - `~/.vbot/agents/<agent-id>/sessions/`
-- `~/.vbot/workspace-<agent-id>/`
+- `~/.vbot/agents/<agent-id>/workspace/`
 
 Built-in tools include `read`, `edit`, and `write`. Relative paths resolve from
 the agent workspace; absolute paths are also allowed.

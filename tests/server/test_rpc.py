@@ -17,6 +17,7 @@ from typing import Any, TypeVar, cast
 
 import pytest
 
+from core.agents import default_workspace_dir
 from core.automation import TriggerService
 from core.chat import ChatLoop, ChatMessage, ChatSessionManager, CommandDispatcher, ToolCall
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
@@ -161,6 +162,9 @@ class StubAgents:
 
     def get_raw(self, agent_id: str) -> StubAgent:
         return self._get_raw(agent_id)
+
+    def default_workspace(self, agent_id: str) -> str:
+        return str(default_workspace_dir(Path("C:/data"), agent_id))
 
     def list(self) -> list[StubAgent]:
         return [self._apply_defaults(self._agents[agent_id]) for agent_id in sorted(self._agents)]

@@ -291,6 +291,9 @@ export const englishCatalog = Object.freeze({
     'Agent + user notes (MEMORY.md + USER.md)',
   'agents.form.workspaceAssignedByServer':
     'Workspace is assigned by the server when the agent is created.',
+  'agents.form.workspaceEditableHelp':
+    "Workspace path used by this agent's tools.",
+  'agents.form.workspaceSetToDefault': 'Set to default',
   'agents.form.submitCreate': 'Create agent',
   'agents.form.submitUpdate': 'Save changes',
   'agents.form.required': 'This field is required.',

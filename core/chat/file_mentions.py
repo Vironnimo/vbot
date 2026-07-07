@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.agents import default_workspace_dir
 from core.attachments import sniff_media_type
 from core.chat.content_blocks import ContentBlock, FileMentionBlock, TextBlock
 from core.tools.search import SearchBudget, ignore_rules_apply, iter_search_entries
@@ -53,7 +54,7 @@ def resolve_mention_root(runtime: RuntimeServices, agent_id: str, project_id: st
     workspace = getattr(agent, "workspace", None)
     if workspace:
         return Path(workspace)
-    return Path(runtime.storage.data_dir) / f"workspace-{agent_id}"
+    return default_workspace_dir(runtime.storage.data_dir, agent_id)
 
 
 def list_mention_files(root: Path) -> tuple[list[str], bool]:
