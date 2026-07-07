@@ -35,3 +35,9 @@ webui/dist/
 coverage/
 # Vite/Vitest temp config bundles left behind by interrupted processes
 *.timestamp-*.mjs
+
+# Ollama's model catalog reflects the machine's locally installed models —
+# machine state, not shippable data. The auto-refresh regenerates it at
+# server startup / picker open whenever the local Ollama is running.
+resources/models/ollama.json
+resources/models/ollama.raw.json
