@@ -710,6 +710,27 @@ def test_scan_reports_configured_model_clean(
     assert [member.agent_id for member in result.team] == ["builder"]
 
 
+def test_scan_honors_project_source_format(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # Arrange: agents in both formats; the project declares claude as its format.
+    _write_agent(repo, "builder.md")
+    claude_dir = repo / ".claude" / "agents"
+    claude_dir.mkdir(parents=True)
+    (claude_dir / "reviewer.md").write_text(
+        "---\nname: reviewer\ndescription: Reviews.\n---\nBody.\n", encoding="utf-8"
+    )
+    project = projects.create("vbot", "vBot", repo, source_format="claude")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    # Act
+    result = resolver.scan_project_report(project)
+
+    # Assert: only the claude member is on the team — no mixing.
+    assert [member.agent_id for member in result.team] == ["reviewer"]
+    assert result.team[0].source_format == "claude"
+
+
 # ---------------------------------------------------------------------------
 # Identity path: unchanged.
 # ---------------------------------------------------------------------------

@@ -977,8 +977,8 @@ class Runtime:
         One source of the bundled skill roots so the global registry and every
         project-scoped registry scan exactly the same directories
         (``<data_dir>/skills``, the bundled ``resources/skills``, then the
-        settings-configured extras). A project registry prepends its own
-        ``.opencode/skills`` ahead of these.
+        settings-configured extras). A project registry prepends its own skill
+        directory (its declared source format's location) ahead of these.
         """
         if self._storage is None:
             raise RuntimeError("Storage service not available")
@@ -1020,7 +1020,8 @@ class Runtime:
 
         ``project_id is None`` and ``identity_agent_id is None`` (a plain identity
         run) returns the global registry byte-for-byte. A set ``project_id`` returns
-        the project's merged registry — the project's own ``.opencode/skills`` first,
+        the project's merged registry — the project's own skill directory (its
+        declared source format's location) first,
         then the bundled pool. When ``identity_agent_id`` names an **identity** agent
         that has its own private skills home, that home is layered on top (agent >
         project > global > bundled) and the agent's own skills are always-allowed for
@@ -1053,16 +1054,17 @@ class Runtime:
     def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
         """Return a project's own skills (name/description/path) for the visit reminder.
 
-        Scans only the project's ``.opencode/skills`` directory, so the result is
-        exactly the project-owned skills with their ``SKILL.md`` paths — a visiting
-        agent reads those files directly with the ``read`` tool. A missing directory
-        yields an empty list.
+        Scans only the project's own skill directory (its declared source format's
+        location), so the result is exactly the project-owned skills with their
+        ``SKILL.md`` paths — a visiting agent reads those files directly with the
+        ``read`` tool. A missing directory yields an empty list.
         """
         self._ensure_started()
         project = self.projects.get(project_id)
         environment = self._skill_environment(self.storage.load_environment())
         registry = SkillRegistry.load(
-            project_skills_dir(Path(project.cwd)), environment=environment
+            project_skills_dir(Path(project.cwd), project.source_format),
+            environment=environment,
         )
         return registry.list_all()
 
@@ -1126,7 +1128,7 @@ class Runtime:
         origins: list[str | None] = [SKILL_ORIGIN_AGENT]
         if project_id is not None:
             project = self.projects.get(project_id)
-            roots.append(project_skills_dir(Path(project.cwd)))
+            roots.append(project_skills_dir(Path(project.cwd), project.source_format))
             origins.append(project_skill_origin(project.display_name))
         roots.extend(scan_roots)
         origins.extend(self._bundled_skill_origins(scan_roots))
@@ -1159,12 +1161,13 @@ class Runtime:
         environment = self._skill_environment(self.storage.load_environment())
         registry = load_project_skill_registry(
             project_cwd,
+            project.source_format,
             scan_roots,
             environment,
             project_origin=project_skill_origin(project.display_name),
             bundled_origins=self._bundled_skill_origins(scan_roots),
         )
-        names = scan_project_skill_names(project_cwd, environment)
+        names = scan_project_skill_names(project_cwd, project.source_format, environment)
         return _ProjectSkillBundle(registry=registry, names=names)
 
     def _reload_channel_tool_if_started(self) -> None:

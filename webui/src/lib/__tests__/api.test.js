@@ -18,6 +18,7 @@ import {
   cancelRun,
   cancelToolCall,
   clearOverride,
+  detectProject,
   setOverride,
   createRpcEnvelope,
   listProjects,
@@ -341,6 +342,33 @@ describe('project.* wrappers', () => {
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
         method: 'project.add',
+      }),
+    );
+  });
+
+  it('probes a cwd through project.detect', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { cwd_exists: true, formats: {}, context_files: {} },
+      }),
+    );
+
+    await expect(
+      detectProject('C:/repos/demo', { fetch: fetchFunction }),
+    ).resolves.toEqual({ cwd_exists: true, formats: {}, context_files: {} });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'project.detect',
+      params: { cwd: 'C:/repos/demo' },
+    });
+  });
+
+  it('rejects a missing cwd before sending project.detect', () => {
+    expect(() => detectProject('')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'project.detect',
       }),
     );
   });

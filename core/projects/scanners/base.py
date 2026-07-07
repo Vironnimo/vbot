@@ -25,10 +25,71 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+import yaml
+
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.projects.scan_report import ScanReport
+
+_LOGGER = get_logger("projects")
+
+FRONT_MATTER_DELIMITER = "---"
+
+
+def split_front_matter(content: str) -> tuple[str, str]:
+    """Split a Markdown file into (front matter, body), preserving the body verbatim.
+
+    Shared by the Markdown-based detectors (OpenCode, Claude). Recognizes a leading
+    ``---`` fence and returns the text up to the closing ``---`` as front matter and
+    everything after it as the body, **unchanged** (a single leading newline after
+    the closing fence is dropped so the body does not start with a blank line, but
+    its content — including any ``{...}`` — is otherwise untouched). A file without
+    a proper fence has an empty front matter and the whole content as body.
+    """
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != FRONT_MATTER_DELIMITER:
+        return "", content
+
+    for index in range(1, len(lines)):
+        if lines[index].strip() == FRONT_MATTER_DELIMITER:
+            front_matter = "".join(lines[1:index])
+            body = "".join(lines[index + 1 :])
+            return front_matter, _strip_one_leading_newline(body)
+
+    # Unterminated front matter: treat the whole file as body so nothing is lost.
+    return "", content
+
+
+def _strip_one_leading_newline(body: str) -> str:
+    if body.startswith("\r\n"):
+        return body[2:]
+    if body.startswith("\n"):
+        return body[1:]
+    return body
+
+
+def parse_front_matter(front_matter: str, path: Path) -> dict[str, Any]:
+    """Parse YAML front matter fail-open: malformed YAML yields ``{}``, never raises."""
+    if not front_matter.strip():
+        return {}
+    try:
+        loaded = yaml.safe_load(front_matter)
+    except yaml.YAMLError as error:
+        _LOGGER.warning("Invalid YAML front matter in %s: %s", path, error)
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return loaded
+
+
+def string_field(value: Any) -> str:
+    """Return a trimmed string for a scalar front-matter field, or ``""`` otherwise."""
+    if isinstance(value, str):
+        return value.strip()
+    return ""
 
 
 @dataclass(frozen=True)
@@ -140,8 +201,11 @@ class DetectorRegistration:
 
 # Format precedence is fixed and explicit: OpenCode wins first. New formats append
 # with a higher rank; the rank — not list order or filesystem order — decides who
-# wins a cross-format ``agent_id`` collision.
+# wins a cross-format ``agent_id`` collision. With the single-format scan filter
+# (a project declares exactly one ``source_format``) a cross-format collision can
+# only occur in an unfiltered scan (``source_format=None``).
 OPENCODE_FORMAT_RANK = 0
+CLAUDE_FORMAT_RANK = 1
 
 
 def build_default_registry() -> list[DetectorRegistration]:
@@ -149,12 +213,15 @@ def build_default_registry() -> list[DetectorRegistration]:
 
     Imported lazily inside the function so ``base`` does not import the concrete
     detectors at module load (and so a detector can import ``base`` without a
-    cycle). OpenCode is the only v1 format; later formats append here with the
-    next rank.
+    cycle). Later formats append here with the next rank.
     """
+    from core.projects.scanners.claude import ClaudeDetector
     from core.projects.scanners.opencode import OpenCodeDetector
 
-    return [DetectorRegistration(detector=OpenCodeDetector(), rank=OPENCODE_FORMAT_RANK)]
+    return [
+        DetectorRegistration(detector=OpenCodeDetector(), rank=OPENCODE_FORMAT_RANK),
+        DetectorRegistration(detector=ClaudeDetector(), rank=CLAUDE_FORMAT_RANK),
+    ]
 
 
 @dataclass(frozen=True)
@@ -187,6 +254,7 @@ def scan_project(
     project_root: Path,
     *,
     registry: list[DetectorRegistration] | None = None,
+    source_format: str | None = None,
 ) -> ScanResult:
     """Scan a project root into a deterministic Team plus a scan report.
 
@@ -194,6 +262,12 @@ def scan_project(
     order, then hands the per-file results to the report builder, which resolves
     ``agent_id`` collisions deterministically and collects structural findings.
     A bare/empty project yields an empty Team and a clean empty report.
+
+    ``source_format`` is the project's single-format filter (decision: one format
+    per project, no mixing): when set, only the detector whose ``format_key``
+    matches runs, so the other format's agents are invisible to every consumer.
+    ``None`` keeps the unfiltered all-detectors behavior (format detection,
+    generic callers).
     """
     # Imported here (not at module top) to keep the report's collision/finding
     # logic in its own module while ``base`` owns the orchestration entry point;
@@ -201,6 +275,12 @@ def scan_project(
     from core.projects.scan_report import build_scan_report
 
     active_registry = registry if registry is not None else build_default_registry()
+    if source_format is not None:
+        active_registry = [
+            registration
+            for registration in active_registry
+            if registration.detector.format_key == source_format
+        ]
     # Run detectors in registry (precedence) order; each detector already returns
     # its files sorted stably by filename, so the concatenation is deterministic.
     ranked_files: list[RankedFile] = []
@@ -209,3 +289,89 @@ def scan_project(
             ranked_files.append(RankedFile(rank=registration.rank, file=detected_file))
     team, report = build_scan_report(ranked_files)
     return ScanResult(team=team, report=report)
+
+
+@dataclass(frozen=True)
+class FormatPresence:
+    """What one source format contributes in a repo: agent and skill counts.
+
+    A format counts as *present* when it yields at least one parsed agent OR one
+    loadable skill — the creation-time auto-detection rule.
+    """
+
+    agents: int
+    skills: int
+
+    @property
+    def present(self) -> bool:
+        """Whether this format contributes anything (≥1 agent or ≥1 skill)."""
+        return self.agents > 0 or self.skills > 0
+
+
+# The context files reported alongside format presence: the tool-neutral
+# AGENTS.md convention at the repo root, and CLAUDE.md at its two conventional
+# locations (repo root, then .claude/). Only facts — the "suggest CLAUDE.md as a
+# project file" rule lives in the WebUI add dialog, not here.
+_AGENTS_MD_FILENAME = "AGENTS.md"
+_CLAUDE_MD_CANDIDATES = ("CLAUDE.md", ".claude/CLAUDE.md")
+
+
+@dataclass(frozen=True)
+class ProjectFormatDetection:
+    """The per-format presence of a repo plus its context-file facts.
+
+    ``formats`` is keyed by detector ``format_key`` (every registered format gets
+    an entry, present or not). ``agents_md`` reports a repo-root ``AGENTS.md``;
+    ``claude_md`` carries the relative path of a found ``CLAUDE.md`` (repo root
+    first, else ``.claude/CLAUDE.md``) or ``None``.
+    """
+
+    formats: dict[str, FormatPresence]
+    agents_md: bool
+    claude_md: str | None
+
+
+def detect_project_formats(
+    project_root: Path,
+    *,
+    registry: list[DetectorRegistration] | None = None,
+) -> ProjectFormatDetection:
+    """Report what each known source format contributes in a repo.
+
+    Runs every registered detector (counting parsed agent profiles only, not parse
+    failures) and scans each format's skill directory, so the add dialog / RPC can
+    make the informed format choice at project creation. Purely read-only and
+    fail-soft: a missing location counts zero; nothing is created or judged here.
+    """
+    # Imported lazily like scan_project's report import: core.skills imports
+    # nothing from core.projects (verified — the cycle risk from the plan), and
+    # the lazy form keeps base free of a module-load skills dependency.
+    from core.skills import project_skills_dir, scan_skill_names
+
+    active_registry = registry if registry is not None else build_default_registry()
+    formats: dict[str, FormatPresence] = {}
+    for registration in active_registry:
+        format_key = registration.detector.format_key
+        detected = registration.detector.detect(project_root)
+        agents = sum(1 for detected_file in detected if detected_file.agent is not None)
+        try:
+            skills_dir = project_skills_dir(project_root, format_key)
+        except KeyError:
+            # A registered detector whose format has no known skill location
+            # (custom test registries) still reports its agents, fail-soft.
+            skills = 0
+        else:
+            skills = len(scan_skill_names(skills_dir))
+        formats[format_key] = FormatPresence(agents=agents, skills=skills)
+
+    claude_md: str | None = None
+    for candidate in _CLAUDE_MD_CANDIDATES:
+        if (project_root / candidate).is_file():
+            claude_md = candidate
+            break
+
+    return ProjectFormatDetection(
+        formats=formats,
+        agents_md=(project_root / _AGENTS_MD_FILENAME).is_file(),
+        claude_md=claude_md,
+    )

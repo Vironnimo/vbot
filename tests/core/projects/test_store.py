@@ -102,6 +102,43 @@ def test_create_persists_whitelist_fields_to_disk(data_dir: Path, repo: Path) ->
     assert payload["skills_project_disabled"] == []
 
 
+def test_create_defaults_source_format_and_persists_it(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+
+    project = store.create("vbot", "vBot", repo)
+
+    assert project.source_format == "opencode"
+    payload = json.loads((data_dir / "projects" / "vbot" / "project.json").read_text("utf-8"))
+    assert payload["source_format"] == "opencode"
+
+
+def test_create_accepts_claude_source_format(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+
+    project = store.create("vbot", "vBot", repo, source_format="claude")
+
+    assert project.source_format == "claude"
+    assert store.get("vbot").source_format == "claude"
+
+
+def test_update_switches_source_format(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    updated = store.update("vbot", source_format="claude")
+
+    assert updated.source_format == "claude"
+    assert store.get("vbot").source_format == "claude"
+
+
+def test_update_rejects_unknown_source_format(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    with pytest.raises(ProjectError):
+        store.update("vbot", source_format="cursor")
+
+
 def test_update_round_trips_whitelist_fields(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)

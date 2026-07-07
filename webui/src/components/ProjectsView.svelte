@@ -13,6 +13,7 @@
   import {
     addProject,
     clearOverride,
+    detectProject,
     listProjects,
     removeProject,
     rpc,
@@ -21,6 +22,7 @@
     showProject,
   } from '$lib/api.js';
   import {
+    PROJECT_SOURCE_FORMATS,
     PROJECT_THINKING_EFFORT_NO_DEFAULT,
     PROJECT_THINKING_EFFORT_OPTIONS,
     buildAddProjectPayload,
@@ -32,14 +34,17 @@
     hasManageChanges,
     memberFieldIsOverridden,
     needsRePoint,
+    normalizeDetectResult,
     normalizeOverrideTemperature,
     normalizeProject,
     normalizeProjects,
     normalizeScanReport,
     normalizeScanSkills,
+    presentFormats,
     projectTeam,
     seedTeamOverrideDraft,
     setListMembership,
+    shouldSuggestClaudeMd,
   } from '$lib/projectsView.js';
   import {
     buildModelSelectOptions,
@@ -65,6 +70,19 @@
   // shared save model (DESIGN.md → Save model): auto-save after a short idle,
   // plus the explicit Save button for users who prefer to commit manually.
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+  // Idle delay before the add dialog probes a typed repository path with
+  // project.detect (per-format agent/skill counts drive the format choice).
+  const ADD_DETECT_DEBOUNCE_MS = 500;
+
+  // Human-facing labels for the source-format vocabulary.
+  const FORMAT_LABELS = Object.freeze({
+    opencode: () => t('projects.format.opencode', 'OpenCode'),
+    claude: () => t('projects.format.claude', 'Claude Code'),
+  });
+
+  function formatLabel(formatKey) {
+    return FORMAT_LABELS[formatKey] ? FORMAT_LABELS[formatKey]() : formatKey;
+  }
 
   // Maps each effective/override field to its section-header label key and the empty
   // wording (a null model reads "not configured", a null temperature/thinking
@@ -124,6 +142,22 @@
   let addForm = $state(createAddForm());
   let addingProject = $state(false);
   let addError = $state('');
+  // The debounced project.detect result for the typed path (null until the
+  // first probe answers). Drives the format choice and the CLAUDE.md suggestion.
+  let addDetect = $state(null);
+  let addDetectTimer = null;
+  const addFormatsPresent = $derived(
+    addDetect ? presentFormats(addDetect) : [],
+  );
+  // Both formats found → the informed radio choice; exactly one → a quiet
+  // "Detected" line (the server auto-detects the same); none → silent default.
+  const addShowsFormatChoice = $derived(addFormatsPresent.length > 1);
+  const addDetectedFormat = $derived(
+    addFormatsPresent.length === 1 ? addFormatsPresent[0] : '',
+  );
+  const addSuggestsClaudeMd = $derived(
+    addDetect !== null && shouldSuggestClaudeMd(addDetect),
+  );
 
   // The selected project drives the detail pane. Its settings form, scanned
   // team, report, and skill pool are held here and reset on selection change.
@@ -201,6 +235,14 @@
   let modelSelectValue = $derived(
     selectModelValue(editForm.default_model, modelOptions),
   );
+  // The per-project source-format selector (exactly one format per project).
+  let sourceFormatOptions = $derived(
+    PROJECT_SOURCE_FORMATS.map((formatKey) => ({
+      value: formatKey,
+      label: formatLabel(formatKey),
+    })),
+  );
+
   let agentOptions = $derived(
     buildDefaultAgentOptions({
       team: activeTeam,
@@ -287,6 +329,7 @@
 
   onDestroy(() => {
     clearAutoSaveTimer();
+    clearAddDetectTimer();
   });
 
   // Auto-save the settings form once it has been idle for the debounce window.
@@ -319,7 +362,14 @@
   });
 
   function createAddForm() {
-    return { cwd: '', display_name: '' };
+    return {
+      cwd: '',
+      display_name: '',
+      // The explicit format pick when both formats are present (radio default:
+      // opencode) and the CLAUDE.md suggestion checkbox (opt-in, off).
+      source_format: 'opencode',
+      include_claude_md: false,
+    };
   }
 
   function createEditForm(project = null) {
@@ -327,6 +377,7 @@
       display_name: project?.display_name ?? '',
       default_agent: project?.default_agent ?? '',
       default_model: project?.default_model ?? '',
+      source_format: project?.source_format ?? 'opencode',
       default_temperature: seedProjectTemperature(project?.default_temperature),
       default_thinking_effort: seedProjectThinkingEffort(
         project?.default_thinking_effort,
@@ -527,6 +578,7 @@
   function openAdd() {
     addForm = createAddForm();
     addError = '';
+    addDetect = null;
     isAddOpen = true;
   }
 
@@ -536,11 +588,52 @@
     }
     isAddOpen = false;
     addError = '';
+    clearAddDetectTimer();
   }
 
   function updateAddField(field, value) {
     addForm[field] = value;
     addError = '';
+    if (field === 'cwd') {
+      scheduleAddDetect(value);
+    }
+  }
+
+  function clearAddDetectTimer() {
+    if (addDetectTimer !== null) {
+      clearTimeout(addDetectTimer);
+      addDetectTimer = null;
+    }
+  }
+
+  // Probe the typed path after a short idle. Detection is advisory only: a
+  // failed/void probe just leaves the dialog without a format choice (the
+  // server auto-detects at add time anyway), so errors are swallowed.
+  function scheduleAddDetect(cwd) {
+    clearAddDetectTimer();
+    const trimmed = cwd.trim();
+    if (trimmed.length === 0) {
+      addDetect = null;
+      return;
+    }
+    addDetectTimer = setTimeout(() => {
+      addDetectTimer = null;
+      void runAddDetect(trimmed);
+    }, ADD_DETECT_DEBOUNCE_MS);
+  }
+
+  async function runAddDetect(cwd) {
+    try {
+      const result = await detectProject(cwd);
+      if (destroyed || !isAddOpen || addForm.cwd.trim() !== cwd) {
+        return;
+      }
+      addDetect = normalizeDetectResult(result);
+    } catch {
+      if (!destroyed) {
+        addDetect = null;
+      }
+    }
   }
 
   async function submitAdd(event) {
@@ -561,6 +654,13 @@
       const payload = buildAddProjectPayload({
         cwd: addForm.cwd,
         display_name: addForm.display_name,
+        // Only an actual choice is sent: with both formats present the radio
+        // decides; otherwise the field is omitted and the server auto-detects.
+        source_format: addShowsFormatChoice ? addForm.source_format : '',
+        // The accepted CLAUDE.md suggestion becomes a normal auto_load entry
+        // (loads verbatim; the backend seeds AGENTS.md in front of it).
+        auto_load:
+          addSuggestsClaudeMd && addForm.include_claude_md ? ['CLAUDE.md'] : [],
       });
       const result = await addProject(payload);
       if (destroyed) {
@@ -570,6 +670,7 @@
       statusMessage = t('projects.add.success', 'Project added.');
       isAddOpen = false;
       addForm = createAddForm();
+      addDetect = null;
       await loadProjects();
       if (!destroyed) {
         // Select the freshly added project so its scan (team + report) is the
@@ -1371,6 +1472,31 @@
                       disabled={editSaving}
                       onInput={(next) => updateEditField('display_name', next)}
                     />
+                  </label>
+
+                  <label class="projects-field">
+                    <span class="projects-label">
+                      {t('projects.manage.sourceFormat', 'Source format')}
+                    </span>
+                    <Dropdown
+                      id="project-edit-source-format"
+                      value={editForm.source_format}
+                      options={sourceFormatOptions}
+                      ariaLabel={t(
+                        'projects.manage.sourceFormat',
+                        'Source format',
+                      )}
+                      disabled={editSaving}
+                      triggerClass="projects-dropdown"
+                      onValueChange={(value) =>
+                        updateEditField('source_format', value)}
+                    />
+                    <small class="projects-inherit-hint">
+                      {t(
+                        'projects.manage.sourceFormatHelp',
+                        'Where this project’s agents and skills come from. Switching re-derives the team and skills from the other ecosystem’s directories; sessions are kept.',
+                      )}
+                    </small>
                   </label>
 
                   <label class="projects-field">
@@ -2264,6 +2390,82 @@
                 onInput={(next) => updateAddField('display_name', next)}
               />
             </label>
+
+            {#if addShowsFormatChoice}
+              <div
+                class="modal-field"
+                role="radiogroup"
+                aria-label={t('projects.add.format', 'Source format')}
+              >
+                <span class="modal-label">
+                  {t('projects.add.format', 'Source format')}
+                </span>
+                <span class="projects-help">
+                  {t(
+                    'projects.add.formatHelp',
+                    'This repository carries both ecosystems. Pick which one this project uses — its agents and skills come only from that one. You can switch later in the project settings.',
+                  )}
+                </span>
+                <div class="projects-format-choice">
+                  {#each PROJECT_SOURCE_FORMATS as formatKey (formatKey)}
+                    <button
+                      type="button"
+                      class="projects-format-option"
+                      class:projects-format-option--selected={addForm.source_format ===
+                        formatKey}
+                      role="radio"
+                      aria-checked={addForm.source_format === formatKey}
+                      disabled={addingProject}
+                      onclick={() => updateAddField('source_format', formatKey)}
+                    >
+                      <span class="projects-format-option__name">
+                        {formatLabel(formatKey)}
+                      </span>
+                      <span class="projects-format-option__detail">
+                        {t(
+                          'projects.add.formatCounts',
+                          '{agents} agents · {skills} skills',
+                          {
+                            agents:
+                              addDetect?.formats?.[formatKey]?.agents ?? 0,
+                            skills:
+                              addDetect?.formats?.[formatKey]?.skills ?? 0,
+                          },
+                        )}
+                      </span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {:else if addDetectedFormat}
+              <p class="projects-help">
+                {t('projects.add.formatDetected', 'Detected: {format}', {
+                  format: formatLabel(addDetectedFormat),
+                })}
+              </p>
+            {/if}
+
+            {#if addSuggestsClaudeMd}
+              <div class="projects-claude-md-suggestion">
+                <Toggle
+                  size="sm"
+                  checked={addForm.include_claude_md}
+                  disabled={addingProject}
+                  ariaLabel={t(
+                    'projects.add.claudeMdSuggestionLabel',
+                    'Load CLAUDE.md as a project file',
+                  )}
+                  onChange={(next) => updateAddField('include_claude_md', next)}
+                />
+                <span>
+                  {t(
+                    'projects.add.claudeMdSuggestion',
+                    'Load {path} as a project file. The repository has no AGENTS.md; the file is loaded as-is into project agent prompts.',
+                    { path: addDetect?.claude_md ?? 'CLAUDE.md' },
+                  )}
+                </span>
+              </div>
+            {/if}
 
             {#if addError}
               <p class="projects-notice projects-notice--error" role="alert">

@@ -1,9 +1,10 @@
 """Skill metadata registry for local agent skills.
 
 Skills are reusable playbooks stored under ``<data_dir>/skills/<skill-id>/``.
-Each skill directory must contain a ``SKILL.md`` file.  The registry reads the
-Markdown front matter for prompt metadata and filters it through an agent's
-``allowed_skills`` list.
+Each skill directory must contain a ``SKILL.md`` file. Project-owned skills live
+in the skill directory of the project's declared source format
+(:data:`PROJECT_SKILLS_SUBPATHS`). The registry reads the Markdown front matter
+for prompt metadata and filters it through an agent's ``allowed_skills`` list.
 """
 
 from __future__ import annotations
@@ -40,11 +41,16 @@ FRONT_MATTER_DELIMITER = "---"
 WILDCARD_ALLOWLIST = "*"
 SKILL_FILENAME = "SKILL.md"
 RESOURCE_DIRECTORIES = ("scripts", "references", "assets")
-# A project's own skills live beside its OpenCode agents, under
-# ``<repo>/.opencode/skills/`` (the v1 project-skill location). Scanned per project
-# and merged with the bundled skills, project-first so a project skill wins a name
-# collision with a bundled one (decision 3/4 in the whitelist plan).
-PROJECT_SKILLS_SUBPATH = (".opencode", "skills")
+# A project's own skills live beside its agents, in the skill directory of the
+# project's declared source format (GLOSSARY → Source Format) — one entry per
+# format, keyed by the canonical ``core.settings.PROJECT_SOURCE_FORMATS`` values
+# so the two vocabularies can never drift. Scanned per project and merged with
+# the bundled skills, project-first so a project skill wins a name collision
+# with a bundled one (decision 3/4 in the whitelist plan).
+PROJECT_SKILLS_SUBPATHS: dict[str, tuple[str, ...]] = {
+    "opencode": (".opencode", "skills"),
+    "claude": (".claude", "skills"),
+}
 
 # Origin tags identify which scope a loaded skill came from, so the prompt catalog
 # and the ``skill`` tool can group skills by where they live. They are opaque
@@ -529,13 +535,20 @@ def _optional_string_list(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
-def project_skills_dir(project_cwd: Path) -> Path:
-    """Return a project's own skill directory (``<cwd>/.opencode/skills/``)."""
-    return project_cwd.joinpath(*PROJECT_SKILLS_SUBPATH)
+def project_skills_dir(project_cwd: Path, source_format: str) -> Path:
+    """Return a project's own skill directory for its declared source format.
+
+    ``<cwd>/.opencode/skills/`` for an OpenCode project, ``<cwd>/.claude/skills/``
+    for a Claude Code one. The format is a required argument — every caller must
+    say which format's directory it means; an unknown format raises ``KeyError``
+    (callers only pass the validated ``Project.source_format``).
+    """
+    return project_cwd.joinpath(*PROJECT_SKILLS_SUBPATHS[source_format])
 
 
 def load_project_skill_registry(
     project_cwd: Path,
+    source_format: str,
     bundled_scan_roots: Sequence[Path],
     environment: Mapping[str, str] | None = None,
     *,
@@ -544,14 +557,15 @@ def load_project_skill_registry(
 ) -> SkillRegistry:
     """Build a project-scoped registry: the project's own skills, then the bundled ones.
 
-    The project skill directory is scanned **first** so a project skill wins a name
-    collision with a bundled skill of the same name (one slot, the project's own
-    playbook wins). ``bundled_scan_roots`` must be the same ordered roots the global
-    registry scans, so a project run sees exactly the bundled pool plus its own
-    skills — nothing leaks between projects. A missing project skill directory is
-    treated as empty, so a project without ``.opencode/skills/`` simply gets the
-    bundled pool. ``project_origin``/``bundled_origins`` tag the loaded skills with
-    their scope for catalog grouping (the project root then the bundled roots).
+    The project skill directory — the declared ``source_format``'s location — is
+    scanned **first** so a project skill wins a name collision with a bundled skill
+    of the same name (one slot, the project's own playbook wins).
+    ``bundled_scan_roots`` must be the same ordered roots the global registry scans,
+    so a project run sees exactly the bundled pool plus its own skills — nothing
+    leaks between projects. A missing project skill directory is treated as empty,
+    so a project without one simply gets the bundled pool.
+    ``project_origin``/``bundled_origins`` tag the loaded skills with their scope
+    for catalog grouping (the project root then the bundled roots).
     """
     origins: list[str | None] | None = None
     if project_origin is not None or bundled_origins is not None:
@@ -562,7 +576,7 @@ def load_project_skill_registry(
         )
         origins = [project_origin, *bundled]
     return SkillRegistry.load(
-        project_skills_dir(project_cwd),
+        project_skills_dir(project_cwd, source_format),
         extra_dirs=list(bundled_scan_roots),
         environment=environment,
         origins=origins,
@@ -586,16 +600,17 @@ def scan_skill_names(
 
 def scan_project_skill_names(
     project_cwd: Path,
+    source_format: str,
     environment: Mapping[str, str] | None = None,
 ) -> frozenset[str]:
     """Return the names of the skills defined in a project's own skill directory.
 
-    Scans only ``<cwd>/.opencode/skills/`` (not the bundled roots), so the result is
-    exactly the project-owned skills — the set the resolver subtracts
+    Scans only the declared format's skill directory (not the bundled roots), so
+    the result is exactly the project-owned skills — the set the resolver subtracts
     ``skills_project_disabled`` from when computing a config agent's effective
     skills. A missing directory yields an empty set.
     """
-    return scan_skill_names(project_skills_dir(project_cwd), environment)
+    return scan_skill_names(project_skills_dir(project_cwd, source_format), environment)
 
 
 # Skill registries are reloaded often — once per project, per run, and on every
