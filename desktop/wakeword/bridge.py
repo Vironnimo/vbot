@@ -96,11 +96,21 @@ class DesktopBridge:
         worker: Any = None,
         worker_factory: Callable[[DesktopBridge], Any] | None = None,
         connection: ConnectionDelegate | None = None,
+        server_url: str = "",
+        mock: bool = False,
     ) -> None:
         self._settings_path = settings_path
         self._worker = worker
         self._worker_factory = worker_factory
         self._connection = connection
+        # The server the voice worker sends to. Kept on the bridge (not captured
+        # once in the worker factory) so a runtime server switch — first-run
+        # connect, saved-server pick, or the "Server" menu — retargets voice too.
+        self._server_url = server_url.rstrip("/")
+        # True when the running worker is the no-microphone mock (either the
+        # --mock-wakeword flag or the on-device stack failing to import), so the
+        # WebUI can warn that nothing is actually being heard.
+        self._mock = bool(mock)
         self._state = _WAKEWORD_STATE_OFF
         self._lock = threading.Lock()
         # Server-selection calls mutate shared on-disk state and navigate the
@@ -132,6 +142,9 @@ class DesktopBridge:
             "target_agent_id": config.get("target_agent_id"),
             "session_behavior": config.get("session_behavior", "active"),
             "wake_phrase": config.get("wake_phrase", "hey_jarvis"),
+            # Runtime-only fields (not editable config): the mock flag lets the
+            # WebUI warn when detection is not really running.
+            "mock": self._mock,
         }
 
     # -- Actions from WebUI --------------------------------------------------
@@ -229,6 +242,36 @@ class DesktopBridge:
         with self._lock:
             self._state = state
         self._status_event.set()
+
+    # -- Active server (voice target follows the window) ---------------------
+
+    @property
+    def server_url(self) -> str:
+        """The base URL the voice worker sends transcripts/RPC to."""
+        with self._lock:
+            return self._server_url
+
+    def set_server_url(self, url: str) -> None:
+        """Point the voice worker at a new server (the window's active server).
+
+        Wired to the connection controller so that whenever the window navigates
+        to a server — first-run connect, saved-server pick, or a runtime "Server"
+        menu switch — voice retargets the same server. A running worker is rebuilt
+        so its in-flight target changes; a not-yet-created worker simply picks up
+        the new URL from :attr:`server_url` when it next starts. A no-op when the
+        URL is unchanged (so the launch auto-connect never needlessly restarts a
+        worker already pointed at that server).
+        """
+        normalized = (url or "").rstrip("/")
+        with self._lock:
+            if normalized == self._server_url:
+                return
+            self._server_url = normalized
+            restart = self._worker is not None and self._worker.is_running()
+        if restart:
+            self._stop_worker()
+            self._worker = None
+            self._start_worker()
 
     # -- Internal ------------------------------------------------------------
 

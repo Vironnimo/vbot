@@ -341,6 +341,56 @@ def test_connect_success_remembers_and_marks_last_used(tmp_path: Path) -> None:
     assert stored["last_used"] == {"host": "pi.lan", "port": 9000}
 
 
+def test_connect_notifies_active_server_listener_with_base_url(tmp_path: Path) -> None:
+    urls: list[str] = []
+    controller = desktop_connection.ConnectionController(
+        settings_file=tmp_path / "settings.json",
+        window=FakeWindow(),
+        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
+    )
+    controller.set_active_server_listener(urls.append)
+
+    controller.connect("pi.lan", 9000)
+
+    # The listener (the voice worker) receives the plain base URL, not the
+    # window's accessor-marked navigation URL.
+    assert urls == ["http://pi.lan:9000/"]
+
+
+def test_connect_failure_does_not_notify_active_server_listener(tmp_path: Path) -> None:
+    urls: list[str] = []
+    controller = desktop_connection.ConnectionController(
+        settings_file=tmp_path / "settings.json",
+        window=FakeWindow(),
+        probe=probe_returning(PROBE_SERVER_UNREACHABLE),
+    )
+    controller.set_active_server_listener(urls.append)
+
+    controller.connect("pi.lan", 9000)
+
+    assert urls == []
+
+
+def test_connect_survives_active_server_listener_error(tmp_path: Path) -> None:
+    window = FakeWindow()
+    controller = desktop_connection.ConnectionController(
+        settings_file=tmp_path / "settings.json",
+        window=window,
+        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
+    )
+
+    def boom(_url: str) -> None:
+        raise RuntimeError("worker rebuild failed")
+
+    controller.set_active_server_listener(boom)
+
+    # A failing listener must never break the navigation that already succeeded.
+    result = controller.connect("pi.lan", 9000)
+
+    assert result.status == PROBE_WEBUI_AVAILABLE
+    assert window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+
+
 @pytest.mark.parametrize(
     ("status", "expected_text"),
     [

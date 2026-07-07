@@ -9,7 +9,12 @@ const VOICE_SETTINGS_DEFAULTS = Object.freeze({
   session_behavior: 'active',
   wake_phrase: 'hey_jarvis',
   liveState: 'off',
+  mock: false,
 });
+
+// Fields observed from the worker, not edited by the user: never part of a save
+// payload or the dirty check, and safe for a status poll to overwrite mid-edit.
+const RUNTIME_KEYS = new Set(['liveState', 'mock']);
 
 const hasKey = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -44,7 +49,26 @@ export function applyWakewordStatus(state, status) {
       ? status.wake_phrase
       : state.wake_phrase,
     liveState: hasKey(status, 'state') ? status.state : state.liveState,
+    mock: hasKey(status, 'mock') ? status.mock : state.mock,
   };
+}
+
+/**
+ * Merge only the observed runtime fields (live worker state, mock flag) from a
+ * status poll, leaving editable config fields untouched. Used by the 500ms poll
+ * so it can never revert an unsaved edit made during the autosave debounce.
+ * Returns the same object reference when nothing changed.
+ */
+export function applyRuntimeStatus(state, status) {
+  if (!status) return state;
+  let next = state;
+  if (hasKey(status, 'state') && status.state !== state.liveState) {
+    next = { ...next, liveState: status.state };
+  }
+  if (hasKey(status, 'mock') && status.mock !== next.mock) {
+    next = { ...next, mock: status.mock };
+  }
+  return next;
 }
 
 /**
@@ -65,7 +89,7 @@ export function buildVoiceSettingsPayload(state, lastSaved) {
   }
   const payload = {};
   for (const key of Object.keys(VOICE_SETTINGS_DEFAULTS)) {
-    if (key === 'liveState') continue;
+    if (RUNTIME_KEYS.has(key)) continue;
     if (state[key] !== lastSaved[key]) {
       payload[key] = state[key];
     }
@@ -77,7 +101,7 @@ export function buildVoiceSettingsPayload(state, lastSaved) {
 export function voiceSettingsDirty(state, lastSaved) {
   if (!lastSaved) return false;
   for (const key of Object.keys(VOICE_SETTINGS_DEFAULTS)) {
-    if (key === 'liveState') continue;
+    if (RUNTIME_KEYS.has(key)) continue;
     if (state[key] !== lastSaved[key]) return true;
   }
   return false;
