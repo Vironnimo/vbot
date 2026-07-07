@@ -1044,6 +1044,23 @@ describe('i18n t()', () => {
     );
   });
 
+  it('contains the shared toggle-chip allow-list copy', () => {
+    expectCatalogKeys([
+      'access.searchPlaceholder',
+      'access.count',
+      'access.allOn',
+      'access.allOff',
+      'access.noMatches',
+      'access.toggle',
+    ]);
+    expect(t('access.count', undefined, { on: 3, total: 12 })).toBe(
+      '3 / 12 on',
+    );
+    expect(t('access.toggle', undefined, { name: 'bash' })).toBe('Toggle bash');
+    expect(t('access.allOn')).toBe('all on');
+    expect(t('access.allOff')).toBe('all off');
+  });
+
   it('does not expose Components showcase labels in the live catalog', () => {
     expect(englishCatalog['components.title']).toBeUndefined();
     expect(englishCatalog['components.toast.errorMessage']).toBeUndefined();
