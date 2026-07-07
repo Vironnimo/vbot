@@ -460,6 +460,62 @@ def test_project_files_collapse_without_context(workspace: Path, tmp_path: Path)
     assert "<memory>" in prompt
 
 
+def test_build_system_prompt_reports_auto_injected_files_via_read_paths(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # Every file whose content reaches the prompt — SOUL, the pinned-memory files,
+    # and the project's readable auto-load files — is reported so the chat loop can
+    # stamp it read-before-write. A configured-but-absent auto-load file is not.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
+    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "MISSING.md", "CONTEXT.md"])
+    read_paths: list[Path] = []
+
+    manager.build_system_prompt(agent, project_context=context, read_paths=read_paths)
+
+    assert set(read_paths) == {
+        (workspace / "SOUL.md").resolve(),
+        (workspace / "MEMORY.md").resolve(),
+        (workspace / "USER.md").resolve(),
+        (repo / "AGENTS.md").resolve(),
+        (repo / "CONTEXT.md").resolve(),
+    }
+
+
+def test_build_system_prompt_read_paths_stays_none_by_default(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # Passing no read_paths (preview, tests) leaves the assembled text byte-identical
+    # to a build that collects them — the observer is a pure side channel.
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
+    read_paths: list[Path] = []
+
+    without_sink = manager.build_system_prompt(agent)
+    with_sink = manager.build_system_prompt(agent, read_paths=read_paths)
+
+    assert without_sink == with_sink
+    assert read_paths  # the observed build still collected the workspace files
+
+
+def test_build_system_prompt_read_paths_empty_for_off_memory_config_agent(
+    tmp_path: Path,
+) -> None:
+    # An empty-workspace config agent with memory off and no project reports nothing
+    # — nothing is auto-injected, and the empty workspace never resolves to Path(".").
+    manager = _manager(tmp_path)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    read_paths: list[Path] = []
+
+    manager.build_system_prompt(agent, project_context=None, read_paths=read_paths)
+
+    assert read_paths == []
+
+
 def test_render_project_files_one_source_for_reminder_and_prompt(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -25,6 +25,7 @@ from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
+from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
@@ -1274,6 +1275,7 @@ class _ChatRuntimeStub:
         self.chat_run_manager = self.chat_runs
         self.extensions = None
         self.system_prompts = _StubPrompts()
+        self.file_read_state = FileReadState()
         self.tools = ToolRegistry()
         self.storage = SimpleNamespace(data_dir=tmp_path)
         self._process_manager = process_manager
@@ -1352,6 +1354,7 @@ class _StubPrompts:
         project_context: object = None,
         skill_registry: object = None,
         skill_catalog: object = None,
+        read_paths: list[Path] | None = None,
     ) -> str:
         return "System prompt"
 

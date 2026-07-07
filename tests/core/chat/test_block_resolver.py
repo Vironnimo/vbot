@@ -16,6 +16,7 @@ from core.chat import ChatError, ChatLoop, ChatMessage, ChatSession
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
 from core.model_tasks import SpeechExecutionError
+from core.tools.file_state import FileReadState
 
 TEXT_IMAGE = frozenset({"text", "image"})
 TEXT_ONLY = frozenset({"text"})
@@ -48,10 +49,11 @@ class _StubPrompts:
         project_context: object = None,
         skill_registry: object = None,
         skill_catalog: object = None,
+        read_paths: list[Path] | None = None,
     ) -> str:
         return "System prompt"
 
-    def render_project_files(self, project_context: object) -> str:
+    def render_project_files(self, project_context: object, *, on_read: object = None) -> str:
         return "" if project_context is None else "RENDERED-PROJECT-FILES"
 
 
@@ -66,6 +68,7 @@ class _StubRuntime:
     def __init__(self) -> None:
         self.system_prompts = _StubPrompts()
         self.models = _StubModels()
+        self.file_read_state = FileReadState()
 
 
 class _StubAgent:

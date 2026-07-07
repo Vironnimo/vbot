@@ -18,6 +18,7 @@ from core.memory import (
     MemoryPromptMode,
     MemoryService,
     memory_block_definition,
+    memory_prompt_file_paths,
     read_memory_files,
 )
 from core.prompts.blocks import (
@@ -929,6 +930,7 @@ class SystemPromptManager:
         project_context: ProjectPromptContext | None = None,
         skill_registry: SkillPromptRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
+        read_paths: list[Path] | None = None,
     ) -> str:
         """Build the complete system prompt for an agent (the block-model path).
 
@@ -948,10 +950,26 @@ class SystemPromptManager:
         is a session-pinned snapshot: when present the skills block renders its frozen
         text instead of re-filtering the registry, so a mid-session skill write never
         shifts the prompt prefix.
+
+        ``read_paths``, when a list is passed, is filled with the resolved absolute
+        path of every prompt file whose content actually reached the assembled prompt
+        (a workspace ``{include:…}``, SOUL, the project auto-load files, the on-disk
+        pinned-memory files). The chat loop stamps those as read-before-write so the
+        agent can edit a file it was auto-shown without a separate read call. The
+        assembled string is byte-for-byte identical whether or not a list is passed,
+        so preview and the prompt cache are unaffected.
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._scope_key(prompt_scope)
-        context = BlockRenderContext(agent=agent, project_context=project_context, scope=scope_key)
+        observer: Callable[[Path], None] | None = (
+            read_paths.append if read_paths is not None else None
+        )
+        context = BlockRenderContext(
+            agent=agent,
+            project_context=project_context,
+            scope=scope_key,
+            read_observer=observer,
+        )
         producers = self._build_producers(agent, skill_registry, skill_catalog)
         layout = self._resolve_scope_layout(scope_key)
         definitions = self._collect_block_definitions(
@@ -1110,13 +1128,17 @@ class SystemPromptManager:
 
         Reuses the single ``{include:…}`` expansion path so framing and fail-soft
         behavior (missing/unreadable → dropped, unsafe path → ``PromptError``,
-        empty workspace → no read) never drift from a normal include.
+        empty workspace → no read) never drift from a normal include. The context's
+        read observer (if any) is threaded through so an inlined SOUL.md is stamped
+        as read-before-write.
         """
-        return expand_workspace_includes(SOUL_INCLUDE_MARKER, context.agent.workspace)
+        return expand_workspace_includes(
+            SOUL_INCLUDE_MARKER, context.agent.workspace, on_read=context.read_observer
+        )
 
     def _render_project_files_block(self, context: BlockRenderContext) -> str:
         """Render the ``core:project_files`` data block (the auto-load files)."""
-        return self.render_project_files(context.project_context)
+        return self.render_project_files(context.project_context, on_read=context.read_observer)
 
     def _runtime_replacements(self, agent: PromptAgent) -> dict[str, str]:
         """Return the build-time runtime-variable substitutions (``{host}``, …).
@@ -1183,7 +1205,12 @@ class SystemPromptManager:
             return f"{AGENT_SCOPE_KEY_PREFIX}{prompt_scope.agent_id}"
         return DEFAULT_SCOPE_KEY
 
-    def render_project_files(self, project_context: ProjectPromptContext | None) -> str:
+    def render_project_files(
+        self,
+        project_context: ProjectPromptContext | None,
+        *,
+        on_read: Callable[[Path], None] | None = None,
+    ) -> str:
         """Render the project's auto-loaded files as ``<file>``-wrapped blocks.
 
         The ``auto_load`` files in list order. AGENTS.md is no longer special — it
@@ -1196,6 +1223,10 @@ class SystemPromptManager:
         collapses. No size limit, truncation, or warning on large files — the
         technical user gets the file 1:1.
 
+        ``on_read``, when given, is called with the resolved absolute path of every
+        file actually inlined, so the caller can stamp it as read-before-write —
+        used both for the system-prompt build and the visiting reminder.
+
         This is the single render used both for ``{project_files}`` in the system
         prompt (project-born sessions) and for the visiting main agent's
         ``<system-reminder>`` (same content, different delivery).
@@ -1205,7 +1236,7 @@ class SystemPromptManager:
 
         blocks: list[str] = []
         for name in project_context.auto_load:
-            block = self._read_project_file_block(project_context.cwd, name)
+            block = self._read_project_file_block(project_context.cwd, name, on_read=on_read)
             if block is not None:
                 blocks.append(block)
         return "\n".join(blocks)
@@ -1233,7 +1264,9 @@ class SystemPromptManager:
         )
         return "\n".join(lines)
 
-    def _read_project_file_block(self, cwd: Path, filename: str) -> str | None:
+    def _read_project_file_block(
+        self, cwd: Path, filename: str, *, on_read: Callable[[Path], None] | None = None
+    ) -> str | None:
         """Read one project auto-load file and wrap it, or ``None`` when absent.
 
         The path is used **as the user wrote it** in the project's auto-load list:
@@ -1244,6 +1277,10 @@ class SystemPromptManager:
         philosophy: maximum agency, minimal restrictions). A missing file is skipped
         silently (lazy rendering); an unreadable file raises, matching ``{include}``.
         The ``<file>`` wrap is shared with ``{include}`` so framing cannot drift.
+
+        ``on_read``, when given, is called with the file's resolved absolute path
+        only when its content is actually inlined (never for a missing/unreadable
+        one), so the caller can stamp it as read-before-write.
         """
         file_path = cwd / filename
         try:
@@ -1261,6 +1298,8 @@ class SystemPromptManager:
             # failures, ValueError the decode/bad-path ones.
             _LOGGER.warning("Skipping unreadable project file %s: %s", file_path, exc)
             return None
+        if on_read is not None:
+            on_read(file_path.resolve())
         return wrap_include_file(filename, content)
 
     def render_skill_catalog(
@@ -1331,9 +1370,17 @@ class SystemPromptManager:
 
         def memory_files(context: BlockRenderContext) -> str:
             mode = getattr(context.agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
-            return read_memory_files(
-                Path(context.agent.workspace), mode, provider=self._memory_provider
-            )
+            workspace = context.agent.workspace
+            rendered = read_memory_files(Path(workspace), mode, provider=self._memory_provider)
+            # Stamp the on-disk memory files as read so the agent can edit a memory
+            # file it was auto-shown. Only existing files are reported (see
+            # memory_prompt_file_paths); an empty workspace (a config agent) is
+            # skipped — it must never resolve against Path(".").
+            observer = context.read_observer
+            if observer is not None and workspace:
+                for path in memory_prompt_file_paths(Path(workspace), mode):
+                    observer(path)
+            return rendered
 
         return {
             "tool_list": tool_list,

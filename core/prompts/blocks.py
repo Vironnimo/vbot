@@ -134,6 +134,14 @@ class BlockRenderContext:
     agent: PromptAgent
     project_context: ProjectPromptContext | None = None
     scope: str = "default"
+    # Optional side channel for build-time file reads. When set, every prompt file
+    # whose content actually reaches the prompt (a workspace ``{include:…}``, SOUL,
+    # the project auto-load files, the pinned-memory files) reports its resolved
+    # absolute path here. The chat loop uses it to stamp those files as read in the
+    # read-before-write guard, so an agent can edit a file it was auto-shown without
+    # a separate read call. ``None`` = no observer — the assembly output is byte-for-
+    # byte identical either way, so preview/tests and the prompt cache are unaffected.
+    read_observer: Callable[[Path], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -351,7 +359,9 @@ def expand_generated_markers(
     return GENERATED_PATTERN.sub(replace, text)
 
 
-def expand_workspace_includes(text: str, workspace: str) -> str:
+def expand_workspace_includes(
+    text: str, workspace: str, *, on_read: Callable[[Path], None] | None = None
+) -> str:
     """Replace every ``{include:filename}`` with the workspace file, fail-soft.
 
     The single include-expansion path, reused by the manager. An empty workspace
@@ -362,6 +372,10 @@ def expand_workspace_includes(text: str, workspace: str) -> str:
     is dropped with a warning (a prompt file never aborts a run — user decision).
     An **unsafe** include path raises :class:`PromptError` — that is a
     malformed directive, not a readability issue.
+
+    ``on_read``, when given, is called with the resolved absolute path of every file
+    whose content is actually inlined (never for a missing/unreadable/dropped one),
+    so a caller can register the inlined file as read-before-write.
     """
     if not workspace:
         return INCLUDE_PATTERN.sub("", text)
@@ -383,6 +397,8 @@ def expand_workspace_includes(text: str, workspace: str) -> str:
             # missing include. A prompt file must never abort the run.
             _LOGGER.warning("Skipping unreadable workspace include %s: %s", include_path, exc)
             return ""
+        if on_read is not None:
+            on_read(include_path.resolve())
         return wrap_include_file(filename, content)
 
     return INCLUDE_PATTERN.sub(replace, text)
@@ -457,7 +473,9 @@ def resolve_block_text(
         return text
 
     expanded = expand_generated_markers(text, producers, context)
-    included = expand_workspace_includes(expanded, context.agent.workspace)
+    included = expand_workspace_includes(
+        expanded, context.agent.workspace, on_read=context.read_observer
+    )
     return apply_replacements(included, replacements)
 
 

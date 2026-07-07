@@ -64,6 +64,7 @@ from core.tools import (
     tool_failure,
     tool_success,
 )
+from core.tools.file_state import FileReadState
 from core.utils.errors import ConfigError, ProviderError
 from core.utils.tokens import estimate_message_tokens
 
@@ -211,12 +212,20 @@ class StubPrompts:
         project_context: Any = None,
         skill_registry: Any = None,
         skill_catalog: Any = None,
+        read_paths: list[Path] | None = None,
     ) -> str:
         self.build_calls.append((agent.id, agent_body, project_context))
         # Echo the body and rendered project files so chat tests can assert what
         # actually reaches the system message, mirroring the real builder's slots
-        # (body in the identity slot, project files after it).
-        parts = [agent_body, f"System for {agent.id}", self.render_project_files(project_context)]
+        # (body in the identity slot, project files after it). Thread read_paths
+        # through render_project_files so project files are reported as read, like
+        # the real builder (SOUL/memory are not modeled by this stub).
+        on_read = read_paths.append if read_paths is not None else None
+        parts = [
+            agent_body,
+            f"System for {agent.id}",
+            self.render_project_files(project_context, on_read=on_read),
+        ]
         return "\n".join(part for part in parts if part)
 
     def render_skill_catalog(self, agent: StubAgent, skill_registry: Any = None) -> Any:
@@ -242,7 +251,7 @@ class StubPrompts:
         lines.extend(f"- {skill.name}: {skill.description} ({skill.path})" for skill in skills)
         return "\n".join(lines)
 
-    def render_project_files(self, project_context: Any) -> str:
+    def render_project_files(self, project_context: Any, *, on_read: Any = None) -> str:
         self.render_project_files_calls.append(project_context)
         if project_context is None:
             return ""
@@ -254,6 +263,8 @@ class StubPrompts:
             file_path = Path(project_context.cwd) / name
             if file_path.exists():
                 blocks.append(f'<file name="{name}">\n{file_path.read_text()}\n</file>')
+                if on_read is not None:
+                    on_read(file_path.resolve())
         return "\n".join(blocks)
 
     def provider_tool_definitions(
@@ -522,6 +533,9 @@ class StubRuntime:
         self.projects = projects if projects is not None else StubProjects({})
         self.chat_sessions = ChatSessionManager(data_dir)
         self.system_prompts = StubPrompts()
+        # Real guard instance so tests can assert auto-injected prompt files are
+        # stamped as read-before-write for the session.
+        self.file_read_state = FileReadState()
         self.tools = tools or ToolRegistry()
         self.chat_runs = ChatRunManager()
         self.chat_run_manager = self.chat_runs
@@ -767,6 +781,7 @@ async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
             project_context: Any = None,
             skill_registry: Any = None,
             skill_catalog: Any = None,
+            read_paths: list[Path] | None = None,
         ) -> str:
             return "\n"
 
