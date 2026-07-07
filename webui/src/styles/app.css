@@ -1644,6 +1644,13 @@ textarea::placeholder {
   color: var(--amber);
 }
 
+/* Streamed but not yet dispatched: a hollow amber ring, no blink — the call is
+   being written, not executing, so it must not read like a long-running one. */
+.te-dot.preparing {
+  color: transparent;
+  -webkit-text-stroke: 1.5px var(--amber);
+}
+
 .te-dot.error {
   color: var(--red);
 }

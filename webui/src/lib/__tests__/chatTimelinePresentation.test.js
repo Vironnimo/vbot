@@ -4,6 +4,7 @@ import {
   compactToolValue,
   errorMessagePresentation,
   isRowCancellable,
+  isToolPreparing,
   labelForEvent,
   labelForMessage,
   resolveSubAgentCancelPlan,
@@ -818,5 +819,28 @@ describe('runMetaParts', () => {
     });
 
     expect(parts.join(' ')).not.toContain('Completed');
+  });
+});
+
+describe('isToolPreparing', () => {
+  it('is true only while a tool call is still streaming (not yet dispatched)', () => {
+    expect(isToolPreparing({ status: 'preparing' })).toBe(true);
+  });
+
+  it('is false once the call is dispatched or settled', () => {
+    for (const status of [
+      'running',
+      'success',
+      'completed',
+      'failed',
+      'cancelled',
+    ]) {
+      expect(isToolPreparing({ status })).toBe(false);
+    }
+  });
+
+  it('tolerates a missing tool', () => {
+    expect(isToolPreparing(null)).toBe(false);
+    expect(isToolPreparing(undefined)).toBe(false);
   });
 });

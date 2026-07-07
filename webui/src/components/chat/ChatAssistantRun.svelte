@@ -9,6 +9,7 @@
     isStartingForegroundSubAgent,
     isSubAgentTool,
     isTextToSpeechTool,
+    isToolPreparing,
     runMetaParts,
     speechArtifactFromTool,
     subAgentAgentId,
@@ -353,13 +354,15 @@
             toolStatus: toolStatus(child),
             streaming: Boolean(child.streaming),
           })}
+          {@const preparing = isToolPreparing(child)}
           <details class="tool-event run-tool-event">
             <summary class="tool-event-line">
               <span
                 class:done={toolStatus(child) === 'success'}
                 class:error={toolStatus(child) === 'failed'}
                 class:cancelled={toolStatus(child) === 'cancelled'}
-                class:running={toolStatus(child) === 'running'}
+                class:preparing
+                class:running={toolStatus(child) === 'running' && !preparing}
                 class="te-dot">●</span
               >
               <span class="te-fn">{toolNameForRunTool(child)}</span>
