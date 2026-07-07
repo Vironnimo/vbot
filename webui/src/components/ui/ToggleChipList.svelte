@@ -38,8 +38,13 @@
   let query = $state('');
 
   let normalizedItems = $derived(Array.isArray(items) ? items : []);
-  let totalCount = $derived(normalizedItems.length);
-  let onCount = $derived(countAllowed(normalizedItems));
+  // Locked items (e.g. the memory tool, shown as a display-only "auto" chip) are
+  // chips but never toggles — excluded from the on/total tally and all-on/all-off.
+  let toggleableItems = $derived(
+    normalizedItems.filter((item) => !item?.locked),
+  );
+  let totalCount = $derived(toggleableItems.length);
+  let onCount = $derived(countAllowed(toggleableItems));
   let visibleItems = $derived(filterChipsByQuery(normalizedItems, query));
   let placeholder = $derived(
     searchPlaceholder || t('access.searchPlaceholder', 'Filter…'),
@@ -50,13 +55,17 @@
   }
 
   // A chip gets a hover card only when there is something to show — its
-  // description, a not-ready hint, or skill warnings.
+  // description, a locked-state note, a not-ready hint, or skill warnings.
   function hasTip(item) {
-    return Boolean(item?.description) || attentionNeeded(item);
+    return (
+      Boolean(item?.description) ||
+      Boolean(item?.lockedNote) ||
+      attentionNeeded(item)
+    );
   }
 </script>
 
-{#if totalCount === 0}
+{#if normalizedItems.length === 0}
   <p class="access-chips__empty">{emptyLabel}</p>
 {:else}
   <div class="access-chips">
@@ -111,26 +120,46 @@
       <div class="access-chips__cloud">
         {#each visibleItems as item (item.name)}
           <div class="access-chip-wrap">
-            <button
-              type="button"
-              class="access-chip"
-              class:is-on={item.allowed}
-              class:is-attention={attentionNeeded(item)}
-              role="switch"
-              aria-checked={item.allowed}
-              aria-label={ariaToggleLabel(item.name)}
-              {disabled}
-              onclick={() => onToggle(item.name, !item.allowed)}
-            >
-              <span class="access-chip__name">{item.name}</span>
-              {#if attentionNeeded(item)}
-                <span class="access-chip__dot" aria-hidden="true"></span>
-              {/if}
-            </button>
+            {#if item.locked}
+              <div
+                class="access-chip access-chip--locked"
+                class:is-on={item.allowed}
+              >
+                <span class="access-chip__name">{item.name}</span>
+                <span class="access-chip__auto">
+                  {item.lockedLabel ?? t('access.lockedAuto', 'auto')}
+                </span>
+              </div>
+            {:else}
+              <button
+                type="button"
+                class="access-chip"
+                class:is-on={item.allowed}
+                class:is-attention={attentionNeeded(item)}
+                role="switch"
+                aria-checked={item.allowed}
+                aria-label={ariaToggleLabel(item.name)}
+                {disabled}
+                onclick={() => onToggle(item.name, !item.allowed)}
+              >
+                <span class="access-chip__name">{item.name}</span>
+                {#if attentionNeeded(item)}
+                  <span class="access-chip__dot" aria-hidden="true"></span>
+                {/if}
+              </button>
+            {/if}
             {#if hasTip(item)}
               <div class="access-chip__tip" role="tooltip">
                 {#if item.description}
                   <p class="access-chip__desc">{item.description}</p>
+                {/if}
+                {#if item.lockedNote}
+                  <p
+                    class="access-chip__locked-note"
+                    data-testid="access-chip-locked-note"
+                  >
+                    {item.lockedNote}
+                  </p>
                 {/if}
                 <ToolReadinessNotice
                   ready={item.ready}
@@ -293,6 +322,37 @@
     height: 5px;
     border-radius: 50%;
     background: var(--amber);
+  }
+
+  /* Locked chip (e.g. memory): display-only, dashed, with an "auto" tag —
+     never a toggle. */
+  .access-chip--locked {
+    cursor: default;
+    color: var(--text-med);
+    border-style: dashed;
+  }
+
+  .access-chip--locked.is-on {
+    color: var(--accent);
+  }
+
+  .access-chip__auto {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-lo);
+  }
+
+  .access-chip--locked.is-on .access-chip__auto {
+    color: rgba(232, 135, 10, 0.75);
+  }
+
+  .access-chip__locked-note {
+    margin: 6px 0 0;
+    color: var(--text-med);
+    font-size: 11.5px;
+    line-height: 1.4;
   }
 
   /* Plain hover card. A transparent ::before bridges the gap so moving the

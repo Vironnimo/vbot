@@ -454,17 +454,28 @@ def _project_skill_pool(state: Any, project_id: str) -> JsonObject:
     ``global`` is the user's global-home skills and ``bundled`` is everything else
     shippable (bundled plus any configured extra dirs) — both opt-in lists, each with
     names a project skill shadows removed (project wins the collision). All sorted.
+
+    Each pool entry is a ``{"name", "description"}`` object so the whitelist editor's
+    chips can show the skill's description on hover, matching the tool pool. Names stay
+    authoritative from ``project_skill_names`` (the set the whitelist math operates on);
+    descriptions are best-effort — the project's own from ``project_own_skills``, the
+    bundled/global ones from the loaded skills registry — defaulting to ``""``.
+
     Guarded with ``getattr`` so a minimal test runtime without the skill seams degrades
     to empty pools rather than raising.
     """
     runtime = state.runtime
     project_skill_names = getattr(runtime, "project_skill_names", None)
-    project_skills = (
-        sorted(project_skill_names(project_id)) if callable(project_skill_names) else []
-    )
+    project_names = sorted(project_skill_names(project_id)) if callable(project_skill_names) else []
+    project_own = getattr(runtime, "project_own_skills", None)
+    own_metadata = list(project_own(project_id)) if callable(project_own) else []
+    project_descriptions = {skill.name: getattr(skill, "description", "") for skill in own_metadata}
+    project_set = set(project_names)
+
     skills_registry = getattr(runtime, "skills", None)
     all_skills = list(skills_registry.list_all()) if skills_registry else []
-    project_set = set(project_skills)
+    registry_descriptions = {skill.name: getattr(skill, "description", "") for skill in all_skills}
+
     global_names = sorted(
         skill.name
         for skill in all_skills
@@ -476,7 +487,15 @@ def _project_skill_pool(state: Any, project_id: str) -> JsonObject:
         for skill in all_skills
         if skill.name not in project_set and skill.name not in global_set
     )
-    return {"project": project_skills, "bundled": bundled, "global": global_names}
+
+    def _entries(names: list[str], descriptions: dict[str, str]) -> list[JsonObject]:
+        return [{"name": name, "description": descriptions.get(name, "")} for name in names]
+
+    return {
+        "project": _entries(project_names, project_descriptions),
+        "bundled": _entries(bundled, registry_descriptions),
+        "global": _entries(global_names, registry_descriptions),
+    }
 
 
 def _set_changes(params: JsonObject) -> JsonObject:

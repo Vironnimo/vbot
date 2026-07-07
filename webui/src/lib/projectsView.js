@@ -256,6 +256,25 @@ export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
 // only when named in `skills_bundled_enabled` / `skills_global_enabled`). A bundled
 // or global skill shadowed by a project skill of the same name is dropped from its
 // section (project wins).
+// Normalize one skill-pool entry to `{ name, description }`. The scan sends
+// `{name, description}` objects (so the whitelist chips can show a description on
+// hover); a bare string is tolerated too and gets an empty description. Nameless
+// entries drop out.
+function normalizeSkillPoolEntry(entry) {
+  if (entry !== null && typeof entry === 'object') {
+    const name = asText(entry.name).trim();
+    return name ? { name, description: asText(entry.description) } : null;
+  }
+  const name = asText(entry).trim();
+  return name ? { name, description: '' } : null;
+}
+
+export function normalizeSkillPool(list) {
+  return (Array.isArray(list) ? list : [])
+    .map(normalizeSkillPoolEntry)
+    .filter(Boolean);
+}
+
 export function buildSkillToggleSections({
   projectSkills = [],
   bundledSkills = [],
@@ -267,19 +286,28 @@ export function buildSkillToggleSections({
   const disabled = new Set(normalizeStringList(skillsProjectDisabled));
   const enabledBundled = new Set(normalizeStringList(skillsBundledEnabled));
   const enabledGlobal = new Set(normalizeStringList(skillsGlobalEnabled));
-  const projectNames = normalizeStringList(projectSkills);
-  const projectSet = new Set(projectNames);
+  const projectEntries = normalizeSkillPool(projectSkills);
+  const projectSet = new Set(projectEntries.map((skill) => skill.name));
   return {
-    project: projectNames.map((name) => ({
-      name,
-      enabled: !disabled.has(name),
+    project: projectEntries.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      enabled: !disabled.has(skill.name),
     })),
-    bundled: normalizeStringList(bundledSkills)
-      .filter((name) => !projectSet.has(name))
-      .map((name) => ({ name, enabled: enabledBundled.has(name) })),
-    global: normalizeStringList(globalSkills)
-      .filter((name) => !projectSet.has(name))
-      .map((name) => ({ name, enabled: enabledGlobal.has(name) })),
+    bundled: normalizeSkillPool(bundledSkills)
+      .filter((skill) => !projectSet.has(skill.name))
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        enabled: enabledBundled.has(skill.name),
+      })),
+    global: normalizeSkillPool(globalSkills)
+      .filter((skill) => !projectSet.has(skill.name))
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        enabled: enabledGlobal.has(skill.name),
+      })),
   };
 }
 
@@ -301,13 +329,14 @@ export function setListMembership(list, name, include) {
   return normalized;
 }
 
-// Normalize the scan response's skill pool into the editor's name lists.
+// Normalize the scan response's skill pool into the editor's `{name, description}`
+// lists (each group carries descriptions for the whitelist chips' hover cards).
 export function normalizeScanSkills(scan) {
   const skills = scan?.skills ?? {};
   return {
-    project: normalizeStringList(skills.project),
-    bundled: normalizeStringList(skills.bundled),
-    global: normalizeStringList(skills.global),
+    project: normalizeSkillPool(skills.project),
+    bundled: normalizeSkillPool(skills.bundled),
+    global: normalizeSkillPool(skills.global),
   };
 }
 
