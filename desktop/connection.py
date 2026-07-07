@@ -284,11 +284,20 @@ class ConnectionController:
         self._settings_file = settings_file
         self._window = window
         self._probe = probe
+        # Notified with the base WebUI URL on every successful connect, so the
+        # voice worker follows the window's active server (wired to the bridge in
+        # the launcher — the controller stays decoupled from the voice stack).
+        self._active_server_listener: Callable[[str], None] | None = None
 
     def attach_window(self, window: WindowProtocol) -> None:
         """Bind the live pywebview window the controller navigates."""
 
         self._window = window
+
+    def set_active_server_listener(self, listener: Callable[[str], None] | None) -> None:
+        """Register a callback invoked with the base URL on each successful connect."""
+
+        self._active_server_listener = listener
 
     # -- Remembered-servers surface (delegates to the module operations) -----
 
@@ -333,6 +342,7 @@ class ConnectionController:
             select_server(target.host, target.port, settings_file=self._settings_file)
             logger.info("Desktop connecting to %s:%s", target.host, target.port)
             self._navigate_url(_with_accessor_param(target.url))
+            self._notify_active_server(target.url)
             return result
 
         logger.warning(
@@ -406,6 +416,22 @@ class ConnectionController:
     def _navigate_url(self, url: str) -> None:
         window = self._require_window()
         window.load_url(url)
+
+    def _notify_active_server(self, url: str) -> None:
+        """Tell the active-server listener (the voice worker) about a new server.
+
+        The listener rebuilds a background worker, so a failure there must never
+        break the window navigation that already succeeded — it is logged and
+        swallowed. Passed the plain base URL, not the ``accessor=desktop`` window
+        URL, since the worker composes its own ``/api/...`` paths from it.
+        """
+
+        if self._active_server_listener is None:
+            return
+        try:
+            self._active_server_listener(url)
+        except Exception:
+            logger.warning("Active-server listener failed for %s", url, exc_info=True)
 
     def _show_connection_screen(self, probe_result: DesktopProbeResult | None) -> None:
         window = self._require_window()

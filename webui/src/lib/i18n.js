@@ -1112,6 +1112,8 @@ export const englishCatalog = Object.freeze({
   'settings.voice.moreSensitive': 'More sensitive',
   'settings.voice.desktopOnly':
     'Voice settings are only available in the vBot Desktop app. Open the Desktop app to configure wakeword detection and voice commands.',
+  'settings.voice.mockWarning':
+    'Wakeword detection is running in mock mode — the on-device speech engine could not be loaded, so nothing is actually being heard. Install the desktop voice dependencies and restart to enable real detection.',
 
   'voice.state.off': 'Disabled',
   'voice.state.listening': 'Listening',

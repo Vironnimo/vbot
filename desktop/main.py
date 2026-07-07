@@ -216,6 +216,10 @@ def launch_desktop(
     override = _resolve_launch_override(args)
     server_url = _resolve_launch_server_url(override, controller)
     bridge = _create_wakeword_bridge(args, settings_file, controller, server_url)
+    # Voice follows the window: every successful in-window connect retargets the
+    # worker, so first-run connect and runtime server switches no longer leave
+    # voice pointed at the launch-time (or empty) server.
+    controller.set_active_server_listener(bridge.set_server_url)
 
     # The window must be created with initial content before the GUI loop; the
     # connection screen is a safe neutral page that the post-loop entry callable
@@ -329,42 +333,41 @@ def _create_wakeword_bridge(
     the window opens. An empty ``server_url`` (first run, nothing to target)
     makes the worker skip sending — the no-target behavior the worker guards.
 
-    Uses MockWakewordWorker when --mock-wakeword is set or when openWakeWord
-    cannot be imported. Returns the bridge instance (never None — the bridge
-    always exists so the WebUI can query capabilities).
+    Uses MockWakewordWorker when --mock-wakeword is set or when the on-device
+    wakeword stack cannot be imported; the mock decision is made once up front so
+    the bridge can surface it to the WebUI. Returns the bridge instance (never
+    None — the bridge always exists so the WebUI can query capabilities).
     """
 
     from desktop.wakeword.bridge import DesktopBridge
+    from desktop.wakeword.engine import OpenWakeWordEngine
     from desktop.wakeword.worker import MockWakewordWorker, WakewordWorker
 
-    use_mock = bool(args.mock_wakeword)
+    is_mock = bool(args.mock_wakeword) or not _real_wakeword_available()
 
     def worker_factory(bridge: DesktopBridge) -> Any:
-        if use_mock:
+        if is_mock:
             return MockWakewordWorker(bridge=bridge)
-        try:
-            import sounddevice  # type: ignore[import-untyped]  # noqa: F401
-
-            from desktop.wakeword.engine import OpenWakeWordEngine
-        except ImportError:
-            return MockWakewordWorker(bridge=bridge)
-
         wakeword_config = read_wakeword_settings(settings_file)
         engine = OpenWakeWordEngine(
             wake_phrase=wakeword_config.get("wake_phrase", "hey_jarvis"),
             sensitivity=wakeword_config.get("sensitivity", 0.5),
         )
+        # Read the current server URL off the bridge (not a captured constant) so
+        # a worker rebuilt after a server switch targets the new server.
         return WakewordWorker(
             engine=engine,
             bridge=bridge,
             settings_path=settings_file,
-            server_url=server_url,
+            server_url=bridge.server_url,
         )
 
     bridge = DesktopBridge(
         settings_path=settings_file,
         worker_factory=worker_factory,
         connection=controller,
+        server_url=server_url,
+        mock=is_mock,
     )
 
     wakeword_config = read_wakeword_settings(settings_file)
@@ -372,6 +375,23 @@ def _create_wakeword_bridge(
         bridge._start_worker()
 
     return bridge
+
+
+def _real_wakeword_available() -> bool:
+    """Whether the on-device wakeword stack can be imported.
+
+    Both openWakeWord and sounddevice must import for the real worker; a missing
+    either one means Desktop runs the no-microphone mock worker. Probed once up
+    front so the decision can be surfaced to the WebUI (a silent mock left the
+    user staring at a fake "listening" that never hears anything).
+    """
+
+    try:
+        import openwakeword  # type: ignore[import-untyped]  # noqa: F401
+        import sounddevice  # type: ignore[import-untyped]  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _resolve_launch_override(args: argparse.Namespace) -> tuple[str, int] | None:

@@ -583,6 +583,83 @@ def test_rpc_call_returns_empty_for_rpc_error(
     assert worker._rpc_call("agent.get", {"id": "main"}) == {}
 
 
+def test_mock_worker_start_stop_lifecycle(fake_bridge: FakeBridge) -> None:
+    from desktop.wakeword.worker import MockWakewordWorker
+
+    worker = MockWakewordWorker(
+        bridge=fake_bridge,
+        engine=MockWakewordEngine(score_sequence=[0.0]),
+    )
+
+    assert not worker.is_running()
+    worker.start()
+    assert worker.is_running()
+    worker.stop()
+    assert not worker.is_running()
+    # Even a never-triggering mock enters the visible listening state.
+    assert "listening" in fake_bridge.states
+
+
+def test_mock_worker_walks_full_state_cycle_on_spike(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import MockWakewordWorker
+
+    monkeypatch.setattr(worker_module, "_MOCK_FRAME_SECONDS", 0.0)
+    monkeypatch.setattr(worker_module, "_MOCK_STAGE_SECONDS", 0.0)
+
+    worker = MockWakewordWorker(bridge=fake_bridge)
+    calls = {"n": 0}
+
+    class SpikeThenStopEngine:
+        threshold = 0.5
+
+        def start(self) -> None:
+            pass
+
+        def detect(self, _chunk: bytes) -> float:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return 1.0
+            # Drop below threshold and end the loop after one full cycle.
+            worker._running.clear()
+            return 0.0
+
+    worker._engine = SpikeThenStopEngine()  # type: ignore[assignment]
+    worker._running.set()
+
+    worker._run()
+
+    # The mock drives the same state names the real worker publishes.
+    assert fake_bridge.states == [
+        "listening",
+        "wakeword_detected",
+        "recording",
+        "transcribing",
+        "sending",
+        "listening",
+    ]
+
+
+def test_mock_worker_simulate_cycle_publishes_all_stages(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import MockWakewordWorker
+
+    monkeypatch.setattr(worker_module, "_MOCK_STAGE_SECONDS", 0.0)
+
+    worker = MockWakewordWorker(bridge=fake_bridge)
+    worker._running.set()
+
+    worker._simulate_cycle()
+
+    assert fake_bridge.states == ["wakeword_detected", "recording", "transcribing", "sending"]
+
+
 def test_list_microphones_graceful_when_no_sounddevice(monkeypatch) -> None:
     """list_microphones should return empty list when sounddevice unavailable."""
     monkeypatch.setitem(__import__("sys").modules, "sounddevice", None)

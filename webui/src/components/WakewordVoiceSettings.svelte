@@ -13,6 +13,7 @@
   import {
     createVoiceSettingsState,
     applyWakewordStatus,
+    applyRuntimeStatus,
     buildVoiceSettingsPayload,
     voiceSettingsDirty,
     snapshotVoiceSettings,
@@ -98,8 +99,11 @@
       // Bridge not available; keep defaults
     }
     loaded = true;
+    // The poll only carries observed runtime fields (live state, mock flag) into
+    // state — never the editable config — so a poll firing during the autosave
+    // debounce cannot revert an unsaved edit.
     cleanupStatusPoll = onWakewordStatusChange((status) => {
-      voiceState = applyWakewordStatus(voiceState, status);
+      voiceState = applyRuntimeStatus(voiceState, status);
     });
   }
 
@@ -224,6 +228,15 @@
         </label>
       </div>
     </div>
+
+    {#if voiceState.mock}
+      <div class="voice-mock-warning" role="alert">
+        {t(
+          'settings.voice.mockWarning',
+          'Wakeword detection is running in mock mode — the on-device speech engine could not be loaded, so nothing is actually being heard. Install the desktop voice dependencies and restart to enable real detection.',
+        )}
+      </div>
+    {/if}
 
     <!-- Live state indicator -->
     <div class="s-row">
@@ -525,6 +538,18 @@
     background: var(--bg-subtle, #2d271f);
     font-size: 0.8rem;
     color: var(--text-lo, #847762);
+    line-height: 1.5;
+  }
+
+  /* Mock-mode warning */
+  .voice-mock-warning {
+    margin: 0.5rem 0 0.75rem;
+    padding: 0.8rem 1rem;
+    border: 1px solid var(--amber, #f59e0b);
+    border-radius: 0.5rem;
+    background: color-mix(in srgb, var(--amber, #f59e0b) 12%, transparent);
+    font-size: 0.8rem;
+    color: var(--text, #f1eadf);
     line-height: 1.5;
   }
 </style>

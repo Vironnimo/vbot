@@ -17,6 +17,8 @@ from typing import Any
 
 import httpx
 
+from desktop.wakeword.engine import MockWakewordEngine
+
 logger = logging.getLogger("vbot.desktop.wakeword.worker")
 
 _FRAME_SIZE_SAMPLES = 1280  # 80ms at 16kHz
@@ -40,6 +42,15 @@ _INTERRUPTIBLE_SLEEP_SLICE_SECONDS = 0.05
 _HTTP_TIMEOUT = 30.0
 _RPC_TIMEOUT = 10.0
 _MAX_RETRIES = 3
+
+# Mock worker cadence. It walks the same detection→send state cycle the real
+# worker does — driven by a MockWakewordEngine, no audio hardware or network —
+# so the WebUI status indicator can be validated with --mock-wakeword.
+_MOCK_FRAME_SECONDS = 0.1
+_MOCK_STAGE_SECONDS = 0.8
+_MOCK_THRESHOLD = 0.5
+# Idle low scores then a spike, so the mock periodically triggers one full cycle.
+_MOCK_DEFAULT_SCORES = [0.0] * 25 + [1.0]
 
 # Mirrors the always-retryable set in core/utils/http_status.py for a
 # non-idempotent POST (audio transcription). Duplicated, not imported: the
@@ -518,15 +529,23 @@ def list_microphones() -> list[dict[str, Any]]:
 
 
 class MockWakewordWorker:
-    """No-microphone worker used when real wakeword dependencies are unavailable."""
+    """No-microphone worker used when the real wakeword stack is unavailable.
 
-    def __init__(self, bridge: Any) -> None:
+    Drives the *same* detection → recording → transcribing → sending state cycle
+    the real worker publishes, but from a :class:`MockWakewordEngine` score script
+    instead of a live microphone, and with no network calls. This lets the WebUI
+    status indicator be validated with ``--mock-wakeword`` (and makes the mock
+    fallback visibly "alive" rather than frozen on ``listening``).
+    """
+
+    def __init__(self, bridge: Any, engine: Any = None) -> None:
         self._bridge = bridge
+        self._engine = engine if engine is not None else MockWakewordEngine(_MOCK_DEFAULT_SCORES)
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
 
     def start(self) -> None:
-        """Start a lightweight status loop without opening audio devices."""
+        """Start the simulated state loop without opening audio devices."""
         if self.is_running():
             return
         self._running.set()
@@ -534,17 +553,45 @@ class MockWakewordWorker:
         self._thread.start()
 
     def stop(self) -> None:
-        """Stop the mock status loop."""
+        """Stop the simulated state loop."""
         self._running.clear()
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None
 
     def is_running(self) -> bool:
-        """True while the mock status thread is alive."""
+        """True while the mock loop thread is alive."""
         return self._thread is not None and self._thread.is_alive()
 
     def _run(self) -> None:
+        try:
+            self._engine.start()
+        except Exception:
+            logger.warning("Mock wakeword engine failed to start", exc_info=True)
         self._bridge.publish_state("listening")
+        armed = True
         while self._running.is_set():
-            time.sleep(0.1)
+            _sleep_while_running(self._running, _MOCK_FRAME_SECONDS)
+            if not self._running.is_set():
+                break
+            score = self._engine.detect(b"")
+            threshold = getattr(self._engine, "threshold", _MOCK_THRESHOLD)
+            if not armed:
+                # Mirror the real worker: re-arm only once the score falls back
+                # below threshold, so one spike is one cycle.
+                if score < threshold:
+                    armed = True
+                continue
+            if score >= threshold:
+                armed = False
+                self._simulate_cycle()
+                if self._running.is_set():
+                    self._bridge.publish_state("listening")
+
+    def _simulate_cycle(self) -> None:
+        """Publish one full post-detection state sequence with brief dwells."""
+        for state in ("wakeword_detected", "recording", "transcribing", "sending"):
+            if not self._running.is_set():
+                return
+            self._bridge.publish_state(state)
+            _sleep_while_running(self._running, _MOCK_STAGE_SECONDS)

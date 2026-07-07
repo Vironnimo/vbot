@@ -103,6 +103,107 @@ def test_get_wakeword_status_shape(tmp_path: Path) -> None:
     assert "wake_phrase" in status
 
 
+def test_get_wakeword_status_includes_mock_flag(tmp_path: Path) -> None:
+    _write_settings(tmp_path / "settings.json")
+
+    real = DesktopBridge(settings_path=tmp_path / "settings.json")
+    assert real.getWakewordStatus()["mock"] is False
+
+    mock = DesktopBridge(settings_path=tmp_path / "settings.json", mock=True)
+    assert mock.getWakewordStatus()["mock"] is True
+
+
+def test_server_url_normalizes_trailing_slash(tmp_path: Path) -> None:
+    _write_settings(tmp_path / "settings.json")
+
+    bridge = DesktopBridge(
+        settings_path=tmp_path / "settings.json",
+        server_url="http://pi.lan:9000/",
+    )
+
+    assert bridge.server_url == "http://pi.lan:9000"
+
+
+def test_set_server_url_rebuilds_running_worker(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": True})
+    workers: list[FakeWorker] = []
+
+    def worker_factory(bridge: DesktopBridge) -> FakeWorker:
+        worker = FakeWorker()
+        # Record the URL the factory saw so we can prove it reads the current one.
+        worker.server_url = bridge.server_url  # type: ignore[attr-defined]
+        workers.append(worker)
+        return worker
+
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        worker_factory=worker_factory,
+        server_url="http://a.lan:8420/",
+    )
+    bridge.setWakewordEnabled(True)
+    assert workers[0].server_url == "http://a.lan:8420"  # type: ignore[attr-defined]
+
+    bridge.set_server_url("http://b.lan:9000/")
+
+    # The running worker is rebuilt against the new server.
+    assert len(workers) == 2
+    assert workers[0].stopped is True
+    assert workers[1].started is True
+    assert workers[1].server_url == "http://b.lan:9000"  # type: ignore[attr-defined]
+
+
+def test_set_server_url_noop_when_unchanged(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": True})
+    workers: list[FakeWorker] = []
+
+    def worker_factory(_bridge: DesktopBridge) -> FakeWorker:
+        worker = FakeWorker()
+        workers.append(worker)
+        return worker
+
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        worker_factory=worker_factory,
+        server_url="http://a.lan:8420/",
+    )
+    bridge.setWakewordEnabled(True)
+
+    # Same target (trailing slash normalized away) → no needless rebuild, so the
+    # launch auto-connect to the already-open server does not restart the worker.
+    bridge.set_server_url("http://a.lan:8420")
+
+    assert len(workers) == 1
+
+
+def test_set_server_url_stores_for_next_start_when_no_worker_running(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)  # wakeword disabled → nothing running
+    workers: list[FakeWorker] = []
+
+    def worker_factory(bridge: DesktopBridge) -> FakeWorker:
+        worker = FakeWorker()
+        worker.server_url = bridge.server_url  # type: ignore[attr-defined]
+        workers.append(worker)
+        return worker
+
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        worker_factory=worker_factory,
+        server_url="",
+    )
+
+    # First-run shape: connect happens before voice is enabled. Nothing is built
+    # now, but the URL is stored so the next start targets the right server.
+    bridge.set_server_url("http://pi.lan:9000/")
+    assert workers == []
+    assert bridge.server_url == "http://pi.lan:9000"
+
+    bridge.setWakewordEnabled(True)
+    assert workers[0].server_url == "http://pi.lan:9000"  # type: ignore[attr-defined]
+
+
 def test_set_wakeword_enabled_toggles_and_persists(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file)

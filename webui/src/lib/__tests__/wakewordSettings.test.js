@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createVoiceSettingsState,
   applyWakewordStatus,
+  applyRuntimeStatus,
   buildVoiceSettingsPayload,
   voiceSettingsDirty,
   snapshotVoiceSettings,
@@ -72,6 +73,52 @@ describe('applyWakewordStatus', () => {
     const hydrated = applyWakewordStatus(state, null);
     expect(hydrated).toEqual(state);
   });
+
+  it('hydrates the mock flag', () => {
+    const state = createVoiceSettingsState();
+    const hydrated = applyWakewordStatus(state, { mock: true });
+    expect(hydrated.mock).toBe(true);
+  });
+});
+
+describe('applyRuntimeStatus', () => {
+  it('updates only liveState and mock, never editable config', () => {
+    const state = {
+      ...createVoiceSettingsState(),
+      sensitivity: 0.9,
+      target_agent_id: 'agent-1',
+    };
+    const status = {
+      state: 'recording',
+      mock: true,
+      // Config fields in the poll payload must be ignored so an in-progress
+      // edit is never reverted.
+      sensitivity: 0.5,
+      target_agent_id: null,
+    };
+
+    const next = applyRuntimeStatus(state, status);
+
+    expect(next.liveState).toBe('recording');
+    expect(next.mock).toBe(true);
+    expect(next.sensitivity).toBe(0.9);
+    expect(next.target_agent_id).toBe('agent-1');
+  });
+
+  it('returns the same reference when nothing changed', () => {
+    const state = {
+      ...createVoiceSettingsState(),
+      liveState: 'listening',
+      mock: false,
+    };
+    const next = applyRuntimeStatus(state, { state: 'listening', mock: false });
+    expect(next).toBe(state);
+  });
+
+  it('returns same state when status is null', () => {
+    const state = createVoiceSettingsState();
+    expect(applyRuntimeStatus(state, null)).toBe(state);
+  });
 });
 
 describe('buildVoiceSettingsPayload', () => {
@@ -116,6 +163,14 @@ describe('buildVoiceSettingsPayload', () => {
     const payload = buildVoiceSettingsPayload(state, null);
     expect(payload.liveState).toBeUndefined();
     expect(payload.enabled).toBeDefined();
+  });
+
+  it('excludes the runtime mock flag from payload and dirty', () => {
+    const lastSaved = snapshotVoiceSettings(createVoiceSettingsState());
+    const state = { ...lastSaved, mock: true };
+
+    expect(buildVoiceSettingsPayload(state, lastSaved)).toEqual({});
+    expect(voiceSettingsDirty(state, lastSaved)).toBe(false);
   });
 });
 
