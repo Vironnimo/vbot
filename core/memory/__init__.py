@@ -16,6 +16,7 @@ from core.memory.memory import (
     MemoryScope,
     MemoryService,
     memory_block_definition,
+    memory_prompt_file_paths,
     read_memory_files,
     validate_memory_prompt_mode,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "MemoryScope",
     "MemoryService",
     "memory_block_definition",
+    "memory_prompt_file_paths",
     "read_memory_files",
     "validate_memory_prompt_mode",
 ]

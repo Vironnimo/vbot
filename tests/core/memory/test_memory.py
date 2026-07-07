@@ -16,6 +16,7 @@ from core.memory import (
     MemoryError,
     MemoryService,
     memory_block_definition,
+    memory_prompt_file_paths,
     read_memory_files,
 )
 from core.memory.memory import _MAX_ENTRY_LENGTH, _MAX_SCOPE_BUDGET, _MEMORY_GUIDANCE
@@ -184,6 +185,44 @@ def test_read_prompt_files_missing_matches_empty_on_disk_file(tmp_path: Path) ->
     real = service.read_prompt_files(real_workspace, MEMORY_PROMPT_MODE_AGENT)
 
     assert virtual == real
+
+
+def test_memory_prompt_file_paths_returns_existing_selected_files(tmp_path: Path) -> None:
+    # The read-before-write stamping source: resolved absolute paths of the memory
+    # files a mode injects that exist on disk, in mode order.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
+    (workspace / "USER.md").write_text("User memory", encoding="utf-8")
+
+    agent_only = memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT)
+    agent_and_user = memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
+
+    assert agent_only == [(workspace / "MEMORY.md").resolve()]
+    assert agent_and_user == [
+        (workspace / "MEMORY.md").resolve(),
+        (workspace / "USER.md").resolve(),
+    ]
+
+
+def test_memory_prompt_file_paths_skips_absent_files(tmp_path: Path) -> None:
+    # A not-yet-created memory file (rendered as default content, no bytes on disk)
+    # has nothing to stamp, so it is omitted.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
+
+    paths = memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
+
+    assert paths == [(workspace / "MEMORY.md").resolve()]
+
+
+def test_memory_prompt_file_paths_off_mode_is_empty(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
+
+    assert memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_OFF) == []
 
 
 def test_memory_block_definition_declares_guidance_and_embedded_marker() -> None:

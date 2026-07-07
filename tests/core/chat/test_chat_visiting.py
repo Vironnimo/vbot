@@ -158,6 +158,24 @@ async def test_file_tool_into_registered_project_injects_house_rules(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_visiting_stamps_project_files_read_before_write(tmp_path: Path) -> None:
+    # A visited project's files are auto-shown in the reminder, so they count as read
+    # for the session — the visiting agent can edit one directly, with no prior read.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    adapter = StubAdapter(
+        [_read_call(str(repo / "AGENTS.md")), {"content": "Done", "tool_calls": None}]
+    )
+    runtime = _visiting_runtime(tmp_path, repo, adapter)
+    runtime.chat_sessions.create("coder", session_id="s1")
+
+    await ChatLoop(runtime).send("coder", "Look at the project", session_id="s1")
+
+    assert runtime.file_read_state.check_stale("s1", (repo / "AGENTS.md").resolve()) is None
+
+
+@pytest.mark.asyncio
 async def test_visiting_reminder_lists_project_skills(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
