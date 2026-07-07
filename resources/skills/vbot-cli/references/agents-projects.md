@@ -32,15 +32,16 @@ vbot agent update coder --temperature 0.4 --thinking-effort high
 A project points vBot at a repo directory (its `cwd`) and exposes the agents discovered in that repo (its team). vBot reads the repo but never writes it.
 
 ```bash
-vbot project add <path> [--name <display-name>] [--default-agent <agent-id>] [--default-model <provider/model-id>] [--default-temperature <0..2>] [--default-thinking-effort <effort>] [--auto-load <file> ...]
+vbot project add <path> [--name <display-name>] [--format opencode|claude] [--default-agent <agent-id>] [--default-model <provider/model-id>] [--default-temperature <0..2>] [--default-thinking-effort <effort>] [--auto-load <file> ...]
 vbot project list
 vbot project show <project-id>
-vbot project set <project-id> [--cwd <path>] [add flags] [--clear-default-temperature] [--clear-default-thinking-effort]
+vbot project set <project-id> [--cwd <path>] [--format opencode|claude] [add flags] [--clear-default-temperature] [--clear-default-thinking-effort]
 vbot project rm <project-id>
 ```
 
 - `add` needs only the repo path; everything else is optional. An empty folder is a valid project (empty team, clean report) — not an error.
 - `add` and `show` print the scan preview: the team plus a report of anything unclean (bad or unconfigured model, slug collision, unslugifiable name). `show` re-scans the repo live; `set --cwd` re-points and re-scans.
+- `--format` picks the project's source ecosystem — `opencode` (`.opencode/agents/` + `.opencode/skills/`) or `claude` (`.claude/agents/` + `.claude/skills/`). Exactly one per project; agents and skills come only from that one. On `add` it is optional (omitted → auto-detected from the repo, defaulting to `opencode` when both or neither are present); on `set` it switches the format and the team + skills re-derive from the other ecosystem's directories.
 - `--auto-load` lists repo files folded into project agent prompts; on `set`, the flag with no values clears the list.
 - `--default-model`/`--default-temperature`/`--default-thinking-effort` are project defaults for its agents; the `--clear-*` flags fall back through to the global defaults.
 - `rm` archives the project's runtime anchor (never the repo) and prints the archive path. It is blocked while a project agent has an active or queued run (`project_busy`) or a cron job targets a project agent (`project_in_use`) — clear those first.
