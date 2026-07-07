@@ -93,11 +93,12 @@ Worker states (exposed in `getWakewordStatus().state`): `off` → `listening` �
 - If the server is unreachable, is not a vBot server, or has no WebUI, Desktop stays open and shows the interactive connection screen (with the failed host/port prefilled and an inline error) instead of crashing or dead-ending.
 - Hosts are plain host names or IP addresses only; schemes, paths, whitespace, and URL punctuation are rejected; a rejected host renders as the `invalid_target` connection-screen error.
 - Wakeword detection runs locally. Audio is only recorded after the wake phrase is detected. No audio leaves the device before a wakeword match.
-- If `target_agent_id` is not configured, the worker enters `error` without recording or transcribing audio.
+- If `target_agent_id` is not configured, the worker **fails fast at start**: it enters `error` immediately (no engine load, no microphone opened) rather than sitting in `listening` and dying on the first wake word. A configured agent that is cleared mid-run recreates the worker (config change), which re-checks the same gate; the post-detection guard in `_handle_detection` remains as defense-in-depth.
 - `"active"` session behavior resolves the Agent's persisted `current_session_id` via `agent.get`; if unavailable, it falls back to the most recently active session from `session.list`, then creates a session.
 - Transcripts are submitted with `chat.stream` and `input_origin: "speech_transcription"` so the Desktop worker returns to listening after the server accepts the Run instead of blocking until the Run completes, while the model still receives hidden context that the visible user text came from speech-to-text.
 - Isolated microphone read errors during detection are recovered by reopening the stream; three consecutive failures transition to `error`.
 - An empty transcript or a failed transcription request is logged, sends no chat message, and returns the worker to `listening`; one bad utterance must not stop future wakeword detection.
+- A stop (disable / reconfigure / server switch) between capture and send discards the utterance: `_handle_detection` re-checks `_running` after recording and after transcription and bails without sending a now-stale command, and the retry loops honor `_running` (interruptible backoff, no retry after stop). A stop-induced empty resolve/send result does not publish `error` (the bridge publishes `off`). The in-flight HTTP request itself is best-effort — a single attempt may finish and its result is discarded.
 
 ## External Dependencies
 
