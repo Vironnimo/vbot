@@ -781,9 +781,7 @@ def test_local_context_resolver_enforces_effective_window(
         metadata={"ollama": {"remote": True}},
     )
     entries = {"ministral-3:8b": local_model, "kimi-k2.6:cloud": cloud_model}
-    monkeypatch.setattr(
-        runtime.models, "get", lambda provider_id, model_id: entries[model_id]
-    )
+    monkeypatch.setattr(runtime.models, "get", lambda provider_id, model_id: entries[model_id])
     runtime.storage.update_settings_sections(
         {"local_models": {"context_windows": {"ollama/ministral-3:8b": 16384}}}
     )
@@ -813,9 +811,7 @@ def test_local_context_resolver_defaults_to_cap_without_setting(
         max_output_tokens=None,
         metadata={"ollama": {"local": True}},
     )
-    monkeypatch.setattr(
-        runtime.models, "get", lambda provider_id, model_id: local_model
-    )
+    monkeypatch.setattr(runtime.models, "get", lambda provider_id, model_id: local_model)
 
     # Act / Assert
     assert runtime._local_context_resolver_for("ollama")("big-local") == 32768
@@ -889,7 +885,8 @@ async def test_maybe_refresh_local_catalogs_refreshes_again_after_ttl(
 
     # Act — expire the throttle between the calls.
     await runtime.maybe_refresh_local_catalogs()
-    runtime._local_catalog_refresh_at = runtime._local_catalog_refresh_at - 31.0
+    assert runtime._local_catalog_refresh_at is not None
+    runtime._local_catalog_refresh_at -= 31.0
     await runtime.maybe_refresh_local_catalogs()
 
     # Assert

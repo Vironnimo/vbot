@@ -27,9 +27,7 @@ class TestParseLocalModelsUpdate:
         result = parse_settings_update(
             {"local_models": {"context_windows": {"ollama/ministral-3:8b": 16384}}}
         )
-        assert result == {
-            "local_models": {"context_windows": {"ollama/ministral-3:8b": 16384}}
-        }
+        assert result == {"local_models": {"context_windows": {"ollama/ministral-3:8b": 16384}}}
 
     def test_null_value_marks_removal(self) -> None:
         result = parse_settings_update(
@@ -55,9 +53,7 @@ class TestParseLocalModelsUpdate:
         with pytest.raises(
             SettingsValidationError, match="unsupported local_models settings: extra"
         ):
-            parse_settings_update(
-                {"local_models": {"context_windows": {}, "extra": 1}}
-            )
+            parse_settings_update({"local_models": {"context_windows": {}, "extra": 1}})
 
     def test_context_windows_not_an_object(self) -> None:
         with pytest.raises(
@@ -74,9 +70,7 @@ class TestParseLocalModelsUpdate:
     @pytest.mark.parametrize("value", [0, -1, "16384", 1.5, True, [], {}])
     def test_non_positive_or_non_int_window_rejected(self, value: object) -> None:
         with pytest.raises(SettingsValidationError, match="must be a positive integer"):
-            parse_settings_update(
-                {"local_models": {"context_windows": {"ollama/m": value}}}
-            )
+            parse_settings_update({"local_models": {"context_windows": {"ollama/m": value}}})
 
 
 class TestValidateLocalModels:
@@ -125,9 +119,7 @@ class TestValidateLocalModels:
     def test_bad_key_and_bad_value_are_errors(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps(
-                {"local_models": {"context_windows": {"no-slash": 4096, "ollama/m": 0}}}
-            ),
+            json.dumps({"local_models": {"context_windows": {"no-slash": 4096, "ollama/m": 0}}}),
             encoding="utf-8",
         )
 

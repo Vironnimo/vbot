@@ -1375,7 +1375,4 @@ class TestResolveEffectiveContextWindow:
         ) == min(LOCAL_CONTEXT_DEFAULT_CAP, GLOBAL_CONTEXT_WINDOW_FLOOR)
 
     def test_no_metadata_behaves_like_plain_chain(self) -> None:
-        assert (
-            resolve_effective_context_window(None, None)
-            == GLOBAL_CONTEXT_WINDOW_FLOOR
-        )
+        assert resolve_effective_context_window(None, None) == GLOBAL_CONTEXT_WINDOW_FLOOR
