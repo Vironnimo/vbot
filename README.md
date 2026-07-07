@@ -1,24 +1,29 @@
-# vBot
+<h1 align="center">vBot</h1>
 
-vBot is a local-first agent harness: an async Python runtime that gives AI
-agents their own workspace, persistent state, tool access, and multiple ways to
-interact with the same system.
+<p align="center"><i>Another personal AI agent. Supports your existing projects and their agents+skills, and the usual stuff.</i></p>
 
-The project currently includes:
+<p align="center">
+  <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache-2.0">
+  <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/status-alpha-orange.svg" alt="Status: Alpha">
+</p>
 
-- a provider and model registry with multiple connection types
-- persistent agents, sessions, workspaces, attachments, and logs
-- an agentic chat loop with tool support, streaming, slash commands, and model fallback
-- a FastAPI server with RPC, Server-Sent Events (SSE), WebSocket events, log streaming, and attachment endpoints
-- a Svelte WebUI with Chat, Agents, Cron, System Prompt, Settings, and Logs views
-- a CLI for local server lifecycle management and RPC-backed management commands
-- a pywebview desktop shell that loads the normal server-served WebUI
-- local extensions, skills, cron jobs, and channel integrations
+vBot is a personal AI agent you host yourself. You chat with it in the web UI — in your browser or through the bundled desktop app that wraps it — or from messaging apps like Telegram and Discord. It keeps persistent memory and skills and works with any model you choose. Point it at a project you already have and it picks up that project's agent team and skills, ready to run.
 
-vBot is designed as a local, single-user system. The server is the shared core;
-the WebUI, CLI, desktop shell, and channel adapters are accessors around it.
-Except for `server start`, `server stop`, `server restart`, and `server status`,
-CLI commands require a running vBot server and go through its RPC surface.
+One async Python core runs everything; the web UI, desktop shell, CLI, and chat channels are just different ways to reach the same agents.
+
+## Features
+
+<table>
+<tr><td><b>Talk to it your way</b></td><td>Chat in the web UI, in a bundled desktop app, or from Telegram and Discord — the same agent and the same memory on every surface.</td></tr>
+<tr><td><b>Any model, any provider</b></td><td>OpenAI, Anthropic, OpenRouter, Ollama, Mistral, GitHub Copilot, and more. Pick a model per agent, with automatic fallback. No lock-in.</td></tr>
+<tr><td><b>Brings your projects along</b></td><td>Point it at a repo you already have and it discovers that project's agent team and skills — OpenCode and Claude Code layouts both work — and runs them as they are.</td></tr>
+<tr><td><b>Persistent by design</b></td><td>Every agent has its own workspace, curated long-term memory, and sessions that survive restarts.</td></tr>
+<tr><td><b>Skills</b></td><td>Reusable playbooks the agent can load on demand — bundled, global, per-project, or ones the agent writes for itself.</td></tr>
+<tr><td><b>Runs unattended</b></td><td>A built-in cron scheduler triggers agents on a schedule for reports, backups, and routine jobs.</td></tr>
+<tr><td><b>Extensible</b></td><td>Local Python extensions and hooks can intercept tool calls and add prompt blocks. Home Assistant ships as a bundled extension.</td></tr>
+<tr><td><b>Full API</b></td><td>HTTP RPC, Server-Sent Events streaming, and WebSocket events for your own integrations.</td></tr>
+</table>
 
 ## Security
 
@@ -35,8 +40,7 @@ Treat exposing vBot to a network as granting remote code execution on that machi
 ## Requirements
 
 - Python **3.11+**
-- Node.js for WebUI development and builds (not needed on hosts that use a
-  prebuilt `webui/dist` via `--skip-webui-build`)
+- Node.js for WebUI development and builds (not needed on hosts that use a prebuilt `webui/dist` via `--skip-webui-build`)
 
 ## Quick Start
 
@@ -68,83 +72,41 @@ To uninstall a bootstrap install, run its bundled uninstaller — it removes the
 
 On Windows, run the uninstaller from an elevated PowerShell so the autostart task can be removed too.
 
-The numbered steps below describe the manual install if you would rather clone the repo and run the installer yourself.
+Once installed, open the WebUI in your browser (default `http://127.0.0.1:8420/`), add at least one provider key, create an agent, and start chatting. See [USAGE.md](USAGE.md) for the full walkthrough.
 
-### 1. Install vBot
+## Manual Install
 
-On Windows, the installer prepares the Python CLI, builds the WebUI, and creates
-missing files in `~/.vbot` without overwriting an existing valid
-`settings.json` or `.env`:
+Prefer to clone the repo and run the installer yourself? On Windows, the installer prepares the Python CLI, builds the WebUI, and creates missing files in `~/.vbot` without overwriting an existing valid `settings.json` or `.env`:
 
 ```powershell
 .\scripts\install.ps1
 ```
 
-By default the installer enables autostart (a Windows Task Scheduler logon task) and starts the server. Creating the task needs an elevated (Administrator) PowerShell. To skip autostart and the immediate start:
-
-```powershell
-.\scripts\install.ps1 -NoAutostart
-```
-
-Uninstall removes the Python package only. It leaves `~/.vbot` untouched:
+By default it enables autostart (a Windows Task Scheduler logon task) and starts the server. Creating the task needs an elevated (Administrator) PowerShell. Skip both with `-NoAutostart`. Uninstall removes the Python package only and leaves `~/.vbot` untouched (add `-RemoveAutostart` to also remove the task):
 
 ```powershell
 .\scripts\uninstall.ps1
 ```
 
-Remove the optional autostart task too:
-
-```powershell
-.\scripts\uninstall.ps1 -RemoveAutostart
-```
-
-On Linux (e.g. a Raspberry Pi), the equivalent installer behaves the same way.
-On PEP 668 systems such as Debian and Raspberry Pi OS it must run inside a
-virtual environment and tells you how to create one otherwise:
+On Linux (e.g. a Raspberry Pi), the equivalent installer behaves the same way. On PEP 668 systems such as Debian and Raspberry Pi OS it must run inside a virtual environment and tells you how to create one otherwise. On low-memory hosts (Pi 3 class), skip the on-device WebUI build with `--skip-webui-build` and copy over a `webui/dist` built elsewhere.
 
 ```bash
 scripts/install.sh
-```
-
-By default it enables a systemd user autostart unit (started at boot via login lingering) and starts the server. To skip that:
-
-```bash
-scripts/install.sh --no-autostart
-```
-
-On low-memory hosts (Pi 3 class), skip the on-device WebUI build and use a
-`webui/dist` built on another machine and copied over:
-
-```bash
-scripts/install.sh --skip-webui-build
-```
-
-Uninstall mirrors the Windows script and leaves `~/.vbot` untouched:
-
-```bash
 scripts/uninstall.sh
-scripts/uninstall.sh --remove-autostart
 ```
 
-### Manual development install
+For a development checkout, install the package in editable mode and the WebUI dependencies:
 
 ```bash
 pip install -e ".[dev]"
+cd webui && npm install && cd ..
 ```
 
-### Install WebUI dependencies
+Full options for every installer — data directory, ports, autostart, and desktop accessors — are documented in [USAGE.md](USAGE.md).
 
-```bash
-cd webui
-npm install
-cd ..
-```
+## Add API Keys
 
-### Add API keys
-
-vBot reads configuration from `~/.vbot/` by default.
-
-Create `~/.vbot/.env`, for example:
+vBot reads configuration from `~/.vbot/` by default. Create `~/.vbot/.env`, for example:
 
 ```env
 OPENAI_API_KEY=...
@@ -152,11 +114,9 @@ OPENROUTER_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 
-### 3b. Home Assistant (optional)
+Home Assistant ships as a bundled extension; configure it in Settings → Extensions instead of the `.env` file. See [USAGE.md](USAGE.md) for details.
 
-Home Assistant ships as a bundled extension — configure it in Settings → Extensions: enter your server URL and paste a Long-Lived Access Token (from your HA profile) into the write-only token field. The token is stored in `~/.vbot/.env` under `HASS_TOKEN`, so an existing `.env` entry keeps working. Once the token is set, vBot exposes 4 LLM-callable tools: `ha_list_entities`, `ha_get_state`, `ha_list_services`, and `ha_call_service`. Without a token they stay hidden everywhere.
-
-### 4. Start the server
+## Start the Server
 
 Managed background start via CLI:
 
@@ -170,41 +130,23 @@ Alternative foreground start:
 python server/main.py
 ```
 
-Default server URL:
+The default server URL is `http://127.0.0.1:8420`, and `http://127.0.0.1:8420/health` returns `{"status":"ok"}` once it is up.
 
-```text
-http://127.0.0.1:8420
-```
+## Open the UI
 
-Health check:
-
-```text
-http://127.0.0.1:8420/health
-```
-
-### 5. Open the UI
-
-For WebUI development:
+For WebUI development, run the Vite dev server and open the URL it prints:
 
 ```bash
 cd webui
 npm run dev
 ```
 
-Open the local Vite URL printed by the command.
-
-For the server-served WebUI:
+For the server-served WebUI, build once and open `http://127.0.0.1:8420/`:
 
 ```bash
 cd webui
 npm run build
 cd ..
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8420/
 ```
 
 ## Updating
@@ -219,13 +161,7 @@ It updates the code from the git checkout it was installed from and restarts the
 
 ## Default Data Directory
 
-By default vBot stores runtime data under:
-
-```text
-~/.vbot
-```
-
-This includes, among other things:
+By default vBot stores runtime data under `~/.vbot`. This includes, among other things:
 
 - `.env` for API keys and tokens
 - `settings.json` for instance settings
@@ -236,39 +172,37 @@ This includes, among other things:
 - `logs/` for daily log files
 - `cron/` for persisted schedules
 
+## Access Paths
+
+- WebUI in the browser
+- Desktop shell via `python desktop/main.py`
+- Messaging channels (Telegram, Discord)
+- CLI via `python cli/main.py ...` for server lifecycle and RPC-backed management
+- HTTP, SSE, and WebSocket integrations against the server
+
 ## Server Interfaces
 
-The current server exposes:
+The server exposes:
 
 - `POST /api/rpc` for the RPC API
-- `GET /api/runs/{run_id}/events` for one Run SSE stream
+- `GET /api/runs/{run_id}/events` for one Run's SSE stream
 - `GET /ws` for app-wide server events
 - `GET /ws/logs` for live log streaming
 - `POST /api/upload` for attachment uploads
 - `GET /api/attachments/{attachment_id}` for attachment downloads
 - `GET /health` for server health
 
-## Main Access Paths
-
-- WebUI in the browser
-- CLI via `python cli/main.py ...`
-- Desktop shell via `python desktop/main.py`
-- HTTP, SSE, and WebSocket integrations against the server
-
 ## Documentation
 
-- `USAGE.md` for detailed setup and workflows
+- [USAGE.md](USAGE.md) — detailed setup, configuration, extensions, RPC examples, and workflows
 
 ## Quality Checks
 
-Backend:
-
 ```bash
-python scripts/quality.py
+python scripts/quality.py            # backend
+python scripts/quality-frontend.py   # frontend
 ```
 
-Frontend:
+## License
 
-```bash
-python scripts/quality-frontend.py
-```
+Apache-2.0 — see [LICENSE](LICENSE).
