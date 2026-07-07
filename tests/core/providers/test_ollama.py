@@ -146,7 +146,9 @@ def adapter() -> OllamaAdapter:
 
 
 def _last_request_payload(route: respx.Route) -> dict[str, Any]:
-    return json.loads(route.calls.last.request.content.decode("utf-8"))
+    payload = json.loads(route.calls.last.request.content.decode("utf-8"))
+    assert isinstance(payload, dict)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -255,9 +257,7 @@ class TestPayloadBuilding:
         )
 
         # Act
-        await adapter.send(
-            SAMPLE_MESSAGES, model_id="ministral-3:8b", temperature=None, tools=None
-        )
+        await adapter.send(SAMPLE_MESSAGES, model_id="ministral-3:8b", temperature=None, tools=None)
 
         # Assert
         payload = _last_request_payload(route)
@@ -313,9 +313,7 @@ class TestPayloadBuilding:
 class TestReasoningToggle:
     @respx.mock
     @pytest.mark.asyncio
-    async def test_effort_on_thinking_model_sends_think_true(
-        self, adapter: OllamaAdapter
-    ) -> None:
+    async def test_effort_on_thinking_model_sends_think_true(self, adapter: OllamaAdapter) -> None:
         # Arrange
         route = respx.post(OLLAMA_CHAT_URL).mock(
             return_value=httpx.Response(200, json=TEXT_RESPONSE)
@@ -397,15 +395,13 @@ class TestReasoningToggle:
 class TestMessageTranslation:
     @respx.mock
     @pytest.mark.asyncio
-    async def test_tool_cycle_round_trips_object_arguments(
-        self, adapter: OllamaAdapter
-    ) -> None:
+    async def test_tool_cycle_round_trips_object_arguments(self, adapter: OllamaAdapter) -> None:
         """Canonical dict arguments replay onto the wire as JSON objects, not strings."""
         # Arrange
         route = respx.post(OLLAMA_CHAT_URL).mock(
             return_value=httpx.Response(200, json=TEXT_RESPONSE)
         )
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "user", "content": "Weather in Berlin?"},
             {
                 "role": "assistant",
@@ -689,9 +685,7 @@ class TestStreamNdjson:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_in_band_error_raises_provider_error(
-        self, adapter: OllamaAdapter
-    ) -> None:
+    async def test_stream_in_band_error_raises_provider_error(self, adapter: OllamaAdapter) -> None:
         # Arrange
         body = _ndjson({"error": "model not found"})
         respx.post(OLLAMA_CHAT_URL).mock(return_value=httpx.Response(200, text=body))
@@ -785,9 +779,7 @@ class TestEnrichment:
             return SHOW_RESPONSE
 
         # Act
-        enriched = await OllamaAdapter.enrich_discovered_models(
-            {"ministral-3:8b": base}, post_json
-        )
+        enriched = await OllamaAdapter.enrich_discovered_models({"ministral-3:8b": base}, post_json)
 
         # Assert
         model = enriched["ministral-3:8b"]
@@ -811,7 +803,9 @@ class TestEnrichment:
             return show
 
         # Act
-        enriched = await OllamaAdapter.enrich_discovered_models({"kimi-k2.6:cloud": base}, post_json)
+        enriched = await OllamaAdapter.enrich_discovered_models(
+            {"kimi-k2.6:cloud": base}, post_json
+        )
 
         # Assert
         reasoning = enriched["kimi-k2.6:cloud"].capabilities.reasoning

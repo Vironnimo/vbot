@@ -132,6 +132,4 @@ class TestResolveContextWindowForAgentPayload:
         state = self._state(model)
 
         # Act / Assert
-        assert (
-            _resolve_context_window(state, "ollama/ministral-3:8b") == LOCAL_CONTEXT_DEFAULT_CAP
-        )
+        assert _resolve_context_window(state, "ollama/ministral-3:8b") == LOCAL_CONTEXT_DEFAULT_CAP
