@@ -100,6 +100,26 @@ async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_project_session_stamps_project_files_read_before_write(tmp_path: Path) -> None:
+    # A project's auto-load files are auto-shown in the system prompt, so they count
+    # as read for the session — the agent can edit one directly, with no prior read.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    runtime, _adapter = _project_runtime(
+        tmp_path, repo, ["AGENTS.md"], body="You are the orchestrator."
+    )
+    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
+
+    await ChatLoop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
+
+    agents_md = (repo / "AGENTS.md").resolve()
+    # Known read for this session; a different session has not seen it.
+    assert runtime.file_read_state.check_stale("s1", agents_md) is None
+    assert runtime.file_read_state.check_stale("other", agents_md) is not None
+
+
+@pytest.mark.asyncio
 async def test_project_session_body_braces_handed_over_verbatim(tmp_path: Path) -> None:
     # The chat loop passes the body as-is; the builder (tested in test_prompts)
     # guarantees no re-expansion. Here we assert the loop does not mangle braces.

@@ -21,6 +21,7 @@ from core.debug.recorder import DebugContext
 from core.runs import ChatRunManager
 from core.skills.skills import SkillRegistry
 from core.tools import ToolRegistry, tool_success
+from core.tools.file_state import FileReadState
 from tests.core.chat.test_chat_loop import StubModels, StubProjects
 
 JsonObject = dict[str, Any]
@@ -184,10 +185,11 @@ class StubPrompts:
         project_context: Any = None,
         skill_registry: Any = None,
         skill_catalog: Any = None,
+        read_paths: list[Path] | None = None,
     ) -> str:
         return f"System for {agent.id}"
 
-    def render_project_files(self, project_context: Any) -> str:
+    def render_project_files(self, project_context: Any, *, on_read: Any = None) -> str:
         return "" if project_context is None else "RENDERED-PROJECT-FILES"
 
     def render_visiting_project_skills(self, project_name: str, skills: Any) -> str:
@@ -245,6 +247,7 @@ class StubRuntime:
         self.projects = StubProjects({})
         self.chat_sessions = ChatSessionManager(data_dir)
         self.system_prompts = StubPrompts()
+        self.file_read_state = FileReadState()
         self.tools = tools or ToolRegistry()
         self.chat_runs = ChatRunManager()
         self.chat_run_manager = self.chat_runs

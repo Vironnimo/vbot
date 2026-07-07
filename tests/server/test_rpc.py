@@ -1063,6 +1063,7 @@ class StubPrompts:
         project_context: object = None,
         skill_registry: object = None,
         skill_catalog: object = None,
+        read_paths: list[Path] | None = None,
     ) -> str:
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
@@ -1226,6 +1227,7 @@ class StubRuntime:
         self.projects = StubProjects()
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.system_prompts = StubPrompts()
+        self.file_read_state = FileReadState()
         self.tools = ToolRegistry()
         self.skills: Any = StubSkills()
         self._models = StubModels()
