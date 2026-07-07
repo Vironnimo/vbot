@@ -317,6 +317,14 @@ export const toolStatus = (tool) => {
   return 'running';
 };
 
+// A tool row the model is still *streaming* — the call has been previewed from
+// its argument deltas but not dispatched yet (no `tool_call_started`). It shares
+// the `running` bucket in `toolStatus` (both are "not settled"), but the dot must
+// read differently: a preparing call has not begun executing, so an early
+// streamed sibling in a parallel batch should not look like it has been running
+// for ages. `mergeToolStarted` clears this to `running` the moment it dispatches.
+export const isToolPreparing = (tool) => tool?.status === 'preparing';
+
 export const toolStatusLabel = (tool) => {
   if (toolStatus(tool) === 'cancelled') {
     return t('chat.toolCancelled', 'cancelled');
