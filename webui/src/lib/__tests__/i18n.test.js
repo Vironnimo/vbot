@@ -1052,6 +1052,7 @@ describe('i18n t()', () => {
       'access.allOff',
       'access.noMatches',
       'access.toggle',
+      'access.lockedAuto',
     ]);
     expect(t('access.count', undefined, { on: 3, total: 12 })).toBe(
       '3 / 12 on',

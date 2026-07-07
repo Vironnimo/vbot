@@ -99,12 +99,27 @@
   );
   let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(skillAccessItems());
+  // Memory is a display-only, never-a-toggle chip (a "locked" chip with an "auto"
+  // tag): it follows the Memory setting, not the allow-list. Rendered first in the
+  // tools cloud; its hover card carries the description and the follows-setting note.
+  let memoryChipItem = $derived(
+    memoryToolItem
+      ? {
+          name: memoryToolItem.name,
+          description: memoryToolItem.description,
+          allowed: formValues.memory_prompt_mode !== 'off',
+          locked: true,
+          lockedNote: memoryToolRowText(),
+        }
+      : null,
+  );
   // The shared chip list keys off `allowed`; the access items track it as
   // `isAllowed`, so map it across (everything else — description, readiness,
-  // warnings — passes through unchanged).
-  let toolChipItems = $derived(
-    visibleToolItems.map((tool) => ({ ...tool, allowed: tool.isAllowed })),
-  );
+  // warnings — passes through unchanged). Memory (locked) leads the tools cloud.
+  let toolChipItems = $derived([
+    ...(memoryChipItem ? [memoryChipItem] : []),
+    ...visibleToolItems.map((tool) => ({ ...tool, allowed: tool.isAllowed })),
+  ]);
   let skillChipItems = $derived(
     visibleSkillItems.map((skill) => ({ ...skill, allowed: skill.isAllowed })),
   );
@@ -1118,26 +1133,6 @@
             {t('agents.form.allowedTools', 'Allowed tools')}
           </span>
         </div>
-        {#if memoryToolItem}
-          <div class="tl-items">
-            <div class="tl-item agents-view__memory-tool-row">
-              <div class="agents-view__access-copy">
-                <span class="tl-item-name">{memoryToolItem.name}</span>
-                {#if memoryToolItem.description}
-                  <span class="agents-view__access-description">
-                    {memoryToolItem.description}
-                  </span>
-                {/if}
-              </div>
-              <span
-                class="agents-view__memory-tool-state"
-                data-testid="memory-tool-row-state"
-              >
-                {memoryToolRowText()}
-              </span>
-            </div>
-          </div>
-        {/if}
         <ToggleChipList
           items={toolChipItems}
           note={toolsAreWildcard && visibleToolItems.length > 0

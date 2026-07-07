@@ -327,6 +327,7 @@ export const englishCatalog = Object.freeze({
   'access.allOff': 'all off',
   'access.noMatches': 'No matches.',
   'access.toggle': 'Toggle {name}',
+  'access.lockedAuto': 'auto',
 
   'agents.tools.memoryFollowsActive':
     'Follows the Memory setting — currently available.',
