@@ -58,6 +58,19 @@ class InvalidAgentIdError(AgentError):
     """Raised when an agent ID is unsafe for filesystem use."""
 
 
+def default_workspace_dir(data_dir: str | os.PathLike[str], agent_id: str) -> Path:
+    """Return an agent's default identity home: ``agents/<id>/workspace/``.
+
+    The single source of the workspace-location convention. Everything that must
+    agree on where an agent's workspace lives by default — the store's create
+    path, and the chat tool-cwd / ``@``-mention fallbacks — resolves through here
+    so the convention can never drift across call sites. The workspace lives
+    inside the agent directory, so the whole agent (config, sessions, prompts,
+    private skills, identity) is one self-contained tree.
+    """
+    return Path(data_dir) / "agents" / agent_id / "workspace"
+
+
 @dataclass(frozen=True)
 class Agent:
     """Persisted agent configuration stored in ``agent.json``."""
@@ -283,7 +296,14 @@ class AgentStore:
         return self._apply_defaults(updated_agent, self._agent_defaults())
 
     def delete(self, agent_id: str) -> Path:
-        """Archive an agent directory and workspace, then remove active copies."""
+        """Archive the agent directory, then remove the active copy.
+
+        A default workspace lives inside the agent directory, so it travels into
+        the archive with the first move; the ``exists`` check below is then False
+        (its live path is already gone) and the second move is skipped. Only a
+        custom workspace outside the agent tree (e.g. a repo an identity agent is
+        rooted in) still exists after the first move and is archived beside it.
+        """
         agent = self.get(agent_id)
         archive_dir = self._archive_dir(agent_id)
         if archive_dir.exists():
@@ -339,8 +359,19 @@ class AgentStore:
     def _agent_path(self, agent_id: str) -> Path:
         return self._agent_dir(agent_id) / "agent.json"
 
+    def default_workspace(self, agent_id: str) -> str:
+        """Return an agent's default identity home as a resolved absolute path.
+
+        ``<data_dir>/agents/<id>/workspace/`` — the location a workspace is
+        seeded to at creation and the target the WebUI "set workspace to default"
+        action writes. Returned in the same ``str(Path.resolve())`` form as the
+        persisted ``workspace`` field, so a caller can compare the two directly
+        to tell whether an agent uses a custom (e.g. repo-rooted) workspace.
+        """
+        return str(self._default_workspace(agent_id).resolve())
+
     def _default_workspace(self, agent_id: str) -> Path:
-        return self._data_dir / f"workspace-{agent_id}"
+        return default_workspace_dir(self._data_dir, agent_id)
 
     def _archive_dir(self, agent_id: str) -> Path:
         # Agent archives live under their own ``agents/`` subtree, mirroring the
