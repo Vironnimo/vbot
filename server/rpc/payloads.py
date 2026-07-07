@@ -172,6 +172,9 @@ def _model_response(
         "effective_context_window": _effective_context_window_field(
             provider_id, model, provider_config, local_context_windows
         ),
+        # Explicit locality flag (refresh-stamped metadata) so the WebUI can
+        # list local models in the context editor without inferring from windows.
+        "local": model_is_local(model.metadata),
         "max_output_tokens": model.max_output_tokens,
         "connections": list(model.connections),
     }

@@ -39,6 +39,60 @@ describe('AgentsView', () => {
     vi.useRealTimers();
   });
 
+  it('hides unsuitable models behind the show-all toggle and badges them', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        models: [
+          openaiModel(),
+          {
+            id: 'ollama/tiny',
+            provider_id: 'ollama',
+            model_id: 'tiny',
+            name: 'Tiny',
+            capabilities: { tools: false },
+            context_window: 262144,
+            effective_context_window: 16384,
+            local: true,
+          },
+        ],
+        connections: [
+          usableConnection('openai:api-key', 'openai', 'API Key'),
+          usableConnection('ollama:local', 'ollama', 'Local'),
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('id: alpha'),
+      100,
+    );
+
+    // Default view: the unsuitable local model is hidden.
+    await openSearchableDropdown('agent-model');
+    expect(searchableOptionLabels('agent-model')).not.toContain('ollama/tiny');
+
+    // The footer toggle reveals it with an honest badge.
+    const footer = getSearchablePanel('agent-model').querySelector(
+      '.searchable-dropdown__footer',
+    );
+    expect(footer).toBeTruthy();
+    expect(footer.textContent).toContain('Show all models (1 hidden)');
+    footer.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    const revealed = Array.from(
+      getSearchablePanel('agent-model').querySelectorAll(
+        '.searchable-dropdown__option',
+      ),
+    ).find((option) => option.textContent.includes('ollama/tiny'));
+    expect(revealed).toBeTruthy();
+    expect(revealed.textContent).toContain('no tool calling');
+    expect(revealed.textContent).toContain('below 32k context');
+  });
+
   it('renders model dropdown options using canonical model ids', async () => {
     rpcMock.mockImplementation(async (method) => {
       if (method === 'model.list') {
@@ -49,12 +103,18 @@ describe('AgentsView', () => {
               provider_id: 'anthropic',
               model_id: 'claude-sonnet-4-20250219',
               name: 'Claude Sonnet 4',
+              capabilities: { tools: true },
+              context_window: 200000,
+              effective_context_window: 200000,
             },
             {
               id: 'openai/gpt-5.2',
               provider_id: 'openai',
               model_id: 'gpt-5.2',
               name: 'GPT-5.2',
+              capabilities: { tools: true },
+              context_window: 256000,
+              effective_context_window: 256000,
             },
           ],
         };
@@ -212,6 +272,9 @@ describe('AgentsView', () => {
               provider_id: 'openai',
               model_id: 'gpt-5.2',
               name: 'GPT-5.2',
+              capabilities: { tools: true },
+              context_window: 256000,
+              effective_context_window: 256000,
             },
           ],
         };
@@ -1629,8 +1692,11 @@ describe('AgentsView', () => {
             model_id: 'gpt-5.2',
             name: 'GPT-5.2',
             capabilities: {
+              tools: true,
               reasoning: { supported: true, levels: ['high', 'xhigh'] },
             },
+            context_window: 256000,
+            effective_context_window: 256000,
           },
         ],
         settingsDefaults: { model: 'openai/gpt-5.2' },
@@ -2104,6 +2170,9 @@ function openaiModel() {
     provider_id: 'openai',
     model_id: 'gpt-5.2',
     name: 'GPT-5.2',
+    capabilities: { tools: true },
+    context_window: 256000,
+    effective_context_window: 256000,
   };
 }
 
@@ -2113,6 +2182,9 @@ function anthropicModel() {
     provider_id: 'anthropic',
     model_id: 'claude-sonnet-4-20250219',
     name: 'Claude Sonnet 4',
+    capabilities: { tools: true },
+    context_window: 200000,
+    effective_context_window: 200000,
   };
 }
 

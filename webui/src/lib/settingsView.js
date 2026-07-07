@@ -983,6 +983,13 @@ export function isOAuthConnection(connection) {
   return connection?.type === 'oauth';
 }
 
+// A keyless connection (type "none", e.g. local Ollama) needs no credential:
+// it is always configured, carries one implicit account, and offers no
+// key/account management actions.
+export function isKeylessConnection(connection) {
+  return connection?.type === 'none';
+}
+
 export function isOAuthDeviceFlowConnection(connection) {
   return isOAuthConnection(connection) && connection?.connectable === true;
 }

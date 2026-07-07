@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  SUITABLE_MIN_CONTEXT,
   buildModelSelectOptions,
+  filterModelSelectOptions,
+  modelFilterFooterLabel,
   modelSelectionValue,
+  modelSuitability,
   parseModelSelectionValue,
   selectModelValue,
 } from '../modelSelection.js';
@@ -14,7 +18,14 @@ function translateWithValues(_key, fallback, values = {}) {
 }
 
 function catalogModel(id, providerId, connections) {
-  const model = { id, provider_id: providerId, name: id };
+  const model = {
+    id,
+    provider_id: providerId,
+    name: id,
+    capabilities: { tools: true },
+    context_window: 128000,
+    effective_context_window: 128000,
+  };
   if (connections) {
     model.connections = connections;
   }
@@ -47,6 +58,8 @@ describe('buildModelSelectOptions', () => {
         value: 'openai/gpt-5.2::api-key',
         label: 'openai/gpt-5.2',
         isUnavailable: false,
+        suitable: true,
+        suitabilityReasons: [],
       },
     ]);
   });
@@ -67,6 +80,8 @@ describe('buildModelSelectOptions', () => {
         value: 'openai/gpt-5.2::api-key',
         label: 'openai/gpt-5.2',
         isUnavailable: false,
+        suitable: true,
+        suitabilityReasons: [],
       },
     ]);
   });
@@ -87,11 +102,15 @@ describe('buildModelSelectOptions', () => {
         value: 'openai/gpt-5.2::api-key',
         label: 'openai/gpt-5.2 (Default)',
         isUnavailable: false,
+        suitable: true,
+        suitabilityReasons: [],
       },
       {
         value: 'openai/gpt-5.2::api-key:work',
         label: 'openai/gpt-5.2 (work)',
         isUnavailable: false,
+        suitable: true,
+        suitabilityReasons: [],
       },
     ]);
   });
@@ -113,16 +132,22 @@ describe('buildModelSelectOptions', () => {
         value: 'openai/gpt-5.2::api-key',
         label: 'openai/gpt-5.2 (API Key – Default)',
         isUnavailable: false,
+        suitable: true,
+        suitabilityReasons: [],
       },
       {
         value: 'openai/gpt-5.2::api-key:work',
         label: 'openai/gpt-5.2 (API Key – work)',
         isUnavailable: false,
+        suitable: true,
+        suitabilityReasons: [],
       },
       {
         value: 'openai/gpt-5.2::subscription',
         label: 'openai/gpt-5.2 (Subscription)',
         isUnavailable: false,
+        suitable: true,
+        suitabilityReasons: [],
       },
     ]);
   });
@@ -166,6 +191,8 @@ describe('buildModelSelectOptions', () => {
         value: 'openai/gpt-5.4::subscription',
         label: 'openai/gpt-5.4',
         isUnavailable: false,
+        suitable: true,
+        suitabilityReasons: [],
       },
     ]);
   });
@@ -267,5 +294,162 @@ describe('model selection value round-trip', () => {
     expect(
       modelSelectionValue(selection.model, selection.connectionLocalId),
     ).toBe('openai/gpt-5.2::api-key:work');
+  });
+});
+
+describe('model suitability filter', () => {
+  it('marks a tools + big-context model suitable', () => {
+    expect(
+      modelSuitability({
+        capabilities: { tools: true },
+        context_window: 200000,
+        effective_context_window: 200000,
+      }),
+    ).toEqual({ suitable: true, reasons: [] });
+  });
+
+  it('flags missing tool calling', () => {
+    expect(
+      modelSuitability({
+        capabilities: { tools: false },
+        effective_context_window: 200000,
+      }),
+    ).toEqual({ suitable: false, reasons: ['noTools'] });
+  });
+
+  it('flags an effective window below the threshold', () => {
+    expect(
+      modelSuitability({
+        capabilities: { tools: true },
+        context_window: 262144,
+        effective_context_window: 16384,
+      }),
+    ).toEqual({ suitable: false, reasons: ['belowMinContext'] });
+  });
+
+  it('treats exactly 32k as suitable', () => {
+    expect(
+      modelSuitability({
+        capabilities: { tools: true },
+        effective_context_window: SUITABLE_MIN_CONTEXT,
+      }),
+    ).toEqual({ suitable: true, reasons: [] });
+  });
+
+  it('flags an unknown context honestly as unknown, not below-32k', () => {
+    expect(
+      modelSuitability({
+        capabilities: { tools: true },
+        context_window: null,
+        effective_context_window: null,
+      }),
+    ).toEqual({ suitable: false, reasons: ['contextUnknown'] });
+  });
+
+  it('falls back to the raw window when no effective window is present', () => {
+    expect(
+      modelSuitability({ capabilities: { tools: true }, context_window: 8192 }),
+    ).toEqual({ suitable: false, reasons: ['belowMinContext'] });
+  });
+
+  it('annotates unsuitable catalog options with a badge', () => {
+    const options = buildModelSelectOptions({
+      models: [
+        {
+          id: 'ollama/tiny',
+          provider_id: 'ollama',
+          name: 'ollama/tiny',
+          capabilities: { tools: false },
+          context_window: 8192,
+          effective_context_window: 8192,
+        },
+      ],
+      connections: [usableConnection('ollama:local', 'ollama', 'Local')],
+      emptyLabel: 'None',
+      translate: translateWithValues,
+    });
+
+    expect(options[1].suitable).toBe(false);
+    expect(options[1].suitabilityReasons).toEqual([
+      'noTools',
+      'belowMinContext',
+    ]);
+    expect(options[1].secondaryLabel).toBe(
+      'no tool calling · below 32k context',
+    );
+  });
+});
+
+describe('filterModelSelectOptions', () => {
+  const suitableOption = {
+    value: 'openai/gpt-5.2::api-key',
+    label: 'openai/gpt-5.2',
+    suitable: true,
+    suitabilityReasons: [],
+  };
+  const unsuitableOption = {
+    value: 'ollama/tiny::local',
+    label: 'ollama/tiny',
+    suitable: false,
+    suitabilityReasons: ['belowMinContext'],
+  };
+  const emptyOption = { value: '', label: 'None', isUnavailable: false };
+  const options = [emptyOption, suitableOption, unsuitableOption];
+
+  it('hides unsuitable options by default', () => {
+    expect(filterModelSelectOptions(options)).toEqual([
+      emptyOption,
+      suitableOption,
+    ]);
+  });
+
+  it('reveals everything with showAll', () => {
+    expect(filterModelSelectOptions(options, { showAll: true })).toEqual(
+      options,
+    );
+  });
+
+  it('keeps the currently selected unsuitable option visible', () => {
+    expect(
+      filterModelSelectOptions(options, {
+        selectedModelValue: 'ollama/tiny::local',
+      }),
+    ).toEqual(options);
+  });
+
+  it('keeps a default-account pinned selection visible via its canonical value', () => {
+    expect(
+      filterModelSelectOptions(options, {
+        selectedModelValue: 'ollama/tiny::local:default',
+      }),
+    ).toEqual(options);
+  });
+});
+
+describe('modelFilterFooterLabel', () => {
+  it('offers to reveal with the hidden count', () => {
+    expect(
+      modelFilterFooterLabel({
+        showAll: false,
+        hiddenCount: 3,
+        translate: translateWithValues,
+      }),
+    ).toBe('Show all models (3 hidden)');
+  });
+
+  it('offers to restore the filter when everything is shown', () => {
+    expect(
+      modelFilterFooterLabel({ showAll: true, translate: translateWithValues }),
+    ).toBe('Show only suitable models');
+  });
+
+  it('shows nothing when the filter hides nothing', () => {
+    expect(
+      modelFilterFooterLabel({
+        showAll: false,
+        hiddenCount: 0,
+        translate: translateWithValues,
+      }),
+    ).toBe('');
   });
 });
