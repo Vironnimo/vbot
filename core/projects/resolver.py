@@ -572,7 +572,11 @@ class AgentResolver:
         :meth:`ScanReport.with_model_findings` seam). The model check happens
         **here, at scan time** — not lazily at first run.
         """
-        result = scan_project(_project_root(project), registry=self._detector_registry)
+        result = scan_project(
+            _project_root(project),
+            registry=self._detector_registry,
+            source_format=project.source_format,
+        )
         model_findings = self._model_findings(result.team)
         report = result.report.with_model_findings(model_findings)
         return ScanResult(team=result.team, report=report)
@@ -633,7 +637,11 @@ class AgentResolver:
         (deleted file), that is an "agent no longer exists" error rather than a
         silent fall-back to the stale cached profile.
         """
-        fresh = scan_project(_project_root(project), registry=self._detector_registry)
+        fresh = scan_project(
+            _project_root(project),
+            registry=self._detector_registry,
+            source_format=project.source_format,
+        )
         for member in fresh.team:
             if member.agent_id == agent_id:
                 return member

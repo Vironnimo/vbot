@@ -418,8 +418,21 @@ export const englishCatalog = Object.freeze({
   'projects.add.missingCwd': 'Enter a repository path to add a project.',
   'projects.add.error': 'Project could not be added.',
   'projects.add.success': 'Project added.',
+  'projects.add.format': 'Source format',
+  'projects.add.formatHelp':
+    'This repository carries both ecosystems. Pick which one this project uses — its agents and skills come only from that one. You can switch later in the project settings.',
+  'projects.add.formatCounts': '{agents} agents · {skills} skills',
+  'projects.add.formatDetected': 'Detected: {format}',
+  'projects.add.claudeMdSuggestion':
+    'Load {path} as a project file. The repository has no AGENTS.md; the file is loaded as-is into project agent prompts.',
+  'projects.add.claudeMdSuggestionLabel': 'Load CLAUDE.md as a project file',
+  'projects.format.opencode': 'OpenCode',
+  'projects.format.claude': 'Claude Code',
   'projects.list.title': 'Your projects',
   'projects.manage.displayName': 'Display name',
+  'projects.manage.sourceFormat': 'Source format',
+  'projects.manage.sourceFormatHelp':
+    'Where this project’s agents and skills come from. Switching re-derives the team and skills from the other ecosystem’s directories; sessions are kept.',
   'projects.manage.defaultAgent': 'Default agent',
   'projects.manage.defaultAgentEmpty': 'No project default',
   'projects.manage.defaultAgentUnavailable': '{agentId} (not in team)',

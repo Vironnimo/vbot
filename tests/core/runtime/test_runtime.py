@@ -963,6 +963,30 @@ def test_project_skill_names_returns_project_owned_only(config: Config, tmp_path
     assert runtime.project_skill_names(None) == frozenset()
 
 
+def test_skills_for_claude_project_reads_claude_skills_dir(config: Config, tmp_path: Path) -> None:
+    # A claude project resolves its own skills from .claude/skills/ — the opencode
+    # directory is invisible to it (one format per project, no mixing).
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_test_skill(repo / ".claude" / "skills", "claude-skill", "Claude playbook.")
+    _write_test_skill(repo / ".opencode" / "skills", "opencode-skill", "OpenCode playbook.")
+    project = runtime.projects.create("p", "P", repo, source_format="claude")
+
+    registry = runtime.skills_for(project.project_id)
+
+    names = {skill.name for skill in registry.list_all()}
+    assert "claude-skill" in names
+    assert "opencode-skill" not in names
+    assert runtime.project_skill_names(project.project_id) == frozenset({"claude-skill"})
+    # The visiting reminder's source sees the same format-scoped set.
+    assert [skill.name for skill in runtime.project_own_skills(project.project_id)] == [
+        "claude-skill"
+    ]
+
+
 def test_skills_for_project_is_cached_until_invalidated(config: Config, tmp_path: Path) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)

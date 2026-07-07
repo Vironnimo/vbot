@@ -42,6 +42,7 @@ def _project_response(**overrides: Any) -> dict[str, Any]:
         "default_model": "openai/gpt-5.2",
         "default_temperature": None,
         "default_thinking_effort": None,
+        "source_format": "opencode",
         "auto_load": ["AGENTS.md"],
         "created_at": "2026-06-18T08:00:00+00:00",
         "updated_at": "2026-06-18T08:00:00+00:00",
@@ -90,6 +91,35 @@ def test_parse_args_supports_project_set_and_rm() -> None:
     # Assert
     assert (set_args.command, set_args.id, set_args.default_agent) == ("set", "vbot", "builder")
     assert (rm_args.command, rm_args.id) == ("rm", "vbot")
+
+
+def test_parse_args_supports_project_format_flag() -> None:
+    add_args = cli_main.parse_args(["project", "add", "./my-repo", "--format", "claude"])
+    set_args = cli_main.parse_args(["project", "set", "vbot", "--format", "opencode"])
+
+    assert add_args.format == "claude"
+    assert set_args.format == "opencode"
+
+
+def test_parse_args_rejects_unknown_project_format() -> None:
+    with pytest.raises(SystemExit):
+        cli_main.parse_args(["project", "add", "./my-repo", "--format", "cursor"])
+
+
+def test_project_format_flag_maps_to_source_format_field() -> None:
+    # The user-facing flag is --format; the RPC field is source_format.
+    add_args = cli_main.parse_args(["project", "add", "./my-repo", "--format", "claude"])
+    set_args = cli_main.parse_args(["project", "set", "vbot", "--format", "claude"])
+
+    assert cli_main._project_add_fields_from_args(add_args)["source_format"] == "claude"
+    assert cli_main._project_set_changes_from_args(set_args)["source_format"] == "claude"
+
+
+def test_project_add_without_format_flag_sends_no_source_format() -> None:
+    # No flag → the server auto-detects; the CLI must not send the field at all.
+    args = cli_main.parse_args(["project", "add", "./my-repo"])
+
+    assert "source_format" not in cli_main._project_add_fields_from_args(args)
 
 
 def test_parse_args_supports_project_default_knobs() -> None:
@@ -195,6 +225,7 @@ def test_project_add_posts_rpc_and_renders_scan_preview(
         "  default_model: openai/gpt-5.2",
         "  default_temperature: -",
         "  default_thinking_effort: -",
+        "  format: opencode",
         "  auto_load: AGENTS.md",
         "  team:",
         "    - orchestrator model=openai/gpt-5.2 description=Routes work",

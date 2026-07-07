@@ -37,8 +37,11 @@ from core.projects import (
 )
 from core.projects.projects import OVERRIDE_FIELDS
 from core.projects.scan_report import ScanFinding, ScanReport
-from core.projects.scanners.base import ScannedAgent, ScanResult
+from core.projects.scanners import detect_project_formats
+from core.projects.scanners.base import ProjectFormatDetection, ScannedAgent, ScanResult
 from core.settings import (
+    DEFAULT_PROJECT_SOURCE_FORMAT,
+    PROJECT_SOURCE_FORMATS,
     SettingsValidationError,
     validate_temperature,
     validate_thinking_effort,
@@ -59,9 +62,10 @@ from server.rpc.validation import _ensure_model_usable, _optional_string, _requi
 JsonObject = dict[str, Any]
 
 # A bare cwd is a valid Project (GLOSSARY → Project; plan: "Minimal-Projekt = nur
-# eine cwd"): the OpenCode location's presence is surfaced in the scan preview's
-# Team, never a hard add-time requirement, so add only validates that the folder
-# exists and is not already claimed.
+# eine cwd"): the chosen format location's presence is surfaced in the scan
+# preview's Team, never a hard add-time requirement, so add only validates that
+# the folder exists and is not already claimed. ``source_format`` is optional —
+# absent, it is auto-detected from the repo (see ``_auto_detect_source_format``).
 _ADD_FIELDS = frozenset(
     {
         "cwd",
@@ -70,6 +74,7 @@ _ADD_FIELDS = frozenset(
         "default_model",
         "default_temperature",
         "default_thinking_effort",
+        "source_format",
         "auto_load",
     }
 )
@@ -81,6 +86,7 @@ _SET_MUTABLE_FIELDS = frozenset(
         "default_model",
         "default_temperature",
         "default_thinking_effort",
+        "source_format",
         "auto_load",
         "allowed_tools",
         "skills_bundled_enabled",
@@ -142,6 +148,11 @@ def _add_project(state: Any, params: JsonObject) -> JsonObject:
         if "default_thinking_effort" in params
         else None
     )
+    source_format = (
+        _validated_source_format(params["source_format"])
+        if "source_format" in params
+        else _auto_detect_source_format(cwd)
+    )
     auto_load = _optional_auto_load(params)
     resolved_display_name = display_name or _display_name_from_cwd(cwd)
     project_id = _slug_from_display_name(resolved_display_name)
@@ -155,6 +166,7 @@ def _add_project(state: Any, params: JsonObject) -> JsonObject:
             default_model=default_model or "",
             default_temperature=default_temperature,
             default_thinking_effort=default_thinking_effort,
+            source_format=source_format,
             auto_load=auto_load,
         )
     except Exception as exc:
@@ -232,12 +244,13 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    # A cwd change re-points the repo, so the live Team and the project's own
-    # skills can both change — drop the per-project caches so the returned report
-    # and every later resolve see the new repo. A non-cwd change (e.g. a whitelist
+    # A cwd change re-points the repo and a source_format change re-points which
+    # of its directories count, so the live Team and the project's own skills can
+    # both change — drop the per-project caches so the returned report and every
+    # later resolve see the new ground truth. Any other change (e.g. a whitelist
     # edit) deliberately does not invalidate: project.json is read fresh per
     # resolve and the skill cache holds only the file pool, not the whitelist rule.
-    if "cwd" in changes:
+    if "cwd" in changes or "source_format" in changes:
         _invalidate_project_caches(state, project_id)
     scan = _scan_preview(state, project)
     return {"project": _project_response(project), "scan": scan}
@@ -487,6 +500,8 @@ def _set_changes(params: JsonObject) -> JsonObject:
         changes["default_thinking_effort"] = _validate_default_thinking_effort(
             params["default_thinking_effort"]
         )
+    if "source_format" in params:
+        changes["source_format"] = _validated_source_format(params["source_format"])
     if "auto_load" in params:
         changes["auto_load"] = _optional_auto_load(params)
     # The Tool/Skill Whitelist fields are lists of non-empty strings; an explicit
@@ -557,6 +572,79 @@ def _validate_default_thinking_effort(value: Any) -> str | None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
 
+def _validated_source_format(value: Any) -> str:
+    """Validate an explicit ``source_format`` param against the canonical vocabulary."""
+    if not isinstance(value, str) or value not in PROJECT_SOURCE_FORMATS:
+        choices = ", ".join(PROJECT_SOURCE_FORMATS)
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.source_format must be one of: {choices}",
+        )
+    return value
+
+
+def _auto_detect_source_format(cwd: str) -> str:
+    """Pick the format for a creation without an explicit ``source_format``.
+
+    Exactly one format present in the repo → that one (silent, no dialog noise);
+    both or neither → the deterministic default ``opencode`` (decision 2 — a
+    non-interactive creator gets a predictable outcome, and the format stays
+    changeable in the project settings).
+    """
+    detection = detect_project_formats(Path(cwd))
+    present = [
+        format_key
+        for format_key in PROJECT_SOURCE_FORMATS
+        if format_key in detection.formats and detection.formats[format_key].present
+    ]
+    if len(present) == 1:
+        return present[0]
+    return DEFAULT_PROJECT_SOURCE_FORMAT
+
+
+def _detect_project(state: Any, params: JsonObject) -> JsonObject:
+    """``project.detect``: report per-format presence + context files for a cwd.
+
+    The add dialog calls this while the user types a path, so a nonexistent or
+    non-directory cwd is a **success** with ``cwd_exists: false`` and empty data,
+    never an error. For an existing directory it returns per-format agent/skill
+    counts and the context-file facts (``AGENTS.md`` present, ``CLAUDE.md``
+    location or null) the dialog builds its format choice and CLAUDE.md
+    suggestion from.
+    """
+    unsupported_fields = sorted(set(params) - {"cwd"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported project.detect fields: {', '.join(unsupported_fields)}",
+        )
+
+    cwd = _optional_string(params, "cwd")
+    if not cwd or not cwd_exists(cwd):
+        return {
+            "cwd_exists": False,
+            "formats": {},
+            "context_files": {"agents_md": False, "claude_md": None},
+        }
+
+    detection = detect_project_formats(Path(cwd))
+    return {
+        "cwd_exists": True,
+        "formats": _formats_response(detection),
+        "context_files": {
+            "agents_md": detection.agents_md,
+            "claude_md": detection.claude_md,
+        },
+    }
+
+
+def _formats_response(detection: ProjectFormatDetection) -> JsonObject:
+    return {
+        format_key: {"agents": presence.agents, "skills": presence.skills}
+        for format_key, presence in detection.formats.items()
+    }
+
+
 def _display_name_from_cwd(cwd: str) -> str:
     """Derive a display name from the repo folder basename when none is given."""
     name = Path(cwd).name
@@ -584,6 +672,7 @@ def _project_response(project: Project) -> JsonObject:
         "default_model": project.default_model,
         "default_temperature": project.default_temperature,
         "default_thinking_effort": project.default_thinking_effort,
+        "source_format": project.source_format,
         "auto_load": list(project.auto_load),
         "allowed_tools": list(project.allowed_tools),
         "skills_bundled_enabled": list(project.skills_bundled_enabled),
@@ -652,4 +741,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "project.set_override": _set_override,
         "project.clear_override": _clear_override,
         "project.rm": _remove_project,
+        "project.detect": _detect_project,
     }

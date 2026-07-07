@@ -162,7 +162,7 @@ class RuntimeServices(Protocol):
 
         ``project_id``/``identity_agent_id`` both ``None`` returns the global
         registry (identity runs, unchanged); a set ``project_id`` returns the
-        project's merged registry (its own ``.opencode/skills`` first, then the
+        project's merged registry (its own source format's skill directory first, then the
         bundled pool); an ``identity_agent_id`` with a private skills home layers
         that on top (always-allowed for the owner). Callers pass the run's agent id
         here **only for identity runs** — a config-agent run passes ``None``, so a

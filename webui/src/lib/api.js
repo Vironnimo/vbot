@@ -479,6 +479,23 @@ export function listProjects(options = {}) {
   return rpc('project.list', {}, options);
 }
 
+// Probe a cwd for per-format agent/skill presence and context files. Called by
+// the add dialog while the user types a path; a nonexistent cwd is a success
+// with `cwd_exists: false`, never an error.
+export function detectProject(cwd, options = {}) {
+  if (!isNonEmptyString(cwd)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project cwd must be a non-empty string',
+      {
+        method: 'project.detect',
+      },
+    );
+  }
+
+  return rpc('project.detect', { cwd }, options);
+}
+
 export function showProject(projectId, options = {}) {
   if (!isNonEmptyString(projectId)) {
     throw new ApiClientError(
