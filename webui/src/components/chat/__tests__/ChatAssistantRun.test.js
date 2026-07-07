@@ -356,3 +356,73 @@ describe('ChatAssistantRun sub-agent activity preview', () => {
     expect(preview.classList.contains('subagent-activity')).toBe(false);
   });
 });
+
+describe('ChatAssistantRun tool dot state', () => {
+  let mountedComponent;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    init('en');
+    mountedComponent = null;
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  function createWriteToolChild({ status = 'running' } = {}) {
+    const preparing = status === 'preparing';
+    return {
+      type: 'tool_call',
+      id: `tool-write-${status}`,
+      name: 'write',
+      toolCallId: `call-write-${status}`,
+      status,
+      // A preparing row only exists from streamed deltas: it renders via the
+      // `streaming` flag and carries no `tool_call_started` yet.
+      streaming: preparing,
+      arguments: preparing ? undefined : { path: 'f.txt' },
+      previewArguments: preparing ? { path: 'f.txt' } : null,
+      startedEvent: preparing
+        ? null
+        : {
+            type: 'tool_call_started',
+            payload: {
+              tool_call: { id: `call-write-${status}`, name: 'write' },
+            },
+          },
+    };
+  }
+
+  function toolDot() {
+    return document.querySelector('.tool-event-line .te-dot');
+  }
+
+  it('renders a streamed (preparing) call as a hollow dot, not the running dot', () => {
+    const item = createAssistantRunItem({
+      items: [createWriteToolChild({ status: 'preparing' })],
+    });
+    mountedComponent = mountRun({ item });
+
+    const dot = toolDot();
+    expect(dot).toBeTruthy();
+    expect(dot.classList.contains('preparing')).toBe(true);
+    expect(dot.classList.contains('running')).toBe(false);
+  });
+
+  it('renders a dispatched (running) call as the running dot, not preparing', () => {
+    const item = createAssistantRunItem({
+      items: [createWriteToolChild({ status: 'running' })],
+    });
+    mountedComponent = mountRun({ item });
+
+    const dot = toolDot();
+    expect(dot).toBeTruthy();
+    expect(dot.classList.contains('running')).toBe(true);
+    expect(dot.classList.contains('preparing')).toBe(false);
+  });
+});
