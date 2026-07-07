@@ -7,6 +7,7 @@ from core.agents.agents import (
     AgentNotFoundError,
     AgentStore,
     InvalidAgentIdError,
+    default_workspace_dir,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "AgentNotFoundError",
     "AgentStore",
     "InvalidAgentIdError",
+    "default_workspace_dir",
 ]

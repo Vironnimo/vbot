@@ -323,4 +323,4 @@ class TestResolveMentionRoot:
 
         root = resolve_mention_root(cast(Any, runtime), "main", None)
 
-        assert root == tmp_path / "workspace-main"
+        assert root == tmp_path / "agents" / "main" / "workspace"

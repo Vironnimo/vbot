@@ -106,7 +106,7 @@ def _main_agent_config_path(data_dir: Path) -> Path:
 
 def _main_agent_workspace_path(data_dir: Path) -> Path:
     """Return the dedicated workspace path for the main agent."""
-    return data_dir / f"workspace-{MAIN_AGENT_ID}"
+    return data_dir / "agents" / MAIN_AGENT_ID / "workspace"
 
 
 def seed_data_dir(data_dir: Path) -> None:

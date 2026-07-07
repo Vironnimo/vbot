@@ -229,8 +229,7 @@ This includes, among other things:
 
 - `.env` for API keys and tokens
 - `settings.json` for instance settings
-- `agents/` for agent configs and sessions
-- `workspace-<agent-id>/` for agent workspaces
+- `agents/<agent-id>/` for each agent's config, sessions, and workspace
 - `extensions/` for local Python hooks
 - `oauth/` for OAuth tokens
 - `attachments/` for uploaded blobs

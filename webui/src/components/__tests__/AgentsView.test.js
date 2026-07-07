@@ -455,6 +455,69 @@ describe('AgentsView', () => {
     });
   });
 
+  it('resets a custom workspace to the default via the set-to-default button', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            workspace: 'C:/custom/rooted-repo',
+            default_workspace: 'C:/data/agents/alpha/workspace',
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('#agent-workspace')?.value ===
+        'C:/custom/rooted-repo',
+      100,
+    );
+
+    const resetButton = findSetToDefaultButton();
+    expect(resetButton).toBeTruthy();
+
+    resetButton.click();
+    flushSync();
+
+    await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
+
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      workspace: 'C:/data/agents/alpha/workspace',
+    });
+  });
+
+  it('hides the set-to-default button when the workspace already is the default', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            workspace: 'C:/data/agents/alpha/workspace',
+            default_workspace: 'C:/data/agents/alpha/workspace',
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('#agent-workspace')?.value ===
+        'C:/data/agents/alpha/workspace',
+      100,
+    );
+
+    expect(findSetToDefaultButton()).toBeUndefined();
+  });
+
   it('sends custom system prompt toggle changes from the agent detail pane', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
@@ -2051,6 +2114,12 @@ function submitAgentForm() {
     .querySelector('form')
     .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
   flushSync();
+}
+
+function findSetToDefaultButton() {
+  return Array.from(
+    document.body.querySelectorAll('.agent-detail-pane button'),
+  ).find((button) => button.textContent.trim() === 'Set to default');
 }
 
 function getAgentUpdateCalls() {
