@@ -73,6 +73,9 @@ function openrouterModels() {
       provider_id: 'openrouter',
       model_id: 'anthropic/claude-sonnet-4',
       name: 'Claude Sonnet 4',
+      capabilities: { tools: true },
+      context_window: 200000,
+      effective_context_window: 200000,
       connections: [],
     },
     {
@@ -80,6 +83,9 @@ function openrouterModels() {
       provider_id: 'openrouter',
       model_id: 'meta/llama-3-8b:free',
       name: 'Llama 3 8B (free)',
+      capabilities: { tools: true },
+      context_window: 131072,
+      effective_context_window: 131072,
       connections: [],
     },
   ];

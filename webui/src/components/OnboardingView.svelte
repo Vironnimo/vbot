@@ -8,7 +8,11 @@
     createAgentFormValues,
     normalizeAgentForm,
   } from '$lib/agentForm.js';
-  import { buildModelSelectOptions } from '$lib/modelSelection.js';
+  import {
+    buildModelSelectOptions,
+    filterModelSelectOptions,
+    modelFilterFooterLabel,
+  } from '$lib/modelSelection.js';
   import {
     ONBOARDING_TARGET_AGENT_ID,
     connectedProviderId,
@@ -69,12 +73,26 @@
   let searchPrefill = $derived(providerModelSearchPrefill(connectedProvider));
   let hasModels = $derived(models.length > 0);
   let tipText = $derived(providerTip(connectedProvider));
-  let modelOptions = $derived(
+  let showAllModels = $state(false);
+  let allModelOptions = $derived(
     buildModelSelectOptions({
       models,
       connections,
       selectedModelValue,
       emptyLabel: t('onboarding.model.placeholder', 'Select a model'),
+      translate: t,
+    }),
+  );
+  let modelOptions = $derived(
+    filterModelSelectOptions(allModelOptions, {
+      showAll: showAllModels,
+      selectedModelValue,
+    }),
+  );
+  let modelFilterFooter = $derived(
+    modelFilterFooterLabel({
+      showAll: showAllModels,
+      hiddenCount: allModelOptions.length - modelOptions.length,
       translate: t,
     }),
   );
@@ -428,6 +446,8 @@
                     'No models match',
                   )}
                   ariaLabel={t('onboarding.model.label', 'Model')}
+                  footerActionLabel={modelFilterFooter}
+                  onFooterAction={() => (showAllModels = !showAllModels)}
                   onValueChange={(value) => (selectedModelValue = value)}
                 />
               {/key}

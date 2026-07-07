@@ -1,5 +1,119 @@
 const DEFAULT_ACCOUNT_ID = 'default';
 
+// Soft suitability filter threshold for agent-model pickers: models below this
+// effective context window (or without tool calling) are hidden by default and
+// revealed by the "show all models" toggle with an honest badge. A view
+// constant — the backend never hard-filters.
+export const SUITABLE_MIN_CONTEXT = 32768;
+
+const SUITABILITY_REASON_NO_TOOLS = 'noTools';
+const SUITABILITY_REASON_BELOW_MIN_CONTEXT = 'belowMinContext';
+const SUITABILITY_REASON_CONTEXT_UNKNOWN = 'contextUnknown';
+
+export function modelSuitability(model) {
+  const reasons = [];
+
+  if (model?.capabilities?.tools !== true) {
+    reasons.push(SUITABILITY_REASON_NO_TOOLS);
+  }
+
+  const effectiveWindow =
+    model?.effective_context_window ?? model?.context_window ?? null;
+
+  if (effectiveWindow === null || effectiveWindow === undefined) {
+    // Unknown context is hidden by default but badged honestly as unknown,
+    // never as "below 32k".
+    reasons.push(SUITABILITY_REASON_CONTEXT_UNKNOWN);
+  } else if (effectiveWindow < SUITABLE_MIN_CONTEXT) {
+    reasons.push(SUITABILITY_REASON_BELOW_MIN_CONTEXT);
+  }
+
+  return { suitable: reasons.length === 0, reasons };
+}
+
+export function filterModelSelectOptions(
+  options,
+  { showAll = false, selectedModelValue = '' } = {},
+) {
+  if (showAll) {
+    return options;
+  }
+
+  const selection = parseModelSelectionValue(selectedModelValue);
+  const exactValue = modelSelectionValue(
+    selection.model,
+    selection.connectionLocalId,
+  );
+  const canonicalValue = canonicalModelSelectionValue(exactValue);
+
+  // The currently selected value stays visible even when unsuitable, so an
+  // existing configuration is never silently masked by the filter.
+  return options.filter(
+    (option) =>
+      option.suitable !== false ||
+      option.value === exactValue ||
+      option.value === canonicalValue,
+  );
+}
+
+export function modelFilterFooterLabel({
+  showAll = false,
+  hiddenCount = 0,
+  translate = defaultTranslate,
+} = {}) {
+  if (showAll) {
+    return translate('models.filter.showSuitable', 'Show only suitable models');
+  }
+
+  if (hiddenCount <= 0) {
+    return '';
+  }
+
+  return translate(
+    'models.filter.showAll',
+    'Show all models ({count} hidden)',
+    {
+      count: hiddenCount,
+    },
+  );
+}
+
+function suitabilityBadgeLabel(reasons, translate) {
+  const labels = {
+    [SUITABILITY_REASON_NO_TOOLS]: translate(
+      'models.filter.noTools',
+      'no tool calling',
+    ),
+    [SUITABILITY_REASON_BELOW_MIN_CONTEXT]: translate(
+      'models.filter.belowMinContext',
+      'below 32k context',
+    ),
+    [SUITABILITY_REASON_CONTEXT_UNKNOWN]: translate(
+      'models.filter.contextUnknown',
+      'context unknown',
+    ),
+  };
+
+  return reasons
+    .map((reason) => labels[reason])
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function suitabilityFields(model, translate) {
+  const { suitable, reasons } = modelSuitability(model);
+
+  if (suitable) {
+    return { suitable: true, suitabilityReasons: [] };
+  }
+
+  return {
+    suitable: false,
+    suitabilityReasons: reasons,
+    secondaryLabel: suitabilityBadgeLabel(reasons, translate),
+  };
+}
+
 export function buildModelSelectOptions({
   models = [],
   connections = [],
@@ -21,6 +135,9 @@ export function buildModelSelectOptions({
   const modelExistsInCatalog = models.some(
     (model) => model.id === selectedModel.model,
   );
+  const selectedCatalogModel = models.find(
+    (model) => model.id === selectedModel.model,
+  );
   const selectedModelOption =
     selectedModel.model &&
     !selectedModel.connectionLocalId &&
@@ -29,6 +146,7 @@ export function buildModelSelectOptions({
           value: selectedModel.model,
           label: selectedModel.model,
           isUnavailable: false,
+          ...suitabilityFields(selectedCatalogModel, translate),
         }
       : null;
   const emptyOption = {
@@ -147,6 +265,7 @@ function connectionModelOptions(
 ) {
   const localId = connectionLocalIdFromConnectionId(connection.id);
   const usableAccounts = usableConnectionAccounts(connection);
+  const suitability = suitabilityFields(model, translate);
 
   if (usableAccounts.length <= 1) {
     return [
@@ -154,6 +273,7 @@ function connectionModelOptions(
         value: modelSelectionValue(model.id, localId),
         label: modelOptionLabel(model, connection, providerConnectionCount),
         isUnavailable: false,
+        ...suitability,
       },
     ];
   }
@@ -171,6 +291,7 @@ function connectionModelOptions(
       translate,
     ),
     isUnavailable: false,
+    ...suitability,
   }));
 }
 

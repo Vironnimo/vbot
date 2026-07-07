@@ -386,6 +386,50 @@
   display: inline-flex;
 }
 
+.s-provider-local-context {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.s-local-context-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.s-local-context-model {
+  min-width: 0;
+  flex: 1;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.s-local-context-input {
+  width: 110px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.s-local-context-max {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .s-inline-waiting {
   display: inline-flex;
   align-items: center;

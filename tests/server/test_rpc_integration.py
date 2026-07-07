@@ -475,6 +475,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                     },
                     "context_window": 256000,
                     "effective_context_window": 256000,
+                    "local": False,
                     "max_output_tokens": 32000,
                     "connections": ["api-key"],
                 }
