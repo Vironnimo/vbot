@@ -291,7 +291,9 @@
       color 0.1s;
   }
 
-  .access-chip:hover:not(:disabled) {
+  /* Hover feedback is for the interactive (button) chips only — the locked
+     display-only chip (a div) must never brighten. */
+  button.access-chip:hover:not(:disabled) {
     border-color: var(--border-2);
     color: var(--text-med);
   }
@@ -302,7 +304,7 @@
     border-color: rgba(232, 135, 10, 0.3);
   }
 
-  .access-chip.is-on:hover:not(:disabled) {
+  button.access-chip.is-on:hover:not(:disabled) {
     background: rgba(232, 135, 10, 0.16);
     border-color: rgba(232, 135, 10, 0.42);
     color: var(--accent);
@@ -324,16 +326,18 @@
     background: var(--amber);
   }
 
-  /* Locked chip (e.g. memory): display-only, dashed, with an "auto" tag —
-     never a toggle. */
+  /* Locked chip (e.g. memory): display-only, dashed, with an "auto" tag — never a
+     toggle. It keeps only the faint on-tint (background/border) but stays MUTED
+     (grey text, dim tag), so it reads as display-only, not as an active accent
+     toggle. The two-class selector beats `.access-chip.is-on`, which would
+     otherwise force the accent text color on. */
   .access-chip--locked {
     cursor: default;
-    color: var(--text-med);
     border-style: dashed;
   }
 
-  .access-chip--locked.is-on {
-    color: var(--accent);
+  .access-chip.access-chip--locked {
+    color: var(--text-med);
   }
 
   .access-chip__auto {
@@ -342,10 +346,6 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-lo);
-  }
-
-  .access-chip--locked.is-on .access-chip__auto {
-    color: rgba(232, 135, 10, 0.75);
   }
 
   .access-chip__locked-note {
