@@ -252,6 +252,20 @@ class TaskModelService:
             model=model,
         )
 
+    def model_for_target(self, target_ref: TaskModelTargetRef) -> Any | None:
+        """Return the resolved ``Model`` for a parsed target, or ``None``.
+
+        Local targets have no provider model, so they resolve to ``None``;
+        provider targets delegate to the same registry lookup the option-schema
+        builder uses, so an unknown or override-only model resolves to ``None``
+        rather than raising. The image execution layer uses this to route
+        per-call knobs against the model's advertised ``task_options``.
+        """
+
+        if target_ref.kind == "local":
+            return None
+        return self._resolve_model(target_ref.provider_id, target_ref.model_id)
+
     def _resolve_model(self, provider_id: str, model_id: str) -> Any | None:
         """Return the registry's ``Model`` for *(provider_id, model_id)*, or ``None``.
 
