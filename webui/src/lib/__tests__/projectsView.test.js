@@ -5,6 +5,7 @@ import {
   FINDING_TYPE_ORPHAN,
   FINDING_TYPE_SLUG_COLLISION,
   FINDING_TYPE_UNSLUGIFIABLE_NAME,
+  PROJECT_SOURCE_FORMATS,
   PROJECT_THINKING_EFFORT_NO_DEFAULT,
   buildAddProjectPayload,
   buildDefaultAgentOptions,
@@ -15,14 +16,17 @@ import {
   hasManageChanges,
   memberFieldIsOverridden,
   needsRePoint,
+  normalizeDetectResult,
   normalizeOverrideTemperature,
   normalizeProject,
   normalizeProjects,
   normalizeScanReport,
   normalizeScanSkills,
+  presentFormats,
   projectTeam,
   seedTeamOverrideDraft,
   setListMembership,
+  shouldSuggestClaudeMd,
 } from '../projectsView.js';
 
 describe('buildAddProjectPayload', () => {
@@ -77,6 +81,19 @@ describe('buildAddProjectPayload', () => {
         default_temperature: '',
         default_thinking_effort: PROJECT_THINKING_EFFORT_NO_DEFAULT,
       }),
+    ).toEqual({ cwd: 'C:/repos/demo' });
+  });
+
+  it('includes a known source format and omits blank/unknown ones', () => {
+    expect(
+      buildAddProjectPayload({ cwd: 'C:/repos/demo', source_format: 'claude' }),
+    ).toEqual({ cwd: 'C:/repos/demo', source_format: 'claude' });
+    // Absent/blank → the server auto-detects; unknown values are never sent.
+    expect(
+      buildAddProjectPayload({ cwd: 'C:/repos/demo', source_format: '' }),
+    ).toEqual({ cwd: 'C:/repos/demo' });
+    expect(
+      buildAddProjectPayload({ cwd: 'C:/repos/demo', source_format: 'cursor' }),
     ).toEqual({ cwd: 'C:/repos/demo' });
   });
 });
@@ -160,6 +177,87 @@ describe('buildManageProjectPayload', () => {
       project,
     );
     expect(changes).toEqual({});
+  });
+});
+
+describe('buildManageProjectPayload source format', () => {
+  const project = { display_name: 'Demo', source_format: 'opencode' };
+
+  it('emits a changed source format', () => {
+    expect(
+      buildManageProjectPayload(
+        { display_name: 'Demo', source_format: 'claude' },
+        project,
+      ),
+    ).toEqual({ source_format: 'claude' });
+  });
+
+  it('treats an unchanged or empty source format as no change', () => {
+    expect(
+      buildManageProjectPayload(
+        { display_name: 'Demo', source_format: 'opencode' },
+        project,
+      ),
+    ).toEqual({});
+    // source_format is required non-empty on the backend — never a clear.
+    expect(
+      buildManageProjectPayload(
+        { display_name: 'Demo', source_format: '' },
+        project,
+      ),
+    ).toEqual({});
+  });
+});
+
+describe('normalizeDetectResult / presentFormats / shouldSuggestClaudeMd', () => {
+  it('normalizes counts, presence, and context files', () => {
+    const detect = normalizeDetectResult({
+      cwd_exists: true,
+      formats: {
+        opencode: { agents: 2, skills: 0 },
+        claude: { agents: 0, skills: 3 },
+      },
+      context_files: { agents_md: true, claude_md: 'CLAUDE.md' },
+    });
+
+    expect(detect.cwd_exists).toBe(true);
+    expect(detect.formats.opencode).toEqual({
+      agents: 2,
+      skills: 0,
+      present: true,
+    });
+    // Skills alone make a format present (≥1 agent OR ≥1 skill).
+    expect(detect.formats.claude.present).toBe(true);
+    expect(detect.agents_md).toBe(true);
+    expect(detect.claude_md).toBe('CLAUDE.md');
+    expect(presentFormats(detect)).toEqual(['opencode', 'claude']);
+  });
+
+  it('degrades a missing/foreign response to nothing found', () => {
+    const detect = normalizeDetectResult(null);
+
+    expect(detect.cwd_exists).toBe(false);
+    for (const key of PROJECT_SOURCE_FORMATS) {
+      expect(detect.formats[key]).toEqual({
+        agents: 0,
+        skills: 0,
+        present: false,
+      });
+    }
+    expect(detect.claude_md).toBe(null);
+    expect(presentFormats(detect)).toEqual([]);
+  });
+
+  it('suggests CLAUDE.md only when found and no AGENTS.md exists', () => {
+    expect(
+      shouldSuggestClaudeMd({ agents_md: false, claude_md: 'CLAUDE.md' }),
+    ).toBe(true);
+    expect(
+      shouldSuggestClaudeMd({ agents_md: true, claude_md: 'CLAUDE.md' }),
+    ).toBe(false);
+    expect(shouldSuggestClaudeMd({ agents_md: false, claude_md: null })).toBe(
+      false,
+    );
   });
 });
 
@@ -325,6 +423,7 @@ describe('normalizeProject / normalizeProjects', () => {
       default_model: '',
       default_temperature: 0.4,
       default_thinking_effort: 'high',
+      source_format: 'opencode',
       auto_load: ['AGENTS.md'],
       allowed_tools: [],
       skills_bundled_enabled: [],
@@ -349,6 +448,20 @@ describe('normalizeProject / normalizeProjects', () => {
     });
     expect(explicit.default_temperature).toBe(0);
     expect(explicit.default_thinking_effort).toBe('');
+  });
+
+  it('keeps a known source format and defaults an absent/unknown one', () => {
+    expect(
+      normalizeProject({ project_id: 'demo', source_format: 'claude' })
+        .source_format,
+    ).toBe('claude');
+    expect(normalizeProject({ project_id: 'demo' }).source_format).toBe(
+      'opencode',
+    );
+    expect(
+      normalizeProject({ project_id: 'demo', source_format: 'cursor' })
+        .source_format,
+    ).toBe('opencode');
   });
 
   it('coerces a missing cwd_exists to false and tolerates a non-list', () => {

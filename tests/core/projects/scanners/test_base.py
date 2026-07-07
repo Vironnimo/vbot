@@ -11,7 +11,12 @@ from core.projects.scanners.base import (
     DetectorRegistration,
     ScannedAgent,
     build_default_registry,
+    detect_project_formats,
     scan_project,
+)
+from core.projects.scanners.claude import (
+    CLAUDE_AGENTS_SUBPATH,
+    ClaudeDetector,
 )
 from core.projects.scanners.opencode import (
     OPENCODE_AGENTS_SUBPATH,
@@ -23,6 +28,21 @@ def _write_opencode_agent(project_root: Path, filename: str, content: str) -> No
     agents_dir = project_root.joinpath(*OPENCODE_AGENTS_SUBPATH)
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / filename).write_text(content, encoding="utf-8")
+
+
+def _write_claude_agent(project_root: Path, filename: str, content: str) -> None:
+    agents_dir = project_root.joinpath(*CLAUDE_AGENTS_SUBPATH)
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / filename).write_text(content, encoding="utf-8")
+
+
+def _write_skill(project_root: Path, skills_subpath: tuple[str, ...], name: str) -> None:
+    skill_dir = project_root.joinpath(*skills_subpath) / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: A test skill.\n---\nBody.\n",
+        encoding="utf-8",
+    )
 
 
 class _FakeDetector:
@@ -76,11 +96,17 @@ def test_scanned_agent_defaults_denied_tools_to_empty() -> None:
     assert agent.denied_tools == frozenset()
 
 
-def test_default_registry_has_opencode_first() -> None:
+def test_default_registry_has_opencode_first_then_claude() -> None:
     registry = build_default_registry()
 
-    assert registry[0].rank == 0
-    assert registry[0].detector.format_key == "opencode"
+    assert [(entry.detector.format_key, entry.rank) for entry in registry] == [
+        ("opencode", 0),
+        ("claude", 1),
+    ]
+
+
+def test_claude_detector_satisfies_protocol() -> None:
+    assert isinstance(ClaudeDetector(), AgentDetector)
 
 
 def test_scan_project_builds_deterministic_team_and_report(tmp_path: Path) -> None:
@@ -157,3 +183,93 @@ def test_scan_with_custom_registry_runs_only_given_detectors(tmp_path: Path) -> 
     result = scan_project(tmp_path, registry=registry)
 
     assert [member.agent_id for member in result.team] == ["solo"]
+
+
+def _write_both_formats(tmp_path: Path) -> None:
+    """A fixture repo carrying agents in both formats."""
+    _write_opencode_agent(tmp_path, "builder.md", "---\ndescription: oc\n---\nBody.\n")
+    _write_claude_agent(tmp_path, "reviewer.md", "---\nname: reviewer\n---\nBody.\n")
+
+
+def test_scan_filters_to_opencode_source_format(tmp_path: Path) -> None:
+    # The project's single-format truth: an opencode project never sees Claude agents.
+    _write_both_formats(tmp_path)
+
+    result = scan_project(tmp_path, source_format="opencode")
+
+    assert [member.agent_id for member in result.team] == ["builder"]
+    assert all(member.source_format == "opencode" for member in result.team)
+
+
+def test_scan_filters_to_claude_source_format(tmp_path: Path) -> None:
+    _write_both_formats(tmp_path)
+
+    result = scan_project(tmp_path, source_format="claude")
+
+    assert [member.agent_id for member in result.team] == ["reviewer"]
+    assert all(member.source_format == "claude" for member in result.team)
+
+
+def test_scan_without_source_format_runs_all_detectors(tmp_path: Path) -> None:
+    # None keeps the unfiltered all-detectors behavior.
+    _write_both_formats(tmp_path)
+
+    result = scan_project(tmp_path)
+
+    assert sorted(member.agent_id for member in result.team) == ["builder", "reviewer"]
+
+
+def test_detect_project_formats_reports_counts(tmp_path: Path) -> None:
+    _write_both_formats(tmp_path)
+    _write_claude_agent(tmp_path, "helper.md", "---\nname: helper\n---\nBody.\n")
+    _write_skill(tmp_path, (".opencode", "skills"), "deploy")
+    _write_skill(tmp_path, (".claude", "skills"), "review")
+    _write_skill(tmp_path, (".claude", "skills"), "test")
+
+    detection = detect_project_formats(tmp_path)
+
+    assert detection.formats["opencode"].agents == 1
+    assert detection.formats["opencode"].skills == 1
+    assert detection.formats["claude"].agents == 2
+    assert detection.formats["claude"].skills == 2
+    assert detection.formats["opencode"].present
+    assert detection.formats["claude"].present
+
+
+def test_detect_project_formats_empty_repo_reports_absent_formats(tmp_path: Path) -> None:
+    detection = detect_project_formats(tmp_path)
+
+    assert detection.formats["opencode"].present is False
+    assert detection.formats["claude"].present is False
+    assert detection.agents_md is False
+    assert detection.claude_md is None
+
+
+def test_detect_project_formats_skills_alone_make_format_present(tmp_path: Path) -> None:
+    # A format counts as present on ≥1 agent OR ≥1 skill.
+    _write_skill(tmp_path, (".claude", "skills"), "review")
+
+    detection = detect_project_formats(tmp_path)
+
+    assert detection.formats["claude"].present
+    assert detection.formats["claude"].agents == 0
+
+
+def test_detect_project_formats_reports_context_files(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+    (tmp_path / "CLAUDE.md").write_text("# Claude\n", encoding="utf-8")
+
+    detection = detect_project_formats(tmp_path)
+
+    assert detection.agents_md is True
+    assert detection.claude_md == "CLAUDE.md"
+
+
+def test_detect_project_formats_finds_nested_claude_md(tmp_path: Path) -> None:
+    # Repo-root CLAUDE.md wins; .claude/CLAUDE.md is the fallback location.
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "CLAUDE.md").write_text("# Claude\n", encoding="utf-8")
+
+    detection = detect_project_formats(tmp_path)
+
+    assert detection.claude_md == ".claude/CLAUDE.md"

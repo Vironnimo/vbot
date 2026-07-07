@@ -131,6 +131,21 @@ def test_validate_project_data_rejects_unknown_thinking_effort() -> None:
     assert "$.default_thinking_effort" in error_paths
 
 
+def test_validate_project_data_accepts_known_source_formats() -> None:
+    for source_format in ("opencode", "claude"):
+        data = _valid_project_data()
+        data["source_format"] = source_format
+
+        assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_unknown_source_format() -> None:
+    data = _valid_project_data()
+    data["source_format"] = "cursor"
+
+    assert _diagnostics(data) == [("error", "$.source_format", "must be one of: claude, opencode")]
+
+
 def test_validate_project_data_rejects_non_list_auto_load() -> None:
     data = _valid_project_data()
     data["auto_load"] = "AGENTS.md"

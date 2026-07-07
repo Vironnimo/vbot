@@ -32,7 +32,20 @@ const MANAGE_FIELDS = Object.freeze([
   'display_name',
   'default_agent',
   'default_model',
+  'source_format',
 ]);
+
+// Fields in the generic diff that are required non-empty on the backend: an
+// empty form value is "no change", never a clear-to-null.
+const NON_CLEARABLE_MANAGE_FIELDS = Object.freeze(
+  new Set(['display_name', 'source_format']),
+);
+
+// The per-project source format vocabulary (mirrors the backend
+// PROJECT_SOURCE_FORMATS): which coding-agent ecosystem the project's Team
+// agents and skills come from. Exactly one per project — no mixing.
+export const PROJECT_SOURCE_FORMATS = Object.freeze(['opencode', 'claude']);
+export const DEFAULT_PROJECT_SOURCE_FORMAT = 'opencode';
 
 // The list-valued whitelist fields, diffed by SET (order-insensitive) so a
 // reorder alone never counts as a change. Tool/skill names are unordered membership
@@ -98,6 +111,13 @@ export function buildAddProjectPayload(formValues) {
     payload.default_model = defaultModel;
   }
 
+  // Only send an explicit, known format — absent means the server auto-detects
+  // from the repo (exactly one format present → that one, else opencode).
+  const sourceFormat = asText(formValues?.source_format).trim();
+  if (PROJECT_SOURCE_FORMATS.includes(sourceFormat)) {
+    payload.source_format = sourceFormat;
+  }
+
   // Only include the knobs when the form carries a real value: a number for
   // temperature, and a level or '' (provider default) for thinking effort. The
   // "no default" sentinel / empty temperature box means "omit" at add time.
@@ -146,8 +166,8 @@ export function buildManageProjectPayload(formValues, project) {
     if (next === current) {
       continue;
     }
-    if (field === 'display_name' && next === '') {
-      // display_name is required non-empty; an empty box is not a clear.
+    if (NON_CLEARABLE_MANAGE_FIELDS.has(field) && next === '') {
+      // Required non-empty on the backend; an empty box is not a clear.
       continue;
     }
     // A cleared pointer must be sent as null (the backend maps None → "" to
@@ -331,6 +351,46 @@ export function buildDefaultAgentOptions({
   return options;
 }
 
+// Normalize a project.detect response into the add dialog's stable shape:
+// per-format `{agents, skills, present}` (present = ≥1 agent OR ≥1 skill — the
+// creation-time detection rule) plus the context-file facts. A missing/foreign
+// response degrades to "nothing found".
+export function normalizeDetectResult(result) {
+  const rawFormats = isPlainObject(result?.formats) ? result.formats : {};
+  const formats = {};
+  for (const key of PROJECT_SOURCE_FORMATS) {
+    const entry = isPlainObject(rawFormats[key]) ? rawFormats[key] : {};
+    const agents = countOrZero(entry.agents);
+    const skills = countOrZero(entry.skills);
+    formats[key] = { agents, skills, present: agents > 0 || skills > 0 };
+  }
+  const context = isPlainObject(result?.context_files)
+    ? result.context_files
+    : {};
+  return {
+    cwd_exists: result?.cwd_exists === true,
+    formats,
+    agents_md: context.agents_md === true,
+    claude_md: optionalText(context.claude_md),
+  };
+}
+
+// The formats a detect result found present, in canonical order. Drives the add
+// dialog's three states: none → silent opencode default, one → quiet "Detected"
+// line, both → the informed radio choice.
+export function presentFormats(detect) {
+  return PROJECT_SOURCE_FORMATS.filter(
+    (key) => detect?.formats?.[key]?.present === true,
+  );
+}
+
+// The CLAUDE.md comfort suggestion (decision 4): offer adding the found
+// CLAUDE.md as a normal project file only when the repo has no AGENTS.md —
+// an explicit user opt-in checkbox, nothing automatic.
+export function shouldSuggestClaudeMd(detect) {
+  return Boolean(detect?.claude_md) && detect?.agents_md !== true;
+}
+
 // A project's cwd no longer resolves to a directory → offer Re-Point. The flag
 // is server-computed (`cwd_exists`); only an explicit `false` triggers it, so a
 // missing/undefined flag never forces the re-point UI.
@@ -355,6 +415,9 @@ export function normalizeProject(project) {
     default_model: asText(project?.default_model),
     default_temperature: numberOrNull(project?.default_temperature),
     default_thinking_effort: stringOrNull(project?.default_thinking_effort),
+    source_format: PROJECT_SOURCE_FORMATS.includes(project?.source_format)
+      ? project.source_format
+      : DEFAULT_PROJECT_SOURCE_FORMAT,
     auto_load: normalizeAutoLoad(project?.auto_load),
     allowed_tools: normalizeStringList(project?.allowed_tools),
     skills_bundled_enabled: normalizeStringList(
@@ -587,6 +650,12 @@ function normalizeProjectThinkingEffortForPayload(value) {
   return PROJECT_THINKING_EFFORT_OPTIONS.includes(normalized)
     ? normalized
     : null;
+}
+
+function countOrZero(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
 }
 
 function numberOrNull(value) {

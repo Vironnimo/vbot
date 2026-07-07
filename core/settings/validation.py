@@ -24,6 +24,7 @@ from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     AGENT_ID_PATTERN,
     PROJECT_ID_PATTERN,
+    PROJECT_SOURCE_FORMATS,
     RECALL_BACKEND_PATTERN,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SettingsValidationError,
@@ -169,9 +170,11 @@ PROJECT_FIELDS = frozenset(
         "skills_bundled_enabled",
         "skills_global_enabled",
         "skills_project_disabled",
+        "source_format",
         "updated_at",
     }
 )
+ALLOWED_PROJECT_SOURCE_FORMATS = frozenset(PROJECT_SOURCE_FORMATS)
 # The optional fields a per-agent override object may carry. Kept in sync with
 # ``core.projects.projects.OVERRIDE_FIELDS`` (which owns the runtime shape).
 OVERRIDE_FIELDS = frozenset({"model", "temperature", "thinking_effort"})
@@ -545,6 +548,11 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
         "$.default_thinking_effort",
         data.get("default_thinking_effort"),
         allow_none=True,
+    )
+    # source_format is optional (an old project.json omits it and loads at the
+    # default); when present it must name a known coding-agent ecosystem.
+    _validate_optional_allowed_string(
+        diagnostics, "$.source_format", data.get("source_format"), ALLOWED_PROJECT_SOURCE_FORMATS
     )
     _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
     # The Tool/Skill Whitelist fields are optional (an old project.json omits them

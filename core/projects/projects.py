@@ -24,6 +24,8 @@ from typing import Any, cast
 
 from core.projects.paths import normalize_cwd
 from core.settings import (
+    DEFAULT_PROJECT_SOURCE_FORMAT,
+    PROJECT_SOURCE_FORMATS,
     SettingsValidationError,
     is_valid_project_id,
     validate_temperature,
@@ -124,6 +126,11 @@ class Project:
     default_model: str = DEFAULT_DEFAULT_MODEL
     default_temperature: float | None = DEFAULT_DEFAULT_TEMPERATURE
     default_thinking_effort: str | None = DEFAULT_DEFAULT_THINKING_EFFORT
+    # The project's single source format (GLOSSARY → Source Format): which
+    # coding-agent ecosystem its Team agents and project skills come from
+    # (".opencode/" vs ".claude/"). Exactly one per project — every consumer
+    # (scan, skills, autocomplete, prompt preview) sees only this format's set.
+    source_format: str = DEFAULT_PROJECT_SOURCE_FORMAT
     auto_load: list[str] = field(default_factory=list)
     # The Project Tool Whitelist — the hard ceiling for this project's config
     # agents (GLOSSARY → Project Tool Whitelist). Defaults to the base list; an
@@ -156,6 +163,7 @@ class Project:
             "default_model": self.default_model,
             "default_temperature": self.default_temperature,
             "default_thinking_effort": self.default_thinking_effort,
+            "source_format": self.source_format,
             "auto_load": list(self.auto_load),
             "allowed_tools": list(self.allowed_tools),
             "skills_bundled_enabled": list(self.skills_bundled_enabled),
@@ -178,6 +186,7 @@ def build_project(
     default_model: str = DEFAULT_DEFAULT_MODEL,
     default_temperature: float | None = DEFAULT_DEFAULT_TEMPERATURE,
     default_thinking_effort: str | None = DEFAULT_DEFAULT_THINKING_EFFORT,
+    source_format: str = DEFAULT_PROJECT_SOURCE_FORMAT,
     auto_load: list[str] | None = None,
     allowed_tools: list[str] | None = None,
     skills_bundled_enabled: list[str] | None = None,
@@ -203,6 +212,7 @@ def build_project(
     validated_default_model = _validate_optional_string("default_model", default_model)
     validated_default_temperature = _validate_default_temperature(default_temperature)
     validated_default_thinking_effort = _validate_default_thinking_effort(default_thinking_effort)
+    validated_source_format = _validate_source_format(source_format)
     validated_auto_load = _validate_auto_load(auto_load)
     validated_allowed_tools = _validate_allowed_tools(allowed_tools)
     validated_skills_bundled = _validate_string_list(
@@ -222,6 +232,7 @@ def build_project(
         default_model=validated_default_model,
         default_temperature=validated_default_temperature,
         default_thinking_effort=validated_default_thinking_effort,
+        source_format=validated_source_format,
         auto_load=validated_auto_load,
         allowed_tools=validated_allowed_tools,
         skills_bundled_enabled=validated_skills_bundled,
@@ -250,6 +261,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         default_thinking_effort=data.get(
             "default_thinking_effort", DEFAULT_DEFAULT_THINKING_EFFORT
         ),
+        source_format=data.get("source_format", DEFAULT_PROJECT_SOURCE_FORMAT),
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
         allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
@@ -330,6 +342,14 @@ def _validate_default_thinking_effort(value: Any) -> str | None:
         return validate_thinking_effort(value, label="default_thinking_effort", allow_none=True)
     except SettingsValidationError as exc:
         raise ProjectError(str(exc)) from exc
+
+
+def _validate_source_format(value: Any) -> str:
+    """Validate the project source format against the canonical vocabulary."""
+    if value not in PROJECT_SOURCE_FORMATS:
+        choices = ", ".join(PROJECT_SOURCE_FORMATS)
+        raise ProjectError(f"source_format must be one of: {choices}")
+    return cast("str", value)
 
 
 def _validate_auto_load(auto_load: list[str] | None) -> list[str]:

@@ -148,6 +148,7 @@ def _project_config_lines(project: object) -> list[str]:
         f"  default_model: {_string_or_default(project.get('default_model'), '-')}",
         f"  default_temperature: {temperature}",
         f"  default_thinking_effort: {thinking_effort}",
+        f"  format: {_string_or_default(project.get('source_format'), '-')}",
         f"  auto_load: {_format_string_list(project.get('auto_load'))}",
     ]
 
