@@ -9,6 +9,8 @@
   import { t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
+    filterModelSelectOptions,
+    modelFilterFooterLabel,
     modelSelectionValue,
     parseModelSelectionValue,
     selectModelValue,
@@ -74,17 +76,47 @@
   let pendingModelCatalogs = null;
   let lastModelsRefreshToken = null;
 
-  let defaultModelOptions = $derived(
+  let showAllModels = $state(false);
+  let showAllFallbackModels = $state(false);
+  let allDefaultModelOptions = $derived(
     selectModelOptions(
       agentDefaults.model,
       t('settings.defaults.noModelDefault', '— (no default)'),
     ),
   );
-  let defaultFallbackModelOptions = $derived(
+  let allDefaultFallbackModelOptions = $derived(
     selectModelOptions(
       agentDefaults.fallback_model,
       t('settings.defaults.noFallbackModelDefault', '— (no default)'),
     ),
+  );
+  let defaultModelOptions = $derived(
+    filterModelSelectOptions(allDefaultModelOptions, {
+      showAll: showAllModels,
+      selectedModelValue: agentDefaults.model,
+    }),
+  );
+  let defaultFallbackModelOptions = $derived(
+    filterModelSelectOptions(allDefaultFallbackModelOptions, {
+      showAll: showAllFallbackModels,
+      selectedModelValue: agentDefaults.fallback_model,
+    }),
+  );
+  let modelFilterFooter = $derived(
+    modelFilterFooterLabel({
+      showAll: showAllModels,
+      hiddenCount: allDefaultModelOptions.length - defaultModelOptions.length,
+      translate: t,
+    }),
+  );
+  let fallbackModelFilterFooter = $derived(
+    modelFilterFooterLabel({
+      showAll: showAllFallbackModels,
+      hiddenCount:
+        allDefaultFallbackModelOptions.length -
+        defaultFallbackModelOptions.length,
+      translate: t,
+    }),
   );
   let defaultModelSelectValue = $derived(
     selectModelValue(agentDefaults.model, defaultModelOptions),
@@ -326,6 +358,8 @@
       ariaLabel={t('settings.defaults.model', 'Model')}
       triggerClass="settings-view__dropdown"
       panelClass="settings-view__model-panel"
+      footerActionLabel={modelFilterFooter}
+      onFooterAction={() => (showAllModels = !showAllModels)}
       onOpenChange={trackModelDropdownOpen}
       onValueChange={(selectedValue) =>
         updateAgentDefaultsModelSelection('model', selectedValue)}
@@ -362,6 +396,8 @@
       ariaLabel={t('settings.defaults.fallbackModel', 'Fallback model')}
       triggerClass="settings-view__dropdown"
       panelClass="settings-view__model-panel"
+      footerActionLabel={fallbackModelFilterFooter}
+      onFooterAction={() => (showAllFallbackModels = !showAllFallbackModels)}
       onOpenChange={trackModelDropdownOpen}
       onValueChange={(selectedValue) =>
         updateAgentDefaultsModelSelection('fallback_model', selectedValue)}

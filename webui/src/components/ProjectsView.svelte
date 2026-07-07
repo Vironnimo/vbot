@@ -43,6 +43,8 @@
   } from '$lib/projectsView.js';
   import {
     buildModelSelectOptions,
+    filterModelSelectOptions,
+    modelFilterFooterLabel,
     modelSelectionValue,
     parseModelSelectionValue,
     selectModelValue,
@@ -171,12 +173,28 @@
     projects.find((item) => item.project_id === selectedProjectId) ?? null,
   );
 
-  let modelOptions = $derived(
+  let showAllModels = $state(false);
+  // Per-member reveal state for the override pickers, keyed by agent id.
+  let showAllOverrideModels = $state({});
+  let allModelOptions = $derived(
     buildModelSelectOptions({
       models: availableModels,
       connections: availableConnections,
       selectedModelValue: editForm.default_model,
       emptyLabel: defaultModelInheritLabel(),
+      translate: t,
+    }),
+  );
+  let modelOptions = $derived(
+    filterModelSelectOptions(allModelOptions, {
+      showAll: showAllModels,
+      selectedModelValue: editForm.default_model,
+    }),
+  );
+  let modelFilterFooter = $derived(
+    modelFilterFooterLabel({
+      showAll: showAllModels,
+      hiddenCount: allModelOptions.length - modelOptions.length,
       translate: t,
     }),
   );
@@ -862,6 +880,14 @@
   // The model-override picker options for one member (its own draft as the selected
   // value so a saved/overridden value stays visible even if unavailable).
   function overrideModelOptions(member) {
+    const selectedModelValue = overrideDraft(member.agent_id).model;
+    return filterModelSelectOptions(allOverrideModelOptions(member), {
+      showAll: Boolean(showAllOverrideModels[member.agent_id]),
+      selectedModelValue,
+    });
+  }
+
+  function allOverrideModelOptions(member) {
     return buildModelSelectOptions({
       models: availableModels,
       connections: availableConnections,
@@ -869,6 +895,24 @@
       emptyLabel: t('projects.team.overrideModelPlaceholder', 'No override'),
       translate: t,
     });
+  }
+
+  function overrideModelFilterFooter(member) {
+    const showAll = Boolean(showAllOverrideModels[member.agent_id]);
+    return modelFilterFooterLabel({
+      showAll,
+      hiddenCount:
+        allOverrideModelOptions(member).length -
+        overrideModelOptions(member).length,
+      translate: t,
+    });
+  }
+
+  function toggleShowAllOverrideModels(agentId) {
+    showAllOverrideModels = {
+      ...showAllOverrideModels,
+      [agentId]: !showAllOverrideModels[agentId],
+    };
   }
 
   function overrideKey(agentId, field) {
@@ -1376,6 +1420,8 @@
                       disabled={editSaving}
                       triggerClass="projects-dropdown"
                       panelClass="projects-view__search-panel"
+                      footerActionLabel={modelFilterFooter}
+                      onFooterAction={() => (showAllModels = !showAllModels)}
                       onOpenChange={trackModelDropdownOpen}
                       onValueChange={updateModelSelection}
                     />
@@ -1733,6 +1779,13 @@
                                       )}
                                       triggerClass="projects-dropdown"
                                       panelClass="projects-view__search-panel"
+                                      footerActionLabel={overrideModelFilterFooter(
+                                        member,
+                                      )}
+                                      onFooterAction={() =>
+                                        toggleShowAllOverrideModels(
+                                          member.agent_id,
+                                        )}
                                       onOpenChange={trackModelDropdownOpen}
                                       onValueChange={(value) =>
                                         updateOverrideModelSelection(

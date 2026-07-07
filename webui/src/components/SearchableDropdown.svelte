@@ -23,6 +23,11 @@
     ariaLabel = '',
     triggerClass = '',
     panelClass = '',
+    // Optional action row pinned under the options (e.g. the model pickers'
+    // "show all models" toggle). Clicking it keeps the panel open so the
+    // revealed options appear in place.
+    footerActionLabel = '',
+    onFooterAction = noop,
     onValueChange = noop,
     onOpenChange = noop,
   } = $props();
@@ -290,6 +295,16 @@
           </div>
         {/if}
       </div>
+
+      {#if footerActionLabel}
+        <button
+          class="s-dropdown-footer searchable-dropdown__footer"
+          type="button"
+          onclick={() => onFooterAction()}
+        >
+          {footerActionLabel}
+        </button>
+      {/if}
     </div>
   {/if}
 </div>
