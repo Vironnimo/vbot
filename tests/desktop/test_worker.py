@@ -166,6 +166,7 @@ def test_worker_lifecycle_start_stop(fake_bridge: FakeBridge) -> None:
         bridge=fake_bridge,
         server_url="http://127.0.0.1:8420",
     )
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
 
     assert not worker.is_running()
     worker.start()
@@ -188,9 +189,13 @@ def test_worker_publishes_error_when_engine_start_fails(
         bridge=fake_bridge,
         server_url="http://127.0.0.1:8420",
     )
+    # A target agent is configured so start() passes the fail-fast gate and the
+    # test actually exercises engine-start failure.
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
     worker.start()
 
     assert "error" in fake_bridge.states
+    engine.start.assert_called_once()
 
 
 def test_mock_engine_works_with_worker(fake_bridge: FakeBridge) -> None:
@@ -211,6 +216,7 @@ def test_mock_engine_works_with_worker(fake_bridge: FakeBridge) -> None:
         bridge=fake_bridge,
         server_url="http://127.0.0.1:8420",
     )
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
 
     worker.start()
     # Let it run for at least a few detection cycles
@@ -259,6 +265,26 @@ def test_worker_does_not_record_without_target_agent(fake_bridge: FakeBridge) ->
 
     assert fake_bridge.states == ["error"]
     assert not worker._running.is_set()
+
+
+def test_worker_start_fails_fast_without_target_agent(fake_bridge: FakeBridge) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    engine = MagicMock()
+    worker = WakewordWorker(
+        engine=engine,
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._read_config = lambda: {"target_agent_id": None}  # type: ignore[method-assign]
+
+    worker.start()
+
+    # No engine loaded, no microphone opened: the misconfiguration surfaces the
+    # moment listening is enabled, not on the first wake word.
+    assert fake_bridge.states == ["error"]
+    assert not worker.is_running()
+    engine.start.assert_not_called()
 
 
 def test_handle_detection_closes_microphone_before_network_calls(
@@ -361,6 +387,71 @@ def test_handle_detection_transcription_failure_returns_to_listening(
     worker._send_transcript.assert_not_called()
     assert fake_bridge.states == ["recording", "transcribing"]
     assert worker._running.is_set()
+
+
+def test_handle_detection_skips_network_when_stopped_during_recording(
+    fake_bridge: FakeBridge,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._stream = FakeSounddeviceStream([_make_speech_chunk()])
+    worker._running.set()
+    worker._read_config = lambda: {  # type: ignore[method-assign]
+        "target_agent_id": "main",
+        "session_behavior": "active",
+    }
+
+    def record_then_stop() -> bytes:
+        worker._running.clear()  # disabled/reconfigured mid-recording
+        return b"audio"
+
+    worker._record_until_silence = record_then_stop  # type: ignore[method-assign]
+    worker._transcribe = MagicMock()  # type: ignore[method-assign]
+
+    worker._handle_detection()
+
+    # Stopped during recording: no transcription round-trip at all.
+    worker._transcribe.assert_not_called()
+    assert fake_bridge.states == ["recording"]
+
+
+def test_handle_detection_discards_transcript_when_stopped_during_transcription(
+    fake_bridge: FakeBridge,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._stream = FakeSounddeviceStream([_make_speech_chunk()])
+    worker._running.set()
+    worker._read_config = lambda: {  # type: ignore[method-assign]
+        "target_agent_id": "main",
+        "session_behavior": "active",
+    }
+    worker._record_until_silence = lambda: b"audio"  # type: ignore[method-assign]
+
+    def transcribe_then_stop(_audio_data: bytes) -> str:
+        worker._running.clear()  # disabled mid-transcription
+        return "turn on the lights"
+
+    worker._transcribe = transcribe_then_stop  # type: ignore[assignment,method-assign]
+    worker._resolve_session = MagicMock()  # type: ignore[method-assign]
+    worker._send_transcript = MagicMock()  # type: ignore[method-assign]
+
+    worker._handle_detection()
+
+    # A stop between capture and send must not fire a now-stale command.
+    worker._resolve_session.assert_not_called()
+    worker._send_transcript.assert_not_called()
+    assert fake_bridge.states == ["recording", "transcribing"]
 
 
 def test_detection_loop_reopens_microphone_after_successful_turn(
@@ -658,6 +749,20 @@ def test_mock_worker_simulate_cycle_publishes_all_stages(
     worker._simulate_cycle()
 
     assert fake_bridge.states == ["wakeword_detected", "recording", "transcribing", "sending"]
+
+
+def test_backoff_sleep_returns_immediately_when_not_running() -> None:
+    import threading
+    import time
+
+    from desktop.wakeword.worker import _backoff_sleep
+
+    running = threading.Event()  # cleared → the interruptible sleep returns at once
+
+    start = time.monotonic()
+    _backoff_sleep(6, running)  # ~64s exponential, clamped to 10s without the flag
+
+    assert time.monotonic() - start < 1.0
 
 
 def test_list_microphones_graceful_when_no_sounddevice(monkeypatch) -> None:

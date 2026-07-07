@@ -84,8 +84,18 @@ class WakewordWorker:
     # -- Lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
-        """Start the engine and launch the detection thread."""
+        """Start the engine and launch the detection thread.
+
+        Fails fast when no target agent is configured: rather than opening the
+        microphone and sitting in ``listening`` only to die on the first wake
+        word, the worker surfaces ``error`` the moment listening is enabled, so
+        the misconfiguration is visible immediately.
+        """
         if self._thread is not None and self._thread.is_alive():
+            return
+        if not self._target_agent_configured():
+            logger.warning("Wakeword listening not started: no target agent is configured")
+            self._bridge.publish_state("error")
             return
         self._running.set()
         try:
@@ -239,6 +249,10 @@ class WakewordWorker:
         audio_data = self._record_until_silence()
         if audio_data is None:
             return
+        if not self._running.is_set():
+            # Stopped (disabled/reconfigured) during recording — skip the network
+            # round-trip entirely, no transcription and no send.
+            return
 
         self._bridge.publish_state("transcribing")
         self._close_stream()
@@ -250,18 +264,26 @@ class WakewordWorker:
         if not transcript:
             logger.info("Wakeword recording produced no transcript; returning to listening")
             return
+        if not self._running.is_set():
+            # Stopped during transcription — do not send a now-stale command.
+            logger.info("Wakeword worker stopped during transcription; discarding transcript")
+            return
 
         self._bridge.publish_state("sending")
         session_behavior = config.get("session_behavior", "active")
 
         session_id = self._resolve_session(agent_id, session_behavior)
         if not session_id:
-            self._bridge.publish_state("error")
-            self._running.clear()
+            # A stop mid-resolve empties the result; that is not an error, so only
+            # surface "error" when the worker is still meant to be running.
+            if self._running.is_set():
+                self._bridge.publish_state("error")
+                self._running.clear()
             return
         if not self._send_transcript(transcript, agent_id, session_id):
-            self._bridge.publish_state("error")
-            self._running.clear()
+            if self._running.is_set():
+                self._bridge.publish_state("error")
+                self._running.clear()
             return
 
     def _read_config(self) -> dict[str, Any]:
@@ -273,6 +295,11 @@ class WakewordWorker:
         except Exception:
             logger.warning("Failed to read wakeword settings", exc_info=True)
             return {}
+
+    def _target_agent_configured(self) -> bool:
+        """Whether a non-empty target agent id is configured right now."""
+        agent_id = self._read_config().get("target_agent_id")
+        return isinstance(agent_id, str) and bool(agent_id.strip())
 
     # -- Audio recording -----------------------------------------------------
 
@@ -362,7 +389,9 @@ class WakewordWorker:
                         return transcript
                     return None
                 if response.status_code in _RETRYABLE_STATUS_CODES:
-                    _backoff_sleep(attempt)
+                    if not self._running.is_set():
+                        return None
+                    _backoff_sleep(attempt, self._running)
                     continue
                 logger.warning(
                     "Speech transcription failed: HTTP %s %s",
@@ -371,8 +400,8 @@ class WakewordWorker:
                 )
                 return None
             except httpx.RequestError:
-                if attempt < _MAX_RETRIES - 1:
-                    _backoff_sleep(attempt)
+                if attempt < _MAX_RETRIES - 1 and self._running.is_set():
+                    _backoff_sleep(attempt, self._running)
                     continue
                 logger.warning("Speech transcription request failed", exc_info=True)
                 return None
@@ -451,13 +480,15 @@ class WakewordWorker:
                     result = rpc_response.get("result", {})
                     return result if isinstance(result, dict) else {}
                 if response.status_code in _RETRYABLE_STATUS_CODES:
-                    _backoff_sleep(attempt)
+                    if not self._running.is_set():
+                        return {}
+                    _backoff_sleep(attempt, self._running)
                     continue
                 logger.warning("RPC %s failed: HTTP %s", method, response.status_code)
                 return {}
             except httpx.RequestError:
-                if attempt < _MAX_RETRIES - 1:
-                    _backoff_sleep(attempt)
+                if attempt < _MAX_RETRIES - 1 and self._running.is_set():
+                    _backoff_sleep(attempt, self._running)
                     continue
                 logger.warning("RPC %s request failed", method, exc_info=True)
                 return {}
@@ -478,10 +509,18 @@ def _encode_wav(raw_frames: bytes) -> bytes:
     return buffer.getvalue()
 
 
-def _backoff_sleep(attempt: int) -> None:
-    """Sleep with exponential backoff and jitter."""
-    delay = (2**attempt) + random.random()
-    time.sleep(min(delay, 10.0))
+def _backoff_sleep(attempt: int, running: threading.Event | None = None) -> None:
+    """Sleep with exponential backoff and jitter, interruptible by ``running``.
+
+    With a running flag, the sleep ends early when the worker is stopped
+    mid-backoff, so a disable does not wait out the full delay before the retry
+    loop notices it should bail.
+    """
+    delay = min((2**attempt) + random.random(), 10.0)
+    if running is None:
+        time.sleep(delay)
+        return
+    _sleep_while_running(running, delay)
 
 
 def _sleep_while_running(running: threading.Event, duration_seconds: float) -> None:
