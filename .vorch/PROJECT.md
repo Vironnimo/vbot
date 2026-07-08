@@ -38,7 +38,8 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | Map file | Domain | What it covers |
 |---|---|---|
 | `.vorch/domain-maps/runtime.md` | `core/runtime/` | Bootstrap, service lifecycle, DI wiring |
-| `.vorch/domain-maps/providers.md` | `core/providers/` | Provider domain overview, per-connection `mode` / `models_endpoint` and per-model `connections` allowlist, index to provider-specific maps || `.vorch/domain-maps/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
+| `.vorch/domain-maps/providers.md` | `core/providers/` | Provider domain overview, per-connection `mode` / `models_endpoint` and per-model `connections` allowlist, index to provider-specific maps |
+| `.vorch/domain-maps/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
 | `.vorch/domain-maps/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas; index to the task-execution child maps |
 | `.vorch/domain-maps/model_tasks/speech.md` | speech execution | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
 | `.vorch/domain-maps/model_tasks/image.md` | image execution | Image generation execution, artifacts, provider wire behavior |
@@ -62,7 +63,8 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |
 | `.vorch/domain-maps/skills.md` | `core/skills/` | Skill loading/validation, agent/project/global/bundled scopes, the validated authoring write core + write-scope boundary, origin-grouped session-pinned catalog |
 | `.vorch/domain-maps/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
-| `.vorch/domain-maps/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send; index to channel-specific maps || `.vorch/domain-maps/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
+| `.vorch/domain-maps/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send; index to channel-specific maps |
+| `.vorch/domain-maps/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
 | `.vorch/domain-maps/cli.md` | `cli/` | Local server lifecycle + `desktop` GUI-launch commands, targeting rules, status/logging contract |
 | `.vorch/domain-maps/desktop.md` | `desktop/` | pywebview thin-client contract, in-window connection screen, remembered servers, native menu, per-user config, voice bridge |
 | `.vorch/domain-maps/webui.md` | `webui/` | Svelte app shell, API client, Chat/Agents views, queue behavior |
@@ -93,33 +95,11 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 
 **Prerequisites:** Python >= 3.11, Node.js (for webui).
 
-**Setup:** The user-facing path is the one-line bootstrap (`scripts/bootstrap.{sh,ps1}`): it installs prerequisites, clones into `~/vbot`, creates an isolated venv at `~/vbot/.venv`, fetches the prebuilt WebUI (release track), exposes only `vbot`, and enables autostart by default. It drops a `.vbot-bootstrap` marker so the bundled uninstaller knows this is a self-contained install and removes the **whole tree** (venv + source), the `vbot` launcher, and the autostart entry — never the data dir.
-
-Windows users can also run the conservative installer directly, which installs the editable Python package, always installs/builds the WebUI, creates missing `~/.vbot` files without overwriting an existing valid `settings.json` or `.env`, and registers a Windows Task Scheduler autostart task by default (opt out with `-NoAutostart`). Existing port settings are respected unless `-Port` is explicit — an explicit port is then also written into the existing `settings.json` (into the port key the app reads), so autostart and later flag-less commands resolve the same port. Two desktop add-ons exist: `-Desktop` adds the pywebview accessor (`.[server,cli,desktop]`) to a full server install and creates a Start-menu shortcut ("vBot Desktop" → `vbot desktop`); `-DesktopClient` installs the accessor alone (`.[cli,desktop]`) — no server stack, no local WebUI build, no data-dir init, no autostart — for a machine that connects to a remote vBot server. The two flags are mutually exclusive; `-Dev` composes with `-Desktop` (installs `.[dev,desktop]`) but is rejected together with `-DesktopClient` — both installers enforce the same rules:
-```powershell
-.\scripts\install.ps1 [-NoAutostart]
-.\scripts\install.ps1 -Desktop          # full server install + desktop accessor + Start-menu shortcut
-.\scripts\install.ps1 -DesktopClient     # server-less desktop client (remote server) + Start-menu shortcut
-```
-Uninstall is intentionally data-dir preserving. For a bootstrap install it removes the whole tree wholesale; for a manual install it uninstalls the pip package and (with `-RemoveAutostart`) the task:
-```powershell
-.\scripts\uninstall.ps1 [-RemoveAutostart]
-```
-
-Linux (e.g. Raspberry Pi) has an equivalent installer with the same conservative behavior, autostart on by default (`--no-autostart` to skip). Autostart uses a systemd **user** unit (`~/.config/systemd/user/vbot.service`, `KillMode=process` so agent-triggered `vbot server restart` survives unit deactivation) plus `loginctl enable-linger`. On PEP 668 systems (Debian/Raspberry Pi OS) it must run inside a venv and fails early with instructions otherwise. `--skip-webui-build` uses an existing `webui/dist` instead of requiring Node — for low-memory hosts (Pi 3 class), build the WebUI on another machine and copy `webui/dist` over; on a Pi 5 building on-device is fine. It mirrors the Windows desktop add-ons: `--desktop` adds the accessor to a full install and writes a freedesktop application-menu entry (`~/.local/share/applications/vbot-desktop.desktop` → `vbot desktop`); `--desktop-client` installs the accessor alone (server-less). Both uninstallers remove the shortcut / `.desktop` entry. **Linux desktop support (shortcut, client mode, `.desktop` entry) is built but not real-hardware-tested** (see `FLAGGED.md`):
-```bash
-scripts/install.sh [--no-autostart] [--skip-webui-build]
-scripts/install.sh --desktop          # full server install + desktop accessor + .desktop entry
-scripts/install.sh --desktop-client   # server-less desktop client (remote server) + .desktop entry
-scripts/uninstall.sh [--remove-autostart]
-```
-
-Manual development setup:
+**Setup:** For development, install the editable package with dev extras:
 ```bash
 pip install -e ".[dev]"
 ```
-
-Use the current Python interpreter directly. Do not assume a virtual environment for installs, quality gates, or runtime commands.
+Use the current Python interpreter directly — do not assume a virtual environment for installs, quality gates, or runtime commands. End-user installation (the one-line bootstrap, the Windows/Linux installers with autostart and desktop add-ons, and uninstall) lives in [USAGE.md](../USAGE.md#installation); read it only when you touch the installer or bootstrap scripts under `scripts/`.
 
 **Worktree commands:** Project worktrees are managed with:
 ```bash
@@ -145,7 +125,7 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 
 **Releasing:** When the user wants to release a new version, read `.vorch/workflows/release-workflow.md`.
 
-**Data directory:** `~/.vbot` — created on first run. Holds `.env`, `settings.json`, and all runtime data: `attachments/`, `logs/`, `oauth/`, `cron/jobs.json`, `speech/`, `processes/` (per-process shell output logs, swept after 24 h), the disposable recall index under `recall/` (`session_index.sqlite` for FTS, `session_vectors.sqlite` for vector), and prompt overrides under `prompts/` and `agents/<agent-id>/prompts/`. Per-domain layout details live in the relevant domain maps.
+**Data directory:** `~/.vbot` — created on first run. Holds `.env` and `settings.json` (see Configuration above) plus all runtime data: attachments, logs, sessions, the recall index, cron jobs, per-process shell logs, and prompt overrides. Per-subdirectory layout lives in the relevant domain maps.
 
 ## Testing
 
@@ -155,7 +135,7 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 
 **Pattern:** AAA. Independent, deterministic, no shared state.
 
-**Quality gates:** Two scripts with the same interface — each runs format → lint → type-check → test (→ build for frontend). Both accept one or more paths (files or directories), or no args for full scan. Output is the agent contract: auto-fixed files are listed per step, failures forward the underlying tool output (pytest/vitest success noise filtered out), and the final line states the verdict. Source paths map to their mirrored test paths across all packages (`cli`, `core`, `desktop`, `scripts`, `server`): a source file runs its exact mirror `test_<file>.py` **plus** any split-sibling test files `test_<file>_*.py` in the same directory that no more-specific source file owns (e.g. `openai_compatible.py` also runs `test_openai_compatible_oauth.py`, while `openai.py` does not). Ownership is by longest matching source stem (hyphens normalized to `_`), so a shorter name never swallows a more specific sibling. When no owned test file exists, the mirrored test directory runs instead and a `note:` line says so. Nonexistent input paths abort with exit code 2 before any tool runs (a bad path would otherwise make pytest-xdist silently collect nothing).
+**Quality gates:** Two scripts with the same interface — `quality.py` (backend) and `quality-frontend.py` (frontend) — each runs format → lint → type-check → test (→ build for frontend) over the paths you pass, or the whole repo with no args. They auto-fix what they can, map each source file to its mirrored test file(s), and filter tool noise down to an agent-readable verdict (auto-fixed files per step, forwarded failure output, a final verdict line). **These gates are the contract — prefer them over invoking `pytest`/`ruff`/`vitest`/etc. by hand.** Reach for a raw tool only when you genuinely suspect the gate withheld something you need (a filtered-away failure, a test that didn't get mapped); when that happens, append a note to `.vorch/FLAGGED.md` so the gate can be improved to surface it, rather than letting hand-invocation become the habit. Full mechanics — the pipeline, the source→test mapping rules, the output contract, and where to fix a gate gap — live in `scripts/README-quality.md`.
 ```bash
 python scripts/quality.py [paths...]           # Backend
 python scripts/quality-frontend.py [paths...]  # Frontend
@@ -183,6 +163,6 @@ Use this section only for important strategic decisions, unusual global constrai
 - **Generated catalogs are refreshable; overrides and the canonical layer are durable inputs.** `resources/models/<provider>.json` is regenerated by refresh (don't hand-edit it). The canonical base `resources/models/models.json` is a refreshable projection of models.dev; `resources/models/models.overrides.json` and `resources/models/<provider>.overrides.json` are hand-maintained input layers, never written by refresh, applied at load. A discoverable provider fact belongs in adapter normalization/runtime policy; a durable, externally-verified fact the feeds don't expose belongs in the matching override layer.
 - **Two-channel transport architecture:** SSE is the per-Run streaming channel; WebSocket is persistent app-wide server-push for lifecycle summaries. Clients send commands through `POST /api/rpc`, not through WebSocket.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages. Visible chat turns can also carry `input_origin: "speech_transcription"` through RPC; the chat loop then adds a hidden system-reminder note immediately before the unchanged visible user message so the model knows the text may contain STT errors.
-- **Built-in commands and skill triggers are separate layers.** Recognized pure-text slash commands are handled before a Run starts. `/skill-name` and `$skill-name` are skill activation hints that preserve the original user message; `$` autocomplete is skill-only. Each built-in command declares two attributes (`CommandSpec`): an `argument` mode (`none`/`optional`/`required`) and an `output` channel (`toast`/`transient`/`action`), from which trigger and presentation behavior are derived rather than hardcoded per command. `optional`/`required` commands take the text after the token as an argument (e.g. `/compact <instruction>`, `/handoff [agent:<id>] [instruction]`); `none` commands match only when nothing trails them. `/handoff` and `/new` are `action` commands that start model runs / switch sessions; `/handoff [agent:<id>] [instruction]` parses an optional `agent:<id>` target token (default: current agent) and an optional free-text instruction woven into the handoff prompt, then triggers an internal note-driven Run to write the handoff, creates a new session, injects the handoff as a user message, and auto-runs the receiving agent. `/learn [request]` is an `action` command that starts an internal Run to author a reusable skill into the current agent's own home via the `skill_manage` tool; the free-text request may mix sources (folder, URL, pasted text) with requirements shaping the skill. `/reflect [focus]` is an `action` command that forks the current session (a general kernel/RPC capability, `session.fork`) and runs a Hermes-style memory+skill review inside the fork with a dispatch-only tool restriction (only `memory`/`skill`/`skill_manage` are callable; the prompt and tool definitions stay byte-identical so the provider cache stays warm), leaving the original session untouched; identity-agents-only. The same review also runs **automatically in the background** on a configurable cadence (`settings.reflection`: off by default; memory review every N turns, skill review every N tool calls, counted per session) — orchestration and cadence live in the `ReflectionService` (`core/automation/reflection.py`), which the chat loop notifies at every run end; see `.vorch/domain-maps/automation.md`. Details in `.vorch/domain-maps/chat.md`.
+- **Built-in commands and skill triggers are separate layers.** Pure-text slash commands are recognized and handled before a Run starts; `/skill-name` and `$skill-name` are skill activation hints that preserve the original user message (`$` autocomplete is skill-only). Each built-in command derives its trigger and presentation from two declared `CommandSpec` attributes — an `argument` mode and an `output` channel — rather than hardcoding them per command. The full command roster (`/handoff`, `/new`, `/learn`, `/reflect`) and the automatic background reflection cadence live in `.vorch/domain-maps/chat.md`, `.vorch/domain-maps/chat/commands.md`, and `.vorch/domain-maps/automation.md`.
 - **Deployment target is Linux, development happens on Windows.** The server is meant to run headless on a Raspberry Pi (64-bit OS); desktop/CLI accessors stay on Windows. Keep core/server/cli code platform-neutral: no Windows-only assumptions without a POSIX branch, path validation accepts/rejects both path flavors on any host, and process management branches on `os.name`/`sys.platform`.
 - **Busy-session queueing is owned by `ChatRunManager`.** Browser sends, `TriggerService`, and subagent routing all enqueue into the same in-memory FIFO per `(project_id, agent_id, session_id)` — the project anchor is part of the run/queue key because session ids may be caller-chosen and repeat across anchors. WebUI queue state is only a server-backed projection and must not become a second source of truth.

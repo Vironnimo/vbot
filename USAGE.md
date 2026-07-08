@@ -35,7 +35,7 @@ For a high-level overview and the fastest one-line install, see the [README](REA
 
 ## Installation
 
-The quickest path is the one-line bootstrap documented in the [README](README.md#quick-start). The script installers below give you full control over data directory, port, autostart, and desktop accessors. Both installers are conservative: they never overwrite an existing valid `settings.json` or `.env`, they respect existing port settings unless a port is passed explicitly, and they stop rather than clobber an invalid `settings.json`.
+The quickest path is the one-line bootstrap documented in the [README](README.md#quick-start). The script installers below give you full control over data directory, port, autostart, and desktop accessors. Both installers are conservative: they never overwrite an existing valid `settings.json` or `.env`, they respect existing port settings unless a port is passed explicitly (an explicit port is then also written into `settings.json`, so autostart and later flag-less commands resolve the same port), and they stop rather than clobber an invalid `settings.json`.
 
 ### Windows installer
 
@@ -78,7 +78,7 @@ Notes:
   scripts/install.sh
   ```
 
-- Autostart (on by default; pass `--no-autostart` to skip) writes a systemd user unit to `~/.config/systemd/user/vbot.service` and enables login lingering so the server starts at boot, without root. Manage it with `systemctl --user status|start|stop vbot`.
+- Autostart (on by default; pass `--no-autostart` to skip) writes a systemd user unit to `~/.config/systemd/user/vbot.service` and enables login lingering so the server starts at boot, without root. The unit uses `KillMode=process`, so an agent-triggered `vbot server restart` survives the unit's own shutdown. Manage it with `systemctl --user status|start|stop vbot`.
 - `--skip-webui-build` is for low-memory hosts (Pi 3 class) where `npm install` is not practical: build the WebUI on another machine (`cd webui && npm install && npm run build`) and copy `webui/dist` into the checkout first. On a Pi 5 the default on-device build is fine.
 
 ### Desktop add-ons
