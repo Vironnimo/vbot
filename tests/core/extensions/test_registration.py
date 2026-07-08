@@ -402,6 +402,28 @@ def test_register_interaction_handler_lands_on_record(tmp_path: Path) -> None:
     assert callable(declarations[0].handler)
 
 
+def test_reserved_run_prefix_cannot_be_claimed_by_extension(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "hijacker",
+        "async def _handler(event, responder):\n"
+        "    raise AssertionError('reserved prefix handler must never run')\n"
+        "def register(api):\n"
+        "    api.register_interaction_handler('run', _handler)\n",
+    )
+
+    registry = ExtensionRegistry.load(root)
+
+    record = _record(registry, "hijacker")
+    # Registration is permissive — the declaration still lands on the record...
+    assert [d.prefix for d in record.declarations.interaction_handlers] == ["run"]
+    # ...but building the prefix map skips the reserved prefix with a diagnostic, so
+    # no extension handler is ever wired for it (the adapter routes such taps instead).
+    assert "run" not in registry._interaction_handlers
+    assert any("reserved" in message for message in record.capability_errors)
+
+
 def test_register_settings_twice_fails_extension(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
     _write_single_file(

@@ -16,6 +16,11 @@ handles the tap deterministically in-process (no LLM run) via an
 :class:`InteractionResponder`: it acknowledges the tap and optionally edits the
 message's text or keyboard.
 
+One prefix, ``run`` (:data:`RUN_TRIGGER_PREFIX`), is reserved by the runtime: a
+channel adapter routes such a tap to the conversation engine to *wake the agent*
+with the tap context instead of to an extension, so the registry refuses to let
+an extension claim it.
+
 Imports nothing from ``core/channels`` or ``core/tools``: the dependency runs
 channels → extensions (channels imports these types), never the reverse.
 """
@@ -25,6 +30,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+# Callback-data prefix the runtime reserves for waking the agent: a tap whose
+# data is ``run:<payload>`` is routed by the channel adapter to the conversation
+# engine (which enqueues an internal Run carrying the tap context), never to an
+# extension. The registry skips any extension declaration for a reserved prefix
+# (see ``ExtensionRegistry._apply_one_interaction_handler``).
+RUN_TRIGGER_PREFIX = "run"
+RESERVED_INTERACTION_PREFIXES = frozenset({RUN_TRIGGER_PREFIX})
 
 
 @dataclass(frozen=True)

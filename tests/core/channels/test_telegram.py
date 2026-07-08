@@ -1577,6 +1577,78 @@ async def test_callback_without_data_is_silently_acked(
 
 
 @pytest.mark.asyncio
+async def test_run_prefix_tap_wakes_agent_and_bypasses_dispatcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatched: list[Any] = []
+
+    async def dispatcher(event: Any, responder: Any) -> bool:
+        dispatched.append(event)
+        return True
+
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    adapter._interaction_dispatcher = dispatcher
+    wake = Mock()
+    adapter._engine.trigger_interaction_reply = wake  # type: ignore[method-assign]
+
+    update = make_callback_update(
+        chat_id=12345,
+        user_id=50,
+        data="run:done",
+        inline_keyboard=[[SimpleNamespace(text="Fertig ✅", callback_data="run:done")]],
+    )
+    await adapter._handle_callback_query(update, SimpleNamespace())
+
+    # Reserved-prefix tap: acked once so the spinner stops, routed to the engine to
+    # wake the agent, and the extension dispatcher is bypassed entirely.
+    bot.answer_callback_query.assert_awaited_once()
+    wake.assert_called_once()
+    call_args = wake.call_args
+    assert call_args is not None
+    conversation, event = call_args.args
+    assert event.data == "run:done"
+    assert conversation.chat_id == "12345"
+    assert dispatched == []
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_non_run_prefix_tap_still_dispatches_to_extension(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatched: list[str] = []
+
+    async def dispatcher(event: Any, responder: Any) -> bool:
+        dispatched.append(event.data)
+        await responder.answer()
+        return True
+
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    adapter._interaction_dispatcher = dispatcher
+    wake = Mock()
+    adapter._engine.trigger_interaction_reply = wake  # type: ignore[method-assign]
+
+    update = make_callback_update(chat_id=12345, user_id=50, data="chk:milk")
+    await adapter._handle_callback_query(update, SimpleNamespace())
+
+    # A non-reserved prefix is unchanged: dispatched to the extension, engine untouched.
+    assert dispatched == ["chk:milk"]
+    wake.assert_not_called()
+    bot.answer_callback_query.assert_awaited_once()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_responder_answer_calls_bot_and_marks_answered(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
