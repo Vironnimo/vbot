@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from curl_cffi import CurlOpt
 from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 
 import core.tools.web_fetch as web_fetch_module
+from core.attachments import AttachmentTooLargeError
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
@@ -19,10 +22,45 @@ from core.tools.web_fetch import (
     WEB_FETCH_TOOL_PARAMETERS,
     _FetchResult,
     extract_content,
+    make_web_fetch_handler,
     register_web_fetch_tool,
-    web_fetch_handler,
 )
 from core.utils.retry import MAX_RETRIES
+
+
+@dataclass(frozen=True)
+class _FakeRecord:
+    id: str
+    filename: str
+    media_type: str
+
+
+class _FakeAttachmentStore:
+    """Records ``store()`` calls; optionally raises to simulate rejection."""
+
+    def __init__(self, *, error: Exception | None = None, media_type: str = "image/png") -> None:
+        self._error = error
+        self._media_type = media_type
+        self.stored: list[tuple[str, bytes]] = []
+
+    def store(self, filename: str, data: bytes) -> _FakeRecord:
+        if self._error is not None:
+            raise self._error
+        self.stored.append((filename, data))
+        return _FakeRecord(id="att-web-1", filename=filename, media_type=self._media_type)
+
+
+# The handler is created by ``make_web_fetch_handler``; this shim builds it with an
+# optional fake store and invokes it, so existing ``await web_fetch_handler(ctx, args)``
+# call sites stay unchanged while image tests pass an ``attachment_store``.
+_FetchHandler = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+def web_fetch_handler(
+    context: ToolContext, arguments: dict[str, Any], *, attachment_store: Any = None
+) -> Awaitable[dict[str, Any]]:
+    handler = cast(_FetchHandler, make_web_fetch_handler(attachment_store))
+    return handler(context, arguments)
 
 
 def make_context(workspace: Path, tool_name: str = WEB_FETCH_TOOL_NAME) -> ToolContext:
@@ -45,10 +83,18 @@ def make_result(
     headers: dict[str, str] | None = None,
     text: str = "",
     url: str = "https://example.com/",
+    content: bytes | None = None,
 ) -> _FetchResult:
-    """Build a normalized fetch result with lower-cased header keys."""
+    """Build a normalized fetch result with lower-cased header keys.
+
+    ``content`` defaults to the UTF-8 encoding of ``text`` so a text response
+    sniffs as text; image/binary tests pass raw bytes explicitly.
+    """
     normalized = {name.lower(): value for name, value in (headers or {}).items()}
-    return _FetchResult(status_code=status_code, headers=normalized, text=text, url=url)
+    body = text.encode("utf-8") if content is None else content
+    return _FetchResult(
+        status_code=status_code, headers=normalized, text=text, url=url, content=body
+    )
 
 
 def install_http_get(
@@ -110,11 +156,13 @@ def assert_failure_envelope(result: dict[str, object], code: str) -> dict[str, s
 def test_register_web_fetch_tool_schema() -> None:
     registry = ToolRegistry()
 
-    register_web_fetch_tool(registry)
+    register_web_fetch_tool(registry, attachment_store=None)
 
     tool = registry.get("web_fetch")
     assert tool.name == WEB_FETCH_TOOL_NAME == "web_fetch"
     assert tool.description == WEB_FETCH_TOOL_DESCRIPTION
+    # The description tells the agent it can view image URLs (a user requirement).
+    assert "image" in WEB_FETCH_TOOL_DESCRIPTION.lower()
     assert tool.parameters == WEB_FETCH_TOOL_PARAMETERS
 
     definitions = registry.provider_definitions(["web_fetch"])
@@ -523,6 +571,200 @@ async def test_web_fetch_handler_include_links_false(
     assert isinstance(content, str)
     assert "Visible Link" in content
     assert link_url not in content
+
+
+_PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_image_url_stores_attachment_and_emits_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/photo.png"
+    store = _FakeAttachmentStore(media_type="image/png")
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "image/png"},
+            content=_PNG_BYTES,
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url}, attachment_store=store)
+
+    assert is_tool_result_envelope(result) is True
+    assert result["ok"] is True
+    assert result["error"] is None
+    data = result["data"]
+    assert isinstance(data, dict)
+    assert "photo.png" in data["content"]
+    assert result["artifacts"] == [
+        {
+            "kind": "read_media",
+            "attachment_id": "att-web-1",
+            "filename": "photo.png",
+            "media_type": "image/png",
+        }
+    ]
+    # The exact fetched bytes were handed to the store under the URL's filename.
+    assert store.stored == [("photo.png", _PNG_BYTES)]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_image_url_shown_even_with_raw_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/photo.png"
+    store = _FakeAttachmentStore(media_type="image/png")
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200, headers={"Content-Type": "image/png"}, content=_PNG_BYTES, url=url
+        ),
+    )
+
+    result = await web_fetch_handler(
+        make_context(workspace), {"url": url, "raw": True}, attachment_store=store
+    )
+
+    assert result["ok"] is True
+    artifacts = result["artifacts"]
+    assert isinstance(artifacts, list)
+    assert artifacts[0]["kind"] == "read_media"
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_image_attachment_error_maps_to_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/huge.png"
+    store = _FakeAttachmentStore(
+        error=AttachmentTooLargeError("Attachment size 99 exceeds limit 4")
+    )
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200, headers={"Content-Type": "image/png"}, content=_PNG_BYTES, url=url
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url}, attachment_store=store)
+
+    error = assert_failure_envelope(result, "attachment_error")
+    assert error["retryable"] is False
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_image_without_store_returns_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/photo.png"
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200, headers={"Content-Type": "image/png"}, content=_PNG_BYTES, url=url
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert "could not be loaded" in content
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_binary_content_returns_notice_not_garbage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/installer.exe"
+    exe_bytes = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00garbage\x00bytes"
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "application/octet-stream"},
+            content=exe_bytes,
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert "Binary content" in content
+    assert "application/octet-stream" in content
+    # The decoded binary body is never surfaced as text.
+    assert "garbage" not in content
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_binary_detected_by_nul_without_content_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/data.bin"
+    # All bytes are ASCII, so the sniffer decodes it as text/plain; the embedded
+    # NUL is what still classifies it as binary.
+    blob = b"\x01\x02\x00\x03\x04binary\x00payload"
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(status_code=200, headers={}, content=blob, url=url),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert "Binary content" in content
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_non_html_json_returns_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/api/data"
+    body = '{"recipe": "cake", "tasty": true}'
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            text=body,
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == body
 
 
 @pytest.mark.asyncio
