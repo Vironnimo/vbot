@@ -7,6 +7,7 @@
   import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { runSettingsSave } from '$lib/settingsSave.js';
   import {
     buildModelSelectOptions,
     modelSelectionValue,
@@ -233,26 +234,15 @@
       return;
     }
 
-    saving = true;
-    onError('');
-
-    try {
-      const nextSettings = await rpc(
-        'settings.update',
-        buildCompactionSettingsPayload(compactionSettings),
-      );
-      onCommit(nextSettings);
-      onToast({
-        title: t('settings.compaction.saved', 'Compaction settings saved.'),
-        variant: 'success',
-      });
-    } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
-    } finally {
-      saving = false;
-    }
+    await runSettingsSave({
+      onCommit,
+      onToast,
+      onError,
+      setSaving: (value) => (saving = value),
+      buildPayload: () => buildCompactionSettingsPayload(compactionSettings),
+      successKey: 'settings.compaction.saved',
+      successFallback: 'Compaction settings saved.',
+    });
   }
 </script>
 

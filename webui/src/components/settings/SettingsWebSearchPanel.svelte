@@ -4,8 +4,8 @@
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
-  import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { runSettingsSave } from '$lib/settingsSave.js';
   import {
     buildWebSearchProviderOptions,
     buildWebSearchSettingsPayload,
@@ -122,30 +122,16 @@
       return;
     }
 
-    saving = true;
-    onError('');
-
-    try {
-      const nextSettings = await rpc(
-        'settings.update',
-        buildWebSearchSettingsPayload(webSearchSettings),
-      );
-      onCommit(nextSettings);
-      webSearchSettings = getWebSearchSettings(nextSettings);
-      onToast({
-        title: t(
-          'settings.webSearch.saveSuccess',
-          'Web search settings updated.',
-        ),
-        variant: 'success',
-      });
-    } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
-    } finally {
-      saving = false;
-    }
+    await runSettingsSave({
+      onCommit,
+      onToast,
+      onError,
+      setSaving: (value) => (saving = value),
+      buildPayload: () => buildWebSearchSettingsPayload(webSearchSettings),
+      successKey: 'settings.webSearch.saveSuccess',
+      successFallback: 'Web search settings updated.',
+      applyResult: (next) => (webSearchSettings = getWebSearchSettings(next)),
+    });
   }
 </script>
 
