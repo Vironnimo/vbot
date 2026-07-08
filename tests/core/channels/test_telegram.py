@@ -1593,7 +1593,7 @@ async def test_run_prefix_tap_wakes_agent_and_bypasses_dispatcher(
         allowed_chat_ids=[12345],
     )
     adapter._interaction_dispatcher = dispatcher
-    wake = Mock()
+    wake = Mock(return_value=True)
     adapter._engine.trigger_interaction_reply = wake  # type: ignore[method-assign]
 
     update = make_callback_update(
@@ -1605,7 +1605,8 @@ async def test_run_prefix_tap_wakes_agent_and_bypasses_dispatcher(
     await adapter._handle_callback_query(update, SimpleNamespace())
 
     # Reserved-prefix tap: acked once so the spinner stops, routed to the engine to
-    # wake the agent, and the extension dispatcher is bypassed entirely.
+    # wake the agent, extension dispatcher bypassed, and — authorized — the keyboard
+    # is closed (reply_markup=None) so the message reads as submitted.
     bot.answer_callback_query.assert_awaited_once()
     wake.assert_called_once()
     call_args = wake.call_args
@@ -1614,6 +1615,32 @@ async def test_run_prefix_tap_wakes_agent_and_bypasses_dispatcher(
     assert event.data == "run:done"
     assert conversation.chat_id == "12345"
     assert dispatched == []
+    bot.edit_message_reply_markup.assert_awaited_once()
+    assert bot.edit_message_reply_markup.await_args.kwargs["reply_markup"] is None
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_run_prefix_tap_denied_does_not_close_keyboard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    # Engine reports the tap unauthorized (a non-owner group tap): the adapter still
+    # acks the spinner but must NOT close the shared message's keyboard.
+    wake = Mock(return_value=False)
+    adapter._engine.trigger_interaction_reply = wake  # type: ignore[method-assign]
+
+    update = make_callback_update(chat_id=12345, user_id=99, data="run:done")
+    await adapter._handle_callback_query(update, SimpleNamespace())
+
+    bot.answer_callback_query.assert_awaited_once()
+    wake.assert_called_once()
+    bot.edit_message_reply_markup.assert_not_awaited()
     await adapter.stop()
 
 
@@ -1713,6 +1740,32 @@ async def test_responder_edit_renders_buttons_and_text(
     assert text_kwargs["chat_id"] == 12345
     assert text_kwargs["message_id"] == 777
     assert text_kwargs["reply_markup"] is None
+
+
+@pytest.mark.asyncio
+async def test_responder_edit_empty_buttons_removes_keyboard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    responder = telegram_module._TelegramInteractionResponder(
+        bot,
+        callback_id="cb1",
+        chat_id=12345,
+        message_id=777,
+        channel_id="tg-assistant",
+    )
+
+    await responder.edit(buttons=[])
+
+    # An empty keyboard removes the inline keyboard (reply_markup=None), not an empty
+    # InlineKeyboardMarkup which Telegram would not clear.
+    bot.edit_message_reply_markup.assert_awaited_once()
+    assert bot.edit_message_reply_markup.await_args.kwargs["reply_markup"] is None
 
 
 def test_markup_to_buttons_empty_without_keyboard() -> None:

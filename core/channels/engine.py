@@ -304,16 +304,17 @@ class ChannelConversationEngine:
         self,
         conversation: ConversationFacts,
         event: InteractionEvent,
-    ) -> None:
+    ) -> bool:
         """Wake the agent from a run-triggering button tap (reserved ``run:`` prefix).
 
         Enqueues an internal note-driven Run (the same path as
         :meth:`trigger_internal_reply`) carrying the tap context — the tapped
         button plus the message's current keyboard state — so the agent can act on
         it and confirm in the chat. Group taps are gated by ``owner_user_ids``
-        exactly like group commands; a non-owner tap is logged and dropped (the
-        adapter has already acknowledged the tap, so the tapper's spinner stops
-        either way).
+        exactly like group commands. Returns ``True`` when the tap was authorized
+        and enqueued, ``False`` when a non-owner group tap was logged and dropped;
+        the adapter has already acked the tap, and closes the keyboard only on a
+        ``True`` (an unauthorized tapper must not close the shared message).
         """
         if not self._command_sender_authorized(conversation):
             _LOGGER.info(
@@ -322,8 +323,9 @@ class ChannelConversationEngine:
                 conversation.chat_id,
                 conversation.user_id,
             )
-            return
+            return False
         self.trigger_internal_reply(conversation, _format_interaction_note(conversation, event))
+        return True
 
     def prepare_inbound_route(
         self,
