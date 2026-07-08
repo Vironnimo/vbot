@@ -121,6 +121,8 @@ Hooks are not the only thing an extension declares. `register(api)` also collect
 
 All three apply phases only touch `loaded` records and never abort bootstrap.
 
+**Bundled skills — a filesystem convention, not a declared capability.** A package/directory extension may also ship **skills** under `<extension>/skills/`, but unlike the capabilities above this is **not** a `register(api)` surface — there is no `register_skill`, no declaration, no apply phase, and the extension registry does not own it. Instead the runtime's skill scan folds every **loaded** extension's `skills/` dir into the global skill pool (`Runtime._extension_skill_dirs` → `_skill_scan_roots`), so an extension ships a skill with only the folder. They present as ordinary **global** skills (allow-list + project opt-out apply; read-only in the editor) and are refreshed live because `reload_extensions` and `apply_extension_disabled_change` both call `reload_skills`. Full behavior lives in `skills.md` (Extension-bundled skills); the only coupling on this side is that a record's `status == "loaded"` gates whether its `root_path / "skills"` is scanned.
+
 ## Channel interaction handlers
 
 A fourth capability lets an extension handle interactive-channel **button taps** deterministically in-process — no LLM run, no agent wake-up. Unlike tools/recall/prompt-blocks (which are *applied into a foreign registry*), this follows the **hook-dispatch model**: the registry owns the handler map and dispatches events, exactly like the five hook events — but it is a **separate** dispatch surface, not one of those five events.

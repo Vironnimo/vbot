@@ -22,7 +22,7 @@ from core.recall import JsonlSessionRecallBackend, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, RunCancelledError
 from core.runtime.runtime import _PROJECT_ROOT, Runtime, _detect_app_version
 from core.sessions import ChatSessionManager
-from core.skills.skills import SkillRegistry
+from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools.file_state import FileReadState
@@ -908,6 +908,16 @@ def _write_agent_skill(data_dir: Path, agent_id: str, name: str, description: st
     _write_test_skill(data_dir / "agents" / agent_id / "skills", name, description)
 
 
+def _write_extension_with_skill(
+    data_dir: Path, ext_name: str, skill_name: str, description: str
+) -> None:
+    """Write a package extension bundling one skill under ``<ext>/skills/<name>/``."""
+    ext_dir = data_dir / "extensions" / ext_name
+    ext_dir.mkdir(parents=True)
+    ext_dir.joinpath("__init__.py").write_text("", encoding="utf-8")
+    _write_test_skill(ext_dir / "skills", skill_name, description)
+
+
 def test_skills_for_none_returns_global_registry(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
@@ -1214,6 +1224,61 @@ def test_skills_for_tags_origin_per_scope(config: Config, tmp_path: Path) -> Non
     assert registry.get("mine").origin == "agent"
     assert registry.get("proj-skill").origin == "project:P"
     assert registry.get(bundled_name).origin == "bundled"
+
+
+def test_extension_bundled_skill_loads_as_global(config: Config) -> None:
+    # A loaded extension bundling ``<ext>/skills/<name>/`` contributes that skill to
+    # the global pool, tagged ``global`` like any other global skill (no code).
+    logging.getLogger("vbot").handlers = []
+    _write_extension_with_skill(config.data_dir, "ext-a", "ext-skill", "From an extension.")
+    runtime = Runtime(config)
+    runtime.start()
+
+    assert runtime.skills.get("ext-skill").description == "From an extension."
+    assert runtime.skills.get("ext-skill").origin == SKILL_ORIGIN_GLOBAL
+
+
+def test_disabled_extension_contributes_no_skill(config: Config) -> None:
+    # An extension in the disabled set is never imported, so its bundled skill
+    # stays out of the pool.
+    logging.getLogger("vbot").handlers = []
+    _write_extension_with_skill(config.data_dir, "ext-a", "ext-skill", "From an extension.")
+    config.data_dir.joinpath("settings.json").write_text(
+        json.dumps({"extensions": {"disabled": ["ext-a"]}}),
+        encoding="utf-8",
+    )
+    runtime = Runtime(config)
+    runtime.start()
+
+    with pytest.raises(KeyError):
+        runtime.skills.get("ext-skill")
+
+
+def test_own_global_skill_wins_over_extension_skill(config: Config) -> None:
+    # ``<data_dir>/skills`` is scanned before extension skill dirs, so a hand-authored
+    # global skill wins a name collision with an extension's.
+    logging.getLogger("vbot").handlers = []
+    _write_extension_with_skill(config.data_dir, "ext-a", "shared", "From the extension.")
+    _write_test_skill(config.data_dir / "skills", "shared", "My own global skill.")
+    runtime = Runtime(config)
+    runtime.start()
+
+    assert runtime.skills.get("shared").description == "My own global skill."
+
+
+def test_disabling_extension_live_drops_its_skill(config: Config) -> None:
+    # Live-deactivating an extension refreshes the skill registry, so its bundled
+    # skill disappears without a restart.
+    logging.getLogger("vbot").handlers = []
+    _write_extension_with_skill(config.data_dir, "ext-a", "ext-skill", "From an extension.")
+    runtime = Runtime(config)
+    runtime.start()
+    assert runtime.skills.get("ext-skill").description == "From an extension."
+
+    asyncio.run(runtime.apply_extension_disabled_change({"ext-a"}))
+
+    with pytest.raises(KeyError):
+        runtime.skills.get("ext-skill")
 
 
 class _BlockingChannelAdapter:
