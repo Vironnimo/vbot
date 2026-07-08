@@ -36,6 +36,7 @@ from server.events import RESOURCE_KIND_CLIENTS, ServerEventBus
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import bridge_run_to_event_bus, publish_resource_changed
 from server.rpc.methods import dispatch_rpc
+from server.rpc.payloads import remove_opaque_provider_metadata
 
 JsonObject = dict[str, Any]
 
@@ -728,21 +729,9 @@ def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | N
 async def _sse_run_events(run: Any, *, after_sequence: int = 0) -> AsyncGenerator[str, None]:
     async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
         async for event in events:
-            data = _remove_opaque_provider_metadata(event.to_dict())
+            data = remove_opaque_provider_metadata(event.to_dict())
             yield (
                 f"id: {event.sequence}\n"
                 f"event: {event.type}\n"
                 f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
             )
-
-
-def _remove_opaque_provider_metadata(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _remove_opaque_provider_metadata(item)
-            for key, item in value.items()
-            if key != "reasoning_meta"
-        }
-    if isinstance(value, list):
-        return [_remove_opaque_provider_metadata(item) for item in value]
-    return value

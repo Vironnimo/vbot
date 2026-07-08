@@ -39,7 +39,7 @@ from server.events import (
     RUN_OUTPUT_SERVER_EVENT,
     RUN_STARTED_SERVER_EVENT,
 )
-from server.rpc.payloads import _remove_opaque_provider_metadata
+from server.rpc.payloads import remove_opaque_provider_metadata
 
 JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger("vbot.server.rpc.event_bridge")
@@ -185,17 +185,17 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
         "run_event_timestamp": event.timestamp,
     }
     if event.type in RUN_OUTPUT_EVENT_TYPES or event.type == RUN_STARTED_EVENT:
-        payload["output"] = _remove_opaque_provider_metadata(event.payload)
+        payload["output"] = remove_opaque_provider_metadata(event.payload)
     if event.type in RUN_TERMINAL_EVENT_TYPES:
         payload["status"] = event.payload.get("status")
         if "timing" in event.payload:
-            payload["timing"] = _remove_opaque_provider_metadata(event.payload["timing"])
+            payload["timing"] = remove_opaque_provider_metadata(event.payload["timing"])
         if "session_usage" in event.payload:
-            payload["session_usage"] = _remove_opaque_provider_metadata(
+            payload["session_usage"] = remove_opaque_provider_metadata(
                 event.payload["session_usage"]
             )
     if event.type == RUN_COMPLETED_EVENT and "usage" in event.payload:
-        payload["usage"] = _remove_opaque_provider_metadata(event.payload["usage"])
+        payload["usage"] = remove_opaque_provider_metadata(event.payload["usage"])
     return {"type": SERVER_EVENT_TYPES.get(event.type, RUN_OUTPUT_SERVER_EVENT), "payload": payload}
 
 
