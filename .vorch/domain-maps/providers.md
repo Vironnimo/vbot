@@ -6,6 +6,38 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 
 `core/providers/` translates canonical vBot chat requests into external provider wire protocols. Provider configs live in `resources/providers/*.json`; normalized model catalogs live in `resources/models/*.json`; runtime creates adapters with one explicit connection, an async token getter, provider defaults, optional debug capture, and provider-scoped model lookup. Concrete wire behavior belongs in the provider child maps under `.vorch/domain-maps/providers/`; keep the root map focused on shared contracts and extension rules. A single provider can serve multiple connection variants (different auth, base URL, or wire protocol) through one adapter class that branches on the connection's declared `mode`; OpenAI is the canonical example with `api-key` and `subscription` connections on one `OpenAIAdapter`.
 
+## Terms
+
+Domain-specific vocabulary for providers and the wire. Core terms (Provider, Model, Reasoning) live in `.vorch/GLOSSARY.md`; the Model-DB terms (Canonical id, Refresh, Load, Reasoning control) live in `models.md`.
+
+### Adapter
+**Definition:** A code class that speaks a specific wire protocol. The adapter hierarchy:
+
+- `ProviderAdapter` (ABC) — defines the interface: `send()`, `stream()`
+- `OpenAICompatibleAdapter` — concrete class for the generic OpenAI `chat/completions` protocol. Used directly by fully compatible providers; mostly compatible providers should subclass it when runtime behavior or catalog discovery differs.
+- `OpenCodeGoAdapter`, `OpenRouterAdapter`, and `GitHubCopilotAdapter` — OpenAI-compatible subclasses that own provider-specific runtime or model-catalog knowledge.
+- `AnthropicAdapter` — concrete class for Anthropic's Messages API. Own wire protocol, own message format, own thinking/reasoning parameters.
+- Custom adapters can inherit from `OpenAICompatibleAdapter` and override specific methods when a provider is mostly but not fully OpenAI-compatible.
+
+**Not:** A model, a provider config, or a data format. The adapter is purely the wire protocol translation layer.
+
+### Connection
+**Definition:** One authentication/wire variant of a Provider, declared statically in `resources/providers/<name>.json`: auth type (`api_key`/`oauth`), optional per-connection base URL, wire `mode`, and models endpoint. Addressed as `<provider>:<connection>` (e.g. `openai:api-key`, `openai:subscription`); model catalogs and discovery are connection-scoped.
+**Not:** An Account. The Connection defines *how* vBot talks to the provider; the Account decides *which credential* is used on it. Also not a network/HTTP connection.
+
+### Account
+**Definition:** A named credential slot on a Connection — one of possibly several API keys or OAuth logins for the same Connection, addressed as `<provider>:<connection>[:<account>]` with default slot `default`. When no account is pinned, the first usable one is chosen deterministically (`default` first, then sorted); API-key accounts map to derived env keys (`BASE__<ACCOUNT>`), OAuth accounts to per-account token files.
+**Not:** A Connection, and not a user account in the product sense. Accounts are interchangeable credentials — they never change the wire protocol or the model catalog.
+
+### Reasoning intent
+**Definition:** The provider-neutral description of what a single request should ask of the model's reasoning, produced once by `resolve_reasoning_intent(...)` (in `core/providers/reasoning.py`) from `(model control, agent effort)`. One of five kinds: `default` (no effort selected — leave the provider default untouched), `off` (do not reason), `effort` (reason at a snapped effort level), `budget` (reason within a token budget), or `on` (reason, binary toggle). Each adapter has a small *render* step that translates the intent into its own wire fields — adding a future provider or control kind is a new render, never new policy. The effort→budget math, `none`→off mapping, and `max_tokens` clamp all live in this one resolver.
+**Not:** A wire payload or a provider parameter. The intent is the shared vocabulary *between* the decision and the per-adapter render; it never goes on the wire as-is. The model-side capability it reads (`control`) is defined in `models.md`.
+
+### Chain of Thought (CoT)
+**Definition:** The opaque output produced during reasoning — both readable text and provider-specific data (signatures, encrypted content) that must be preserved unchanged for round-tripping. How far persisted CoT replays into later requests is the adapter's per-provider reasoning-replay policy (`none` / `current_run` / `full_history`): within tool-use loops dropping it breaks model continuity, and providers like Anthropic expect it back unchanged across the whole same-model conversation. The adapter handles all serialization and round-trip preservation; the chat layer owns history shaping (which entries keep CoT) but never interprets CoT data.
+**Not:** Reasoning. CoT is the opaque output; reasoning is the capability and its configuration (GLOSSARY → Reasoning).
+**Example:** Anthropic returns `thinking` blocks with a `signature` field. Whenever history is replayed — a tool-use loop or, under `full_history`, a later run on the same model — the adapter must send both fields back unchanged; dropping the signature breaks continuity even though vBot never reads it.
+
 ## Data Model
 
 - Provider JSON owns `id`, `name`, adapter selector, base URL, `connections`, optional `defaults`, optional `extra_headers`, optional `models_endpoint`, and an optional `context_window`. `context_window` is the per-provider **read-side fact default** — a positive int (validated; `0`/negative/non-int rejected) applied when a model on this provider has no window of its own. It is distinct from `defaults` (which holds request-shaping params like `max_tokens`): the fine line is *request-shaping defaults → `defaults`/adapter; read-side facts like `context_window` → provider-config level*.

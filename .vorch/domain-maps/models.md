@@ -15,6 +15,26 @@ The system splits cleanly into two moments:
 
 The rule that ties them: **a hand-edit to an override takes effect on the next LOAD, not on a refresh.** Override files are read at load time, so correcting a fact is "edit the override, reload the registry" — never "re-run refresh".
 
+## Terms
+
+Domain-specific vocabulary for the Model DB. Core terms (Provider, Model, Reasoning) live in `.vorch/GLOSSARY.md`.
+
+### Canonical id
+**Definition:** A models.dev-style `lab/model` identifier (e.g. `deepseek/deepseek-v4-pro`) that names a model independent of any provider. It is a purely internal join/DB key used during at-load assembly to inherit shared base facts onto a provider model — it is **never sent on the wire**. A provider model reaches its canonical base by an explicit `canonical` pointer (hand or auto) or an exact wire-id match; resolution is deterministic only, never fuzzy.
+**Not:** A wire `model-id` (the exact string an API expects). The canonical id never leaves assembly; the model-id is what providers receive. A missed join is not an error — the model runs on provider + override data.
+
+### Refresh
+**Definition:** The DUMB half of the Model DB: fetch provider `/models`, the public models.dev `catalog.json`, and any provider task-capability catalog the adapter declares (e.g. OpenRouter's image API with typed per-model option schemas), then project the results onto disk per file. Needs network and (for provider catalogs) a credential; rare and explicit (`model.refresh_db`). It writes the pure per-file projection — no merge across files, no join across providers.
+**Not:** Load. Refresh writes disk from the network; a hand-edit to an override file takes effect on the next **Load**, with no refresh.
+
+### Load
+**Definition:** The SMART half of the Model DB (`ModelRegistry.load` → `assembly.py`): assemble each effective model in memory from the on-disk layers — resolving the canonical join and the field-level merge — with no network and no key. Frequent (startup, after cache invalidation).
+**Not:** Refresh, and not generic file loading. Load does the cross-file assembly Refresh deliberately avoids; it reads the layer files but fetches nothing.
+
+### Reasoning control
+**Definition:** How a provider steers a model's reasoning on the wire — one of `levels` (an effort ladder), `on_off` (a thinking toggle), or `budget` (a token budget, with `budget_max`). vBot derives it at refresh from the models.dev `reasoning_options` source field (an `effort` option wins → `levels`; else `budget_tokens` → `budget`; else `toggle` → `on_off`) and stores it in `capabilities.reasoning.control`.
+**Not:** The `thinking_effort` the agent selects. `control` is the model's wire capability; `thinking_effort` is the per-agent setting that gets snapped against the model's `levels` ladder. The runtime resolution of the two (the Reasoning intent) lives in `providers.md`.
+
 ## The three layers under `resources/models/`
 
 Each layer is a different home with a clear responsibility (assembly file-format contract in `assembly.py`'s module docstring — the source of truth):
