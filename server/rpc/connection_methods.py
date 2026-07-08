@@ -47,7 +47,7 @@ from server.rpc.provider_access import (
     _runtime_resources_dir,
     _runtime_token_store,
 )
-from server.rpc.validation import _required_string
+from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger("vbot.server.rpc.connection_methods")
@@ -70,12 +70,7 @@ MODEL_LIST_FILTER_FIELDS = frozenset(
 
 
 async def _list_models(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - MODEL_LIST_FILTER_FIELDS)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported model.list fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, MODEL_LIST_FILTER_FIELDS, "model.list")
 
     try:
         model_query = ModelQuery.from_filters(params)
@@ -199,12 +194,9 @@ def _effective_account_id(
 
 
 def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "value", "account"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported provider set-key fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(
+        params, {"provider_id", "connection_id", "value", "account"}, "provider set-key"
+    )
 
     provider_id = _required_string(params, "provider_id")
     value = _required_string(params, "value")
@@ -237,12 +229,7 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "account"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported provider unset-key fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"provider_id", "connection_id", "account"}, "provider unset-key")
 
     provider_id = _required_string(params, "provider_id")
     raw_connection_id = params.get("connection_id")
@@ -279,12 +266,7 @@ def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported model refresh fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"provider_id"}, "model refresh")
 
     try:
         runtime = state.runtime
@@ -304,12 +286,7 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "account"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported provider connect fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"provider_id", "connection_id", "account"}, "provider connect")
 
     provider_id = _required_string(params, "provider_id")
     connection_id = _required_string(params, "connection_id")
@@ -377,12 +354,7 @@ def _on_device_flow_poll_done(task: asyncio.Task[None]) -> None:
 
 
 def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "account"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported provider disconnect fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"provider_id", "connection_id", "account"}, "provider disconnect")
 
     provider_id = _required_string(params, "provider_id")
     connection_id = _required_string(params, "connection_id")
@@ -411,12 +383,9 @@ def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "account"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported provider connection status fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(
+        params, {"provider_id", "connection_id", "account"}, "provider connection status"
+    )
 
     provider_id = _required_string(params, "provider_id")
     connection_id = _required_string(params, "connection_id")

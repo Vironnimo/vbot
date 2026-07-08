@@ -45,6 +45,7 @@ from server.rpc.validation import (
     _ensure_model_connection_supported,
     _optional_bool,
     _optional_string,
+    _reject_unsupported,
     _required_agent_address,
     _required_string,
 )
@@ -63,12 +64,7 @@ def _list_agents(state: Any) -> JsonObject:
 
 
 def _get_agent(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported agent.get fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"id"}, "agent.get")
 
     agent_id = _required_string(params, "id")
     try:
@@ -208,12 +204,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     child is already covered by the per-session busy guard.
     """
     supported_fields = {"agent_id", "session_id"}
-    unsupported_fields = sorted(set(params) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported session.delete fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, supported_fields, "session.delete")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
@@ -278,12 +269,7 @@ def _resolve_post_delete_landing(
 
 
 def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"agent_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported session.list fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"agent_id"}, "session.list")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     try:
@@ -304,12 +290,7 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
     chat/channel constant.
     """
     supported_fields = {"agent_id", "session_id", "target_agent_id"}
-    unsupported_fields = sorted(set(params) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported session.fork fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, supported_fields, "session.fork")
 
     source_agent_id, source_project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
@@ -373,12 +354,7 @@ def _optional_fork_target(
 
 async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"agent_id", "session_id", "channel_id", "platform_conv_id"}
-    unsupported_fields = sorted(set(params) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported session.link_channel fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, supported_fields, "session.link_channel")
 
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
@@ -430,12 +406,7 @@ def _rename_session(state: Any, params: JsonObject) -> JsonObject:
     can confirm what was applied after normalization.
     """
     supported_fields = {"agent_id", "session_id", "title"}
-    unsupported_fields = sorted(set(params) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported session.rename fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, supported_fields, "session.rename")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")

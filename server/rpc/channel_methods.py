@@ -17,6 +17,7 @@ from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
     _optional_bool,
     _optional_string_list,
+    _reject_unsupported,
     _required_bool,
     _required_string,
     _required_string_list,
@@ -50,12 +51,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         "owner_user_ids",
         "observe_unaddressed",
     }
-    unsupported_fields = sorted(set(params) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported channel.create fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, supported_fields, "channel.create")
 
     config = ChannelConfig(
         id=_required_string(params, "id"),
@@ -95,12 +91,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         "owner_user_ids",
         "observe_unaddressed",
     }
-    unsupported_fields = sorted(set(params) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported channel.update fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, supported_fields, "channel.update")
 
     channel_id = _required_string(params, "id")
     updates: JsonObject = {}
@@ -144,12 +135,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported channel.delete fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"id"}, "channel.delete")
 
     channel_id = _required_string(params, "id")
     try:
@@ -161,12 +147,7 @@ def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported channel.enable fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"id"}, "channel.enable")
 
     channel_id = _required_string(params, "id")
     try:
@@ -178,12 +159,7 @@ def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported channel.disable fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"id"}, "channel.disable")
 
     channel_id = _required_string(params, "id")
     try:
@@ -195,12 +171,7 @@ def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _channel_status(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported channel.status fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"id"}, "channel.status")
 
     channel_id = _required_string(params, "id")
     try:

@@ -57,7 +57,12 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.runtime_access import _state_chat_runs
-from server.rpc.validation import _ensure_model_usable, _optional_string, _required_string
+from server.rpc.validation import (
+    _ensure_model_usable,
+    _optional_string,
+    _reject_unsupported,
+    _required_string,
+)
 
 JsonObject = dict[str, Any]
 
@@ -121,12 +126,7 @@ def _invalidate_project_caches(state: Any, project_id: str) -> None:
 
 
 def _add_project(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - _ADD_FIELDS)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.add fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, _ADD_FIELDS, "project.add")
 
     cwd = _required_string(params, "cwd")
     if not cwd_exists(cwd):
@@ -188,12 +188,7 @@ def _list_projects(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _show_project(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"project_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.show fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"project_id"}, "project.show")
 
     project_id = _required_string(params, "project_id")
     try:
@@ -266,12 +261,9 @@ def _set_override(state: Any, params: JsonObject) -> JsonObject:
     (``clear_override`` returns the same shape). No cache invalidation is needed —
     ``project.json`` is read fresh on every resolve.
     """
-    unsupported_fields = sorted(set(params) - {"project_id", "agent_id", "field", "value"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.set_override fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(
+        params, {"project_id", "agent_id", "field", "value"}, "project.set_override"
+    )
 
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
@@ -293,12 +285,7 @@ def _clear_override(state: Any, params: JsonObject) -> JsonObject:
     a no-op success. No cache invalidation is needed — ``project.json`` is read fresh
     on every resolve, so the dropped override takes effect on the next run.
     """
-    unsupported_fields = sorted(set(params) - {"project_id", "agent_id", "field"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.clear_override fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"project_id", "agent_id", "field"}, "project.clear_override")
 
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
@@ -357,12 +344,7 @@ def _validate_override_value(state: Any, field: str, value: Any) -> Any:
 
 
 async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"project_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.rm fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"project_id"}, "project.rm")
 
     project_id = _required_string(params, "project_id")
     projects = _projects(state)
@@ -631,12 +613,7 @@ def _detect_project(state: Any, params: JsonObject) -> JsonObject:
     location or null) the dialog builds its format choice and CLAUDE.md
     suggestion from.
     """
-    unsupported_fields = sorted(set(params) - {"cwd"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.detect fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"cwd"}, "project.detect")
 
     cwd = _optional_string(params, "cwd")
     if not cwd or not cwd_exists(cwd):

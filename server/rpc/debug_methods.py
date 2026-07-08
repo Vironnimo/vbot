@@ -27,7 +27,7 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.provider_access import _provider_connection
-from server.rpc.validation import _required_string
+from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
 _logger = logging.getLogger("vbot.server.rpc.debug_methods")
@@ -225,12 +225,7 @@ def _debug_trace_get(state: Any, params: JsonObject) -> JsonObject:
     Requires ``debug.enabled`` to be ``true``.
     """
     trace_id = _required_string(params, "trace_id")
-    unsupported_fields = sorted(set(params) - {"trace_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported debug.trace_get fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"trace_id"}, "debug.trace_get")
     try:
         runtime = state.runtime
         _ensure_debug_enabled(runtime)
@@ -269,12 +264,7 @@ async def _debug_model_probe(state: Any, params: JsonObject) -> JsonObject:
     """
     provider_id = _required_string(params, "provider_id")
     connection_id = _required_string(params, "connection_id")
-    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported debug.model_probe fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"provider_id", "connection_id"}, "debug.model_probe")
 
     runtime = state.runtime
     _ensure_debug_enabled(runtime)

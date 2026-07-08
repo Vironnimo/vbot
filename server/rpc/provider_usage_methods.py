@@ -14,6 +14,7 @@ from typing import Any, cast
 from core.providers.usage import ProviderUsageService
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
 
@@ -21,12 +22,7 @@ _SUPPORTED_FIELDS = {"connections"}
 
 
 async def _provider_usage(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - _SUPPORTED_FIELDS)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported provider.usage fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, _SUPPORTED_FIELDS, "provider.usage")
 
     connections = _optional_connections(params)
     report = await _usage_service(state).report(connections=connections)
