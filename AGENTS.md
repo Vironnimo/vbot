@@ -123,3 +123,5 @@ Do NOT install packages speculatively. Only request what the current task requir
 If a section referenced from `.vorch/PROJECT.md` doesn't exist yet, skip it and proceed with what you have.
 
 When working on a domain, read its domain map from `.vorch/domain-maps/`. Your task will list which maps to read — treat that as a starting point, not a ceiling. Read others if you need them.
+
+Terminology has two homes: core, cross-cutting terms live in `.vorch/GLOSSARY.md`; a domain's own terms live in a `## Terms` section inside its map. So a domain map is also where that domain's vocabulary is defined — reading the map gives you both the domain and its words.

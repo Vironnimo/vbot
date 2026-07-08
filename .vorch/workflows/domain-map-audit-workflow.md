@@ -12,6 +12,7 @@ A corpus-wide pass over **all** domain maps: compress for token economy without 
    - **Consolidation** — scattered points that are one idea → merge into one statement.
    - **Boundary drift** — overlapping responsibility across maps → sharpen the boundary, state who owns what.
    - **Staleness** — claims that no longer match the code → verify, then fix or remove.
+   - **Term home** — a `## Terms` section is legitimate map content, never an inventory to cut. But check placement: a domain-internal term sitting in `.vorch/GLOSSARY.md`, or a term duplicated in both the glossary and a map's `## Terms` → one home only (glossary for cross-cutting/user-facing, the map's `## Terms` for domain-internal); leave no copy behind and fix stale "GLOSSARY → <Term>" pointers.
 4. **Per-map tightening** — Apply `domain-map-workflow.md`'s What To Cut, and extract task-gated material (procedures, deep references — needed only for one task) into `.vorch/domain-maps/<domain>/` with a sharp trigger line in the map's `## References`.
 5. **Edit plan** — Present one numbered plan before editing: per change, what it is, files touched, where each moved or removed fact now lives. No fact may be dropped. Wait for approval.
 6. **Apply & verify** — Edit, then re-read the changed maps and the diff: no fact lost, every pointer resolves, every trigger sharp, `.vorch/PROJECT.md` index current.

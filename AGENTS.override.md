@@ -60,13 +60,13 @@ There's no orchestrator here to keep these current — that's on you. When a cha
 
 ## Glossary
 
-`.vorch/GLOSSARY.md` is read at every session start and is shared context for the whole project — keeping it right matters. Watch for glossary candidates as you work and while discussing with the user:
+`.vorch/GLOSSARY.md` is read at every session start and is shared context for the whole project — keeping it right matters, which means keeping it **small**. It holds only core, cross-cutting terms every agent needs regardless of what it touches, plus terms the user says in conversation. A **domain-internal** term — one you only need once you are already working inside that one domain, and that the user never says — lives in a `## Terms` section inside that domain's map instead, never in the glossary. **One home per term, never both** (writing a domain-map term is domain-map work — the HARD GATE above applies). Watch for term candidates as you work and while discussing with the user:
 
 - A term got **implicitly defined** through the conversation, a clarification, or a decision.
 - A **project-specific term** in play could plausibly be misread (non-obvious meaning here).
 - A term seems to cause **friction** because you and the user may mean different things by it.
 
-Only project-specific terms — never standard programming terms or anything self-evident. When a term matters, propose handling it (add full definition / add placeholder / skip), then run the `glossary` skill — it handles triage, the interview, and writing the entry into `.vorch/GLOSSARY.md`.
+Only project-specific terms — never standard programming terms or anything self-evident. When a term matters, decide its home by the rule above, propose handling it (add full definition / add placeholder / skip), then run the `glossary` skill — it handles triage (including which home), the interview, and writing the entry into the glossary or the domain map's `## Terms` section.
 
 ## Git
 

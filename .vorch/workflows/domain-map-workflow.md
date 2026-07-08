@@ -49,6 +49,15 @@ Cut information that slows agents down without making them safer:
 
 Do not cut important behavior, field semantics, output contracts, or gotchas merely because they duplicate code. Short but wrong is worse than long.
 
+## Domain Terms (the `## Terms` section)
+
+A domain map carries a `## Terms` section: the crisp vocabulary specific to this domain — the `Definition:` / `Not:` entries an agent (or the user) needs to read the domain the same way everyone else does. This is the domain-local half of the project's shared vocabulary; the cross-cutting core lives in `.vorch/GLOSSARY.md`.
+
+- **What belongs here:** a term you only need once you are already working inside this domain, and that the user never says in conversation — implementation-level vocabulary. A term that is core and cross-cutting (any agent needs it regardless of domain), or that the user uses, belongs in `.vorch/GLOSSARY.md` instead. **One home per term, never both** — if you move a term in from the glossary, delete the glossary copy and fix the pointers.
+- **Placement:** put `## Terms` **high** — right after the Overview, before the detailed sections — because agents often read only the first screen of a map. Never at the end.
+- **Format:** one `### <Term>` per entry, a `**Definition:**` line (max ~2 sentences, agent-perspective), and an optional `**Not:**` line only when confusion with a nearby term is a real risk — the same shape as a glossary entry, one heading level deeper. Open the section with one line naming which of this domain's core terms live in the glossary, so the split is visible (e.g. "Core terms (Provider, Model) live in `.vorch/GLOSSARY.md`").
+- **Cross-references:** name a term in another map plainly ("see `models.md`"); point at a core term as "GLOSSARY → <Term>". When a term leaves the glossary, sweep the maps for stale "GLOSSARY → <Term>" pointers to it.
+
 ## References & Supplementary Files
 
 A domain map is the always-read orientation layer for its domain. Material needed only for a specific task does not belong in it — split it into a supplementary file so reading the map stays cheap.
@@ -135,6 +144,10 @@ Use this as a starting point. Remove every section that does not apply.
 ## Overview
 
 [What this domain is responsible for. What it owns. What it does not do if non-obvious. Keep it to the context an agent needs before touching the domain.]
+
+## Terms
+
+[Domain-local vocabulary — the terms specific to this domain, one `### Term` each with a `**Definition:**` (+ optional `**Not:**`). Place high, right after Overview. Core cross-cutting terms live in `.vorch/GLOSSARY.md`, not here. Omit the section if the domain has no domain-specific terms.]
 
 ## Data Model
 
