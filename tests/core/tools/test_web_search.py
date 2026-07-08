@@ -298,7 +298,7 @@ async def test_web_search_handler_brave_network_error(
         del retry_after
         sleep_attempts.append(attempt)
 
-    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
 
     def _raise_connect_error(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection failed", request=request)
@@ -333,7 +333,7 @@ async def test_web_search_handler_retries_transient_http_status(
         del retry_after
         sleep_attempts.append(attempt)
 
-    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
 
     route = respx.get(_BRAVE_ENDPOINT).mock(
         side_effect=[
@@ -365,7 +365,7 @@ async def test_web_search_brave_exhausted_status_signals_retryable(
     async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
 
     route = respx.get(_BRAVE_ENDPOINT).mock(
         return_value=httpx.Response(503, json={"error": {"message": "busy"}})
@@ -394,7 +394,7 @@ async def test_web_search_brave_network_error_signals_retryable(
     async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
 
     def _raise_connect_error(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection failed", request=request)
@@ -768,7 +768,7 @@ async def test_web_search_handler_honors_retry_after_hint(
         del attempt
         observed_hints.append(retry_after)
 
-    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
 
     respx.get(_BRAVE_ENDPOINT).mock(
         side_effect=[
