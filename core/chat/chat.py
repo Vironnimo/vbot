@@ -1631,19 +1631,11 @@ class ChatLoop:
             self._lookup_provider_config(provider_id),
             model_metadata=model_entry.metadata,
             model_key=f"{provider_id}/{resolved_model_id}",
-            local_context_windows=self._load_local_context_windows(),
+            # Live read through the runtime's single source of truth (no reload
+            # hook, StorageError-tolerant), so a settings change applies to the
+            # next request without re-implementing the storage read here.
+            local_context_windows=self._runtime.local_context_windows(),
         )
-
-    def _load_local_context_windows(self) -> Any:
-        """Return the live user-configured local-model window map, or empty.
-
-        Read at call time (no reload hook) so a settings change applies to the
-        next request; tolerant of a partial runtime in tests.
-        """
-        try:
-            return self._runtime.storage.load_local_models_settings()["context_windows"]
-        except (AttributeError, KeyError):
-            return {}
 
     def _lookup_provider_config(self, provider_id: str) -> Any:
         """Return the ProviderConfig for the read-side window default, or None.

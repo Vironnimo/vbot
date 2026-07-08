@@ -6,6 +6,7 @@ and testability without dragging in concrete implementations.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.providers.accounts import ProviderAccount
@@ -207,4 +208,8 @@ class RuntimeServices(Protocol):
 
     def get_adapter(self, provider_id: str, connection_id: str) -> ProviderAdapter:
         """Build a wired provider adapter for one connection."""
+        ...
+
+    def local_context_windows(self) -> Mapping[str, Any]:
+        """Live user-configured local-model context-window map, or empty."""
         ...
