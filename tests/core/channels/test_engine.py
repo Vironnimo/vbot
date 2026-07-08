@@ -1470,11 +1470,12 @@ async def test_interaction_tap_enqueues_internal_run_with_state(tmp_path: Path) 
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
     engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
 
-    engine.trigger_interaction_reply(
+    authorized = engine.trigger_interaction_reply(
         make_conversation(kind="direct", user_id=50), _interaction_event()
     )
     await drain(engine, 12345)
 
+    assert authorized is True
     trigger_mock.assert_awaited_once()
     await_args = trigger_mock.await_args
     assert await_args is not None
@@ -1492,11 +1493,12 @@ async def test_group_owner_interaction_tap_enqueues(tmp_path: Path) -> None:
         tmp_path, owner_user_ids=["50"], trigger_run=trigger_mock
     )
 
-    engine.trigger_interaction_reply(
+    authorized = engine.trigger_interaction_reply(
         make_conversation(kind="group", user_id=50, message_id="777"), _interaction_event()
     )
     await drain(engine, 12345)
 
+    assert authorized is True
     trigger_mock.assert_awaited_once()
     await engine.stop()
 
@@ -1511,11 +1513,12 @@ async def test_group_non_owner_interaction_tap_is_dropped(
     )
 
     caplog.set_level(logging.INFO, logger="vbot.channels.engine")
-    engine.trigger_interaction_reply(
+    authorized = engine.trigger_interaction_reply(
         make_conversation(kind="group", user_id=99, message_id="777"), _interaction_event()
     )
     await drain(engine, 12345)
 
+    assert authorized is False
     trigger_mock.assert_not_awaited()
     assert any("denied for non-owner" in record.getMessage() for record in caplog.records)
     await engine.stop()

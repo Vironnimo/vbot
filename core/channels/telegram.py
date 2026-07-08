@@ -854,10 +854,14 @@ class TelegramChannelAdapter(ChannelAdapter):
             # A reserved-prefix tap wakes the agent instead of an extension: ack now
             # so the spinner stops immediately, then hand the tap to the engine, which
             # gates it (group owner) and enqueues an internal Run carrying the current
-            # keyboard state. The extension dispatcher is intentionally bypassed.
+            # keyboard state. On an authorized tap, best-effort close the keyboard so
+            # the message reads as "submitted" and cannot be re-triggered. The
+            # extension dispatcher is intentionally bypassed.
             with contextlib.suppress(ChannelError):
                 await responder.answer()
-            self._engine.trigger_interaction_reply(conversation, event)
+            if self._engine.trigger_interaction_reply(conversation, event):
+                with contextlib.suppress(ChannelError):
+                    await responder.edit(buttons=[])
             return
 
         if self._interaction_dispatcher is not None:
@@ -1201,7 +1205,9 @@ class _TelegramInteractionResponder:
         text: str | None = None,
         buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
-        markup = _buttons_to_markup(buttons) if buttons is not None else None
+        # An empty keyboard means "remove the inline keyboard": Telegram clears it
+        # only for reply_markup=None, not for an empty InlineKeyboardMarkup.
+        markup = _buttons_to_markup(buttons) if buttons else None
         with _telegram_error_boundary(self._channel_id):
             if text is not None:
                 await self._bot.edit_message_text(

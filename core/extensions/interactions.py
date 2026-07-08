@@ -81,8 +81,10 @@ class InteractionResponder(Protocol):
     ``answer`` stops the tapper's client-side spinner (an empty ``text`` is a
     silent ack; a non-empty one shows a toast, or a modal alert when ``alert``).
     ``edit`` rewrites the message that was tapped — its ``text`` and/or its
-    ``buttons`` (keyboard). Every interactive tap must be answered exactly once;
-    the channel guarantees a fallback ack if the handler does not answer itself.
+    ``buttons`` (keyboard); an empty ``buttons`` list removes the keyboard (the
+    message stays, its buttons are cleared). Every interactive tap must be
+    answered exactly once; the channel guarantees a fallback ack if the handler
+    does not answer itself.
     """
 
     async def answer(self, text: str | None = None, *, alert: bool = False) -> None: ...
