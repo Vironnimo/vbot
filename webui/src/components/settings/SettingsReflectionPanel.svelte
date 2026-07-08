@@ -4,8 +4,8 @@
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
-  import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { runSettingsSave } from '$lib/settingsSave.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
@@ -143,29 +143,18 @@
       return;
     }
 
-    saving = true;
-    onError('');
-
-    try {
-      const nextSettings = await rpc('settings.update', {
+    await runSettingsSave({
+      onCommit,
+      onToast,
+      onError,
+      setSaving: (value) => (saving = value),
+      buildPayload: () => ({
         reflection: getReflectionSettings({ reflection: reflectionSettings }),
-      });
-      onCommit(nextSettings);
-      reflectionSettings = getReflectionSettings(nextSettings);
-      onToast({
-        title: t(
-          'settings.reflection.saveSuccess',
-          'Reflection settings updated.',
-        ),
-        variant: 'success',
-      });
-    } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
-    } finally {
-      saving = false;
-    }
+      }),
+      successKey: 'settings.reflection.saveSuccess',
+      successFallback: 'Reflection settings updated.',
+      applyResult: (next) => (reflectionSettings = getReflectionSettings(next)),
+    });
   }
 </script>
 

@@ -3,8 +3,8 @@
 
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
-  import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { runSettingsSave } from '$lib/settingsSave.js';
   import {
     buildRecallBackendOptions,
     buildRecallSettingsPayload,
@@ -97,27 +97,16 @@
       return;
     }
 
-    saving = true;
-    onError('');
-
-    try {
-      const nextSettings = await rpc(
-        'settings.update',
-        buildRecallSettingsPayload(recallSettings),
-      );
-      onCommit(nextSettings);
-      recallSettings = getRecallSettings(nextSettings);
-      onToast({
-        title: t('settings.recall.saveSuccess', 'Recall backend updated.'),
-        variant: 'success',
-      });
-    } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
-    } finally {
-      saving = false;
-    }
+    await runSettingsSave({
+      onCommit,
+      onToast,
+      onError,
+      setSaving: (value) => (saving = value),
+      buildPayload: () => buildRecallSettingsPayload(recallSettings),
+      successKey: 'settings.recall.saveSuccess',
+      successFallback: 'Recall backend updated.',
+      applyResult: (next) => (recallSettings = getRecallSettings(next)),
+    });
   }
 </script>
 
