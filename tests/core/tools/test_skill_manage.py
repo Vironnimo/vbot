@@ -25,17 +25,27 @@ def _skill_md(
 class _Harness:
     def __init__(self, tmp_path: Path) -> None:
         self._homes = tmp_path / "agents"
+        self._global = tmp_path / "skills"
         self.invalidated: list[str] = []
+        self.reloaded = 0
         self.tools = ToolRegistry()
         register_skill_manage_tool(
             self.tools,
             SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"]),
             self.home,
             self.invalidated.append,
+            lambda: self._global,
+            self._on_reload,
         )
 
     def home(self, agent_id: str) -> Path:
         return self._homes / agent_id / "skills"
+
+    def global_home(self) -> Path:
+        return self._global
+
+    def _on_reload(self) -> None:
+        self.reloaded += 1
 
     def run(self, arguments: dict[str, object], agent_id: str = "main") -> dict[str, Any]:
         context = _context(agent_id)
@@ -195,7 +205,7 @@ def test_unknown_argument_rejected(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
 
     result = harness.run(
-        {"operation": "create", "name": "demo", "content": _skill_md(), "scope": "global"}
+        {"operation": "create", "name": "demo", "content": _skill_md(), "target": "global"}
     )
 
     assert result["ok"] is False
@@ -210,3 +220,55 @@ def test_writes_target_only_calling_agents_home(tmp_path: Path) -> None:
     assert (harness.home("alice") / "demo" / "SKILL.md").is_file()
     assert not harness.home("bob").exists()
     assert harness.invalidated == ["alice"]
+
+
+def test_own_is_default_scope(tmp_path: Path) -> None:
+    # No scope argument writes the private home and invalidates that agent only —
+    # the global pool stays untouched and is not reloaded.
+    harness = _Harness(tmp_path)
+
+    result = harness.run({"operation": "create", "name": "demo", "content": _skill_md()})
+
+    assert result["ok"] is True
+    assert cast(dict[str, Any], result["data"])["scope"] == "own"
+    assert harness.invalidated == ["main"]
+    assert harness.reloaded == 0
+    assert not harness.global_home().exists()
+
+
+def test_global_scope_writes_global_pool_and_reloads(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+
+    result = harness.run(
+        {"operation": "create", "name": "demo", "content": _skill_md(), "scope": "global"}
+    )
+
+    assert result["ok"] is True
+    assert cast(dict[str, Any], result["data"])["scope"] == "global"
+    assert (harness.global_home() / "demo" / "SKILL.md").is_file()
+    # A global write reloads the whole registry, and never touches an agent home.
+    assert harness.reloaded == 1
+    assert harness.invalidated == []
+    assert not harness.home("main").exists()
+
+
+def test_global_created_skill_is_loadable(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+
+    harness.run({"operation": "create", "name": "demo", "content": _skill_md(), "scope": "global"})
+
+    assert SkillRegistry.load(harness.global_home()).get("demo").description == "Do a demo task."
+
+
+def test_invalid_scope_rejected(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+
+    result = harness.run(
+        {"operation": "create", "name": "demo", "content": _skill_md(), "scope": "project"}
+    )
+
+    assert result["ok"] is False
+    assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"
+    # A rejected scope writes nothing and reloads nothing.
+    assert harness.reloaded == 0
+    assert harness.invalidated == []
