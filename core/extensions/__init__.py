@@ -16,6 +16,8 @@ from core.extensions.extensions import (
     purge_extension_modules,
 )
 from core.extensions.interactions import (
+    RESERVED_INTERACTION_PREFIXES,
+    RUN_TRIGGER_PREFIX,
     InteractionButton,
     InteractionEvent,
     InteractionHandlerDeclaration,
@@ -35,6 +37,8 @@ __all__ = [
     "ExtensionRecord",
     "ExtensionRegistry",
     "HookContext",
+    "RESERVED_INTERACTION_PREFIXES",
+    "RUN_TRIGGER_PREFIX",
     "InteractionButton",
     "InteractionEvent",
     "InteractionHandlerDeclaration",

@@ -24,7 +24,12 @@ from core.channels.adapter import (
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
-from core.extensions import InteractionButton, InteractionEvent, InteractionResponder
+from core.extensions import (
+    RUN_TRIGGER_PREFIX,
+    InteractionButton,
+    InteractionEvent,
+    InteractionResponder,
+)
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -844,6 +849,16 @@ class TelegramChannelAdapter(ChannelAdapter):
             user_display_name=conversation.user_display_name,
             thread_id=conversation.thread_id,
         )
+
+        if data.split(":", 1)[0] == RUN_TRIGGER_PREFIX:
+            # A reserved-prefix tap wakes the agent instead of an extension: ack now
+            # so the spinner stops immediately, then hand the tap to the engine, which
+            # gates it (group owner) and enqueues an internal Run carrying the current
+            # keyboard state. The extension dispatcher is intentionally bypassed.
+            with contextlib.suppress(ChannelError):
+                await responder.answer()
+            self._engine.trigger_interaction_reply(conversation, event)
+            return
 
         if self._interaction_dispatcher is not None:
             await self._interaction_dispatcher(event, responder)

@@ -26,6 +26,7 @@ from core.channels.engine import ChannelConversationEngine
 from core.chat import MessageSender
 from core.chat.commands import CommandAction, CommandHandled, NotACommand
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
+from core.extensions.interactions import InteractionButton, InteractionEvent
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import ChatSessionManager
 
@@ -1416,4 +1417,105 @@ async def test_group_media_caption_wake_word_triggers(tmp_path: Path) -> None:
     await drain(engine, 12345)
 
     trigger_mock.assert_awaited_once()
+    await engine.stop()
+
+
+# --- Run-triggering button taps (reserved run: prefix) -----------------------
+
+
+def _interaction_event(
+    *, data: str = "run:done", user_display_name: str | None = "Alice"
+) -> InteractionEvent:
+    return InteractionEvent(
+        platform="telegram",
+        channel_id="tg-assistant",
+        chat_id="12345",
+        user_id="50",
+        message_id="777",
+        data=data,
+        buttons=(
+            (InteractionButton(label="✅ Milk", data="chk:milk"),),
+            (InteractionButton(label="⬜ Bread", data="chk:bread"),),
+            (InteractionButton(label="Fertig ✅", data="run:done"),),
+        ),
+        user_display_name=user_display_name,
+    )
+
+
+def test_format_interaction_note_lists_tapped_button_and_full_keyboard() -> None:
+    note = engine_module._format_interaction_note(
+        make_conversation(kind="group", user_id=50, user_display_name="Alice"),
+        _interaction_event(),
+    )
+
+    assert 'Tapped button: "Fertig ✅" (run:done)' in note
+    assert '- "✅ Milk" (chk:milk)' in note
+    assert '- "⬜ Bread" (chk:bread)' in note
+    assert '- "Fertig ✅" (run:done)' in note
+    # Group taps name the tapper so the agent knows who acted on the shared session.
+    assert "Tapped by: Alice" in note
+
+
+def test_format_interaction_note_omits_tapper_in_dm() -> None:
+    note = engine_module._format_interaction_note(
+        make_conversation(kind="direct", user_id=50, user_display_name="Alice"),
+        _interaction_event(),
+    )
+
+    assert "Tapped by:" not in note
+
+
+@pytest.mark.asyncio
+async def test_interaction_tap_enqueues_internal_run_with_state(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    engine.trigger_interaction_reply(
+        make_conversation(kind="direct", user_id=50), _interaction_event()
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    # An internal note-driven run: no visible user message, content is the note.
+    assert await_args.kwargs.get("internal") is True
+    note = await_args.args[1]
+    assert "chk:milk" in note and "chk:bread" in note
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_owner_interaction_tap_enqueues(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path, owner_user_ids=["50"], trigger_run=trigger_mock
+    )
+
+    engine.trigger_interaction_reply(
+        make_conversation(kind="group", user_id=50, message_id="777"), _interaction_event()
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_non_owner_interaction_tap_is_dropped(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path, owner_user_ids=["50"], trigger_run=trigger_mock
+    )
+
+    caplog.set_level(logging.INFO, logger="vbot.channels.engine")
+    engine.trigger_interaction_reply(
+        make_conversation(kind="group", user_id=99, message_id="777"), _interaction_event()
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_not_awaited()
+    assert any("denied for non-owner" in record.getMessage() for record in caplog.records)
     await engine.stop()

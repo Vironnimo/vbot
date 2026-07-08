@@ -99,8 +99,10 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Optional inline-keyboard rows; each button is {label, data}. data is the "
                 "callback payload, format '<prefix>:<payload>', max 64 bytes; an extension "
-                "registered for '<prefix>' handles taps. Telegram only; cannot be combined "
-                "with file_paths."
+                "registered for '<prefix>' handles taps. The reserved prefix 'run' wakes you "
+                "instead: a tap on a 'run:<payload>' button starts a run carrying the tap "
+                "context — the tapped button and the message's current button state — so you "
+                "can act on it and reply. Telegram only; cannot be combined with file_paths."
             ),
         },
     },

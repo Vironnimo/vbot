@@ -43,6 +43,7 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.channels.channels import ChannelConfig
+    from core.extensions.interactions import InteractionEvent
     from core.runs import Run, RunEvent
     from core.sessions import ChatSession, ChatSessionManager
 
@@ -298,6 +299,31 @@ class ChannelConversationEngine:
             conversation.chat_id,
             _QueuedInternalPrompt(conversation=conversation, prompt=prompt),
         )
+
+    def trigger_interaction_reply(
+        self,
+        conversation: ConversationFacts,
+        event: InteractionEvent,
+    ) -> None:
+        """Wake the agent from a run-triggering button tap (reserved ``run:`` prefix).
+
+        Enqueues an internal note-driven Run (the same path as
+        :meth:`trigger_internal_reply`) carrying the tap context — the tapped
+        button plus the message's current keyboard state — so the agent can act on
+        it and confirm in the chat. Group taps are gated by ``owner_user_ids``
+        exactly like group commands; a non-owner tap is logged and dropped (the
+        adapter has already acknowledged the tap, so the tapper's spinner stops
+        either way).
+        """
+        if not self._command_sender_authorized(conversation):
+            _LOGGER.info(
+                "Run-triggering tap denied for non-owner (channel=%s chat=%s user=%s)",
+                self._config.id,
+                conversation.chat_id,
+                conversation.user_id,
+            )
+            return
+        self.trigger_internal_reply(conversation, _format_interaction_note(conversation, event))
 
     def prepare_inbound_route(
         self,
@@ -944,6 +970,36 @@ def _format_observed_message(conversation: ConversationFacts, text: str) -> str:
     display_name = _sanitize_sender_tag_part(conversation.user_display_name or conversation.user_id)
     sender_id = _sanitize_sender_tag_part(conversation.user_id)
     return f"{CHANNEL_MESSAGE_NOTE_PREFIX}{display_name} ({sender_id}): {text}"
+
+
+def _format_interaction_note(conversation: ConversationFacts, event: InteractionEvent) -> str:
+    """Render the neutral kernel note for a run-triggering button tap.
+
+    Content-agnostic: it calls out the tapped button and then lists every current
+    button's label and callback data verbatim in row order, so the agent can read
+    the whole keyboard state — e.g. which items a skill marked ✅ — from the note
+    alone, with no server-side store. Any glyph or id convention inside the labels
+    or data is the skill's interpretation, never the engine's.
+    """
+    lines = [
+        "A channel button was tapped and is asking you to act on it.",
+        f'Tapped button: "{_tapped_button_label(event)}" ({event.data})',
+    ]
+    if conversation.kind == "group":
+        lines.append(f"Tapped by: {conversation.user_display_name or conversation.user_id}")
+    lines.append("Current buttons on the message (top to bottom, left to right):")
+    lines.extend(f'- "{button.label}" ({button.data})' for row in event.buttons for button in row)
+    lines.append("Act on the current button state, then confirm in this chat.")
+    return "\n".join(lines)
+
+
+def _tapped_button_label(event: InteractionEvent) -> str:
+    """The label of the button whose data was tapped, or the raw data as fallback."""
+    for row in event.buttons:
+        for button in row:
+            if button.data == event.data:
+                return button.label
+    return event.data
 
 
 def _sanitize_sender_tag_part(value: str) -> str:

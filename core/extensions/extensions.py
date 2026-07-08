@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.extensions.interactions import (
+    RESERVED_INTERACTION_PREFIXES,
     InteractionEvent,
     InteractionHandlerDeclaration,
     InteractionResponder,
@@ -510,7 +511,9 @@ class ExtensionRegistry:
         prefix already claimed by an earlier-loaded extension is **skipped** and
         diagnosed on the loser's record, and the first claimant is diagnosed
         naming the skipped extension(s) — the same first-wins policy as
-        :meth:`_apply_one_tool`. There are no built-in prefixes to reserve.
+        :meth:`_apply_one_tool`. A runtime-reserved prefix
+        (:data:`RESERVED_INTERACTION_PREFIXES`, e.g. ``run``) is skipped before
+        that so no extension can claim it.
         """
         loaded = [record for record in self._records if record.status == "loaded"]
         declarers: dict[str, list[str]] = defaultdict(list)
@@ -529,6 +532,12 @@ class ExtensionRegistry:
         declarers: dict[str, list[str]],
     ) -> None:
         prefix = declaration.prefix
+        if prefix in RESERVED_INTERACTION_PREFIXES:
+            self._diagnose_capability(
+                record,
+                f"interaction handler {prefix!r} skipped: prefix is reserved by the runtime",
+            )
+            return
         other_declarers = [other for other in declarers[prefix] if other != record.name]
         if prefix in self._interaction_handlers:
             winner = repr(other_declarers[0]) if other_declarers else "another extension"
