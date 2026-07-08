@@ -24,6 +24,9 @@ from core.settings.settings import (
     validate_thinking_effort,
 )
 from core.settings.validation import (
+    ALLOWED_CHANNEL_DM_SCOPES,
+    ALLOWED_CHANNEL_PLATFORMS,
+    ALLOWED_CHANNEL_RESPONSE_MODES,
     JsonDiagnostic,
     JsonValidationReport,
     SettingsDiagnostic,
@@ -50,6 +53,9 @@ from core.settings.validation import (
 __all__ = [
     "AGENT_DEFAULT_FIELDS",
     "AGENT_ID_PATTERN",
+    "ALLOWED_CHANNEL_DM_SCOPES",
+    "ALLOWED_CHANNEL_PLATFORMS",
+    "ALLOWED_CHANNEL_RESPONSE_MODES",
     "ALLOWED_THINKING_EFFORTS",
     "DEFAULT_APPEARANCE_CHAT_WIDTH",
     "DEFAULT_APPEARANCE_LANGUAGE",
