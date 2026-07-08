@@ -1,0 +1,6 @@
+{
+  "name": "Checklist",
+  "description": "Toggle ⬜/✅ checklist buttons on interactive channel messages in-process, without waking the agent.",
+  "version": "1.0.0",
+  "api_version": 1
+}

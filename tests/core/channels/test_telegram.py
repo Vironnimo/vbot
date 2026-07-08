@@ -32,6 +32,7 @@ from core.channels.telegram import (
 from core.chat import MessageSender
 from core.chat.commands import CommandAction, CommandHandled, NotACommand
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
+from core.extensions import ExtensionRegistry, InteractionButton, purge_extension_modules
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import ChatSessionManager
 
@@ -139,6 +140,51 @@ def make_migration_update(
     )
 
 
+def make_callback_update(
+    *,
+    chat_id: int,
+    user_id: int,
+    data: str,
+    callback_id: str = "cb1",
+    inline_keyboard: list[list[Any]] | None = None,
+    message_id: int = 777,
+    text: str | None = "Shopping list",
+    answer: AsyncMock | None = None,
+) -> SimpleNamespace:
+    """Build a fake callback_query update mirroring PTB's effective_* resolution.
+
+    For a callback_query, PTB fills ``effective_message``/``effective_chat``/
+    ``effective_user`` from the tapped message and the tapper, so the adapter
+    reuses ``_conversation_facts`` on it exactly as for an inbound message.
+    """
+    reply_markup = (
+        SimpleNamespace(inline_keyboard=inline_keyboard) if inline_keyboard is not None else None
+    )
+    message = SimpleNamespace(
+        message_id=message_id,
+        message_thread_id=None,
+        is_topic_message=False,
+        text=text,
+        caption=None,
+        reply_to_message=None,
+        reply_markup=reply_markup,
+        chat=SimpleNamespace(id=chat_id),
+    )
+    callback = SimpleNamespace(
+        id=callback_id,
+        data=data,
+        from_user=SimpleNamespace(id=user_id, full_name="Tapper", username="tap"),
+        message=message,
+        answer=answer or AsyncMock(),
+    )
+    return SimpleNamespace(
+        callback_query=callback,
+        effective_message=message,
+        effective_chat=SimpleNamespace(id=chat_id),
+        effective_user=SimpleNamespace(id=user_id, full_name="Tapper", username="tap"),
+    )
+
+
 def make_completed_run(*, session_id: str, output_text: str) -> Run:
     run = Run(run_id="run-completed", agent_id="assistant", session_id=session_id)
     run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": output_text}})
@@ -225,6 +271,9 @@ def make_adapter(
         send_media_group=AsyncMock(),
         send_chat_action=AsyncMock(),
         get_file=AsyncMock(),
+        answer_callback_query=AsyncMock(),
+        edit_message_text=AsyncMock(),
+        edit_message_reply_markup=AsyncMock(),
     )
     adapter._application = SimpleNamespace(
         bot=bot,
@@ -266,11 +315,22 @@ def install_fake_telegram_media(monkeypatch: pytest.MonkeyPatch) -> None:
             self.message_id = message_id
             self.allow_sending_without_reply = allow_sending_without_reply
 
+    class FakeInlineKeyboardButton:
+        def __init__(self, *, text: str, callback_data: str) -> None:
+            self.text = text
+            self.callback_data = callback_data
+
+    class FakeInlineKeyboardMarkup:
+        def __init__(self, inline_keyboard: list[list[Any]]) -> None:
+            self.inline_keyboard = inline_keyboard
+
     fake_telegram = SimpleNamespace(
         InputFile=FakeInputFile,
         InputMediaPhoto=FakeInputMediaPhoto,
         InputMediaDocument=FakeInputMediaDocument,
         ReplyParameters=FakeReplyParameters,
+        InlineKeyboardButton=FakeInlineKeyboardButton,
+        InlineKeyboardMarkup=FakeInlineKeyboardMarkup,
     )
     monkeypatch.setattr(telegram_module, "_load_telegram", lambda: fake_telegram)
 
@@ -863,9 +923,14 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
             **content,
         )
 
-    migration_handler, text_handler, media_handler, structured_handler, unsupported_handler = (
-        adapter._build_message_handlers(telegram_ext)
-    )
+    (
+        migration_handler,
+        text_handler,
+        media_handler,
+        structured_handler,
+        unsupported_handler,
+        callback_handler,
+    ) = adapter._build_message_handlers(telegram_ext)
     text_message = make_real_message(text="hi")
     photo_message = make_real_message(
         photo=[telegram.PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)]
@@ -907,6 +972,22 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
     assert not unsupported_handler.check_update(
         telegram.Update(update_id=9, edited_message=sticker_message)
     )
+
+    # The callback handler is additive and matches only the distinct callback_query
+    # update type, never a plain message.
+    callback_update = telegram.Update(
+        update_id=10,
+        callback_query=telegram.CallbackQuery(
+            id="cb1",
+            from_user=telegram.User(id=50, first_name="A", is_bot=False),
+            chat_instance="ci",
+            data="chk:milk",
+            message=text_message,
+        ),
+    )
+    assert callback_handler.check_update(callback_update)
+    assert not callback_handler.check_update(telegram.Update(update_id=11, message=text_message))
+    assert not text_handler.check_update(callback_update)
     # Animations are media, not an unsupported type.
     assert media_handler.check_update(telegram.Update(update_id=10, message=animation_message))
     assert not unsupported_handler.check_update(
@@ -1282,6 +1363,339 @@ async def test_send_splits_message_at_telegram_limit(
     chunks = [call.kwargs["text"] for call in bot.send_message.await_args_list]
     assert [len(chunk) for chunk in chunks] == [TELEGRAM_MESSAGE_LIMIT, TELEGRAM_MESSAGE_LIMIT, 9]
     await adapter.stop()
+
+
+# --- Interactive messages: outbound buttons ----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_with_buttons_attaches_markup_to_last_chunk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    # Two chunks: the keyboard belongs only on the final visible message.
+    payload = "x" * (TELEGRAM_MESSAGE_LIMIT + 5)
+    await adapter.send(
+        payload,
+        "12345",
+        buttons=[[InteractionButton(label="Milk ⬜", data="chk:milk")]],
+    )
+
+    calls = bot.send_message.await_args_list
+    assert len(calls) == 2
+    assert "reply_markup" not in calls[0].kwargs
+    markup = calls[1].kwargs["reply_markup"]
+    assert markup.inline_keyboard[0][0].text == "Milk ⬜"
+    assert markup.inline_keyboard[0][0].callback_data == "chk:milk"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_rejects_buttons_with_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    with pytest.raises(ChannelConfigError, match="cannot be combined with file"):
+        await adapter.send(
+            "caption",
+            "12345",
+            files=[FileData(filename="a.png", media_type="image/png", data=b"a")],
+            buttons=[[InteractionButton(label="x", data="chk:x")]],
+        )
+
+    bot.send_photo.assert_not_awaited()
+    bot.send_document.assert_not_awaited()
+    await adapter.stop()
+
+
+# --- Interactive messages: inbound taps --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_callback_from_allowed_chat_dispatches_interaction_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: dict[str, Any] = {}
+
+    async def dispatcher(event: Any, responder: Any) -> bool:
+        received["event"] = event
+        await responder.answer()
+        return True
+
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    adapter._interaction_dispatcher = dispatcher
+
+    update = make_callback_update(
+        chat_id=12345,
+        user_id=50,
+        data="chk:milk",
+        inline_keyboard=[
+            [
+                SimpleNamespace(text="Milk ⬜", callback_data="chk:milk"),
+                SimpleNamespace(text="Eggs ✅", callback_data="chk:eggs"),
+            ]
+        ],
+    )
+    await adapter._handle_callback_query(update, SimpleNamespace())
+
+    event = received["event"]
+    assert event.platform == "telegram"
+    assert event.channel_id == "tg-assistant"
+    assert event.chat_id == "12345"
+    assert event.user_id == "50"
+    assert event.message_id == "777"
+    assert event.data == "chk:milk"
+    assert event.text == "Shopping list"
+    assert event.buttons == (
+        (
+            InteractionButton(label="Milk ⬜", data="chk:milk"),
+            InteractionButton(label="Eggs ✅", data="chk:eggs"),
+        ),
+    )
+    # The handler answered through the responder; no duplicate fallback ack.
+    bot.answer_callback_query.assert_awaited_once()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_callback_from_denied_chat_is_recorded_and_silently_acked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatched: list[Any] = []
+
+    async def dispatcher(event: Any, responder: Any) -> bool:
+        dispatched.append(event)
+        return True
+
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    adapter._interaction_dispatcher = dispatcher
+
+    answer = AsyncMock()
+    update = make_callback_update(chat_id=999, user_id=50, data="chk:milk", answer=answer)
+    await adapter._handle_callback_query(update, SimpleNamespace())
+
+    # Denied: recorded, silently acked via the callback shorthand, never dispatched.
+    answer.assert_awaited_once()
+    bot.answer_callback_query.assert_not_awaited()
+    assert dispatched == []
+    assert any(entry.chat_id == "999" for entry in adapter.denied_chats())
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_callback_fallback_ack_fires_when_handler_does_not_answer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def dispatcher(event: Any, responder: Any) -> bool:
+        # Handled, but the handler never answered.
+        return True
+
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    adapter._interaction_dispatcher = dispatcher
+
+    update = make_callback_update(chat_id=12345, user_id=50, data="chk:milk")
+    await adapter._handle_callback_query(update, SimpleNamespace())
+
+    bot.answer_callback_query.assert_awaited_once()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_callback_without_dispatcher_still_acks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    # No dispatcher wired (registry not present): the tap is still acknowledged.
+    assert adapter._interaction_dispatcher is None
+
+    update = make_callback_update(chat_id=12345, user_id=50, data="chk:milk")
+    await adapter._handle_callback_query(update, SimpleNamespace())
+
+    bot.answer_callback_query.assert_awaited_once()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_callback_without_data_is_silently_acked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatched: list[Any] = []
+
+    async def dispatcher(event: Any, responder: Any) -> bool:
+        dispatched.append(event)
+        return True
+
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    adapter._interaction_dispatcher = dispatcher
+
+    answer = AsyncMock()
+    update = make_callback_update(chat_id=12345, user_id=50, data="", answer=answer)
+    await adapter._handle_callback_query(update, SimpleNamespace())
+
+    answer.assert_awaited_once()
+    assert dispatched == []
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_responder_answer_calls_bot_and_marks_answered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    responder = telegram_module._TelegramInteractionResponder(
+        bot,
+        callback_id="cb1",
+        chat_id=12345,
+        message_id=777,
+        channel_id="tg-assistant",
+    )
+
+    assert responder.answered is False
+    await responder.answer("Saved", alert=True)
+
+    assert responder.answered is True
+    bot.answer_callback_query.assert_awaited_once()
+    kwargs = bot.answer_callback_query.await_args.kwargs
+    assert kwargs["callback_query_id"] == "cb1"
+    assert kwargs["text"] == "Saved"
+    assert kwargs["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_responder_edit_renders_buttons_and_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    _adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    responder = telegram_module._TelegramInteractionResponder(
+        bot,
+        callback_id="cb1",
+        chat_id=12345,
+        message_id=777,
+        channel_id="tg-assistant",
+    )
+
+    await responder.edit(buttons=[[InteractionButton(label="Milk ✅", data="chk:milk")]])
+
+    bot.edit_message_reply_markup.assert_awaited_once()
+    kwargs = bot.edit_message_reply_markup.await_args.kwargs
+    assert kwargs["chat_id"] == 12345
+    assert kwargs["message_id"] == 777
+    assert kwargs["reply_markup"].inline_keyboard[0][0].text == "Milk ✅"
+    assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "chk:milk"
+
+    await responder.edit(text="Updated")
+
+    bot.edit_message_text.assert_awaited_once()
+    text_kwargs = bot.edit_message_text.await_args.kwargs
+    assert text_kwargs["text"] == "Updated"
+    assert text_kwargs["chat_id"] == 12345
+    assert text_kwargs["message_id"] == 777
+    assert text_kwargs["reply_markup"] is None
+
+
+def test_markup_to_buttons_empty_without_keyboard() -> None:
+    assert telegram_module._markup_to_buttons(None) == ()
+    assert telegram_module._markup_to_buttons([]) == ()
+
+
+@pytest.mark.asyncio
+async def test_tap_flows_through_real_checklist_extension_end_to_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # End-to-end: a real callback_query on an allowlisted chat → the adapter's
+    # callback handler → the registry dispatcher (as the runtime injects it) → the
+    # shipped checklist extension → the responder edits the keyboard on the wire.
+    install_fake_telegram_media(monkeypatch)
+    bundled_dir = Path(__file__).resolve().parents[3] / "resources" / "extensions"
+    registry = ExtensionRegistry.load(
+        tmp_path / "does-not-exist-data-extensions",
+        bundled_dir=bundled_dir,
+    )
+    try:
+        adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+            tmp_path,
+            monkeypatch,
+            allowed_chat_ids=[12345],
+        )
+        adapter._interaction_dispatcher = registry.dispatch_channel_interaction
+
+        update = make_callback_update(
+            chat_id=12345,
+            user_id=50,
+            data="chk:milk",
+            inline_keyboard=[
+                [
+                    SimpleNamespace(text="⬜ Milk", callback_data="chk:milk"),
+                    SimpleNamespace(text="⬜ Eggs", callback_data="chk:eggs"),
+                ]
+            ],
+        )
+        await adapter._handle_callback_query(update, SimpleNamespace())
+
+        # Only the tapped "Milk" flipped ⬜→✅; "Eggs" and every callback data survive.
+        bot.edit_message_reply_markup.assert_awaited_once()
+        markup = bot.edit_message_reply_markup.await_args.kwargs["reply_markup"]
+        row = markup.inline_keyboard[0]
+        assert (row[0].text, row[0].callback_data) == ("✅ Milk", "chk:milk")
+        assert (row[1].text, row[1].callback_data) == ("⬜ Eggs", "chk:eggs")
+        # The tap was acknowledged (spinner stops), exactly once.
+        bot.answer_callback_query.assert_awaited_once()
+        await adapter.stop()
+    finally:
+        # This file has no vbot_ext cleanup fixture; drop the loaded extension
+        # modules so a later extension-loading test starts clean.
+        purge_extension_modules()
 
 
 @pytest.mark.asyncio

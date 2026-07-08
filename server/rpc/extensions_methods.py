@@ -150,6 +150,9 @@ def _extension_capabilities(record: ExtensionRecord, state: Any) -> JsonObject:
             for declaration in declarations.tools
         ],
         "recall_backends": [declaration.name for declaration in declarations.recall_backends],
+        "interaction_handlers": [
+            declaration.prefix for declaration in declarations.interaction_handlers
+        ],
         "startup": bool(declarations.startup),
         "shutdown": bool(declarations.shutdown),
     }

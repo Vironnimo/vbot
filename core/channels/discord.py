@@ -22,6 +22,7 @@ from core.channels.adapter import (
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, TextBlock
+from core.extensions import InteractionButton
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -134,12 +135,17 @@ class DiscordChannelAdapter(ChannelAdapter):
         *,
         files: list[FileData] | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         """Send one outbound message and/or file payloads to a Discord channel.
 
         ``thread_id`` is transport parity only and ignored: Discord threads are their
-        own channels, addressed directly as the ``platform_target``.
+        own channels, addressed directly as the ``platform_target``. Interactive
+        ``buttons`` are not supported on Discord — a non-``None`` value is rejected
+        rather than silently dropped (Discord interactive support is out of scope).
         """
+        if buttons is not None:
+            raise ChannelError("buttons are not supported on Discord channels")
         target = await self._resolve_target(platform_target)
         await self._send_payloads(target, message, list(files or []))
         self._backfilled_message_ids.pop(platform_target, None)

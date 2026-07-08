@@ -14,7 +14,7 @@ import pytest
 import core.channels.discord as discord_module
 from core.attachments import AttachmentStore, AttachmentTooLargeError
 from core.channels.adapter import FileData
-from core.channels.channels import ChannelConfig, ChannelConfigError
+from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.discord import (
     DISCORD_MESSAGE_LIMIT,
     DiscordChannelAdapter,
@@ -23,6 +23,7 @@ from core.channels.discord import (
 from core.chat import MessageSender
 from core.chat.commands import NotACommand
 from core.chat.content_blocks import MediaBlock, TextBlock
+from core.extensions import InteractionButton
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import ChatSessionManager
 
@@ -622,6 +623,28 @@ async def test_send_batches_files_ten_per_message(tmp_path: Path) -> None:
     assert len(channel.sent[0]["files"]) == 10
     assert "content" not in channel.sent[1]
     assert len(channel.sent[1]["files"]) == 1
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_rejects_buttons(tmp_path: Path) -> None:
+    channel = FakeChannel(100, guild=SimpleNamespace(id=1))
+    adapter, _sessions, _trigger, _client = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+    )
+
+    # Discord has no interactive-message support; a non-None buttons value is
+    # rejected rather than silently dropped.
+    with pytest.raises(ChannelError, match="buttons are not supported on Discord"):
+        await adapter.send(
+            "hi",
+            "100",
+            buttons=[[InteractionButton(label="Milk ⬜", data="chk:milk")]],
+        )
+
+    assert channel.sent == []
     await adapter.stop()
 
 

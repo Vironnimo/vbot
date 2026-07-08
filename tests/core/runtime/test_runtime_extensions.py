@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from core.extensions import InteractionButton, InteractionEvent
 from core.extensions.extensions import ExtensionRegistry
 from core.runtime import runtime as runtime_module
 from core.runtime.runtime import Runtime
@@ -691,6 +692,99 @@ _SLOW_SHUTDOWN_EXT_SOURCE = (
     "def register(api):\n"
     "    api.on_shutdown(_shutdown)\n"
 )
+
+
+# --- channel interaction dispatcher: live-reading injection --------------------
+
+
+class _RecordingResponder:
+    """Minimal ``InteractionResponder`` that records whether it was answered."""
+
+    def __init__(self) -> None:
+        self.answered = False
+
+    async def answer(self, text: str | None = None, *, alert: bool = False) -> None:
+        self.answered = True
+
+    async def edit(
+        self,
+        *,
+        text: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
+    ) -> None:
+        return None
+
+
+def _interaction_event(data: str) -> InteractionEvent:
+    return InteractionEvent(
+        platform="telegram",
+        channel_id="ch",
+        chat_id="1",
+        user_id="2",
+        message_id="3",
+        data=data,
+        buttons=(),
+    )
+
+
+_INTERACTION_EXT_SOURCE = (
+    "async def _toggle(event, responder):\n"
+    "    await responder.answer()\n"
+    "def register(api):\n"
+    "    api.register_interaction_handler('chk', _toggle)\n"
+)
+
+
+def test_dispatch_channel_interaction_false_without_registry(tmp_path: Path) -> None:
+    # Before start (no registry loaded) the dispatcher is a clean no-op returning
+    # False, so a channel with no extensions still acknowledges taps itself.
+    config = Config(data_dir=tmp_path / "data")
+    runtime = Runtime(config)
+
+    responder = _RecordingResponder()
+    handled = asyncio.run(
+        runtime._dispatch_channel_interaction(_interaction_event("chk:x"), responder)
+    )
+
+    assert handled is False
+    assert responder.answered is False
+
+
+def test_interaction_dispatcher_reads_live_registry_across_reload(tmp_path: Path) -> None:
+    # The runtime injects its live-reading dispatcher into the channel service, so a
+    # reload (which swaps self._extensions) needs no channel re-wiring — the next tap
+    # routes through the rebuilt registry.
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_extension(data_dir, "interactive", _INTERACTION_EXT_SOURCE)
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        service = runtime._channel_service
+        assert service is not None
+        assert service._interaction_dispatcher == runtime._dispatch_channel_interaction
+
+        responder = _RecordingResponder()
+        handled = asyncio.run(
+            runtime._dispatch_channel_interaction(_interaction_event("chk:milk"), responder)
+        )
+        assert handled is True
+        assert responder.answered is True
+
+        asyncio.run(runtime.reload_extensions())
+
+        # Reload swaps self._extensions but not the channel service; the same
+        # injected callable reads the freshly-swapped registry live.
+        assert service._interaction_dispatcher == runtime._dispatch_channel_interaction
+        after = _RecordingResponder()
+        handled_after = asyncio.run(
+            runtime._dispatch_channel_interaction(_interaction_event("chk:milk"), after)
+        )
+        assert handled_after is True
+        assert after.answered is True
+    finally:
+        runtime.stop()
 
 
 def test_reload_and_disable_never_interleave(tmp_path: Path) -> None:

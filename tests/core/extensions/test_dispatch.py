@@ -20,6 +20,8 @@ from core.extensions import (
     Deny,
     ExtensionRegistry,
     HookContext,
+    InteractionButton,
+    InteractionEvent,
     Modify,
     Replace,
 )
@@ -167,9 +169,10 @@ _RETIRED_PROMPT_EVENT = "before" + "_agent_start"
 class TestRetiredPromptAppendEventRemoved:
     """The legacy system-prompt tail-append event is gone entirely (D6).
 
-    Its sole purpose was the append, replaced by declared prompt blocks. The
-    dispatch surface is now exactly the five kept events, and an extension that
-    still registers the retired name runs harmlessly into the void.
+    Its sole purpose was the append, replaced by declared prompt blocks. The hook
+    dispatch surface is now exactly the five kept events (plus the separate
+    channel-interaction dispatcher, which is not a hook event), and an extension
+    that still registers the retired name runs harmlessly into the void.
     """
 
     def test_dispatch_surface_is_the_five_kept_events(self) -> None:
@@ -181,6 +184,7 @@ class TestRetiredPromptAppendEventRemoved:
             "dispatch_context",
             "dispatch_tool_call",
             "dispatch_tool_result",
+            "dispatch_channel_interaction",
         }
 
     @pytest.mark.asyncio
@@ -590,6 +594,116 @@ class TestToolResult:
         )
 
         assert result == {"status": "ok"}
+
+
+class _NullResponder:
+    """Minimal ``InteractionResponder`` for dispatch tests that never edit/answer."""
+
+    async def answer(self, text: str | None = None, *, alert: bool = False) -> None:
+        return None
+
+    async def edit(self, *, text: str | None = None, buttons: Any = None) -> None:
+        return None
+
+
+class TestChannelInteractionDispatch:
+    """Prefix-routed tap dispatch: match by prefix, report handled, isolate raises."""
+
+    @staticmethod
+    def _event(data: str) -> InteractionEvent:
+        return InteractionEvent(
+            platform="telegram",
+            channel_id="chan",
+            chat_id="1",
+            user_id="2",
+            message_id="3",
+            data=data,
+            buttons=((InteractionButton(label="Milk ⬜", data="chk:milk"),),),
+        )
+
+    @pytest.mark.asyncio
+    async def test_routes_to_handler_by_prefix(self) -> None:
+        registry = ExtensionRegistry()
+        seen: list[tuple[str, Any]] = []
+
+        async def handler(event: InteractionEvent, responder: Any) -> None:
+            seen.append((event.data, responder))
+
+        responder = _NullResponder()
+        registry._interaction_handlers["chk"] = ("ext-a", handler)
+
+        handled = await registry.dispatch_channel_interaction(self._event("chk:milk"), responder)
+
+        assert handled is True
+        assert seen == [("chk:milk", responder)]
+
+    @pytest.mark.asyncio
+    async def test_unmatched_prefix_returns_false_without_running(self) -> None:
+        registry = ExtensionRegistry()
+
+        async def handler(event: InteractionEvent, responder: Any) -> None:
+            raise AssertionError("must not run")
+
+        registry._interaction_handlers["chk"] = ("ext-a", handler)
+
+        handled = await registry.dispatch_channel_interaction(
+            self._event("other:x"), _NullResponder()
+        )
+
+        assert handled is False
+
+    @pytest.mark.asyncio
+    async def test_data_without_colon_uses_whole_string_as_prefix(self) -> None:
+        registry = ExtensionRegistry()
+        seen: list[str] = []
+
+        async def handler(event: InteractionEvent, responder: Any) -> None:
+            seen.append(event.data)
+
+        registry._interaction_handlers["ping"] = ("ext-a", handler)
+
+        handled = await registry.dispatch_channel_interaction(self._event("ping"), _NullResponder())
+
+        assert handled is True
+        assert seen == ["ping"]
+
+    @pytest.mark.asyncio
+    async def test_sync_handler_is_supported(self) -> None:
+        registry = ExtensionRegistry()
+        seen: list[str] = []
+
+        def handler(event: InteractionEvent, responder: Any) -> None:
+            seen.append(event.data)
+
+        registry._interaction_handlers["chk"] = ("ext-a", handler)
+
+        handled = await registry.dispatch_channel_interaction(
+            self._event("chk:a"), _NullResponder()
+        )
+
+        assert handled is True
+        assert seen == ["chk:a"]
+
+    @pytest.mark.asyncio
+    async def test_raising_handler_is_isolated_but_still_handled(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = ExtensionRegistry()
+
+        async def boom(event: InteractionEvent, responder: Any) -> None:
+            raise RuntimeError("boom")
+
+        registry._interaction_handlers["chk"] = ("ext-a", boom)
+
+        caplog.set_level(logging.WARNING, logger="vbot.extensions")
+        handled = await registry.dispatch_channel_interaction(
+            self._event("chk:a"), _NullResponder()
+        )
+
+        # A matched handler that raises still counts as handled (True); the error
+        # is logged at warning, never propagated.
+        assert handled is True
+        assert any("interaction handler" in record.getMessage() for record in caplog.records)
 
 
 def _loaded_record(registry: ExtensionRegistry, name: str) -> ExtensionAPI:

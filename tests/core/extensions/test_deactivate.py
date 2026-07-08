@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from core.extensions import ExtensionRegistry, HookContext
+from core.extensions import ExtensionRegistry, HookContext, InteractionEvent
 from core.tools import ToolContext, ToolRegistry
 from core.tools.tools import ToolNotFoundError
 
@@ -196,6 +196,62 @@ def test_deactivate_already_disabled_is_noop(tmp_path: Path) -> None:
     # A boot-disabled extension was never imported; deactivating it does nothing.
     assert asyncio.run(registry.deactivate("tooly")) is False
     assert _record(registry, "tooly").status == "disabled"
+
+
+class _RecordingResponder:
+    """Minimal ``InteractionResponder`` that records whether it was answered."""
+
+    def __init__(self) -> None:
+        self.answered = False
+
+    async def answer(self, text: str | None = None, *, alert: bool = False) -> None:
+        self.answered = True
+
+    async def edit(self, *, text: str | None = None, buttons: object = None) -> None:
+        return None
+
+
+def _tap_event(data: str) -> InteractionEvent:
+    return InteractionEvent(
+        platform="telegram",
+        channel_id="chan",
+        chat_id="1",
+        user_id="2",
+        message_id="3",
+        data=data,
+        buttons=(),
+    )
+
+
+def _interaction_extension_source(prefix: str) -> str:
+    return (
+        "async def _handler(event, responder):\n"
+        "    await responder.answer()\n"
+        "def register(api):\n"
+        f"    api.register_interaction_handler({prefix!r}, _handler)\n"
+    )
+
+
+def test_deactivate_drops_interaction_prefixes(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "interactive", _interaction_extension_source("chk"))
+
+    registry = ExtensionRegistry.load(root)
+
+    before = _RecordingResponder()
+    assert (
+        asyncio.run(registry.dispatch_channel_interaction(_tap_event("chk:milk"), before)) is True
+    )
+    assert before.answered is True
+
+    assert asyncio.run(registry.deactivate("interactive")) is True
+
+    # After deactivation the prefix routes to no handler: unhandled, never answered.
+    after = _RecordingResponder()
+    assert (
+        asyncio.run(registry.dispatch_channel_interaction(_tap_event("chk:milk"), after)) is False
+    )
+    assert after.answered is False
 
 
 def test_deactivate_leaves_colliding_tool_with_its_real_owner(tmp_path: Path) -> None:

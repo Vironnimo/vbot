@@ -24,6 +24,7 @@ from core.extensions.extensions import (
     RecallBackendDeclaration,
     ToolDeclaration,
 )
+from core.extensions.interactions import InteractionHandlerDeclaration
 from core.extensions.settings_schema import parse_settings_fields
 from server.rpc.methods import dispatch_rpc
 from tests.server.test_rpc import StubAdapter, make_state
@@ -118,6 +119,7 @@ def _loaded_record() -> ExtensionRecord:
         ToolDeclaration("word_count", "Count words", {"type": "object"}, _noop_handler)
     )
     declarations.recall_backends.append(RecallBackendDeclaration("my_backend", _noop_handler))
+    declarations.interaction_handlers.append(InteractionHandlerDeclaration("chk", _noop_handler))
     declarations.startup.append(_noop_handler)
     return ExtensionRecord(
         name="guard_bash",
@@ -184,6 +186,7 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
             "hooks": {"tool_call": 1, "run_end": 1},
             "tools": [{"name": "word_count", "ready": True}],
             "recall_backends": ["my_backend"],
+            "interaction_handlers": ["chk"],
             "startup": True,
             "shutdown": False,
         },

@@ -13,6 +13,7 @@ from core.channels.channels import (
     ChannelError,
     ChannelNotFoundError,
 )
+from core.extensions import InteractionButton
 from core.tools.arguments import optional_string, required_string
 from core.tools.tools import (
     JsonObject,
@@ -36,7 +37,7 @@ CHANNEL_SEND_TOOL_DESCRIPTION = (
 )
 _REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id",))
 _OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(
-    ("message", "platform_target", "thread_id", "file_paths")
+    ("message", "platform_target", "thread_id", "file_paths", "buttons")
 )
 _CHANNEL_SEND_ALLOWED_ARGUMENTS = (
     _REQUIRED_CHANNEL_SEND_ARGUMENTS | _OPTIONAL_CHANNEL_SEND_ARGUMENTS
@@ -79,6 +80,27 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Optional list of file paths to send. Relative paths resolve from the "
                 "working directory."
+            ),
+        },
+        "buttons": {
+            "type": "array",
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "data": {"type": "string"},
+                    },
+                    "required": ["label", "data"],
+                    "additionalProperties": False,
+                },
+            },
+            "description": (
+                "Optional inline-keyboard rows; each button is {label, data}. data is the "
+                "callback payload, format '<prefix>:<payload>', max 64 bytes; an extension "
+                "registered for '<prefix>' handles taps. Telegram only; cannot be combined "
+                "with file_paths."
             ),
         },
     },
@@ -139,6 +161,7 @@ async def _handle_channel_send_tool(
             base_dir=context.effective_cwd,
             max_size_bytes=max_attachment_size_bytes,
         )
+        buttons = _build_buttons(arguments.get("buttons"))
         if message is None and not files:
             return tool_failure(
                 "invalid_arguments",
@@ -154,7 +177,12 @@ async def _handle_channel_send_tool(
             channel_config,
         )
         await channel_service.send(
-            channel_id, message, platform_target, files=files or None, thread_id=thread_id
+            channel_id,
+            message,
+            platform_target,
+            files=files or None,
+            thread_id=thread_id,
+            buttons=buttons,
         )
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
@@ -347,6 +375,42 @@ def _build_file_data(value: object, *, base_dir: Path, max_size_bytes: int) -> l
         )
 
     return files
+
+
+def _build_buttons(value: object) -> list[list[InteractionButton]] | None:
+    """Parse the tool's ``buttons`` payload into neutral inline-keyboard rows.
+
+    Returns ``None`` when omitted. Raises ``ValueError`` (mapped to a clean
+    ``invalid_arguments`` tool failure) on a malformed structure; the callback
+    data's byte-length and platform support are enforced downstream by the
+    channel service and adapter.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError("buttons must be an array of button rows")
+
+    rows: list[list[InteractionButton]] = []
+    for row_index, row in enumerate(value):
+        if not isinstance(row, list):
+            raise ValueError(f"buttons[{row_index}] must be an array of buttons")
+        buttons: list[InteractionButton] = []
+        for button_index, button in enumerate(row):
+            if not isinstance(button, dict):
+                raise ValueError(f"buttons[{row_index}][{button_index}] must be an object")
+            label = button.get("label")
+            data = button.get("data")
+            if not isinstance(label, str) or not label:
+                raise ValueError(
+                    f"buttons[{row_index}][{button_index}].label must be a non-empty string"
+                )
+            if not isinstance(data, str) or not data:
+                raise ValueError(
+                    f"buttons[{row_index}][{button_index}].data must be a non-empty string"
+                )
+            buttons.append(InteractionButton(label=label, data=data))
+        rows.append(buttons)
+    return rows or None
 
 
 def _resolve_path(path: str, *, base_dir: Path) -> Path:
