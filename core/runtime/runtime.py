@@ -515,7 +515,8 @@ class Runtime:
             )
         register_skill_tool(self._tools, self.skills_for)
         # The agent skill-authoring write core refuses the bundled skills root; the
-        # ``skill_manage`` tool writes only the calling agent's private home.
+        # ``skill_manage`` tool writes the calling agent's private home (default) or
+        # the shared global pool (only when the user asked).
         self._skill_authoring = SkillAuthoringService(
             protected_roots=[resources_path / _SKILLS_DIRNAME]
         )
@@ -524,6 +525,8 @@ class Runtime:
             self._skill_authoring,
             self.agent_skills_dir,
             self.invalidate_agent_skills,
+            lambda: self.global_skills_dir,
+            self.reload_skills,
         )
         extension_dirs = self._extra_extension_directories(settings)
         disabled_extensions, extension_config = self._extension_load_options(settings)
@@ -1478,6 +1481,8 @@ class Runtime:
                     self._skill_authoring,
                     self.agent_skills_dir,
                     self.invalidate_agent_skills,
+                    lambda: self.global_skills_dir,
+                    self.reload_skills,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
