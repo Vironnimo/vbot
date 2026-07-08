@@ -41,10 +41,10 @@ from core.settings.normalizers import (
     normalize_web_search_settings,
     validate_supported_agent_default_fields,
 )
-from core.storage.atomic import remove_temporary_file, temporary_path
 from core.storage.errors import StorageError
 from core.storage.prompt_blocks import PromptBlockStore
 from core.storage.prompt_fragments import PromptFragmentStore
+from core.utils.atomic import atomic_write_text
 from core.utils.config import build_environment_snapshot, read_env_file
 
 if TYPE_CHECKING:
@@ -197,12 +197,9 @@ class StorageManager:
         if not replaced:
             updated_lines.append(new_line)
 
-        temp_path = temporary_path(self.data_dir, env_path)
         try:
-            temp_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
-            os.replace(temp_path, env_path)
+            atomic_write_text(env_path, "\n".join(updated_lines) + "\n", data_dir=self.data_dir)
         except OSError as exc:
-            remove_temporary_file(temp_path)
             raise StorageError(f"Cannot write {env_path}: {exc}") from exc
 
     def remove_data_dir_credential(self, key: str) -> bool:
@@ -239,12 +236,9 @@ class StorageManager:
             return False
 
         self.ensure_directories()
-        temp_path = temporary_path(self.data_dir, env_path)
         try:
-            temp_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
-            os.replace(temp_path, env_path)
+            atomic_write_text(env_path, "\n".join(updated_lines) + "\n", data_dir=self.data_dir)
         except OSError as exc:
-            remove_temporary_file(temp_path)
             raise StorageError(f"Cannot write {env_path}: {exc}") from exc
         return True
 
@@ -786,19 +780,17 @@ class StorageManager:
 
         with self._settings_lock:
             self.ensure_directories()
-            temp_path = temporary_path(self.data_dir, self.settings_path)
             try:
-                with temp_path.open("w", encoding="utf-8") as file:
-                    json.dump(dict(settings), file, ensure_ascii=False, indent=2, sort_keys=True)
-                    file.write("\n")
-                os.replace(temp_path, self.settings_path)
+                serialized = (
+                    json.dumps(dict(settings), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+                )
             except TypeError as exc:
-                remove_temporary_file(temp_path)
                 raise StorageError(
                     f"Settings contain a value that cannot be serialized: {exc}"
                 ) from exc
+            try:
+                atomic_write_text(self.settings_path, serialized, data_dir=self.data_dir)
             except OSError as exc:
-                remove_temporary_file(temp_path)
                 raise StorageError(f"Cannot write {self.settings_path}: {exc}") from exc
 
     def copy_agent_prompt_fragments(self, agent_id: str, *, overwrite: bool = False) -> list[Path]:

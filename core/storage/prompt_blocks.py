@@ -25,14 +25,13 @@ block has no override path at all — the store never invents one.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from core.prompts import LayoutEntry
 from core.settings import is_valid_agent_id
-from core.storage.atomic import remove_temporary_file, temporary_path
 from core.storage.errors import StorageError
+from core.utils.atomic import atomic_write_text
 
 # The block-id source prefixes that may appear on disk as a ``blocks/<namespace>``
 # subfolder. A fixed closed set (D3): an unknown namespace is invalid storage
@@ -221,14 +220,9 @@ class PromptBlockStore:
 
         target_path = self.block_override_path(scope, block_id)
         self._ensure_directories()
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        temp_path = temporary_path(self._data_dir, target_path)
         try:
-            temp_path.write_text(content, encoding="utf-8")
-            os.replace(temp_path, target_path)
+            atomic_write_text(target_path, content, data_dir=self._data_dir)
         except OSError as exc:
-            remove_temporary_file(temp_path)
             raise StorageError(f"Cannot write block override {target_path}: {exc}") from exc
 
         return target_path
@@ -323,14 +317,8 @@ class PromptBlockStore:
 
     def _write_json_atomic(self, target_path: Path, payload: object, *, label: str) -> None:
         self._ensure_directories()
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        temp_path = temporary_path(self._data_dir, target_path)
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         try:
-            with temp_path.open("w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2, sort_keys=True)
-                file.write("\n")
-            os.replace(temp_path, target_path)
+            atomic_write_text(target_path, serialized, data_dir=self._data_dir)
         except OSError as exc:
-            remove_temporary_file(temp_path)
             raise StorageError(f"Cannot write {label} {target_path}: {exc}") from exc

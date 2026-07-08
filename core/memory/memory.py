@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 import re
 import threading
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, Protocol
 
+from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 
 if TYPE_CHECKING:
@@ -401,16 +401,10 @@ def _strip_entry_bullet(line: str) -> str:
 
 def _write_memory_parts(path: Path, preamble: str, entries: list[str], suffix: str) -> None:
     text = _render_memory_text(preamble, entries, suffix)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f".{path.name}.tmp")
     try:
-        temp_path.write_text(text, encoding="utf-8")
-        os.replace(temp_path, path)
+        atomic_write_text(path, text)
     except OSError as exc:
         raise MemoryError(f"failed to write memory file {path}: {exc}") from exc
-    finally:
-        with suppress(OSError):
-            temp_path.unlink(missing_ok=True)
 
 
 def _render_memory_text(preamble: str, entries: list[str], suffix: str) -> str:
