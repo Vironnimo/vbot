@@ -504,6 +504,27 @@ class Runtime:
         register_process_tool(self._tools, self._process_manager)
         register_text_to_speech_tool(self._tools, self._speech)
         register_image_generation_tool(self._tools, self._image)
+        extension_dirs = self._extra_extension_directories(settings)
+        disabled_extensions, extension_config = self._extension_load_options(settings)
+        self._extensions = ExtensionRegistry.load(
+            self._storage.data_dir / "extensions",
+            extra_dirs=extension_dirs,
+            disabled=disabled_extensions,
+            config=extension_config,
+            bundled_dir=resources_path / "extensions",
+            config_provider=self._live_extension_config,
+            credential_resolver=self.resolve_environment_credential,
+        )
+        failed_extension_count = len(self._extensions.diagnostics())
+        if failed_extension_count > 0:
+            self.logger.warning(
+                "Loaded extensions with %s failed extensions; "
+                "see vbot.extensions errors for details",
+                failed_extension_count,
+            )
+        # Skills load after extensions: a loaded extension may bundle its own skills
+        # under ``<extension>/skills/``, which ``_skill_scan_roots`` folds into the
+        # global pool, so the extension layer must be in place first.
         skill_scan_roots = self._skill_scan_roots(settings, resources_path)
         self._skills = SkillRegistry.load(
             skill_scan_roots[0],
@@ -533,24 +554,6 @@ class Runtime:
             lambda: self.global_skills_dir,
             self.reload_skills,
         )
-        extension_dirs = self._extra_extension_directories(settings)
-        disabled_extensions, extension_config = self._extension_load_options(settings)
-        self._extensions = ExtensionRegistry.load(
-            self._storage.data_dir / "extensions",
-            extra_dirs=extension_dirs,
-            disabled=disabled_extensions,
-            config=extension_config,
-            bundled_dir=resources_path / "extensions",
-            config_provider=self._live_extension_config,
-            credential_resolver=self.resolve_environment_credential,
-        )
-        failed_extension_count = len(self._extensions.diagnostics())
-        if failed_extension_count > 0:
-            self.logger.warning(
-                "Loaded extensions with %s failed extensions; "
-                "see vbot.extensions errors for details",
-                failed_extension_count,
-            )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._projects = ProjectStore(self._storage.data_dir)
         self._agent_resolver = build_agent_resolver(
@@ -985,9 +988,13 @@ class Runtime:
 
         One source of the bundled skill roots so the global registry and every
         project-scoped registry scan exactly the same directories
-        (``<data_dir>/skills``, the bundled ``resources/skills``, then the
-        settings-configured extras). A project registry prepends its own skill
-        directory (its declared source format's location) ahead of these.
+        (``<data_dir>/skills``, the bundled ``resources/skills``, the
+        settings-configured extras, then the ``skills/`` folder of every loaded
+        extension). A project registry prepends its own skill directory (its
+        declared source format's location) ahead of these. Everything from the
+        bundled root onward is tagged ``global`` by ``_bundled_skill_origins``, so
+        extension-bundled skills present as global skills; the user's own
+        ``<data_dir>/skills`` is scanned first and therefore wins a name collision.
         """
         if self._storage is None:
             raise RuntimeError("Storage service not available")
@@ -995,6 +1002,26 @@ class Runtime:
             self._storage.data_dir / _SKILLS_DIRNAME,
             resources_path / _SKILLS_DIRNAME,
             *self._extra_skill_directories(settings),
+            *self._extension_skill_dirs(),
+        ]
+
+    def _extension_skill_dirs(self) -> list[Path]:
+        """Return the ``skills/`` directory of every currently-loaded extension.
+
+        A loaded extension in package/directory form may bundle skills under
+        ``<extension>/skills/`` (GLOSSARY -> Skill); ``_skill_scan_roots`` folds
+        them into the global pool, so an extension ships a skill with no code —
+        only the folder. Only ``loaded`` records contribute: a disabled, failed, or
+        overridden extension adds nothing. A single-file extension's ``root_path``
+        is its ``.py`` file, whose ``skills`` child is not a directory and is simply
+        skipped by the scan. Empty until the extension layer exists.
+        """
+        if self._extensions is None:
+            return []
+        return [
+            record.root_path / _SKILLS_DIRNAME
+            for record in self._extensions.records()
+            if record.status == "loaded"
         ]
 
     @staticmethod
@@ -1335,6 +1362,10 @@ class Runtime:
             new_registry.apply_tools(tool_registry)
             self.reload_recall_backend()
             self._refresh_prompt_block_definitions()
+            # The rebuilt layer may change which extensions bundle skills (added,
+            # removed, edited, or enabled), so rebuild the skill registry — and its
+            # project/agent caches — against the fresh set of extension skill dirs.
+            self.reload_skills()
 
             await new_registry.fire_startup()
 
@@ -1378,6 +1409,9 @@ class Runtime:
                 await self._extensions.deactivate(name, self._tools)
 
             self._refresh_prompt_block_definitions()
+            # A deactivated extension's bundled skills must drop from the global
+            # pool too, so rebuild the skill registry against the now-smaller set.
+            self.reload_skills()
             self._recover_recall_backend_if_deactivated(deactivating_backend_names)
 
     def _extension_recall_backend_names(self, names: set[str]) -> set[str]:
