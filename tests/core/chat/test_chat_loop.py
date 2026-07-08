@@ -595,6 +595,11 @@ class StubRuntime:
         # objects (name/description/path); default empty means no skills section.
         return self.project_own_skills_result
 
+    def local_context_windows(self) -> JsonObject:
+        # Mirrors Runtime.local_context_windows: the live user-configured
+        # local-model window map, read from storage at call time.
+        return cast(JsonObject, self.storage.load_local_models_settings()["context_windows"])
+
 
 class StubProviderCredentials:
     def __init__(self, usable_connection_ids: set[str]) -> None:
