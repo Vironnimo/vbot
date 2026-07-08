@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from difflib import get_close_matches
 from typing import Any
 
+from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -331,12 +332,6 @@ def _format_account_rows(accounts: object) -> str:
         source = _string_or_default(account.get("source"), "?")
         lines.append(f"  - id: {account_id}  usable: {usable}  source: {source}")
     return "\n".join(lines)
-
-
-def _string_or_default(value: object, default: str) -> str:
-    if isinstance(value, str) and value:
-        return value
-    return default
 
 
 def _format_refresh_result(data: Mapping[str, Any], provider_id: str) -> str:

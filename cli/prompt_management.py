@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from cli.formatting import bool_text as _bool_text
+from cli.formatting import string_or_default as _string_or_default
+from cli.formatting import value_text as _value_text
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -94,23 +97,3 @@ def _modified_text(block: dict[str, object]) -> str:
     if block.get("editable") is not True:
         return "-"
     return _bool_text(block.get("is_modified"))
-
-
-def _bool_text(value: object) -> str:
-    if value is True:
-        return "yes"
-    if value is False:
-        return "no"
-    return "unknown"
-
-
-def _value_text(value: object) -> str:
-    if value is None:
-        return "-"
-    return str(value)
-
-
-def _string_or_default(value: object, default: str) -> str:
-    if isinstance(value, str) and value:
-        return value
-    return default
