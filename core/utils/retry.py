@@ -68,6 +68,16 @@ def compute_retry_delay(
     return delay, False
 
 
+async def sleep_for_retry(attempt: int, retry_after: float | None = None) -> None:
+    """Sleep the backoff delay for *attempt*, honoring a ``retry_after`` floor.
+
+    The one-line wrapper the HTTP tools' hand-rolled retry loops share instead of
+    each spelling out ``compute_retry_delay`` + ``asyncio.sleep``.
+    """
+    delay, _ = compute_retry_delay(attempt, retry_after=retry_after)
+    await asyncio.sleep(delay)
+
+
 async def retry_async(
     async_fn: Callable[..., Awaitable[T]],
     *args: Any,

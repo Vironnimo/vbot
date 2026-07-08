@@ -259,7 +259,7 @@ async def test_web_fetch_handler_retries_retryable_statuses(
     async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(web_fetch_module, "_sleep_for_retry", no_retry_sleep)
+    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
 
     attempts = 0
 
@@ -294,7 +294,7 @@ async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
     async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(web_fetch_module, "_sleep_for_retry", no_retry_sleep)
+    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
 
     calls = 0
 
@@ -328,7 +328,7 @@ async def test_web_fetch_handler_honors_retry_after_hint(
         del attempt
         observed_hints.append(retry_after)
 
-    monkeypatch.setattr(web_fetch_module, "_sleep_for_retry", recording_sleep)
+    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", recording_sleep)
 
     attempts = 0
 

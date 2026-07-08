@@ -27,7 +27,7 @@ from core.tools.tools import (
 )
 from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
-from core.utils.retry import MAX_RETRIES, compute_retry_delay
+from core.utils.retry import MAX_RETRIES, sleep_for_retry
 
 _LOGGER = get_logger("tools.web_fetch")
 
@@ -760,11 +760,6 @@ async def _validate_public_target(scheme: str, host: str | None, port: int) -> t
     return normalized_host, str(resolved_addresses[0])
 
 
-async def _sleep_for_retry(attempt: int, retry_after: float | None = None) -> None:
-    delay, _ = compute_retry_delay(attempt, retry_after=retry_after)
-    await asyncio.sleep(delay)
-
-
 async def _request_with_retry(session: AsyncSession, url: str) -> _FetchResult:
     """Fetch a URL and retry retryable status codes with backoff and jitter."""
     for attempt in range(MAX_RETRIES + 1):
@@ -775,7 +770,7 @@ async def _request_with_retry(session: AsyncSession, url: str) -> _FetchResult:
             and attempt < MAX_RETRIES
             and is_retryable_status(result.status_code, idempotent=True)
         ):
-            await _sleep_for_retry(attempt, parse_retry_after(result.headers))
+            await sleep_for_retry(attempt, parse_retry_after(result.headers))
             continue
 
         return result

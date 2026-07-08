@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import html
 import re
 from collections.abc import Callable, Mapping
@@ -33,7 +32,7 @@ from core.tools.tools import (
 )
 from core.utils.http_status import HttpRequestFailure, is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
-from core.utils.retry import MAX_RETRIES, compute_retry_delay
+from core.utils.retry import MAX_RETRIES, sleep_for_retry
 
 _LOGGER = get_logger("tools.web_search")
 
@@ -359,11 +358,6 @@ def _extract_error_detail(response: httpx.Response) -> str:
     return response.reason_phrase or "request failed"
 
 
-async def _sleep_for_retry(attempt: int, retry_after: float | None = None) -> None:
-    delay, _ = compute_retry_delay(attempt, retry_after=retry_after)
-    await asyncio.sleep(delay)
-
-
 async def _search_brave(
     *,
     api_key: str,
@@ -401,7 +395,7 @@ async def _search_brave(
                         retryable=True,
                         attempts_made=MAX_RETRIES + 1,
                     )
-                await _sleep_for_retry(attempt)
+                await sleep_for_retry(attempt)
                 continue
 
             if response.status_code >= 400:
@@ -410,7 +404,7 @@ async def _search_brave(
                     is_retryable_status(response.status_code, idempotent=True)
                     and attempt < MAX_RETRIES
                 ):
-                    await _sleep_for_retry(attempt, parse_retry_after(response.headers))
+                    await sleep_for_retry(attempt, parse_retry_after(response.headers))
                     continue
                 detail = _extract_error_detail(response)
                 _LOGGER.warning(
@@ -513,7 +507,7 @@ async def _search_searxng(
                         retryable=True,
                         attempts_made=MAX_RETRIES + 1,
                     )
-                await _sleep_for_retry(attempt)
+                await sleep_for_retry(attempt)
                 continue
 
             if response.status_code >= 400:
@@ -522,7 +516,7 @@ async def _search_searxng(
                     is_retryable_status(response.status_code, idempotent=True)
                     and attempt < MAX_RETRIES
                 ):
-                    await _sleep_for_retry(attempt, parse_retry_after(response.headers))
+                    await sleep_for_retry(attempt, parse_retry_after(response.headers))
                     continue
                 detail = _extract_error_detail(response)
                 if response.status_code == 403:
