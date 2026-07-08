@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock, TextBlock
+from core.extensions import InteractionButton
 
 if TYPE_CHECKING:
     from core.attachments import AttachmentRecord
@@ -233,12 +234,18 @@ class ChannelAdapter(ABC):
         *,
         files: list[FileData] | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         """Send one outbound message to a platform target.
 
         ``thread_id`` addresses a thread/topic inside the target where the platform
         models topics as sub-addresses of one chat (Telegram forum topics). Adapters
         whose threads are their own platform targets (Discord) ignore it.
+
+        ``buttons`` attaches an inline-keyboard (rows of :class:`InteractionButton`)
+        to the message so taps come back as channel interaction events. Only
+        adapters that support interactive messages honor it; the rest reject a
+        non-``None`` value with a clean error.
         """
 
     @abstractmethod

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 from core.channels.adapter import FileData, RouteFacts
 from core.channels.channels import ChannelNotFoundError
+from core.extensions import InteractionButton
 from core.tools.channel import (
     CHANNEL_SEND_TOOL_NAME,
     register_channel_send_tool,
@@ -129,9 +130,91 @@ def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -
         "12345",
         files=None,
         thread_id=None,
+        buttons=None,
     )
     chat_sessions.get_metadata.assert_not_called()
     channel_service.list_channels.assert_called_once_with()
+
+
+def test_channel_send_passes_buttons_to_service(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    chat_sessions = make_chat_sessions()
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "Shopping list",
+                "platform_target": "12345",
+                "buttons": [
+                    [
+                        {"label": "Milk ⬜", "data": "chk:milk"},
+                        {"label": "Eggs ⬜", "data": "chk:eggs"},
+                    ]
+                ],
+            },
+        )
+    )
+
+    assert_success_envelope(result)
+    channel_service.send.assert_awaited_once_with(
+        "tg-assistant",
+        "Shopping list",
+        "12345",
+        files=None,
+        thread_id=None,
+        buttons=[
+            [
+                InteractionButton(label="Milk ⬜", data="chk:milk"),
+                InteractionButton(label="Eggs ⬜", data="chk:eggs"),
+            ]
+        ],
+    )
+
+
+def test_channel_send_rejects_malformed_buttons(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    chat_sessions = make_chat_sessions()
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "Shopping list",
+                "platform_target": "12345",
+                # Missing the required "data" field.
+                "buttons": [[{"label": "Milk"}]],
+            },
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "buttons[0][0].data must be a non-empty string",
+    )
+    channel_service.send.assert_not_awaited()
 
 
 def test_channel_send_records_outbound_note_in_target_session(tmp_path: Path) -> None:
@@ -283,6 +366,7 @@ def test_channel_send_resolves_platform_target_from_session_metadata(tmp_path: P
         "12345",
         files=None,
         thread_id=None,
+        buttons=None,
     )
     channel_service.list_channels.assert_called_once_with()
 
@@ -327,6 +411,7 @@ def test_channel_send_ignores_session_metadata_for_other_channel(tmp_path: Path)
         "8506476339",
         files=None,
         thread_id=None,
+        buttons=None,
     )
 
 
@@ -367,6 +452,7 @@ def test_channel_send_resolves_platform_target_from_unique_allowed_chat_id(tmp_p
         "8506476339",
         files=None,
         thread_id=None,
+        buttons=None,
     )
 
 
@@ -404,6 +490,7 @@ def test_channel_send_passes_explicit_thread_id(tmp_path: Path) -> None:
         "12345",
         files=None,
         thread_id="42",
+        buttons=None,
     )
 
 
@@ -447,6 +534,7 @@ def test_channel_send_adopts_thread_from_session_metadata(tmp_path: Path) -> Non
         "12345",
         files=None,
         thread_id="42",
+        buttons=None,
     )
 
 

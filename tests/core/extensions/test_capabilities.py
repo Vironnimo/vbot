@@ -261,3 +261,57 @@ def test_extension_recall_backend_invalid_name_is_diagnosed(tmp_path: Path) -> N
     assert "Bad_Name" not in recall_registry.names()
     errors = _record(registry, "bad_backend").capability_errors
     assert any("Bad_Name" in message and "snake_case" in message for message in errors)
+
+
+# --- interaction handlers ----------------------------------------------------
+
+
+def _interaction_extension_source(prefix: str) -> str:
+    """Extension registering one interaction handler for *prefix*."""
+    return (
+        "async def _handler(event, responder):\n"
+        "    await responder.answer()\n"
+        "def register(api):\n"
+        f"    api.register_interaction_handler({prefix!r}, _handler)\n"
+    )
+
+
+def test_extension_interaction_handler_lands_in_prefix_map(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "chk_ext", _interaction_extension_source("chk"))
+
+    registry = ExtensionRegistry.load(root)
+
+    # The apply phase built the prefix map; the prefix points at this extension.
+    assert registry._interaction_handlers["chk"][0] == "chk_ext"
+    assert _record(registry, "chk_ext").capability_errors == []
+
+
+def test_two_extensions_same_prefix_first_wins_both_diagnosed(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    # Load order is sorted by name: alpha applies before zeta.
+    _write_single_file(root, "alpha", _interaction_extension_source("chk"))
+    _write_single_file(root, "zeta", _interaction_extension_source("chk"))
+
+    registry = ExtensionRegistry.load(root)
+
+    # First-declared (alpha) won the prefix; zeta's copy was skipped.
+    assert registry._interaction_handlers["chk"][0] == "alpha"
+    alpha_errors = _record(registry, "alpha").capability_errors
+    zeta_errors = _record(registry, "zeta").capability_errors
+    assert any("zeta" in message for message in alpha_errors)
+    assert any("alpha" in message and "skipped" in message for message in zeta_errors)
+
+
+def test_extension_with_skipped_interaction_prefix_stays_loaded(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "alpha", _interaction_extension_source("chk"))
+    _write_single_file(root, "zeta", _interaction_extension_source("chk"))
+
+    registry = ExtensionRegistry.load(root)
+
+    # The loser is non-fatal: still loaded, not in failed diagnostics.
+    loser = _record(registry, "zeta")
+    assert loser.status == "loaded"
+    assert loser not in registry.diagnostics()
+    assert loser.capability_errors != []

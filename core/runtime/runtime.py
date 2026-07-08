@@ -25,7 +25,12 @@ from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService, SummarizationStrategy
 from core.debug import DebugTraceStore, ProviderDebugRecorder
-from core.extensions import ExtensionRegistry, purge_extension_modules
+from core.extensions import (
+    ExtensionRegistry,
+    InteractionEvent,
+    InteractionResponder,
+    purge_extension_modules,
+)
 from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.models import Model, ModelRegistry
@@ -611,6 +616,7 @@ class Runtime:
             credential_resolver=self.resolve_environment_credential,
             attachment_store=self._attachment_store,
             command_dispatcher=self._command_dispatcher,
+            interaction_dispatcher=self._dispatch_channel_interaction,
         )
         self._channel_service._notify_tool_registration_changed_hook = (
             self._reload_channel_tool_if_started
@@ -1713,6 +1719,20 @@ class Runtime:
         if self._skill_authoring is None:
             raise RuntimeError("Skill authoring service not available")
         return self._skill_authoring
+
+    async def _dispatch_channel_interaction(
+        self, event: InteractionEvent, responder: InteractionResponder
+    ) -> bool:
+        """Route a channel button tap into the live extension registry.
+
+        Injected into channel adapters as a bound method, so it always reads the
+        current ``self._extensions`` — an extension reload/disable needs no channel
+        re-wiring. Returns ``False`` when no registry is loaded (the adapter then
+        still acknowledges the tap).
+        """
+        if self._extensions is None:
+            return False
+        return await self._extensions.dispatch_channel_interaction(event, responder)
 
     @property
     def extensions(self) -> ExtensionRegistry | None:

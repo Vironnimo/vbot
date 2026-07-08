@@ -64,6 +64,7 @@ The `api` object (`ExtensionAPI`) offers:
 | `api.register_tool(name, description, parameters, handler, *, internal=False, display=None)` | an agent tool |
 | `api.register_recall_backend(name, factory)` | a session-recall backend |
 | `api.register_prompt_block(slug, *, default_text=None, render=None)` | a System Prompt block |
+| `api.register_interaction_handler(prefix, handler)` | a channel button-tap handler (see [Channel interaction handlers](#channel-interaction-handlers)) |
 | `api.register_settings(fields)` | a settings schema (see [Settings schema](#settings-schema)) |
 | `api.on_startup(handler)` / `api.on_shutdown(handler)` | a lifecycle callback (sync or async, no args) |
 | `api.config` | your config **snapshot** from `settings.extensions.config.<name>`, taken at register time (default `{}`) |
@@ -177,6 +178,67 @@ lowercase snake_case and must not collide with a built-in. Once registered, a
 backend becomes selectable via `settings.recall.backend` (Settings → Recall).
 See [`.vorch/domain-maps/recall.md`](../.vorch/domain-maps/recall.md) for the backend
 protocol.
+
+## Channel interaction handlers
+
+A channel message can carry inline **buttons**; tapping one produces a channel
+interaction event. `api.register_interaction_handler(prefix, handler)` lets your
+extension handle those taps **deterministically in-process** — no LLM run, no
+agent wake-up — which is what makes a tap fast and free.
+
+Routing is by **callback-data prefix**. A button's callback data is
+`"<prefix>:<payload>"` (the `prefix` never itself contains `:`); your handler
+receives every tap whose data begins with `"<prefix>:"`. A prefix already
+claimed by an earlier-loaded extension is skipped and diagnosed on your
+extension's record (first-wins, the same policy as a tool-name collision) — one
+prefix, one owner.
+
+```python
+from core.extensions import InteractionButton
+
+async def _toggle(event, responder):
+    # event.buttons is the message's current keyboard (rows of InteractionButton),
+    # event.data is the tapped button's callback payload. Rebuild the keyboard and
+    # edit it back — the state lives in the message, there is no server-side store.
+    new_rows = [
+        [
+            InteractionButton(label=flip(b.label) if b.data == event.data else b.label,
+                              data=b.data)
+            for b in row
+        ]
+        for row in event.buttons
+    ]
+    await responder.edit(buttons=new_rows)
+    await responder.answer()            # stop the tapper's spinner (empty = silent ack)
+
+def register(api):
+    api.register_interaction_handler("chk", _toggle)
+```
+
+The handler is called `handler(event, responder)`:
+
+- `event` (`InteractionEvent`) carries `platform`, `channel_id`, `chat_id`,
+  `user_id`, `message_id`, `data` (the tapped payload), `buttons` (the message's
+  current keyboard as rows of `InteractionButton`), and optional `text`,
+  `user_display_name`, `thread_id`. There is **no server-side persistence**: the
+  platform delivers the current message + keyboard with every tap, so recompute
+  the edit from the event.
+- `responder` (`InteractionResponder`) is the reply channel: `await
+  responder.answer(text=None, *, alert=False)` acknowledges the tap (an empty
+  `text` is a silent ack; a non-empty one shows a toast, or a modal when
+  `alert=True`), and `await responder.edit(*, text=None, buttons=None)` rewrites
+  the tapped message's text and/or keyboard.
+
+Every tap is acknowledged **exactly once** — if your handler does not call
+`answer()`, the channel sends a fallback ack so the tapper's spinner always
+stops. A handler that raises is logged and swallowed (fail-open), then the
+fallback ack still runs.
+
+To **send** buttons, use the `channel_send` tool's `buttons` parameter (rows of
+`{label, data}`), or a channel adapter's `send(..., buttons=...)`. Telegram is
+the only platform with interactive support today; callback data is capped at 64
+bytes. The bundled **checklist** extension (prefix `chk`) is a ready reference
+handler that flips a leading ⬜↔✅ on the tapped button.
 
 ## Settings schema
 

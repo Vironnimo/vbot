@@ -22,6 +22,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.extensions.interactions import (
+    InteractionEvent,
+    InteractionHandlerDeclaration,
+    InteractionResponder,
+)
 from core.extensions.settings_schema import SettingsFieldDeclaration, parse_settings_fields
 from core.utils.logging import get_logger
 
@@ -198,6 +203,7 @@ class ExtensionDeclarations:
     tools: list[ToolDeclaration] = field(default_factory=list)
     recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
     prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
+    interaction_handlers: list[InteractionHandlerDeclaration] = field(default_factory=list)
     settings_schema: list[SettingsFieldDeclaration] | None = None
 
 
@@ -354,6 +360,21 @@ class ExtensionAPI:
             RecallBackendDeclaration(name=name, factory=factory)
         )
 
+    def register_interaction_handler(self, prefix: str, handler: Callable[..., Any]) -> None:
+        """Declare a channel-interaction (button-tap) handler for *prefix*.
+
+        Only collects the declaration; the runtime builds the prefix map after
+        every extension has registered. The handler is called
+        ``handler(event, responder)`` for each tap whose callback ``data`` begins
+        with ``"<prefix>:"`` (see :mod:`core.extensions.interactions`). A prefix
+        already claimed by an earlier-loaded extension is skipped and diagnosed
+        on this extension's record — extensions never override an existing
+        prefix.
+        """
+        self._declarations.interaction_handlers.append(
+            InteractionHandlerDeclaration(prefix=prefix, handler=handler)
+        )
+
     def register_prompt_block(
         self,
         slug: str,
@@ -398,6 +419,7 @@ class ExtensionAPI:
 class ExtensionRegistry:
     def __init__(self) -> None:
         self._handlers: dict[str, list[RegisteredHandler]] = defaultdict(list)
+        self._interaction_handlers: dict[str, RegisteredHandler] = {}
         self._records: list[ExtensionRecord] = []
 
     @classmethod
@@ -459,6 +481,7 @@ class ExtensionRegistry:
                 claimed[discovered.name] = record
         _await_pending_registers(pending)
         registry._apply_declarations()
+        registry._apply_interaction_handlers()
         return registry
 
     def install_handler(self, extension_name: str, event: str, handler: HookHandler) -> None:
@@ -478,6 +501,51 @@ class ExtensionRegistry:
             for event, handlers in record.declarations.hooks.items():
                 for handler in handlers:
                     self.install_handler(record.name, event, handler)
+
+    def _apply_interaction_handlers(self) -> None:
+        """Build the prefix → (extension, handler) map from every loaded record.
+
+        Called by :meth:`load` right after :meth:`_apply_declarations`. Load order
+        is deterministic, so a collision must not silently decide behavior: a
+        prefix already claimed by an earlier-loaded extension is **skipped** and
+        diagnosed on the loser's record, and the first claimant is diagnosed
+        naming the skipped extension(s) — the same first-wins policy as
+        :meth:`_apply_one_tool`. There are no built-in prefixes to reserve.
+        """
+        loaded = [record for record in self._records if record.status == "loaded"]
+        declarers: dict[str, list[str]] = defaultdict(list)
+        for record in loaded:
+            for declaration in record.declarations.interaction_handlers:
+                declarers[declaration.prefix].append(record.name)
+
+        for record in loaded:
+            for declaration in record.declarations.interaction_handlers:
+                self._apply_one_interaction_handler(record, declaration, declarers)
+
+    def _apply_one_interaction_handler(
+        self,
+        record: ExtensionRecord,
+        declaration: InteractionHandlerDeclaration,
+        declarers: dict[str, list[str]],
+    ) -> None:
+        prefix = declaration.prefix
+        other_declarers = [other for other in declarers[prefix] if other != record.name]
+        if prefix in self._interaction_handlers:
+            winner = repr(other_declarers[0]) if other_declarers else "another extension"
+            self._diagnose_capability(
+                record,
+                f"interaction handler {prefix!r} skipped: prefix already declared "
+                f"by extension {winner}",
+            )
+            return
+        self._interaction_handlers[prefix] = (record.name, declaration.handler)
+        if other_declarers:
+            joined = ", ".join(repr(other) for other in other_declarers)
+            self._diagnose_capability(
+                record,
+                f"interaction handler {prefix!r} registered; also declared by "
+                f"extension(s) {joined} (skipped there)",
+            )
 
     def apply_tools(self, tool_registry: ToolRegistry) -> None:
         """Register every loaded extension's declared tools into *tool_registry*.
@@ -695,6 +763,7 @@ class ExtensionRegistry:
 
         declarations = record.declarations
         self._remove_handlers(name)
+        self._remove_interaction_handlers(name)
         if tool_registry is not None:
             self._unregister_extension_tools(tool_registry, declarations.tools)
         for handler in declarations.shutdown:
@@ -727,6 +796,14 @@ class ExtensionRegistry:
             self._handlers[event] = [
                 pair for pair in self._handlers[event] if pair[0] != extension_name
             ]
+
+    def _remove_interaction_handlers(self, extension_name: str) -> None:
+        """Drop every interaction prefix registered under *extension_name*."""
+        self._interaction_handlers = {
+            prefix: entry
+            for prefix, entry in self._interaction_handlers.items()
+            if entry[0] != extension_name
+        }
 
     def _unregister_extension_tools(
         self, tool_registry: ToolRegistry, tools: list[ToolDeclaration]
@@ -947,6 +1024,38 @@ class ExtensionRegistry:
                 if validated is not None:
                     current = validated
         return current
+
+    async def dispatch_channel_interaction(
+        self, event: InteractionEvent, responder: InteractionResponder
+    ) -> bool:
+        """Route one channel button-tap to the extension registered for its prefix.
+
+        The prefix is ``event.data`` up to the first ``":"``. Returns ``False``
+        when no handler is registered for that prefix (the channel still
+        acknowledges the tap itself). When a handler matches it is invoked
+        ``handler(event, responder)`` with the same fail-open isolation as hook
+        dispatch — a raising handler is logged at ``warning`` and swallowed — and
+        ``True`` is returned (a handler *matched*, even if it raised), so the
+        channel does not mistake a raising handler for an unhandled tap.
+        """
+        prefix = event.data.split(":", 1)[0]
+        entry = self._interaction_handlers.get(prefix)
+        if entry is None:
+            return False
+        extension_name, handler = entry
+        try:
+            result = handler(event, responder)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:
+            _LOGGER.warning(
+                "Extension %r interaction handler %r raised: %s",
+                extension_name,
+                prefix,
+                exc,
+                exc_info=True,
+            )
+        return True
 
 
 @dataclass(frozen=True)

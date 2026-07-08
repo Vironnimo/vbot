@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import replace
 from functools import partial
 from importlib import import_module
@@ -24,6 +24,7 @@ from core.channels.adapter import (
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
+from core.extensions import InteractionButton, InteractionEvent, InteractionResponder
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -74,12 +75,20 @@ class TelegramChannelAdapter(ChannelAdapter):
         *,
         command_dispatcher: CommandDispatcher,
         chat_migration_persister: Callable[[str, str], None] | None = None,
+        interaction_dispatcher: (
+            Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]] | None
+        ) = None,
     ) -> None:
         self._config = config
         self._attachment_store = attachment_store
         # Persists a group→supergroup chat-id swap into the channel config
         # (ChannelService wires its storage update); None keeps the swap runtime-only.
         self._chat_migration_persister = chat_migration_persister
+        # Routes a button tap to the extension registered for its callback prefix.
+        # Reads the live extension registry (bound method), so an extension
+        # reload/disable needs no channel re-wiring — the next tap uses the current
+        # registry. None means taps are always acknowledged but never dispatched.
+        self._interaction_dispatcher = interaction_dispatcher
         self._engine = ChannelConversationEngine(
             config,
             trigger_service,
@@ -196,6 +205,9 @@ class TelegramChannelAdapter(ChannelAdapter):
                 unsupported_message_types & new_messages_only,
                 self._handle_unsupported_message_type,
             ),
+            # A button tap is a distinct update type (callback_query), not a message,
+            # so this handler is additive and never wrapped with UpdateType.MESSAGE.
+            telegram_ext.CallbackQueryHandler(self._handle_callback_query),
         ]
 
     async def stop(self) -> None:
@@ -221,15 +233,26 @@ class TelegramChannelAdapter(ChannelAdapter):
         *,
         files: list[FileData] | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
-        """Send one outbound message and/or file payloads to Telegram."""
+        """Send one outbound message and/or file payloads to Telegram.
+
+        ``buttons`` attaches an inline keyboard to the message (the final text
+        chunk). A keyboard cannot ride on a media group, so combining ``buttons``
+        with ``files`` is rejected rather than silently dropping the keyboard.
+        """
         bot = self._require_bot()
         chat_id = _parse_platform_target(platform_target)
         message_thread_id = _parse_thread_id(thread_id)
         normalized_message = _normalize_optional_message(message)
         normalized_files = list(files or [])
+        reply_markup = _buttons_to_markup(buttons) if buttons else None
 
         if normalized_files:
+            if reply_markup is not None:
+                raise ChannelConfigError(
+                    "interactive buttons cannot be combined with file attachments"
+                )
             with _telegram_error_boundary(self._config.id):
                 await self._send_with_files(
                     bot,
@@ -245,7 +268,11 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         with _telegram_error_boundary(self._config.id):
             await self._send_text_chunks(
-                bot, chat_id, normalized_message, message_thread_id=message_thread_id
+                bot,
+                chat_id,
+                normalized_message,
+                message_thread_id=message_thread_id,
+                reply_markup=reply_markup,
             )
 
     async def _send_text_chunks(
@@ -255,11 +282,18 @@ class TelegramChannelAdapter(ChannelAdapter):
         message: str,
         *,
         message_thread_id: int | None = None,
+        reply_markup: Any = None,
     ) -> None:
-        for chunk in split_telegram_message(message, TELEGRAM_MESSAGE_LIMIT):
+        # A keyboard belongs on the final visible message, so it rides only on the
+        # last chunk of a split reply.
+        chunks = split_telegram_message(message, TELEGRAM_MESSAGE_LIMIT)
+        last_index = len(chunks) - 1
+        for index, chunk in enumerate(chunks):
             payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
             if message_thread_id is not None:
                 payload["message_thread_id"] = message_thread_id
+            if reply_markup is not None and index == last_index:
+                payload["reply_markup"] = reply_markup
             await bot.send_message(**payload)
 
     async def _send_with_files(
@@ -756,6 +790,78 @@ class TelegramChannelAdapter(ChannelAdapter):
             thread_id=conversation.thread_id,
         )
 
+    async def _handle_callback_query(self, update: Any, _context: Any) -> None:
+        """Turn a Telegram button tap (callback_query) into a dispatched interaction.
+
+        This path is owned entirely by the adapter: it does **not** go through the
+        conversation engine, ``should_respond``, ``TriggerService``, or the
+        per-conversation FIFO — a tap is handled deterministically in-process by an
+        extension, not by waking the agent (an LLM run per tap would be slow and
+        costly). Identity and the allowlist gate reuse the same inbound plumbing as
+        messages. Every tap is acknowledged exactly once — by the extension handler
+        or by the fallback here — so the tapper's spinner always stops.
+        """
+        callback = getattr(update, "callback_query", None)
+        if callback is None:
+            return
+
+        data = getattr(callback, "data", None)
+        message = getattr(callback, "message", None)
+        conversation = self._conversation_facts(update)
+        if (
+            not isinstance(data, str)
+            or not data
+            or message is None
+            or conversation is None
+            or conversation.message_id is None
+        ):
+            await self._best_effort_ack(callback)
+            return
+
+        if not self._is_chat_allowed(conversation.chat_id):
+            self._record_denied_inbound(conversation, update)
+            await self._best_effort_ack(callback)
+            return
+
+        responder = _TelegramInteractionResponder(
+            self._require_bot(),
+            callback_id=str(getattr(callback, "id", "")),
+            chat_id=int(conversation.chat_id),
+            message_id=int(conversation.message_id),
+            channel_id=self._config.id,
+        )
+        inline_keyboard = getattr(getattr(message, "reply_markup", None), "inline_keyboard", None)
+        text_value = getattr(message, "text", None)
+        event = InteractionEvent(
+            platform=self.platform,
+            channel_id=self._config.id,
+            chat_id=conversation.chat_id,
+            user_id=conversation.user_id,
+            message_id=conversation.message_id,
+            data=data,
+            buttons=_markup_to_buttons(inline_keyboard),
+            text=text_value if isinstance(text_value, str) else None,
+            user_display_name=conversation.user_display_name,
+            thread_id=conversation.thread_id,
+        )
+
+        if self._interaction_dispatcher is not None:
+            await self._interaction_dispatcher(event, responder)
+        if not responder.answered:
+            with contextlib.suppress(ChannelError):
+                await responder.answer()
+
+    async def _best_effort_ack(self, callback: Any) -> None:
+        """Silently acknowledge a tap; a Bot API failure here is logged, never fatal."""
+        try:
+            await callback.answer()
+        except Exception as error:
+            _LOGGER.debug(
+                "Telegram callback ack failed (channel=%s): %s",
+                self._config.id,
+                error,
+            )
+
     def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
         """Ensure the Session mirroring an outbound Telegram chat exists with channel context."""
         return self._engine.ensure_channel_session(
@@ -1039,6 +1145,96 @@ class TelegramChannelAdapter(ChannelAdapter):
         if application is None:
             raise ChannelError(f"Telegram channel is not running: {self._config.id}")
         return application.bot
+
+
+class _TelegramInteractionResponder:
+    """Concrete :class:`InteractionResponder` for one Telegram ``callback_query``.
+
+    Owns the reply channel for a single tap: acknowledge it (stop the tapper's
+    spinner) and optionally edit the tapped message's text and/or keyboard. Bot
+    API calls are wrapped in the adapter's :func:`_telegram_error_boundary`, so a
+    failed edit or ack surfaces as a ``ChannelError`` rather than an unwrapped
+    PTB error. ``answered`` lets the adapter guarantee a single fallback ack.
+    """
+
+    def __init__(
+        self,
+        bot: Any,
+        *,
+        callback_id: str,
+        chat_id: int,
+        message_id: int,
+        channel_id: str,
+    ) -> None:
+        self._bot = bot
+        self._callback_id = callback_id
+        self._chat_id = chat_id
+        self._message_id = message_id
+        self._channel_id = channel_id
+        self.answered = False
+
+    async def answer(self, text: str | None = None, *, alert: bool = False) -> None:
+        with _telegram_error_boundary(self._channel_id):
+            await self._bot.answer_callback_query(
+                callback_query_id=self._callback_id, text=text, show_alert=alert
+            )
+        self.answered = True
+
+    async def edit(
+        self,
+        *,
+        text: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
+    ) -> None:
+        markup = _buttons_to_markup(buttons) if buttons is not None else None
+        with _telegram_error_boundary(self._channel_id):
+            if text is not None:
+                await self._bot.edit_message_text(
+                    text=text,
+                    chat_id=self._chat_id,
+                    message_id=self._message_id,
+                    reply_markup=markup,
+                )
+            elif buttons is not None:
+                await self._bot.edit_message_reply_markup(
+                    chat_id=self._chat_id,
+                    message_id=self._message_id,
+                    reply_markup=markup,
+                )
+
+
+def _buttons_to_markup(rows: list[list[InteractionButton]]) -> Any:
+    """Render neutral button rows into a PTB ``InlineKeyboardMarkup``."""
+    telegram = _load_telegram()
+    keyboard = [
+        [
+            telegram.InlineKeyboardButton(text=button.label, callback_data=button.data)
+            for button in row
+        ]
+        for row in rows
+    ]
+    return telegram.InlineKeyboardMarkup(keyboard)
+
+
+def _markup_to_buttons(inline_keyboard: Any) -> tuple[tuple[InteractionButton, ...], ...]:
+    """Read a PTB ``inline_keyboard`` (rows of buttons) into neutral button rows.
+
+    Returns an empty tuple when the message carries no keyboard. Each button's
+    ``.text`` becomes the neutral label and its ``.callback_data`` the neutral
+    data; a button missing either is skipped (only tappable buttons round-trip).
+    """
+    if not inline_keyboard:
+        return ()
+    rows: list[tuple[InteractionButton, ...]] = []
+    for row in inline_keyboard:
+        buttons: list[InteractionButton] = []
+        for button in row:
+            label = getattr(button, "text", None)
+            data = getattr(button, "callback_data", None)
+            if isinstance(label, str) and isinstance(data, str):
+                buttons.append(InteractionButton(label=label, data=data))
+        rows.append(tuple(buttons))
+    return tuple(rows)
 
 
 def split_telegram_message(message: str, max_chars: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:

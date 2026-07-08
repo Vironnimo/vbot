@@ -6,8 +6,9 @@ Sends proactive outbound messages through configured channels.
 
 - Tool name: `channel_send`
 - Registration: `register_channel_send_tool(registry, channel_service, chat_sessions, *, max_attachment_size_bytes)` — the runtime passes the active `AttachmentStore.max_size_bytes` (the `attachment_max_size_bytes` setting).
-- Schema: required `channel_id`; optional `message`, `platform_target`, and `file_paths`.
+- Schema: required `channel_id`; optional `message`, `platform_target`, `thread_id`, `file_paths`, and `buttons`.
 - Display: summary fields `channel_id` and `message`.
+- `buttons` is `list[list[{label, data}]]` — inline-keyboard rows. `data` is the callback payload `"<prefix>:<payload>"` (max 64 bytes; the extension registered for `<prefix>` handles taps — see `.vorch/domain-maps/extensions.md` → Channel interaction handlers). The handler parses it into `list[list[InteractionButton]]`, rejecting a malformed structure with `invalid_arguments`; the 64-byte cap and platform support are enforced downstream (`ChannelService.send` / the adapter). Telegram only; `buttons` cannot be combined with `file_paths` (the adapter rejects it). No message id is returned.
 
 ## Conventions
 

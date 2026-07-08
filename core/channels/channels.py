@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import shutil
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import ChannelAdapter, DeniedChatFacts, FileData, RouteFacts
+from core.extensions import InteractionButton, InteractionEvent, InteractionResponder
 from core.settings import SettingsValidationError, load_validated_channel_json
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
@@ -37,6 +38,9 @@ _CHANNEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ADAPTER_RESTART_INITIAL_DELAY_SECONDS = 1.0
 _ADAPTER_RESTART_MAX_DELAY_SECONDS = 30.0
 _ADAPTER_RESTART_MAX_RETRIES = 3
+# Telegram caps an inline button's callback_data at 64 UTF-8 bytes; validated on
+# send so an over-long payload fails cleanly rather than at the Bot API.
+_MAX_CALLBACK_DATA_BYTES = 64
 _MUTABLE_FIELDS = frozenset(
     (
         "platform",
@@ -295,6 +299,9 @@ class ChannelService:
         credential_resolver: Callable[[str], str],
         attachment_store: AttachmentStore | None = None,
         command_dispatcher: CommandDispatcher,
+        interaction_dispatcher: (
+            Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]] | None
+        ) = None,
     ) -> None:
         self._trigger_service = trigger_service
         self._chat_sessions = chat_sessions
@@ -302,6 +309,7 @@ class ChannelService:
         self._credential_resolver = credential_resolver
         self._attachment_store = attachment_store
         self._command_dispatcher = command_dispatcher
+        self._interaction_dispatcher = interaction_dispatcher
         self._storage = ChannelStorage(Path(data_root))
         self._adapters: dict[str, ChannelAdapter] = {}
         self._adapter_tasks: dict[str, asyncio.Task[None]] = {}
@@ -472,6 +480,7 @@ class ChannelService:
         *,
         files: list[FileData] | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         """Delegate an outbound send to a running channel adapter."""
         normalized_id = _normalize_channel_id(channel_id)
@@ -500,16 +509,18 @@ class ChannelService:
                     raise ChannelConfigError("files must contain FileData values only")
                 normalized_files.append(file_data)
 
+        normalized_buttons = _normalize_outbound_buttons(buttons)
+
         if normalized_message is None and not normalized_files:
             raise ChannelConfigError("at least one of message or files must be provided")
 
         adapter = self._active_adapter(normalized_id)
-        if normalized_files is None:
-            await adapter.send(normalized_message, platform_target, thread_id=thread_id)
-            return
-
         await adapter.send(
-            normalized_message, platform_target, files=normalized_files, thread_id=thread_id
+            normalized_message,
+            platform_target,
+            files=normalized_files,
+            thread_id=thread_id,
+            buttons=normalized_buttons,
         )
 
     def ensure_outbound_session(self, channel_id: str, platform_target: str) -> RouteFacts:
@@ -698,6 +709,7 @@ class ChannelService:
                 attachment_store=self._attachment_store,
                 command_dispatcher=self._command_dispatcher,
                 chat_migration_persister=partial(self.record_chat_id_migration, config.id),
+                interaction_dispatcher=self._interaction_dispatcher,
             )
 
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
@@ -997,6 +1009,45 @@ class ChannelService:
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
+
+
+def _normalize_outbound_buttons(
+    buttons: list[list[InteractionButton]] | None,
+) -> list[list[InteractionButton]] | None:
+    """Validate an outbound inline-keyboard before it reaches an adapter.
+
+    Returns ``None`` when no buttons were given (or every row is empty). Raises
+    :class:`ChannelConfigError` on a malformed structure or a button whose
+    callback ``data`` is empty or exceeds the 64-byte Telegram limit — so a bad
+    payload fails at the service boundary, uniformly across adapters, rather than
+    deep inside the Bot API call.
+    """
+    if buttons is None:
+        return None
+    if not isinstance(buttons, list):
+        raise ChannelConfigError("buttons must be a list of button rows when provided")
+
+    normalized: list[list[InteractionButton]] = []
+    for row in buttons:
+        if not isinstance(row, list):
+            raise ChannelConfigError("each button row must be a list of buttons")
+        normalized_row: list[InteractionButton] = []
+        for button in row:
+            if not isinstance(button, InteractionButton):
+                raise ChannelConfigError("buttons must contain InteractionButton values only")
+            if not isinstance(button.label, str) or not button.label:
+                raise ChannelConfigError("each button label must be a non-empty string")
+            if not isinstance(button.data, str) or not button.data:
+                raise ChannelConfigError("each button data must be a non-empty string")
+            if len(button.data.encode("utf-8")) > _MAX_CALLBACK_DATA_BYTES:
+                raise ChannelConfigError(
+                    f"button data exceeds {_MAX_CALLBACK_DATA_BYTES} bytes: {button.data!r}"
+                )
+            normalized_row.append(button)
+        if normalized_row:
+            normalized.append(normalized_row)
+
+    return normalized or None
 
 
 def _normalize_channel_id(channel_id: str) -> str:

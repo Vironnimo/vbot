@@ -28,6 +28,7 @@ from core.channels.channels import _normalize_channel_id
 from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
 from core.chat.commands import NotACommand
+from core.extensions import InteractionButton
 
 
 class AgentStoreStub:
@@ -87,6 +88,7 @@ class BlockingAdapter(ChannelAdapter):
         self.started = asyncio.Event()
         self.stopped = asyncio.Event()
         self.sent_messages: list[tuple[str | None, str]] = []
+        self.sent_buttons: list[list[list[InteractionButton]] | None] = []
 
     async def start(self) -> None:
         self.started.set()
@@ -102,8 +104,10 @@ class BlockingAdapter(ChannelAdapter):
         *,
         files: list[FileData] | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         self.sent_messages.append((message, platform_target))
+        self.sent_buttons.append(buttons)
 
     def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
         return RouteFacts(agent_id="assistant", session_id=f"ch-blocking-{platform_target}")
@@ -133,6 +137,7 @@ class FailingAdapter(ChannelAdapter):
         *,
         files: list[FileData] | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         return
 
@@ -174,6 +179,7 @@ class DelayedStopAdapter(ChannelAdapter):
         *,
         files: list[FileData] | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         return
 
@@ -672,6 +678,88 @@ async def test_channel_service_send_routes_to_running_adapter(
     assert adapter.sent_messages == [("Hello", "12345")]
 
     # Cleanup
+    service.stop()
+    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_channel_service_send_passes_buttons_to_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    adapter = BlockingAdapter()
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+
+    service.start_channel(config.id)
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
+
+    rows = [[InteractionButton(label="Milk ⬜", data="chk:milk")]]
+    await service.send(config.id, "Shopping", "12345", buttons=rows)
+
+    assert adapter.sent_messages == [("Shopping", "12345")]
+    assert adapter.sent_buttons == [rows]
+
+    service.stop()
+    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_channel_service_send_rejects_oversized_callback_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    adapter = BlockingAdapter()
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+
+    service.start_channel(config.id)
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
+
+    # 65 bytes of callback data: one over Telegram's 64-byte cap.
+    oversized = [[InteractionButton(label="x", data="d" * 65)]]
+    with pytest.raises(ChannelConfigError, match="exceeds 64 bytes"):
+        await service.send(config.id, "hi", "12345", buttons=oversized)
+
+    # The rejected send never reached the adapter.
+    assert adapter.sent_messages == []
+
+    service.stop()
+    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_channel_service_send_rejects_empty_button_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    adapter = BlockingAdapter()
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+
+    service.start_channel(config.id)
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
+
+    with pytest.raises(ChannelConfigError, match="button data must be a non-empty string"):
+        await service.send(
+            config.id, "hi", "12345", buttons=[[InteractionButton(label="x", data="")]]
+        )
+
     service.stop()
     await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
     await asyncio.sleep(0)

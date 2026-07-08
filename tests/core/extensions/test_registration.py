@@ -382,6 +382,26 @@ def test_register_settings_invalid_fields_fail_extension(tmp_path: Path) -> None
     assert "Bad" in (record.error or "")
 
 
+def test_register_interaction_handler_lands_on_record(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "interactive",
+        "async def _handler(event, responder):\n"
+        "    return None\n"
+        "def register(api):\n"
+        "    api.register_interaction_handler('chk', _handler)\n",
+    )
+
+    registry = ExtensionRegistry.load(root)
+
+    record = _record(registry, "interactive")
+    assert record.status == "loaded"
+    declarations = record.declarations.interaction_handlers
+    assert [declaration.prefix for declaration in declarations] == ["chk"]
+    assert callable(declarations[0].handler)
+
+
 def test_register_settings_twice_fails_extension(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
     _write_single_file(

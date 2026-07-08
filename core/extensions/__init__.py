@@ -15,6 +15,12 @@ from core.extensions.extensions import (
     ToolResultValidator,
     purge_extension_modules,
 )
+from core.extensions.interactions import (
+    InteractionButton,
+    InteractionEvent,
+    InteractionHandlerDeclaration,
+    InteractionResponder,
+)
 from core.extensions.settings_schema import (
     SettingsFieldDeclaration,
     parse_settings_fields,
@@ -29,6 +35,10 @@ __all__ = [
     "ExtensionRecord",
     "ExtensionRegistry",
     "HookContext",
+    "InteractionButton",
+    "InteractionEvent",
+    "InteractionHandlerDeclaration",
+    "InteractionResponder",
     "Modify",
     "PromptBlockDeclaration",
     "Replace",
