@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any, cast
 
 from core.channels import ChannelConfig, ChannelConfigError, ChannelNotFoundError
+from core.settings import (
+    ALLOWED_CHANNEL_DM_SCOPES,
+    ALLOWED_CHANNEL_PLATFORMS,
+    ALLOWED_CHANNEL_RESPONSE_MODES,
+)
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -18,9 +23,6 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
-CHANNEL_PLATFORMS = frozenset(("discord", "telegram"))
-CHANNEL_DM_SCOPES = frozenset(("per_conversation", "main", "per_peer", "per_account_channel_peer"))
-CHANNEL_RESPONSE_MODES = frozenset(("mention", "all"))
 
 
 def _list_channels(state: Any, params: JsonObject) -> JsonObject:
@@ -231,8 +233,8 @@ def _validate_channel_agent_exists(state: Any, agent_id: str) -> None:
 
 def _required_channel_platform(params: JsonObject, key: str) -> str:
     platform = _required_string(params, key)
-    if platform not in CHANNEL_PLATFORMS:
-        options = ", ".join(sorted(CHANNEL_PLATFORMS))
+    if platform not in ALLOWED_CHANNEL_PLATFORMS:
+        options = ", ".join(sorted(ALLOWED_CHANNEL_PLATFORMS))
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             f"params.{key} must be one of: {options}",
@@ -245,8 +247,8 @@ def _optional_channel_dm_scope(params: JsonObject, key: str, *, default: str) ->
         return default
 
     dm_scope = _required_string(params, key)
-    if dm_scope not in CHANNEL_DM_SCOPES:
-        options = ", ".join(sorted(CHANNEL_DM_SCOPES))
+    if dm_scope not in ALLOWED_CHANNEL_DM_SCOPES:
+        options = ", ".join(sorted(ALLOWED_CHANNEL_DM_SCOPES))
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             f"params.{key} must be one of: {options}",
@@ -259,8 +261,8 @@ def _optional_channel_response_mode(params: JsonObject, key: str) -> str:
         return "mention"
 
     response_mode = _required_string(params, key)
-    if response_mode not in CHANNEL_RESPONSE_MODES:
-        options = ", ".join(sorted(CHANNEL_RESPONSE_MODES))
+    if response_mode not in ALLOWED_CHANNEL_RESPONSE_MODES:
+        options = ", ".join(sorted(ALLOWED_CHANNEL_RESPONSE_MODES))
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             f"params.{key} must be one of: {options}",

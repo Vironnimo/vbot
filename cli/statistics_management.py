@@ -16,8 +16,6 @@ from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
-STATISTICS_SECTIONS = ("overview", "usage", "runs", "errors", "tools", "skills")
-
 # The report bounds its own output lists to a stable top-N (see
 # core/statistics/statistics.py); the CLI mirrors that ceiling when rendering
 # ranked breakdowns so a single command never floods the terminal.

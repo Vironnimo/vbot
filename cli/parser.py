@@ -11,18 +11,20 @@ from collections.abc import Sequence
 
 from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
-from core.settings import PROJECT_SOURCE_FORMATS
+from core.providers.reasoning import THINKING_EFFORT_ORDER
+from core.settings import (
+    ALLOWED_CHANNEL_DM_SCOPES,
+    ALLOWED_CHANNEL_PLATFORMS,
+    PROJECT_SOURCE_FORMATS,
+)
 from core.utils.config import DEFAULT_HOST
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
-THINKING_EFFORTS = ("", "none", "minimal", "low", "medium", "high", "xhigh", "max")
-CHANNEL_PLATFORMS = ("discord", "telegram")
-CHANNEL_DM_SCOPES = (
-    "per_conversation",
-    "main",
-    "per_peer",
-    "per_account_channel_peer",
-)
+# Empty string = provider default; the rest is the canonical effort ladder.
+THINKING_EFFORTS = ("", *THINKING_EFFORT_ORDER)
+# Argparse choices need a deterministic order; the canonical sets are unordered.
+CHANNEL_PLATFORMS = tuple(sorted(ALLOWED_CHANNEL_PLATFORMS))
+CHANNEL_DM_SCOPES = tuple(sorted(ALLOWED_CHANNEL_DM_SCOPES))
 CRON_STATUSES = ("active", "paused", "completed")
 STATISTICS_SECTIONS = ("overview", "usage", "runs", "errors", "tools", "skills")
 TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
