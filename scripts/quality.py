@@ -10,21 +10,24 @@ their corresponding test paths (``tests/core/utils/test_config.py``) for
 pytest; ruff and mypy receive them directly.
 """
 
-import hashlib
 import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-# Tool output is decoded as UTF-8, but Windows consoles often use a legacy
-# code page that cannot encode every character — degrade those to "?" instead
-# of crashing the runner mid-report.
-for _stream in (sys.stdout, sys.stderr):
-    if hasattr(_stream, "reconfigure"):
-        _stream.reconfigure(errors="replace")
+from _quality_common import (
+    PROJECT_ROOT,
+    changed_snapshot_paths,
+    collapse_blank_lines,
+    configure_console_encoding,
+    deduplicate_paths,
+    describe_fix_result,
+    snapshot_target_files,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+configure_console_encoding()
+
 PYTHON_FILE_SUFFIXES = {".py"}
 SNAPSHOT_IGNORED_DIRS = {
     ".git",
@@ -57,23 +60,6 @@ PYTEST_RESULT_TOKENS = ("PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS"
 PYTEST_PROGRESS_NODEID_PATTERN = re.compile(
     r"^(?:\[[^\]]+\]\s+)*(?:\[\s*\d+%\]\s+)?[^:\s][^\s]*::[^\s]+$"
 )
-
-
-def deduplicate_paths(paths: list[str]) -> list[str]:
-    """Remove file paths already covered by a broader directory path.
-
-    If both ``core/utils/`` and ``core/utils/config.py`` are given, keep
-    only ``core/utils/``.
-    """
-    # Separate probable directories from files by extension.
-    dirs = [p for p in paths if not p.endswith(".py")]
-    files = [p for p in paths if p.endswith(".py")]
-
-    result = list(dirs)
-    for fp in files:
-        if not any(fp.startswith(d + "/") for d in dirs):
-            result.append(fp)
-    return result
 
 
 MIRRORED_TEST_PACKAGES = ("cli", "core", "desktop", "scripts", "server")
@@ -205,91 +191,6 @@ def parse_pytest_counts(output: str) -> tuple[int, int, int]:
     )
 
 
-def hash_file(path: Path) -> str:
-    """Return a stable content hash for *path*."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def iter_snapshot_files(directory: Path) -> list[Path]:
-    """Return Python files under *directory*, skipping ignored folders."""
-    files: list[Path] = []
-    try:
-        entries = sorted(directory.iterdir(), key=lambda entry: entry.name)
-    except OSError:
-        return files
-
-    for entry in entries:
-        if entry.is_dir():
-            if entry.name in SNAPSHOT_IGNORED_DIRS:
-                continue
-            files.extend(iter_snapshot_files(entry))
-            continue
-        if entry.suffix in PYTHON_FILE_SUFFIXES:
-            files.append(entry)
-    return files
-
-
-def display_path(path: Path) -> str:
-    """Return a stable project-relative path for console output."""
-    if path.is_relative_to(PROJECT_ROOT):
-        return path.relative_to(PROJECT_ROOT).as_posix()
-    return path.as_posix()
-
-
-def snapshot_target_files(paths: list[str]) -> dict[str, str]:
-    """Return content hashes for fixable files under the given targets."""
-    snapshot: dict[str, str] = {}
-
-    for raw_path in paths:
-        candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = PROJECT_ROOT / raw_path
-        candidate = candidate.resolve()
-
-        if not candidate.exists():
-            continue
-        if candidate.is_file():
-            if candidate.suffix in PYTHON_FILE_SUFFIXES:
-                snapshot[display_path(candidate)] = hash_file(candidate)
-            continue
-
-        for file_path in iter_snapshot_files(candidate):
-            snapshot[display_path(file_path)] = hash_file(file_path)
-
-    return snapshot
-
-
-def changed_snapshot_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    """Return sorted file paths whose content changed between two snapshots."""
-    return sorted(
-        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
-    )
-
-
-def describe_fix_result(returncode: int, elapsed: float, changed_files: list[str]) -> str:
-    """Return the status text for an auto-fix step."""
-    if changed_files:
-        file_word = "file" if len(changed_files) == 1 else "files"
-        return f"FIXED ({elapsed:.1f}s, {len(changed_files)} {file_word})"
-    if returncode == 0:
-        return f"PASS ({elapsed:.1f}s, no fixes needed)"
-    return f"UNCHANGED ({elapsed:.1f}s, no automatic fixes applied)"
-
-
-def _collapse_blank_lines(lines: list[str]) -> list[str]:
-    """Collapse repeated blank lines while preserving section breaks."""
-
-    collapsed: list[str] = []
-    previous_blank = False
-    for line in lines:
-        is_blank = line.strip() == ""
-        if is_blank and previous_blank:
-            continue
-        collapsed.append(line)
-        previous_blank = is_blank
-    return collapsed
-
-
 def _is_pytest_progress_nodeid_line(stripped_line: str) -> bool:
     """Return whether *stripped_line* is a verbose-progress node id entry."""
 
@@ -319,7 +220,7 @@ def filter_pytest_failure_output(output: str) -> str:
             continue
         filtered_lines.append(line.rstrip())
 
-    collapsed = _collapse_blank_lines(filtered_lines)
+    collapsed = collapse_blank_lines(filtered_lines)
     filtered_output = "\n".join(collapsed).strip()
     return filtered_output or output.strip()
 
@@ -329,7 +230,7 @@ def main() -> int:
 
     # Normalize: backslash → forward slash, strip trailing slash.
     normalized = [p.replace("\\", "/").rstrip("/") for p in raw_paths]
-    paths = deduplicate_paths(normalized)
+    paths = deduplicate_paths(normalized, lambda path: path.endswith(".py"))
 
     # Reject unknown paths before running anything: a typo would otherwise
     # surface as a confusing tool error (or worse, as a silently green run).
@@ -398,7 +299,9 @@ def main() -> int:
 
         before_snapshot: dict[str, str] = {}
         if kind == "fix" and snapshot_paths is not None:
-            before_snapshot = snapshot_target_files(snapshot_paths)
+            before_snapshot = snapshot_target_files(
+                snapshot_paths, PROJECT_ROOT, PYTHON_FILE_SUFFIXES, SNAPSHOT_IGNORED_DIRS
+            )
 
         start = time.monotonic()
         # ruff/mypy/pytest emit UTF-8 regardless of the console code page.
@@ -417,7 +320,9 @@ def main() -> int:
 
         if kind == "fix":
             if snapshot_paths is not None:
-                after_snapshot = snapshot_target_files(snapshot_paths)
+                after_snapshot = snapshot_target_files(
+                    snapshot_paths, PROJECT_ROOT, PYTHON_FILE_SUFFIXES, SNAPSHOT_IGNORED_DIRS
+                )
                 changed_files = changed_snapshot_paths(before_snapshot, after_snapshot)
             # ruff format / ruff check --fix
             # Exit code 1 means "unfixable issues remain" — that's fine,

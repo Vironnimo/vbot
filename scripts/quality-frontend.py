@@ -12,22 +12,24 @@ directory. All npm commands
 run with ``cwd="webui"``.
 """
 
-import hashlib
 import re
 import shutil
 import subprocess
 import sys
 import time
-from pathlib import Path
 
-# Tool output is decoded as UTF-8, but Windows consoles often use a legacy
-# code page that cannot encode characters like vitest's check marks — degrade
-# those to "?" instead of crashing the runner mid-report.
-for _stream in (sys.stdout, sys.stderr):
-    if hasattr(_stream, "reconfigure"):
-        _stream.reconfigure(errors="replace")
+from _quality_common import (
+    PROJECT_ROOT,
+    changed_snapshot_paths,
+    collapse_blank_lines,
+    configure_console_encoding,
+    deduplicate_paths,
+    describe_fix_result,
+    snapshot_target_files,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+configure_console_encoding()
+
 WEBUI_ROOT = PROJECT_ROOT / "webui"
 FRONTEND_FILE_SUFFIXES = {
     ".cjs",
@@ -60,22 +62,6 @@ SNAPSHOT_IGNORED_DIRS = {
 def _has_extension(path: str) -> bool:
     """Return True if the last segment of *path* looks like a file name."""
     return "." in path.rsplit("/", 1)[-1]
-
-
-def deduplicate_paths(paths: list[str]) -> list[str]:
-    """Remove file paths already covered by a broader directory path.
-
-    If both ``src/components/`` and ``src/components/Foo.svelte`` are
-    given, keep only ``src/components/``.
-    """
-    dirs = [p for p in paths if not _has_extension(p)]
-    files = [p for p in paths if _has_extension(p)]
-
-    result = list(dirs)
-    for fp in files:
-        if not any(fp.startswith(d + "/") for d in dirs):
-            result.append(fp)
-    return result
 
 
 def strip_webui_prefix(path: str) -> str:
@@ -140,91 +126,6 @@ def parse_vitest_counts(output: str) -> tuple[int, int]:
     return passed, int(summary.group("total"))
 
 
-def hash_file(path: Path) -> str:
-    """Return a stable content hash for *path*."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def iter_snapshot_files(directory: Path) -> list[Path]:
-    """Return snapshot-eligible frontend files under *directory*."""
-    files: list[Path] = []
-    try:
-        entries = sorted(directory.iterdir(), key=lambda entry: entry.name)
-    except OSError:
-        return files
-
-    for entry in entries:
-        if entry.is_dir():
-            if entry.name in SNAPSHOT_IGNORED_DIRS:
-                continue
-            files.extend(iter_snapshot_files(entry))
-            continue
-        if entry.suffix in FRONTEND_FILE_SUFFIXES:
-            files.append(entry)
-    return files
-
-
-def display_path(path: Path) -> str:
-    """Return a stable project-relative path for console output."""
-    if path.is_relative_to(PROJECT_ROOT):
-        return path.relative_to(PROJECT_ROOT).as_posix()
-    return path.as_posix()
-
-
-def snapshot_target_files(paths: list[str]) -> dict[str, str]:
-    """Return content hashes for fixable frontend files under the given targets."""
-    snapshot: dict[str, str] = {}
-
-    for raw_path in paths:
-        candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = WEBUI_ROOT / raw_path
-        candidate = candidate.resolve()
-
-        if not candidate.exists():
-            continue
-        if candidate.is_file():
-            if candidate.suffix in FRONTEND_FILE_SUFFIXES:
-                snapshot[display_path(candidate)] = hash_file(candidate)
-            continue
-
-        for file_path in iter_snapshot_files(candidate):
-            snapshot[display_path(file_path)] = hash_file(file_path)
-
-    return snapshot
-
-
-def changed_snapshot_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    """Return sorted file paths whose content changed between two snapshots."""
-    return sorted(
-        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
-    )
-
-
-def describe_fix_result(returncode: int, elapsed: float, changed_files: list[str]) -> str:
-    """Return the status text for an auto-fix step."""
-    if changed_files:
-        file_word = "file" if len(changed_files) == 1 else "files"
-        return f"FIXED ({elapsed:.1f}s, {len(changed_files)} {file_word})"
-    if returncode == 0:
-        return f"PASS ({elapsed:.1f}s, no fixes needed)"
-    return f"UNCHANGED ({elapsed:.1f}s, no automatic fixes applied)"
-
-
-def _collapse_blank_lines(lines: list[str]) -> list[str]:
-    """Collapse repeated blank lines while preserving section breaks."""
-
-    collapsed: list[str] = []
-    previous_blank = False
-    for line in lines:
-        is_blank = line.strip() == ""
-        if is_blank and previous_blank:
-            continue
-        collapsed.append(line)
-        previous_blank = is_blank
-    return collapsed
-
-
 def filter_vitest_failure_output(output: str) -> str:
     """Remove passing-test noise from Vitest output while keeping failure detail."""
 
@@ -242,7 +143,7 @@ def filter_vitest_failure_output(output: str) -> str:
             continue
         filtered_lines.append(line.rstrip())
 
-    collapsed = _collapse_blank_lines(filtered_lines)
+    collapsed = collapse_blank_lines(filtered_lines)
     filtered_output = "\n".join(collapsed).strip()
     return filtered_output or cleaned_output.strip()
 
@@ -263,7 +164,7 @@ def main() -> int:
 
     # Normalize: backslash → forward slash, strip trailing slash.
     normalized = [p.replace("\\", "/").rstrip("/") for p in raw_paths]
-    paths = deduplicate_paths(normalized)
+    paths = deduplicate_paths(normalized, _has_extension)
 
     # Strip webui/ prefix — all npm commands run with cwd=WEBUI_ROOT.
     stripped = [strip_webui_prefix(p) for p in paths]
@@ -334,7 +235,9 @@ def main() -> int:
     for label, cmd, kind, snapshot_paths in steps:
         before_snapshot: dict[str, str] = {}
         if kind == "fix" and snapshot_paths is not None:
-            before_snapshot = snapshot_target_files(snapshot_paths)
+            before_snapshot = snapshot_target_files(
+                snapshot_paths, WEBUI_ROOT, FRONTEND_FILE_SUFFIXES, SNAPSHOT_IGNORED_DIRS
+            )
 
         start = time.monotonic()
         # Use errors="replace" and text=True to avoid UnicodeDecodeError on Windows.
@@ -359,7 +262,9 @@ def main() -> int:
 
         if kind == "fix":
             if snapshot_paths is not None:
-                after_snapshot = snapshot_target_files(snapshot_paths)
+                after_snapshot = snapshot_target_files(
+                    snapshot_paths, WEBUI_ROOT, FRONTEND_FILE_SUFFIXES, SNAPSHOT_IGNORED_DIRS
+                )
                 changed_files = changed_snapshot_paths(before_snapshot, after_snapshot)
             # prettier --write / eslint --fix
             # Exit code 1 from eslint --fix means "unfixable issues remain"
