@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import re
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
@@ -14,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
+from core.utils.atomic import atomic_write_bytes, atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -210,24 +210,16 @@ class AttachmentStore:
         return self._attachments_dir / f"{attachment_id}.json"
 
     def _write_blob(self, path: Path, data: bytes) -> None:
-        temp_path = _temporary_path(path)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path.write_bytes(data)
-            os.replace(temp_path, path)
+            atomic_write_bytes(path, data)
         except OSError as exc:
-            _safe_remove_temporary_file(temp_path)
             raise AttachmentError(f"Cannot write attachment blob {path}: {exc}") from exc
 
     def _write_sidecar(self, path: Path, payload: JsonObject) -> None:
-        temp_path = _temporary_path(path)
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         try:
-            with temp_path.open("w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2, sort_keys=True)
-                file.write("\n")
-            os.replace(temp_path, path)
+            atomic_write_text(path, serialized)
         except OSError as exc:
-            _safe_remove_temporary_file(temp_path)
             raise AttachmentError(f"Cannot write attachment metadata {path}: {exc}") from exc
 
     @staticmethod
@@ -414,15 +406,6 @@ def _require_string(data: JsonObject, key: str) -> str:
     if not isinstance(value, str):
         raise AttachmentError(f"Attachment metadata field '{key}' must be a string")
     return value
-
-
-def _temporary_path(target_path: Path) -> Path:
-    return target_path.with_name(f"{target_path.name}.{uuid4().hex}.tmp")
-
-
-def _safe_remove_temporary_file(path: Path) -> None:
-    with suppress(OSError):
-        path.unlink(missing_ok=True)
 
 
 __all__ = [

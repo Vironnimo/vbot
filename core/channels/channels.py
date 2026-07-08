@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import shutil
 from collections.abc import Callable
@@ -12,11 +11,11 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import ChannelAdapter, DeniedChatFacts, FileData, RouteFacts
 from core.settings import SettingsValidationError, load_validated_channel_json
+from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -236,16 +235,12 @@ class ChannelStorage:
 
         channel_dir = self._channel_dir(config.id)
         config_path = channel_dir / _CHANNEL_CONFIG_FILENAME
-        temp_path = config_path.with_name(f"{config_path.name}.{uuid4().hex}.tmp")
-
+        serialized = (
+            json.dumps(config.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        )
         try:
-            channel_dir.mkdir(parents=True, exist_ok=True)
-            with temp_path.open("w", encoding="utf-8") as file:
-                json.dump(config.to_dict(), file, ensure_ascii=False, indent=2, sort_keys=True)
-                file.write("\n")
-            os.replace(temp_path, config_path)
+            atomic_write_text(config_path, serialized)
         except OSError as error:
-            self._safe_remove_temporary_file(temp_path)
             raise ChannelError(f"Cannot write {config_path}: {error}") from error
 
     def delete(self, channel_id: str) -> None:
@@ -285,14 +280,6 @@ class ChannelStorage:
                 f"{config_path}: expected {config_path.parent.name}, got {config.id}"
             )
         return config
-
-    @staticmethod
-    def _safe_remove_temporary_file(temp_path: Path) -> None:
-        try:
-            if temp_path.exists():
-                temp_path.unlink()
-        except OSError:
-            return
 
 
 class ChannelService:

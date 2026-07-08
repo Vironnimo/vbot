@@ -145,7 +145,7 @@ def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(
         replace_calls.append((source, target))
         raise OSError("replace failed")
 
-    monkeypatch.setattr("core.storage.storage.os.replace", fail_replace)
+    monkeypatch.setattr("core.utils.atomic.os.replace", fail_replace)
 
     with pytest.raises(StorageError, match="Cannot write"):
         storage.set_data_dir_credential("OPENROUTER_API_KEY", "new")

@@ -11,13 +11,12 @@ are seeded once when an Agent's custom prompt scope is enabled.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 
 from core.settings import is_valid_agent_id
-from core.storage.atomic import remove_temporary_file, temporary_path
 from core.storage.errors import StorageError
+from core.utils.atomic import atomic_write_text
 
 PROMPT_FRAGMENT_NAMES = frozenset(
     {
@@ -91,12 +90,9 @@ class PromptFragmentStore:
                 continue
 
             content = self.read_prompt_fragment(fragment_name)
-            temp_path = temporary_path(self._data_dir, target_path)
             try:
-                temp_path.write_text(content, encoding="utf-8")
-                os.replace(temp_path, target_path)
+                atomic_write_text(target_path, content, data_dir=self._data_dir)
             except OSError as exc:
-                remove_temporary_file(temp_path)
                 raise StorageError(
                     f"Cannot copy Agent prompt fragment {fragment_name}: {exc}"
                 ) from exc

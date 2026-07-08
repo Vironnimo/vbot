@@ -34,12 +34,12 @@ Other domains may create additional data under the same root on demand. For exam
 
 - Settings writes are UTF-8, sorted, indented JSON with a trailing newline.
 - Settings read-modify-write helpers are serialized only inside the current process. They are not cross-process locks.
-- Atomic Storage writes use temp files under `<data_dir>/.tmp/` plus `os.replace()`. Callers must ensure the data directory skeleton exists or use Storage methods that call `ensure_directories()`.
+- Atomic Storage writes go through the shared `core/utils/atomic.py` helpers (`atomic_write_text` / `atomic_write_bytes`), which stage a temp file under `<data_dir>/.tmp/` (passed via `data_dir=`) then `os.replace()` it into place. Callers must ensure the data directory skeleton exists or use Storage methods that call `ensure_directories()`.
 - `.env` parsing is conservative: `KEY=VALUE`, blank/comment lines ignored, matching quotes stripped, no expansion or command substitution.
 - `.env` values must never be copied back into `os.environ` and must never be logged.
 - Prompt fragment names and Agent IDs are allowlisted before paths are constructed. Path traversal and absolute fragment paths are invalid storage data, not inputs to sanitize later. The same holds for block ids: `PromptBlockStore` is the single id-to-path writer, validates the namespace (closed set) and slug (canonical agent-id rule, rejected under both POSIX and Windows path semantics) before any path is built, and raises `StorageError` on an unsafe id rather than sanitizing it.
 - `update_settings_sections()` expects a parsed public Settings update from `core/settings.parse_settings_update()`. If any section fails Storage-level normalization, the existing `settings.json` is left unchanged.
-- Where new code goes: stateless per-section validation/normalization belongs in `core/settings/normalizers.py` (settings domain), prompt-fragment file access in `prompt_fragments.py` (`PromptFragmentStore`), block layout/override file access in `prompt_blocks.py` (`PromptBlockStore`) — both owned and delegated to by `StorageManager` — and shared temp-file/atomic writes in `atomic.py`. `StorageManager` stays the orchestration entry point, not a home for new normalization or path logic.
+- Where new code goes: stateless per-section validation/normalization belongs in `core/settings/normalizers.py` (settings domain), prompt-fragment file access in `prompt_fragments.py` (`PromptFragmentStore`), block layout/override file access in `prompt_blocks.py` (`PromptBlockStore`) — both owned and delegated to by `StorageManager` — and shared temp-file/atomic-write primitives in `core/utils/atomic.py` (app-wide, no longer storage-local). `StorageManager` stays the orchestration entry point, not a home for new normalization or path logic.
 
 ## Constraints & Gotchas
 

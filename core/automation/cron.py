@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
@@ -16,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter  # type: ignore[import-untyped]
 
 from core.settings import SettingsValidationError, load_validated_cron_jobs_json
+from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -342,15 +342,10 @@ class CronService:
         payload = [
             job.to_dict() for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
         ]
-        temp_path = self._jobs_path.with_name(f"{self._jobs_path.name}.{uuid4().hex}.tmp")
-
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         try:
-            with temp_path.open("w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2, sort_keys=True)
-                file.write("\n")
-            os.replace(temp_path, self._jobs_path)
+            atomic_write_text(self._jobs_path, serialized)
         except OSError as error:
-            self._safe_remove_temporary_file(temp_path)
             raise CronStorageError(f"Cannot write {self._jobs_path}: {error}") from error
 
     def _start_job_task(self, job: CronJob) -> None:
@@ -685,21 +680,15 @@ class CronService:
     def _write_once_fire_claim(self, job: CronJob, claimed_at: str) -> None:
         self._ensure_storage_exists()
         claim_path = self._once_fire_claim_path(job.id)
-        temp_path = claim_path.with_name(f"{claim_path.name}.{uuid4().hex}.tmp")
         payload = {
             "job_id": job.id,
             "claimed_at": claimed_at,
             "run_at": job.run_at,
         }
-
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         try:
-            self._once_fire_claims_dir.mkdir(parents=True, exist_ok=True)
-            with temp_path.open("w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2, sort_keys=True)
-                file.write("\n")
-            os.replace(temp_path, claim_path)
+            atomic_write_text(claim_path, serialized)
         except OSError as error:
-            self._safe_remove_temporary_file(temp_path)
             raise CronStorageError(f"Cannot write {claim_path}: {error}") from error
 
     def _read_once_fire_claimed_at(self, job_id: str) -> str | None:
@@ -741,13 +730,6 @@ class CronService:
     @staticmethod
     def _clone_job(job: CronJob) -> CronJob:
         return CronJob.from_dict(job.to_dict())
-
-    @staticmethod
-    def _safe_remove_temporary_file(path: Path) -> None:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            return
 
 
 def _once_retry_delay(attempt: int) -> float:

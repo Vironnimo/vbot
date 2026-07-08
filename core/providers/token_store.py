@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
 
 from core.providers.accounts import ACCOUNT_ID_PATTERN, DEFAULT_ACCOUNT_ID, sorted_account_ids
+from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("providers.token_store")
@@ -35,7 +34,6 @@ class TokenStore:
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
         self._oauth_dir = data_dir / "oauth"
-        self._tmp_dir = data_dir / ".tmp"
 
     def save(
         self,
@@ -47,16 +45,12 @@ class TokenStore:
     ) -> None:
         """Persist *token* atomically for the provider connection account."""
 
-        self._oauth_dir.mkdir(parents=True, exist_ok=True)
-        self._tmp_dir.mkdir(parents=True, exist_ok=True)
         token_path = self._token_path(provider_id, local_connection_id, account_id)
-        temp_path = self._tmp_dir / f"{token_path.name}.{uuid4().hex}.tmp"
-
-        temp_path.write_text(
+        atomic_write_text(
+            token_path,
             json.dumps(self._token_to_dict(token), sort_keys=True),
-            encoding="utf-8",
+            data_dir=self._data_dir,
         )
-        os.replace(temp_path, token_path)
         _LOGGER.info(
             "Saved OAuth token for provider '%s' connection '%s' account '%s'",
             provider_id,

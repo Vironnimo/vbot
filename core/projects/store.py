@@ -48,6 +48,7 @@ from core.settings import (
     is_valid_agent_id,
     load_validated_project_json,
 )
+from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("projects")
@@ -446,13 +447,9 @@ class ProjectStore:
 
     def _write_project(self, project: Project) -> None:
         config_path = self._config_path(project.project_id)
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = config_path.with_name(f".{config_path.name}.tmp")
-        temp_path.write_text(
-            json.dumps(project.to_dict(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        atomic_write_text(
+            config_path, json.dumps(project.to_dict(), ensure_ascii=False, indent=2) + "\n"
         )
-        os.replace(temp_path, config_path)
 
     def _read_project(self, config_path: Path) -> Project:
         try:

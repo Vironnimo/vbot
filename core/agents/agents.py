@@ -26,6 +26,7 @@ from core.settings import (
     validate_thinking_effort,
 )
 from core.tools.availability import sanitize_configured_allowed_tools
+from core.utils.atomic import atomic_write_text
 
 DEFAULT_FALLBACK_MODEL = ""
 DEFAULT_MODEL = ""
@@ -383,13 +384,9 @@ class AgentStore:
 
     def _write_agent(self, agent: Agent) -> None:
         agent_path = self._agent_path(agent.id)
-        agent_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = agent_path.with_name(f".{agent_path.name}.tmp")
-        temp_path.write_text(
-            json.dumps(asdict(agent), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        atomic_write_text(
+            agent_path, json.dumps(asdict(agent), ensure_ascii=False, indent=2) + "\n"
         )
-        os.replace(temp_path, agent_path)
 
     def _agent_defaults(self) -> dict[str, Any]:
         if self._defaults_provider is None:
