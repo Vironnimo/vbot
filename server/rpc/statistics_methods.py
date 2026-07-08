@@ -15,6 +15,7 @@ from core.skills import project_skill_origin, scan_skill_names
 from core.statistics import StatisticsService
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
 
@@ -22,12 +23,7 @@ _SUPPORTED_FIELDS = {"since", "until"}
 
 
 def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - _SUPPORTED_FIELDS)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported statistics.report fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, _SUPPORTED_FIELDS, "statistics.report")
 
     since = _optional_utc_timestamp(params, "since")
     until = _optional_utc_timestamp(params, "until")

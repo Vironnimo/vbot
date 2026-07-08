@@ -12,6 +12,7 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
+    _reject_unsupported,
     _required_agent_address,
     _required_block_slug,
     _required_string,
@@ -27,12 +28,7 @@ def _list_logs(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _read_log(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"file"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported log read fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"file"}, "log read")
 
     file_name = _required_string(params, "file")
     try:
@@ -145,16 +141,6 @@ def _optional_layout_position(params: JsonObject) -> int | None:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.position must be a non-negative integer")
     return value
-
-
-def _reject_unsupported(params: JsonObject, allowed: set[str], method: str) -> None:
-    """Raise ``invalid_request`` when *params* carries a field outside *allowed*."""
-    unsupported_fields = sorted(set(params) - allowed)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported {method} fields: {', '.join(unsupported_fields)}",
-        )
 
 
 async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:

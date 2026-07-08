@@ -9,6 +9,7 @@ from core.utils.logging import get_logger
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.extensions")
@@ -199,12 +200,7 @@ def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
     way, provider credentials are reloaded so live resolution sees the change
     immediately. The secret value is never logged.
     """
-    unsupported = sorted(set(params) - {"name", "key", "value"})
-    if unsupported:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported extensions.set_secret fields: {', '.join(unsupported)}",
-        )
+    _reject_unsupported(params, {"name", "key", "value"}, "extensions.set_secret")
 
     name = _required_str(params, "name")
     key = _required_str(params, "key")

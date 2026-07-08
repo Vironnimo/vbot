@@ -14,7 +14,12 @@ from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.validation import _optional_string, _required_agent_address, _required_string
+from server.rpc.validation import (
+    _optional_string,
+    _reject_unsupported,
+    _required_agent_address,
+    _required_string,
+)
 
 JsonObject = dict[str, Any]
 CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
@@ -48,12 +53,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "timezone",
         "session_id",
     }
-    unsupported_fields = sorted(set(params) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported cron.create fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, supported_fields, "cron.create")
 
     # The target rides the outside ``agent@projekt`` address form, parsed once at
     # the edge into a bare ``agent_id`` plus the optional ``project_id`` stored on
@@ -129,12 +129,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "session_id",
         "status",
     }
-    unsupported_fields = sorted(set(params) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported cron.update fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, supported_fields, "cron.update")
 
     job_id = _required_string(params, "id")
     updates: JsonObject = {}
@@ -191,12 +186,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _cron_delete(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported cron.delete fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"id"}, "cron.delete")
 
     job_id = _required_string(params, "id")
     try:
@@ -207,12 +197,7 @@ def _cron_delete(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _cron_enable(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported cron.enable fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"id"}, "cron.enable")
 
     job_id = _required_string(params, "id")
     try:
@@ -223,12 +208,7 @@ def _cron_enable(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported cron.disable fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"id"}, "cron.disable")
 
     job_id = _required_string(params, "id")
     try:

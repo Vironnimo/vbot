@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Set as AbstractSet
 from typing import Any, Literal, cast
 
 from core.chat import ChatError
@@ -171,6 +172,16 @@ def _optional_bool(params: JsonObject, key: str, *, default: bool) -> bool:
     if not isinstance(value, bool):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a boolean")
     return value
+
+
+def _reject_unsupported(params: JsonObject, allowed: AbstractSet[str], method: str) -> None:
+    """Raise ``invalid_request`` when *params* carries a field outside *allowed*."""
+    unsupported_fields = sorted(set(params) - allowed)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported {method} fields: {', '.join(unsupported_fields)}",
+        )
 
 
 def _ensure_model_connection_supported(models: Any, label: str, model_string: str) -> None:

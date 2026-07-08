@@ -14,7 +14,11 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.provider_access import _provider_has_credentials, _provider_settings_connection
-from server.rpc.validation import _ensure_model_connection_supported, _required_string
+from server.rpc.validation import (
+    _ensure_model_connection_supported,
+    _reject_unsupported,
+    _required_string,
+)
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.settings")
@@ -232,12 +236,7 @@ def _task_model_settings(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"model_tasks"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported task_model.update fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"model_tasks"}, "task_model.update")
     try:
         settings_update = parse_settings_update({"model_tasks": params.get("model_tasks")})
     except SettingsValidationError as exc:
@@ -251,12 +250,7 @@ def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _task_model_list_targets(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"task_type"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported task_model.list_targets fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"task_type"}, "task_model.list_targets")
     task_type = _required_string(params, "task_type")
     try:
         targets = state.runtime.model_tasks.list_targets(task_type)
@@ -266,12 +260,7 @@ def _task_model_list_targets(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _task_model_options(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"task_type", "target"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported task_model.options fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"task_type", "target"}, "task_model.options")
     task_type = _required_string(params, "task_type")
     target = _required_string(params, "target")
     try:

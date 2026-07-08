@@ -64,6 +64,7 @@ from server.rpc.validation import (
     _optional_positive_integer,
     _optional_string,
     _parse_chat_content,
+    _reject_unsupported,
     _required_agent_address,
     _required_string,
 )
@@ -109,12 +110,7 @@ def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
 
 def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"agent_id", "session_id", "limit", "before"}
-    unsupported_fields = sorted(set(params) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported chat.history fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, supported_fields, "chat.history")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
@@ -1067,12 +1063,7 @@ async def _retry_chat_for_ids(
 
 
 async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"run_id", "reason"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported chat.cancel fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"run_id", "reason"}, "chat.cancel")
 
     run_id = _required_string(params, "run_id")
     reason = _optional_string(params, "reason")
@@ -1084,12 +1075,7 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"agent_id", "run_id", "tool_call_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported chat.cancel_tool_call fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"agent_id", "run_id", "tool_call_id"}, "chat.cancel_tool_call")
 
     run_id = _required_string(params, "run_id")
     tool_call_id = _required_string(params, "tool_call_id")
@@ -1107,12 +1093,7 @@ async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"agent_id", "session_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported chat.queue_list fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.queue_list")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
@@ -1130,12 +1111,7 @@ def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"agent_id", "session_id", "item_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported chat.queue_remove fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"agent_id", "session_id", "item_id"}, "chat.queue_remove")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
@@ -1155,15 +1131,11 @@ def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(
-        set(params)
-        - {"agent_id", "session_id", "item_id", "content", "input_origin", "file_mentions"}
+    _reject_unsupported(
+        params,
+        {"agent_id", "session_id", "item_id", "content", "input_origin", "file_mentions"},
+        "chat.queue_update",
     )
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported chat.queue_update fields: {', '.join(unsupported_fields)}",
-        )
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")

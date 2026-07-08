@@ -13,7 +13,7 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.payloads import _invalid_skill_response, _skill_response, _tool_response
-from server.rpc.validation import _required_agent_address
+from server.rpc.validation import _reject_unsupported, _required_agent_address
 
 JsonObject = dict[str, Any]
 
@@ -57,12 +57,7 @@ def _list_commands(state: Any, params: JsonObject) -> JsonObject:
     # the skill suggestions to that agent's effective skills; without it the call
     # returns the global skill list (today's behavior). Validated as a request shape
     # before the domain work so a malformed address is a clean client error.
-    unsupported_fields = sorted(set(params) - {"agent_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported chat.commands fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"agent_id"}, "chat.commands")
     address = _required_agent_address(params, "agent_id") if "agent_id" in params else None
     try:
         command_items = [
@@ -134,12 +129,7 @@ async def _list_files(state: Any, params: JsonObject) -> JsonObject:
     and filters locally, so this stays a single call per interaction. The walk
     runs in a worker thread — a large tree must not block the event loop.
     """
-    unsupported_fields = sorted(set(params) - {"agent_id"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported files.list fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, {"agent_id"}, "files.list")
     agent_id, project_id = _required_agent_address(params, "agent_id")
     try:
         root = resolve_mention_root(state.runtime, agent_id, project_id)
