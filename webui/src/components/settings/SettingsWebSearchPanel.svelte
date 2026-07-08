@@ -218,7 +218,10 @@
         id="settings-web-search-searxng-base-url"
         type="url"
         value={webSearchSettings.searxng.base_url}
-        placeholder="http://localhost:8888"
+        placeholder={t(
+          'settings.webSearch.searxngBaseUrlPlaceholder',
+          'http://localhost:8888',
+        )}
         ariaLabel={t('settings.webSearch.searxngBaseUrl', 'SearXNG base URL')}
         onInput={(_next, event) => handleWebSearchSearxngBaseUrlChange(event)}
       />

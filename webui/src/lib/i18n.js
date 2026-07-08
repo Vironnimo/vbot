@@ -775,6 +775,7 @@ export const englishCatalog = Object.freeze({
   'settings.webSearch.searxngBaseUrl': 'SearXNG base URL',
   'settings.webSearch.searxngBaseUrlDescription':
     'Address of the SearXNG instance to use. SearXNG is a self-hosted metasearch engine — you need to run one yourself or point this at a reachable instance.',
+  'settings.webSearch.searxngBaseUrlPlaceholder': 'http://localhost:8888',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
   'settings.specializedModels.subtitle':
