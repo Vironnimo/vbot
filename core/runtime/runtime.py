@@ -513,7 +513,7 @@ class Runtime:
                 "see vbot.skills warnings for details",
                 invalid_skill_count,
             )
-        register_skill_tool(self._tools, self.skills_for)
+        register_skill_tool(self._tools, self.skills_for, self.reload_skills)
         # The agent skill-authoring write core refuses the bundled skills root; the
         # ``skill_manage`` tool writes the calling agent's private home (default) or
         # the shared global pool (only when the user asked).
@@ -1473,7 +1473,7 @@ class Runtime:
                 )
         if self._tools is not None:
             self._tools.unregister("skill")
-            register_skill_tool(self._tools, self.skills_for)
+            register_skill_tool(self._tools, self.skills_for, self.reload_skills)
             if self._skill_authoring is not None:
                 self._tools.unregister("skill_manage")
                 register_skill_manage_tool(
