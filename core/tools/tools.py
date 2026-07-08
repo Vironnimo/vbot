@@ -346,6 +346,26 @@ def tool_failure(
     }
 
 
+READ_MEDIA_ARTIFACT_KIND = "read_media"
+
+
+def read_media_artifact(*, attachment_id: str, filename: str, media_type: str) -> JsonObject:
+    """Build a ``read_media`` artifact describing a stored media blob.
+
+    A tool emits this artifact to ask the chat loop to inject the media as a
+    synthetic current-turn user message so a vision model actually sees it (see
+    ``core/chat/tool_dispatch.py``). Both ``read`` (local image files) and
+    ``web_fetch`` (fetched image URLs) produce it, so the contract shape lives
+    here once instead of being duplicated in each tool.
+    """
+    return {
+        "kind": READ_MEDIA_ARTIFACT_KIND,
+        "attachment_id": attachment_id,
+        "filename": filename,
+        "media_type": media_type,
+    }
+
+
 def is_tool_result_envelope(result: JsonObject) -> bool:
     """Return whether a JSON object matches the stable tool result envelope."""
     if set(result) != {"ok", "error", "data", "artifacts"}:
@@ -865,7 +885,9 @@ __all__ = [
     "ToolPromptBlockRegistry",
     "ToolReadinessPredicate",
     "ToolRegistry",
+    "READ_MEDIA_ARTIFACT_KIND",
     "is_tool_result_envelope",
+    "read_media_artifact",
     "tool_failure",
     "tool_is_ready",
     "tool_success",

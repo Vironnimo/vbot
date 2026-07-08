@@ -7,8 +7,8 @@ import ipaddress
 import re
 import socket
 from dataclasses import dataclass
-from typing import Literal
-from urllib.parse import urljoin, urlparse
+from typing import Any, Literal
+from urllib.parse import unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import NavigableString, PageElement
@@ -16,12 +16,15 @@ from curl_cffi import CurlOpt
 from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.exceptions import RequestException
 
+from core.attachments import AttachmentError, sniff_media_type
 from core.tools.arguments import coerce_bool
 from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolHandler,
     ToolRegistry,
+    read_media_artifact,
     tool_failure,
     tool_success,
 )
@@ -34,6 +37,10 @@ _LOGGER = get_logger("tools.web_fetch")
 _MAX_URL_BYTES = 100 * 1024
 _RESPONSE_TRUNCATED_MARKER = "\n\n[... response truncated ...]"
 _CONTENT_TRUNCATED_MARKER = "\n\n[... content truncated ...]"
+# A NUL byte within this leading window marks a payload as binary (the classic
+# heuristic): text has none, binaries almost always do. Mirrors the read tool's
+# guard so a fetched executable/archive returns a notice, not decoded garbage.
+_BINARY_DETECTION_BYTES = 8192
 
 # Impersonate a recent real Chrome so the TLS/HTTP-2 fingerprint matches a
 # browser. Header-only spoofing does not fool fingerprint-based bot walls
@@ -106,7 +113,10 @@ IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 WEB_FETCH_TOOL_NAME = "web_fetch"
 WEB_FETCH_TOOL_DESCRIPTION = (
-    "Fetch a public HTTP or HTTPS URL and return the page content as clean, readable text."
+    "Fetch a public HTTP or HTTPS URL and return the page content as clean, "
+    "readable text. An image URL is shown to you directly when the model supports "
+    "vision; other binary files (executables, archives, media) return a short "
+    "notice instead of raw bytes."
 )
 WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -139,13 +149,15 @@ class _FetchResult:
     """Normalized outcome of a single GET, decoupled from the HTTP library.
 
     Header keys are lower-cased so lookups (``content-type``, ``location``) are
-    case-insensitive.
+    case-insensitive. ``content`` holds the raw response bytes (needed to sniff
+    and store images); ``text`` is the decoded body used for the text paths.
     """
 
     status_code: int
     headers: dict[str, str]
     text: str
     url: str
+    content: bytes = b""
 
 
 class _RedirectLimitExceededError(Exception):
@@ -181,6 +193,7 @@ async def _http_get(session: AsyncSession, url: str) -> _FetchResult:
         headers=headers,
         text=response.text,
         url=str(response.url),
+        content=response.content,
     )
 
 
@@ -820,72 +833,130 @@ async def _fetch_with_retry(
     raise RuntimeError("unreachable retry loop state")
 
 
-async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    """Handle a web_fetch tool call and return a stable vBot result envelope."""
-    del context
+def _response_media_type(headers: dict[str, str]) -> str:
+    """Return the lower-cased content-type without parameters (charset, boundary)."""
+    return headers.get("content-type", "").split(";", 1)[0].strip().lower()
 
-    unknown_arguments = set(arguments) - {"url", "include_links", "raw"}
-    if unknown_arguments:
-        names = ", ".join(sorted(unknown_arguments))
-        return tool_failure("validation_error", f"Unknown argument(s): {names}", retryable=False)
 
-    url_argument = arguments.get("url")
-    if not isinstance(url_argument, str) or not url_argument.strip():
-        return tool_failure("validation_error", "url must be a non-empty string", retryable=False)
+def _filename_from_url(url: str) -> str:
+    """Derive a display filename from a URL's last path segment.
 
+    Used only to name the stored attachment or notice; the image media type comes
+    from the magic-byte sniff of the bytes, not this name, so a missing or
+    query-decorated extension is harmless.
+    """
+    name = unquote(urlparse(url).path.rsplit("/", 1)[-1]).strip()
+    return name or "download"
+
+
+def _looks_binary(raw: bytes) -> bool:
+    """Return whether the leading bytes contain a NUL, marking the payload binary."""
+    return b"\x00" in raw[:_BINARY_DETECTION_BYTES]
+
+
+def _is_textual_content_type(media_type: str) -> bool:
+    """Return whether a content-type denotes text that should be returned as-is.
+
+    Guards genuinely textual responses (HTML, JSON, XML, plain text, source) from
+    the binary notice even when their bytes are not UTF-8 (a legacy charset), since
+    the server labelled them text.
+    """
+    return (
+        media_type.startswith("text/")
+        or "html" in media_type
+        or "json" in media_type
+        or "xml" in media_type
+        or "javascript" in media_type
+    )
+
+
+def _is_binary_payload(media_type: str, sniffed: str, raw: bytes) -> bool:
+    """Decide whether a non-image response is binary (→ notice) or text (→ returned).
+
+    A textual content-type always wins. Otherwise anything the magic-byte sniff
+    does not classify as text — audio, video, PDF, archives, executables — is
+    binary, as is any payload carrying a NUL in its leading bytes.
+    """
+    if _is_textual_content_type(media_type):
+        return False
+    if not sniffed.startswith("text/"):
+        return True
+    return _looks_binary(raw)
+
+
+def _fetch_image_result(attachment_store: Any, url: str, raw: bytes) -> JsonObject:
+    """Store a fetched image as an attachment and signal current-turn injection.
+
+    Mirrors the read tool's image branch: the blob goes through the attachment
+    store (reusing its size limit and allowlist) and a ``read_media`` artifact
+    tells the chat loop to inject the image as a synthetic user message so a vision
+    model actually sees it. A non-vision model degrades to a text note in the chat
+    loop, not here.
+    """
+    if attachment_store is None:
+        return tool_success(
+            {"content": f"[Image at {url} could not be loaded (no attachment store available).]"}
+        )
     try:
-        include_links = coerce_bool(
-            arguments.get("include_links"), field_name="include_links", default=True
-        )
-        raw = coerce_bool(arguments.get("raw"), field_name="raw", default=False)
-    except ValueError as error:
-        return tool_failure("validation_error", str(error), retryable=False)
+        record = attachment_store.store(_filename_from_url(url), raw)
+    except AttachmentError as error:
+        return tool_failure("attachment_error", str(error), retryable=False)
 
-    url = url_argument.strip()
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"}:
-        return tool_failure("validation_error", "only http/https URLs are allowed", retryable=False)
-    if not parsed.netloc or parsed.hostname is None:
-        return tool_failure("validation_error", "url must include a valid host", retryable=False)
+    return tool_success(
+        {
+            "content": (
+                f"Fetched image {record.filename} ({record.media_type}) from {url} — "
+                "shown to you in the following message."
+            )
+        },
+        artifacts=[
+            read_media_artifact(
+                attachment_id=record.id,
+                filename=record.filename,
+                media_type=record.media_type,
+            )
+        ],
+    )
 
-    try:
-        resolve_map: dict[tuple[str, int], str] = {}
-        async with _make_session() as session:
-            result = await _fetch_with_retry(session, url, resolve_map)
-    except ValueError as error:
-        return tool_failure("validation_error", str(error), retryable=False)
-    except _RedirectLimitExceededError as error:
-        _LOGGER.warning("web_fetch redirect limit exceeded for %s", url)
-        return tool_failure("request_error", str(error), retryable=False)
-    except RequestException as error:
-        # Transport errors are not retried by web_fetch's status-only retry loop,
-        # so the tool made a single attempt; the failure is still transient.
-        _LOGGER.warning("web_fetch request failed for %s: %s", url, error)
-        return tool_failure(
-            "request_error",
-            f"request failed while fetching URL: {error}",
-            retryable=True,
-            attempts_made=1,
-        )
 
-    if result.status_code >= 400:
-        status = result.status_code
-        _LOGGER.warning("web_fetch request failed: HTTP %s for %s", status, url)
-        # A retryable status only reaches here after the retry loop exhausted its
-        # attempts; a non-retryable status (e.g. 404) failed on the first try.
-        retryable = is_retryable_status(status, idempotent=True)
-        return tool_failure(
-            "request_error",
-            f"HTTP {status} while fetching URL: {url}",
-            retryable=retryable,
-            attempts_made=(MAX_RETRIES + 1) if retryable else None,
-        )
+def _binary_notice(url: str, media_type: str, size_bytes: int) -> JsonObject:
+    """Return a short notice for binary content instead of decoding it to garbage."""
+    label = media_type or "application/octet-stream"
+    return tool_success(
+        {
+            "content": (
+                f"[Binary content at {url} ({label}, {size_bytes:,} bytes). "
+                "It contains non-text (binary) data and is not shown as text.]"
+            )
+        }
+    )
+
+
+def _shape_success(
+    attachment_store: Any,
+    result: _FetchResult,
+    url: str,
+    *,
+    raw: bool,
+    include_links: bool,
+) -> JsonObject:
+    """Turn a successful fetch into an image / binary-notice / text envelope."""
+    media_type = _response_media_type(result.headers)
+    sniffed = sniff_media_type(result.content, _filename_from_url(url))
+
+    # Images are shown to the model regardless of ``raw`` — ``raw`` only ever
+    # governed HTML text cleaning, and there is no textual "raw" form of an image.
+    if sniffed.startswith("image/"):
+        return _fetch_image_result(attachment_store, url, result.content)
+
+    # Binary payloads (executable, archive, media, PDF) would decode to mojibake;
+    # a short notice — also regardless of ``raw`` — replaces the garbage.
+    if _is_binary_payload(media_type, sniffed, result.content):
+        return _binary_notice(url, sniffed, len(result.content))
 
     raw_body = result.text
     raw_size = len(raw_body.encode("utf-8"))
-
-    content_type = result.headers.get("content-type", "")
-    if raw or "html" not in content_type.lower():
+    if raw or "html" not in media_type:
         content = _truncate_utf8_with_suffix(
             raw_body,
             _MAX_URL_BYTES,
@@ -902,13 +973,96 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
     return tool_success({"content": output})
 
 
-def register_web_fetch_tool(registry: ToolRegistry) -> None:
+def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
+    """Create a web_fetch handler bound to the attachment store.
+
+    The store is consulted only when a fetched URL turns out to be an image: the
+    image is promoted to an attachment and shown to a vision model, exactly as the
+    read tool does for local image files. Every text / binary-notice path is
+    store-independent. Mirrors the read tool's factory pattern.
+    """
+
+    async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        """Handle a web_fetch tool call and return a stable vBot result envelope."""
+        del context
+
+        unknown_arguments = set(arguments) - {"url", "include_links", "raw"}
+        if unknown_arguments:
+            names = ", ".join(sorted(unknown_arguments))
+            return tool_failure(
+                "validation_error", f"Unknown argument(s): {names}", retryable=False
+            )
+
+        url_argument = arguments.get("url")
+        if not isinstance(url_argument, str) or not url_argument.strip():
+            return tool_failure(
+                "validation_error", "url must be a non-empty string", retryable=False
+            )
+
+        try:
+            include_links = coerce_bool(
+                arguments.get("include_links"), field_name="include_links", default=True
+            )
+            raw = coerce_bool(arguments.get("raw"), field_name="raw", default=False)
+        except ValueError as error:
+            return tool_failure("validation_error", str(error), retryable=False)
+
+        url = url_argument.strip()
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return tool_failure(
+                "validation_error", "only http/https URLs are allowed", retryable=False
+            )
+        if not parsed.netloc or parsed.hostname is None:
+            return tool_failure(
+                "validation_error", "url must include a valid host", retryable=False
+            )
+
+        try:
+            resolve_map: dict[tuple[str, int], str] = {}
+            async with _make_session() as session:
+                result = await _fetch_with_retry(session, url, resolve_map)
+        except ValueError as error:
+            return tool_failure("validation_error", str(error), retryable=False)
+        except _RedirectLimitExceededError as error:
+            _LOGGER.warning("web_fetch redirect limit exceeded for %s", url)
+            return tool_failure("request_error", str(error), retryable=False)
+        except RequestException as error:
+            # Transport errors are not retried by web_fetch's status-only retry loop,
+            # so the tool made a single attempt; the failure is still transient.
+            _LOGGER.warning("web_fetch request failed for %s: %s", url, error)
+            return tool_failure(
+                "request_error",
+                f"request failed while fetching URL: {error}",
+                retryable=True,
+                attempts_made=1,
+            )
+
+        if result.status_code >= 400:
+            status = result.status_code
+            _LOGGER.warning("web_fetch request failed: HTTP %s for %s", status, url)
+            # A retryable status only reaches here after the retry loop exhausted its
+            # attempts; a non-retryable status (e.g. 404) failed on the first try.
+            retryable = is_retryable_status(status, idempotent=True)
+            return tool_failure(
+                "request_error",
+                f"HTTP {status} while fetching URL: {url}",
+                retryable=retryable,
+                attempts_made=(MAX_RETRIES + 1) if retryable else None,
+            )
+
+        return _shape_success(attachment_store, result, url, raw=raw, include_links=include_links)
+
+    return web_fetch_handler
+
+
+def register_web_fetch_tool(registry: ToolRegistry, *, attachment_store: Any) -> None:
     """Register the web_fetch tool with a vBot tool registry."""
     registry.register(
         WEB_FETCH_TOOL_NAME,
         WEB_FETCH_TOOL_DESCRIPTION,
         WEB_FETCH_TOOL_PARAMETERS,
-        web_fetch_handler,
+        make_web_fetch_handler(attachment_store),
         display=ToolDisplay(summary_fields=("url",)),
     )
 
@@ -918,6 +1072,6 @@ __all__ = [
     "WEB_FETCH_TOOL_NAME",
     "WEB_FETCH_TOOL_PARAMETERS",
     "extract_content",
+    "make_web_fetch_handler",
     "register_web_fetch_tool",
-    "web_fetch_handler",
 ]

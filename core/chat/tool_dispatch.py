@@ -23,6 +23,7 @@ from core.tools import (
     EDIT_TOOL_NAME,
     GLOB_TOOL_NAME,
     GREP_TOOL_NAME,
+    READ_MEDIA_ARTIFACT_KIND,
     READ_TOOL_NAME,
     WRITE_TOOL_NAME,
     InvalidToolResultError,
@@ -387,7 +388,7 @@ def _read_media_injections(result: JsonObject) -> list[JsonObject]:
 
     injections: list[JsonObject] = []
     for artifact in artifacts:
-        if not isinstance(artifact, dict) or artifact.get("kind") != "read_media":
+        if not isinstance(artifact, dict) or artifact.get("kind") != READ_MEDIA_ARTIFACT_KIND:
             continue
         attachment_id = artifact.get("attachment_id")
         filename = artifact.get("filename")

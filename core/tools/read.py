@@ -21,6 +21,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolHandler,
     ToolRegistry,
+    read_media_artifact,
     tool_failure,
     tool_success,
 )
@@ -337,12 +338,11 @@ def _read_image(
             )
         },
         artifacts=[
-            {
-                "kind": "read_media",
-                "attachment_id": record.id,
-                "filename": record.filename,
-                "media_type": record.media_type,
-            }
+            read_media_artifact(
+                attachment_id=record.id,
+                filename=record.filename,
+                media_type=record.media_type,
+            )
         ],
     )
 

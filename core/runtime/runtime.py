@@ -490,7 +490,7 @@ class Runtime:
         register_grep_tool(self._tools)
         register_write_tool(self._tools, file_state=self._file_state)
         register_memory_tool(self._tools, self._memory_service)
-        register_web_fetch_tool(self._tools)
+        register_web_fetch_tool(self._tools, attachment_store=self._attachment_store)
         register_web_search_tool(
             self._tools,
             self.resolve_environment_credential,

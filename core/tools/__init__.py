@@ -99,6 +99,7 @@ from core.tools.speech import (
 )
 from core.tools.tools import (
     DEFAULT_TOOL_CONCURRENCY_LIMIT,
+    READ_MEDIA_ARTIFACT_KIND,
     TOOL_ALLOWLIST_WILDCARD,
     DuplicateToolError,
     InvalidToolResultError,
@@ -121,6 +122,7 @@ from core.tools.tools import (
     ToolRegistry,
     ToolSkillActivationHook,
     is_tool_result_envelope,
+    read_media_artifact,
     tool_failure,
     tool_is_ready,
     tool_success,
@@ -129,8 +131,8 @@ from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
     WEB_FETCH_TOOL_PARAMETERS,
+    make_web_fetch_handler,
     register_web_fetch_tool,
-    web_fetch_handler,
 )
 from core.tools.web_search import (
     WEB_SEARCH_TOOL_DESCRIPTION,
@@ -235,7 +237,9 @@ __all__ = [
     "edit_handler",
     "glob_handler",
     "grep_handler",
+    "READ_MEDIA_ARTIFACT_KIND",
     "is_tool_result_envelope",
+    "read_media_artifact",
     "make_edit_handler",
     "make_memory_handler",
     "make_process_handler",
@@ -245,6 +249,7 @@ __all__ = [
     "make_image_generation_handler",
     "make_read_handler",
     "make_session_search_handler",
+    "make_web_fetch_handler",
     "make_write_handler",
     "register_edit_tool",
     "register_glob_tool",
@@ -269,7 +274,6 @@ __all__ = [
     "tool_failure",
     "tool_is_ready",
     "tool_success",
-    "web_fetch_handler",
     "web_search_handler",
     "write_handler",
     "make_image_generation_handler",
