@@ -26,7 +26,7 @@ def _run_response(
         "agent_id": run.agent_id,
         "session_id": run.session_id,
         "status": run.status.value,
-        "events": [_remove_opaque_provider_metadata(event.to_dict()) for event in run.events],
+        "events": [remove_opaque_provider_metadata(event.to_dict()) for event in run.events],
     }
     if final_message is not None:
         response["message"] = _visible_message(final_message)
@@ -43,7 +43,7 @@ def _queued_response(item: QueuedRunItem) -> JsonObject:
 
 
 def _visible_message(message: ChatMessage) -> JsonObject:
-    return cast(JsonObject, _remove_opaque_provider_metadata(message.to_dict()))
+    return cast(JsonObject, remove_opaque_provider_metadata(message.to_dict()))
 
 
 def _is_visible_history_message(message: ChatMessage) -> bool:
@@ -258,13 +258,20 @@ def _invalid_skill_response(diagnostic: Any) -> JsonObject:
     }
 
 
-def _remove_opaque_provider_metadata(value: Any) -> Any:
+def remove_opaque_provider_metadata(value: Any) -> Any:
+    """Recursively strip ``reasoning_meta`` from an outbound payload.
+
+    The opaque provider reasoning metadata is round-trip state for adapters, never
+    something a client should receive. Shared by the RPC response mappers, the SSE
+    stream (``app.py``), and the event bridge so all client-facing paths scrub it
+    the same way.
+    """
     if isinstance(value, dict):
         return {
-            key: _remove_opaque_provider_metadata(item)
+            key: remove_opaque_provider_metadata(item)
             for key, item in value.items()
             if key != "reasoning_meta"
         }
     if isinstance(value, list):
-        return [_remove_opaque_provider_metadata(item) for item in value]
+        return [remove_opaque_provider_metadata(item) for item in value]
     return value
