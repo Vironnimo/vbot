@@ -251,28 +251,20 @@ export async function uploadAttachment(file, options = {}) {
 }
 
 export function updateTaskModelSettings(modelTasks, options = {}) {
-  if (!isPlainObject(modelTasks)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Task model settings must be an object',
-      {
-        method: 'task_model.update',
-      },
-    );
-  }
+  requirePlainObject(
+    modelTasks,
+    'Task model settings must be an object',
+    'task_model.update',
+  );
   return rpc('task_model.update', { model_tasks: modelTasks }, options);
 }
 
 export function listTaskModelTargets(taskType, options = {}) {
-  if (!isNonEmptyString(taskType)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Task type must be a non-empty string',
-      {
-        method: 'task_model.list_targets',
-      },
-    );
-  }
+  requireNonEmptyString(
+    taskType,
+    'Task type must be a non-empty string',
+    'task_model.list_targets',
+  );
   return rpc('task_model.list_targets', { task_type: taskType }, options);
 }
 
@@ -366,12 +358,10 @@ export async function transcribeSpeech(audioBlob, options = {}) {
 }
 
 export function getAttachmentUrl(attachmentId) {
-  if (!isNonEmptyString(attachmentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Attachment id must be a non-empty string',
-    );
-  }
+  requireNonEmptyString(
+    attachmentId,
+    'Attachment id must be a non-empty string',
+  );
   return `${ATTACHMENT_BASE_ENDPOINT}/${attachmentId}`;
 }
 
@@ -380,15 +370,11 @@ export function listLogs(options = {}) {
 }
 
 export function readLogFile(file, options = {}) {
-  if (!isNonEmptyString(file)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Log file must be a non-empty string',
-      {
-        method: 'log.read',
-      },
-    );
-  }
+  requireNonEmptyString(
+    file,
+    'Log file must be a non-empty string',
+    'log.read',
+  );
 
   return rpc('log.read', { file }, options);
 }
@@ -410,67 +396,47 @@ export function updateCronJob(params = {}, options = {}) {
 }
 
 export function deleteCronJob(id, options = {}) {
-  if (!isNonEmptyString(id)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Cron job id must be a non-empty string',
-      {
-        method: 'cron.delete',
-      },
-    );
-  }
+  requireNonEmptyString(
+    id,
+    'Cron job id must be a non-empty string',
+    'cron.delete',
+  );
 
   return rpc('cron.delete', { id }, options);
 }
 
 export function enableCronJob(id, options = {}) {
-  if (!isNonEmptyString(id)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Cron job id must be a non-empty string',
-      {
-        method: 'cron.enable',
-      },
-    );
-  }
+  requireNonEmptyString(
+    id,
+    'Cron job id must be a non-empty string',
+    'cron.enable',
+  );
 
   return rpc('cron.enable', { id }, options);
 }
 
 export function disableCronJob(id, options = {}) {
-  if (!isNonEmptyString(id)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Cron job id must be a non-empty string',
-      {
-        method: 'cron.disable',
-      },
-    );
-  }
+  requireNonEmptyString(
+    id,
+    'Cron job id must be a non-empty string',
+    'cron.disable',
+  );
 
   return rpc('cron.disable', { id }, options);
 }
 
 export function addProject(params = {}, options = {}) {
-  if (!isPlainObject(params)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Project payload must be an object',
-      {
-        method: 'project.add',
-      },
-    );
-  }
+  requirePlainObject(
+    params,
+    'Project payload must be an object',
+    'project.add',
+  );
 
-  if (!isNonEmptyString(params.cwd)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Project cwd must be a non-empty string',
-      {
-        method: 'project.add',
-      },
-    );
-  }
+  requireNonEmptyString(
+    params.cwd,
+    'Project cwd must be a non-empty string',
+    'project.add',
+  );
 
   return rpc('project.add', params, options);
 }
@@ -483,87 +449,59 @@ export function listProjects(options = {}) {
 // the add dialog while the user types a path; a nonexistent cwd is a success
 // with `cwd_exists: false`, never an error.
 export function detectProject(cwd, options = {}) {
-  if (!isNonEmptyString(cwd)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Project cwd must be a non-empty string',
-      {
-        method: 'project.detect',
-      },
-    );
-  }
+  requireNonEmptyString(
+    cwd,
+    'Project cwd must be a non-empty string',
+    'project.detect',
+  );
 
   return rpc('project.detect', { cwd }, options);
 }
 
 export function showProject(projectId, options = {}) {
-  if (!isNonEmptyString(projectId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Project id must be a non-empty string',
-      {
-        method: 'project.show',
-      },
-    );
-  }
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'project.show',
+  );
 
   return rpc('project.show', { project_id: projectId }, options);
 }
 
 export function setProject(projectId, changes = {}, options = {}) {
-  if (!isNonEmptyString(projectId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Project id must be a non-empty string',
-      {
-        method: 'project.set',
-      },
-    );
-  }
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'project.set',
+  );
 
-  if (!isPlainObject(changes)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Project changes must be an object',
-      {
-        method: 'project.set',
-      },
-    );
-  }
+  requirePlainObject(
+    changes,
+    'Project changes must be an object',
+    'project.set',
+  );
 
   return rpc('project.set', { ...changes, project_id: projectId }, options);
 }
 
 export function setOverride(projectId, agentId, field, value, options = {}) {
-  if (!isNonEmptyString(projectId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Project id must be a non-empty string',
-      {
-        method: 'project.set_override',
-      },
-    );
-  }
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'project.set_override',
+  );
 
-  if (!isNonEmptyString(agentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent id must be a non-empty string',
-      {
-        method: 'project.set_override',
-      },
-    );
-  }
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'project.set_override',
+  );
 
-  if (!isNonEmptyString(field)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Override field must be a non-empty string',
-      {
-        method: 'project.set_override',
-      },
-    );
-  }
+  requireNonEmptyString(
+    field,
+    'Override field must be a non-empty string',
+    'project.set_override',
+  );
 
   // A per-agent override (model / temperature / thinking_effort) becomes the top
   // tier of that field's resolution chain for this agent in this project. The value
@@ -577,35 +515,23 @@ export function setOverride(projectId, agentId, field, value, options = {}) {
 }
 
 export function clearOverride(projectId, agentId, field, options = {}) {
-  if (!isNonEmptyString(projectId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Project id must be a non-empty string',
-      {
-        method: 'project.clear_override',
-      },
-    );
-  }
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'project.clear_override',
+  );
 
-  if (!isNonEmptyString(agentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent id must be a non-empty string',
-      {
-        method: 'project.clear_override',
-      },
-    );
-  }
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'project.clear_override',
+  );
 
-  if (!isNonEmptyString(field)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Override field must be a non-empty string',
-      {
-        method: 'project.clear_override',
-      },
-    );
-  }
+  requireNonEmptyString(
+    field,
+    'Override field must be a non-empty string',
+    'project.clear_override',
+  );
 
   // Drop one overridden field for this agent; clearing the agent's last field
   // removes the override entry entirely (server-side). The field falls back through
@@ -618,53 +544,37 @@ export function clearOverride(projectId, agentId, field, options = {}) {
 }
 
 export function removeProject(projectId, options = {}) {
-  if (!isNonEmptyString(projectId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Project id must be a non-empty string',
-      {
-        method: 'project.rm',
-      },
-    );
-  }
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'project.rm',
+  );
 
   return rpc('project.rm', { project_id: projectId }, options);
 }
 
 export function listSessions(agentId, options = {}) {
-  if (!isNonEmptyString(agentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent id must be a non-empty string',
-      {
-        method: 'session.list',
-      },
-    );
-  }
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.list',
+  );
 
   return rpc('session.list', { agent_id: agentId }, options);
 }
 
 export function renameSession(agentId, sessionId, title, options = {}) {
-  if (!isNonEmptyString(agentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent id must be a non-empty string',
-      {
-        method: 'session.rename',
-      },
-    );
-  }
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.rename',
+  );
 
-  if (!isNonEmptyString(sessionId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Session id must be a non-empty string',
-      {
-        method: 'session.rename',
-      },
-    );
-  }
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'session.rename',
+  );
 
   // An empty title is the explicit "clear the name" signal, so the title is
   // sent as-is (coerced to a string) rather than validated as non-empty.
@@ -676,25 +586,17 @@ export function renameSession(agentId, sessionId, title, options = {}) {
 }
 
 export function deleteSession(agentId, sessionId, options = {}) {
-  if (!isNonEmptyString(agentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent id must be a non-empty string',
-      {
-        method: 'session.delete',
-      },
-    );
-  }
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.delete',
+  );
 
-  if (!isNonEmptyString(sessionId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Session id must be a non-empty string',
-      {
-        method: 'session.delete',
-      },
-    );
-  }
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'session.delete',
+  );
 
   return rpc(
     'session.delete',
@@ -704,25 +606,17 @@ export function deleteSession(agentId, sessionId, options = {}) {
 }
 
 export function listQueue(agentId, sessionId, options = {}) {
-  if (!isNonEmptyString(agentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent id must be a non-empty string',
-      {
-        method: 'chat.queue_list',
-      },
-    );
-  }
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'chat.queue_list',
+  );
 
-  if (!isNonEmptyString(sessionId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Session id must be a non-empty string',
-      {
-        method: 'chat.queue_list',
-      },
-    );
-  }
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'chat.queue_list',
+  );
 
   return rpc(
     'chat.queue_list',
@@ -732,15 +626,11 @@ export function listQueue(agentId, sessionId, options = {}) {
 }
 
 export function cancelRun(runId, options = {}, rpcOptions = {}) {
-  if (!isNonEmptyString(runId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Run id must be a non-empty string',
-      {
-        method: 'chat.cancel',
-      },
-    );
-  }
+  requireNonEmptyString(
+    runId,
+    'Run id must be a non-empty string',
+    'chat.cancel',
+  );
 
   const params = { run_id: runId };
   const reason = isPlainObject(options) ? options.reason : null;
@@ -755,25 +645,17 @@ export function cancelToolCall(
   { agentId, runId, toolCallId } = {},
   options = {},
 ) {
-  if (!isNonEmptyString(runId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Run id must be a non-empty string',
-      {
-        method: 'chat.cancel_tool_call',
-      },
-    );
-  }
+  requireNonEmptyString(
+    runId,
+    'Run id must be a non-empty string',
+    'chat.cancel_tool_call',
+  );
 
-  if (!isNonEmptyString(toolCallId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Tool call id must be a non-empty string',
-      {
-        method: 'chat.cancel_tool_call',
-      },
-    );
-  }
+  requireNonEmptyString(
+    toolCallId,
+    'Tool call id must be a non-empty string',
+    'chat.cancel_tool_call',
+  );
 
   const params = { run_id: runId, tool_call_id: toolCallId };
   if (isNonEmptyString(agentId)) {
@@ -784,35 +666,23 @@ export function cancelToolCall(
 }
 
 export function removeFromQueue(agentId, sessionId, itemId, options = {}) {
-  if (!isNonEmptyString(agentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent id must be a non-empty string',
-      {
-        method: 'chat.queue_remove',
-      },
-    );
-  }
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'chat.queue_remove',
+  );
 
-  if (!isNonEmptyString(sessionId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Session id must be a non-empty string',
-      {
-        method: 'chat.queue_remove',
-      },
-    );
-  }
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'chat.queue_remove',
+  );
 
-  if (!isNonEmptyString(itemId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Queue item id must be a non-empty string',
-      {
-        method: 'chat.queue_remove',
-      },
-    );
-  }
+  requireNonEmptyString(
+    itemId,
+    'Queue item id must be a non-empty string',
+    'chat.queue_remove',
+  );
 
   return rpc(
     'chat.queue_remove',
@@ -828,35 +698,23 @@ export function updateQueueItem(
   content,
   options = {},
 ) {
-  if (!isNonEmptyString(agentId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent id must be a non-empty string',
-      {
-        method: 'chat.queue_update',
-      },
-    );
-  }
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'chat.queue_update',
+  );
 
-  if (!isNonEmptyString(sessionId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Session id must be a non-empty string',
-      {
-        method: 'chat.queue_update',
-      },
-    );
-  }
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'chat.queue_update',
+  );
 
-  if (!isNonEmptyString(itemId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Queue item id must be a non-empty string',
-      {
-        method: 'chat.queue_update',
-      },
-    );
-  }
+  requireNonEmptyString(
+    itemId,
+    'Queue item id must be a non-empty string',
+    'chat.queue_update',
+  );
 
   if (!(isNonEmptyString(content) || Array.isArray(content))) {
     throw new ApiClientError(
@@ -884,15 +742,11 @@ export function updateQueueItem(
 }
 
 export function deleteChannel(channelId, options = {}) {
-  if (!isNonEmptyString(channelId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Channel id must be a non-empty string',
-      {
-        method: 'channel.delete',
-      },
-    );
-  }
+  requireNonEmptyString(
+    channelId,
+    'Channel id must be a non-empty string',
+    'channel.delete',
+  );
 
   return rpc('channel.delete', { id: channelId }, options);
 }
@@ -930,15 +784,11 @@ export function debugTraceList(options = {}) {
 }
 
 export function debugTraceGet(traceId, options = {}) {
-  if (!isNonEmptyString(traceId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Trace id must be a non-empty string',
-      {
-        method: 'debug.trace_get',
-      },
-    );
-  }
+  requireNonEmptyString(
+    traceId,
+    'Trace id must be a non-empty string',
+    'debug.trace_get',
+  );
 
   return rpc('debug.trace_get', { trace_id: traceId }, options);
 }
@@ -948,25 +798,17 @@ export function debugTraceClear(options = {}) {
 }
 
 export function debugModelProbe(providerId, connectionId, options = {}) {
-  if (!isNonEmptyString(providerId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Provider id must be a non-empty string',
-      {
-        method: 'debug.model_probe',
-      },
-    );
-  }
+  requireNonEmptyString(
+    providerId,
+    'Provider id must be a non-empty string',
+    'debug.model_probe',
+  );
 
-  if (!isNonEmptyString(connectionId)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Connection id must be a non-empty string',
-      {
-        method: 'debug.model_probe',
-      },
-    );
-  }
+  requireNonEmptyString(
+    connectionId,
+    'Connection id must be a non-empty string',
+    'debug.model_probe',
+  );
 
   return rpc(
     'debug.model_probe',
@@ -990,12 +832,7 @@ export function normalizeRpcError(error, options = {}) {
 }
 
 export function subscribeRunEvents(sseUrl, handlers = {}, options = {}) {
-  if (!isNonEmptyString(sseUrl)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'SSE URL must be a non-empty string',
-    );
-  }
+  requireNonEmptyString(sseUrl, 'SSE URL must be a non-empty string');
   const EventSourceClass = options.EventSource ?? globalThis.EventSource;
   if (typeof EventSourceClass !== 'function') {
     throw new ApiClientError(RPC_ERROR_NETWORK, 'EventSource is not available');
@@ -1109,12 +946,7 @@ export function subscribeServerEvents(handlers = {}, options = {}) {
 }
 
 export function subscribeLogEvents(file, handlers = {}, options = {}) {
-  if (!isNonEmptyString(file)) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Log file must be a non-empty string',
-    );
-  }
+  requireNonEmptyString(file, 'Log file must be a non-empty string');
 
   const WebSocketClass = options.WebSocket ?? globalThis.WebSocket;
   if (typeof WebSocketClass !== 'function') {
@@ -1318,6 +1150,24 @@ function browserOrigin() {
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function requireNonEmptyString(value, message, method) {
+  if (!isNonEmptyString(value)) {
+    throw new ApiClientError(RPC_ERROR_INVALID_CLIENT_REQUEST, message, {
+      method,
+    });
+  }
+  return value;
+}
+
+function requirePlainObject(value, message, method) {
+  if (!isPlainObject(value)) {
+    throw new ApiClientError(RPC_ERROR_INVALID_CLIENT_REQUEST, message, {
+      method,
+    });
+  }
+  return value;
 }
 
 function isNonEmptyString(value) {
