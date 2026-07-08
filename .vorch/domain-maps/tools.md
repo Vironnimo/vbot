@@ -6,6 +6,14 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 
 `core/tools/` owns the registry of callable tools available to the agentic loop. It exposes provider/prompt definitions, filters tools by Agent allowlists, dispatches calls with `ToolContext`, and turns expected tool failures into stable result envelopes. Concrete built-in tool behavior lives in child maps under `.vorch/domain-maps/tools/`.
 
+## Terms
+
+Domain-specific vocabulary for tools. The core Tool term lives in `.vorch/GLOSSARY.md`.
+
+### Readiness
+**Definition:** A per-tool, cheap, I/O-free predicate (`Tool.ready`, a zero-arg `Callable[[], bool] | None`) evaluated at every prompt/tool-definition build; filter order is registered → allowed → ready. A not-ready tool vanishes from the System Prompt, the provider tool definitions, and the pickers but stays registered (its persisted permissions survive); a direct dispatch returns a clean `tool_not_ready` envelope instead of running the handler. A predicate that raises counts as not-ready.
+**Not:** A permission — an allowlist answers "may this agent use it", readiness answers "can it run right now" (e.g. is the extension's token set). Not a stored extension state either: the Extensions tab's waiting status is a derived `ready_state`, not a third switch.
+
 ## Data Model
 
 - `Tool`: `name`, `description`, `parameters`, `handler`, `internal`, `display`, `ready` (an optional zero-arg readiness predicate, `Callable[[], bool] | None`; `None` = always ready), `readiness_hint` (`str | None`, default `None` — English text explaining the readiness precondition, surfaced by `tool.list`; server-delivered content like the description, never frontend i18n), and `extension` (`str | None`, default `None` — the name of the owning extension, set at extension-tool apply time; `None` for a built-in).

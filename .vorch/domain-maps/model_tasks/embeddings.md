@@ -6,6 +6,14 @@ Provider-neutral text embedding execution for the configured `text_embedding` ta
 
 `core/model_tasks/` (`embeddings*.py`) owns text-to-vector embedding after Settings has selected one concrete task-model target. It resolves the `text_embedding` binding through `TaskModelService`, batches inputs, calls the provider embedding API, and returns `list[list[float]]` vectors preserving input order. It does not own model discovery, model catalogs, settings validation, UI controls, vector storage, or recall search; those live in `core/models/`, `core/model_tasks/`, `core/settings/`, `webui/`, `core/recall/`, and `core/tools/`.
 
+## Terms
+
+Domain-specific vocabulary for embedding execution. The user-facing Semantic Recall term lives in `.vorch/GLOSSARY.md`.
+
+### Embedding Model
+**Definition:** A specialized model that converts text into numerical vectors (embeddings) for semantic comparison. In vBot, this is a configurable `text_embedding` task-model binding used by the recall `vector` backend to find meaning-related past sessions (e.g. "car" and "vehicle" are nearby in embedding space).
+**Not:** A chat model, a TTS model, or an image generation model. The embedding model produces vectors, not text, speech, or images.
+
 ## Interfaces
 
 - `EmbeddingService(runtime)` — runtime-owned service; resolves the `text_embedding` binding and calls the provider embedding client.

@@ -8,6 +8,14 @@ FastAPI transport layer around the core kernel.
 
 Clients call the vBot server contract; provider wire details stay behind `core/providers/` adapters.
 
+## Terms
+
+Domain-specific vocabulary for the server transport.
+
+### Event Bus
+**Definition:** The server's internal mechanism for publishing lifecycle events such as run start, streamed output, tool activity, completion, failure, or cancellation to interested clients.
+**Not:** A provider protocol, storage format, or public API by itself. It is an internal distribution mechanism.
+
 ## Data model
 
 - RPC envelope: `POST /api/rpc` accepts a JSON object with `method` and optional `params`, and returns `{ "ok": true, "result": ... }` or `{ "ok": false, "error": { "code": ..., "message": ... } }`. Malformed JSON bodies still return that RPC envelope with `invalid_request` instead of surfacing a transport 500.

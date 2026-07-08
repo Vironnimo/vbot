@@ -13,6 +13,22 @@ Loading is **two-phase**:
 
 The module then **dispatches every hook event** through typed per-event methods on `ExtensionRegistry`. `core/chat/` constructs the `HookContext`, chooses the fire-points, supplies each event's payload, and applies the returned results — it never iterates handlers itself. Extensions run in-process on the normal asyncio event loop when one exists. Trust boundary is the kernel's: extension modules run arbitrary in-process Python.
 
+## Terms
+
+Domain-specific vocabulary for extensions.
+
+### Bundled Extension
+**Definition:** An extension shipped in the install tree under `resources/extensions/`, always scanned as the last extension root and default-on (opt out via the `disabled` set). A same-name copy in the data dir or an extra scan root shadows it (recorded `overridden`), so customizing a shipped extension is a deliberate copy into the data dir. Home Assistant is the first bundled extension.
+**Not:** A data-dir extension (the user's own, in an earlier root), and not a separate mechanism — after loading it is a normal extension in every way (hooks, tools, config, enable/disable).
+
+### Extension Reload
+**Definition:** The explicit, restart-equivalent rebuild of the **whole** extension layer from disk in the running process (`Runtime.reload_extensions`): one command tears the old layer down and builds a fresh one, so the end state equals exactly what a server restart from the current persisted settings would produce. Triggered by the `extensions.reload` RPC, `vbot extensions reload`, the WebUI "Reload extensions" button, and by *enabling* an extension. It picks up edited code (including package submodules), added/deleted extensions, fixed-`failed` extensions, and boot-disabled extensions that were enabled. Every extension-layer mutation (reload **and** live disable) serializes through one runtime lock.
+**Not:** A server restart (nothing stops; the process keeps running), not per-module hot patching (it is always a full atomic rebuild), and not the Model DB Refresh/Load pair (that is about the model catalog, not extensions — see `models.md`). Disabling one extension is the surgical live-disable path, not a full reload.
+
+### Extension Settings Schema
+**Definition:** The typed field list an extension declares via `api.register_settings(fields)` at register time (`text`/`number`/`toggle`/`secret`), driving the WebUI settings form and the server-side save validation. A `secret` field names an explicit `.env` key (`env_key`) and never carries a default or enters `settings.json`; non-secret values live in the extension's config and are read live per call.
+**Not:** The extension's config *values* themselves (those are what the schema validates and the form edits), and not a manifest section — the schema is declared in code at register time, so single-file extensions carry one too.
+
 ## Bundled extensions
 
 Home Assistant is the **first shipped bundled extension** (`resources/extensions/homeassistant/`) — it exercises the whole surface: external I/O, a secret + a live URL via the settings schema, per-tool readiness. Its behavior and contracts have their own child map: `.vorch/domain-maps/extensions/homeassistant.md`.
