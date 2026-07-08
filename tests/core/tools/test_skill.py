@@ -23,10 +23,14 @@ def _fixed_registry(
     return lambda _project_id, _agent_id: registry
 
 
+def _no_refresh() -> None:
+    """Refresh callback for tests whose registry never changes on a rescan."""
+
+
 def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path))
     tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry))
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
     registered: dict[str, str] = {}
 
     def activate(name: str, content: str) -> bool:
@@ -54,7 +58,7 @@ def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
 def test_skill_tool_without_activation_hook_still_returns_content(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path))
     tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry))
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
     data = cast(dict[str, Any], result["data"])
@@ -65,13 +69,43 @@ def test_skill_tool_without_activation_hook_still_returns_content(tmp_path: Path
     assert "Investigate failures methodically." in cast(str, data["content"])
 
 
-def test_skill_tool_unknown_skill_fails(tmp_path: Path) -> None:
+def test_skill_tool_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> None:
+    # A genuine miss (no such skill on disk) still fails — but only after one rescan,
+    # so a name that was hand-dropped just before the call still gets a chance.
+    refresh_calls = {"count": 0}
+
+    def refresh() -> None:
+        refresh_calls["count"] += 1
+
     tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))))
+    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))), refresh)
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "missing"}))
 
     assert result == tool_failure("skill_not_found", "Skill not found: missing")
+    assert refresh_calls["count"] == 1
+
+
+def test_skill_tool_rescans_disk_on_miss_then_activates(tmp_path: Path) -> None:
+    # A skill dropped into a skill directory after the run's registry was cached is
+    # absent from the first lookup; the rescan makes it live, so the retry activates.
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    state = {"registry": SkillRegistry.load(skills_dir)}
+
+    def refresh() -> None:
+        _skills_dir(tmp_path)  # the hand-dropped skill now exists on disk
+        state["registry"] = SkillRegistry.load(skills_dir)
+
+    tools = ToolRegistry()
+    register_skill_tool(tools, lambda _project_id, _agent_id: state["registry"], refresh)
+
+    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
+    data = cast(dict[str, Any], result["data"])
+
+    assert result["ok"] is True
+    assert data["status"] == "loaded"
+    assert data["name"] == "debugging"
 
 
 def test_skill_tool_passes_identity_agent_only_for_identity_runs(tmp_path: Path) -> None:
@@ -87,7 +121,7 @@ def test_skill_tool_passes_identity_agent_only_for_identity_runs(tmp_path: Path)
         return registry
 
     tools = ToolRegistry()
-    register_skill_tool(tools, resolver)
+    register_skill_tool(tools, resolver, _no_refresh)
 
     asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
     asyncio.run(async_dispatch(tools, _context(tmp_path, project_id="vbot"), {"name": "debugging"}))
@@ -114,7 +148,9 @@ metadata:
         encoding="utf-8",
     )
     tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(skills_dir, environment={})))
+    register_skill_tool(
+        tools, _fixed_registry(SkillRegistry.load(skills_dir, environment={})), _no_refresh
+    )
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "openai-helper"}))
 
@@ -126,7 +162,9 @@ metadata:
 
 def test_skill_tool_dedup_uses_session_activation_hook(tmp_path: Path) -> None:
     tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))))
+    register_skill_tool(
+        tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))), _no_refresh
+    )
 
     context = _context(tmp_path, lambda _name, _content: False)
     actual = asyncio.run(async_dispatch(tools, context, {"name": "debugging"}))
@@ -150,7 +188,7 @@ def test_skill_tool_file_read_error(tmp_path: Path) -> None:
     registry = SkillRegistry.load(skills_dir)
     skill_file.unlink()
     tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry))
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
     error = cast(dict[str, Any], result["error"])
@@ -175,7 +213,9 @@ def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
     registries: dict[str | None, SkillRegistry] = {"vbot": project_registry}
     tools = ToolRegistry()
     register_skill_tool(
-        tools, lambda project_id, _agent_id: registries.get(project_id, global_registry)
+        tools,
+        lambda project_id, _agent_id: registries.get(project_id, global_registry),
+        _no_refresh,
     )
 
     project_result = asyncio.run(
@@ -199,7 +239,7 @@ def test_skill_tool_list_mode_returns_grouped_skills(tmp_path: Path) -> None:
         agent_dir, extra_dirs=[_skills_dir(tmp_path)], origins=["agent", "global"]
     )
     tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry))
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {}))
     data = cast(dict[str, Any], result["data"])
@@ -219,7 +259,7 @@ def test_skill_tool_list_mode_returns_grouped_skills(tmp_path: Path) -> None:
 def test_skill_tool_blank_name_lists_instead_of_activating(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path), origins=["global"])
     tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry))
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
     data = cast(dict[str, Any], result["data"])
@@ -242,7 +282,7 @@ def test_skill_tool_loads_agent_own_skill_bypassing_allowlist(tmp_path: Path) ->
     )
     registry = SkillRegistry.load(agent_home, always_allowed=frozenset({"private"}))
     tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry))
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
     result = asyncio.run(
         async_dispatch(tools, _context(tmp_path, allowed_skills=[]), {"name": "private"})

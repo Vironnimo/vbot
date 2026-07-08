@@ -30,6 +30,13 @@ from core.tools.tools import (
 # their owner, and global skills everywhere else, without re-registering per run.
 SkillRegistryResolver = Callable[[str | None, str | None], SkillRegistry]
 
+# Rescans skills from disk and drops the cached per-run registries so the next
+# resolve rebuilds against the fresh pool (the runtime wires this to
+# ``Runtime.reload_skills``). Invoked once on a name miss so a skill hand-dropped
+# into a skill directory after this run's registry was cached is picked up without
+# a restart — see the rescan-on-miss retry in the handler below.
+SkillRefresh = Callable[[], None]
+
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
     "Load an allowed skill by name to add its instructions to session context, or "
@@ -63,13 +70,18 @@ SKILL_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-def make_skill_handler(resolve_registry: SkillRegistryResolver) -> Any:
+def make_skill_handler(
+    resolve_registry: SkillRegistryResolver, refresh_skills: SkillRefresh
+) -> Any:
     """Return a skill handler that resolves its registry per call from the run.
 
     ``resolve_registry`` maps a run's effective skill project (``None`` for identity)
     and agent to the skill registry to activate against, so a project run loads
     project skills, an agent loads its own private skills, and an identity run loads
-    global skills through the same handler.
+    global skills through the same handler. ``refresh_skills`` rescans skills from
+    disk; the handler calls it once on a name miss and re-resolves, so a skill
+    dropped into a skill directory after this run's registry was cached activates by
+    name without a restart.
     """
 
     def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -97,7 +109,17 @@ def make_skill_handler(resolve_registry: SkillRegistryResolver) -> Any:
         try:
             skill = skill_registry.get(skill_name)
         except KeyError:
-            return tool_failure("skill_not_found", f"Skill not found: {skill_name}")
+            # A miss may just mean the skill was hand-dropped into a skill directory
+            # after this run's registry was cached. Rescan disk once and re-resolve
+            # so "drop it in, then activate it by name" works without a restart. The
+            # session-pinned prompt catalog is deliberately left untouched (no
+            # availability note) — only activation is made live.
+            refresh_skills()
+            skill_registry = resolve_registry(context.skill_project_id, identity_agent_id)
+            try:
+                skill = skill_registry.get(skill_name)
+            except KeyError:
+                return tool_failure("skill_not_found", f"Skill not found: {skill_name}")
 
         if not _is_skill_allowed(skill_registry, skill_name, context.allowed_skills):
             return tool_failure(
@@ -137,19 +159,25 @@ def make_skill_handler(resolve_registry: SkillRegistryResolver) -> Any:
     return skill_handler
 
 
-def register_skill_tool(registry: ToolRegistry, resolve_registry: SkillRegistryResolver) -> None:
+def register_skill_tool(
+    registry: ToolRegistry,
+    resolve_registry: SkillRegistryResolver,
+    refresh_skills: SkillRefresh,
+) -> None:
     """Register the skill activation tool with a per-project registry resolver.
 
     A normal allow-list tool: an agent offers it only when ``skill`` is in its allowed
     tools, so it can be toggled per agent like any other tool. It is **not** gated on the
     agent currently having a loadable skill — a skill can be authored or activated
     mid-session, so the loader stays available whenever the tool itself is allowed.
+    ``refresh_skills`` rescans skills from disk on a name miss so a hand-dropped skill
+    is activatable by name without a restart.
     """
     registry.register(
         SKILL_TOOL_NAME,
         SKILL_TOOL_DESCRIPTION,
         SKILL_TOOL_PARAMETERS,
-        make_skill_handler(resolve_registry),
+        make_skill_handler(resolve_registry, refresh_skills),
         display=ToolDisplay(summary_fields=("name",)),
     )
 
