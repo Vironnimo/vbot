@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from difflib import get_close_matches
 from typing import Any
 
+from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -502,9 +503,3 @@ def _format_unknown_extension(name: str, candidates: list[str]) -> str:
         if suggestions:
             lines.append(f"did you mean: {suggestions[0]}")
     return "\n".join(lines)
-
-
-def _string_or_default(value: object, default: str) -> str:
-    if isinstance(value, str) and value:
-        return value
-    return default

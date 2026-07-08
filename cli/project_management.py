@@ -18,6 +18,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from cli.formatting import bool_text as _bool_text
+from cli.formatting import format_string_list as _format_string_list
+from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -231,22 +234,6 @@ def _format_project_row(project: object) -> str:
     )
 
 
-def _format_string_list(value: object) -> str:
-    if not isinstance(value, list):
-        return "-"
-    if not value:
-        return "[]"
-    return ",".join(str(item) for item in value)
-
-
-def _bool_text(value: object) -> str:
-    if value is True:
-        return "yes"
-    if value is False:
-        return "no"
-    return "unknown"
-
-
 def _number_or_default(value: object, default: str) -> str:
     # bool is an int subclass; never render a stray boolean as a temperature.
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -263,9 +250,3 @@ def _thinking_effort_text(value: object) -> str:
     if isinstance(value, str):
         return value
     return "-"
-
-
-def _string_or_default(value: object, default: str) -> str:
-    if isinstance(value, str) and value:
-        return value
-    return default

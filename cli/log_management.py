@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -78,9 +79,3 @@ def _format_log_entry(entry: object) -> str:
     if continuation:
         return f"{line}\n  {continuation}"
     return line
-
-
-def _string_or_default(value: object, default: str) -> str:
-    if isinstance(value, str) and value:
-        return value
-    return default
