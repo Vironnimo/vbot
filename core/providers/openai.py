@@ -63,6 +63,14 @@ DISCOVERY_REASONING_PARAMETER_NAMES = frozenset(
     {"reasoning", "reasoning_effort", "include_reasoning", "thinking_effort"}
 )
 CODEX_CLIENT_VERSION = "0.136.0"
+# Codex backend prompt-cache routing: the ChatGPT ``/codex/responses`` backend
+# routes the prompt cache by these request HEADERS scoped to the conversation —
+# NOT by the body-level ``prompt_cache_key`` (verified live 2026-07-09: the body
+# field has no measurable effect, while a stable conversation scope on these
+# headers lifts cache hits from ~1/6 to ~5/6). Mirrors the Codex CLI and the
+# hermes-agent transport.
+CODEX_CACHE_SCOPE_HEADERS = ("session_id", "x-client-request-id")
+CONVERSATION_ID_KWARG = "conversation_id"
 
 
 class OpenAIAdapter(OpenAICompatibleAdapter):
@@ -162,6 +170,21 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             metadata=base_model.metadata,
         )
 
+    def request_context_kwargs(self, *, agent_id: str, session_id: str) -> dict[str, Any]:
+        """Scope the Codex prompt cache to the conversation.
+
+        The ChatGPT Codex backend routes its prompt cache by per-request headers
+        (``CODEX_CACHE_SCOPE_HEADERS``), not the body-level ``prompt_cache_key``.
+        Handing the adapter a stable conversation id lets the ``subscription``
+        (Codex) path stamp those headers so a growing shared prefix reliably hits
+        the same cache-warm machine across turns. The value only steers routing,
+        never correctness — the wire prefix still decides what actually caches —
+        so ``agent_id:session_id`` (stable per conversation) is enough. The
+        ``api-key`` ``/chat/completions`` path ignores it (that path caches by
+        OpenAI's default prefix-hash routing).
+        """
+        return {CONVERSATION_ID_KWARG: f"{agent_id}:{session_id}"}
+
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Wire media depends on the connection's wire variant.
 
@@ -175,12 +198,12 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return IMAGE_WIRE_MEDIA_TYPES
         return super().wire_media_support(model_id) | {"application/pdf"}
 
-    async def _build_headers(self) -> dict[str, str]:
+    async def _build_headers(self, cache_scope_id: str | None = None) -> dict[str, str]:
         if self._connection_mode == CODEX_RESPONSES_MODE:
-            return await self._build_codex_headers()
+            return await self._build_codex_headers(cache_scope_id)
         return await super()._build_headers()
 
-    async def _build_codex_headers(self) -> dict[str, str]:
+    async def _build_codex_headers(self, cache_scope_id: str | None = None) -> dict[str, str]:
         token = await self._token_getter()
         account_id = extract_chatgpt_account_id(token)
         if account_id is None:
@@ -195,6 +218,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         # extra_headers are deliberately not merged here so a stray config entry can
         # never leak onto the Codex wire (the OpenAI provider forbids extra_headers).
         headers.update(CODEX_EXTRA_HEADERS)
+        # Pin the prompt cache to the conversation (see CODEX_CACHE_SCOPE_HEADERS).
+        if cache_scope_id:
+            for header_name in CODEX_CACHE_SCOPE_HEADERS:
+                headers[header_name] = cache_scope_id
         return headers
 
     async def send(
@@ -211,13 +238,16 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         ``/chat/completions`` request.
         """
 
+        conversation_id = kwargs.pop(CONVERSATION_ID_KWARG, None)
         if self._connection_mode == CODEX_RESPONSES_MODE:
             payload = self._build_responses_payload(
                 messages,
                 model_id=model_id,
                 **self._request_kwargs_with_defaults(kwargs),
             )
-            return await self._post_json(CODEX_RESPONSES_ENDPOINT, payload)
+            return await self._post_json(
+                CODEX_RESPONSES_ENDPOINT, payload, cache_scope_id=conversation_id
+            )
         return await super().send(messages, model_id=model_id, **kwargs)
 
     async def stream(
@@ -234,6 +264,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         ``/chat/completions`` stream.
         """
 
+        conversation_id = kwargs.pop(CONVERSATION_ID_KWARG, None)
         if self._connection_mode == CODEX_RESPONSES_MODE:
             payload = self._build_responses_payload(
                 messages,
@@ -241,7 +272,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 stream=True,
                 **self._request_kwargs_with_defaults(kwargs),
             )
-            async for delta in self._stream_responses(payload):
+            async for delta in self._stream_responses(payload, cache_scope_id=conversation_id):
                 yield delta
             return
         async for delta in super().stream(messages, model_id=model_id, **kwargs):
@@ -335,9 +366,15 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return frozenset(ladder)
         return OPENAI_SUBSCRIPTION_REASONING_EFFORTS
 
-    async def _post_json(self, endpoint_path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post_json(
+        self,
+        endpoint_path: str,
+        payload: dict[str, Any],
+        *,
+        cache_scope_id: str | None = None,
+    ) -> dict[str, Any]:
         async def _do_request() -> dict[str, Any]:
-            headers = await self._build_headers()
+            headers = await self._build_headers(cache_scope_id)
             try:
                 response = await self._client.post(endpoint_path, json=payload, headers=headers)
             except httpx.TransportError as exc:
@@ -356,11 +393,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         self,
         endpoint_path: str,
         payload: dict[str, Any],
+        *,
+        cache_scope_id: str | None = None,
     ) -> httpx.Response:
         async def _connect() -> httpx.Response:
             # Rebuild headers per attempt: an OAuth token may refresh during a
             # retry backoff, and the getter must be re-consulted each time.
-            headers = await self._build_headers()
+            headers = await self._build_headers(cache_scope_id)
             request = self._client.build_request(
                 "POST",
                 endpoint_path,
@@ -385,8 +424,15 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
         return await retry_async(_connect)
 
-    async def _stream_responses(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        response = await self._connect_stream(CODEX_RESPONSES_ENDPOINT, payload)
+    async def _stream_responses(
+        self,
+        payload: dict[str, Any],
+        *,
+        cache_scope_id: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        response = await self._connect_stream(
+            CODEX_RESPONSES_ENDPOINT, payload, cache_scope_id=cache_scope_id
+        )
         state = ResponsesStreamState()
         event_lines: list[str] = []
         seen_finish_delta = False

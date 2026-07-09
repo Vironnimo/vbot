@@ -224,6 +224,93 @@ async def test_codex_send_posts_responses_payload_with_account_and_beta_headers(
     }
 
 
+def test_request_context_kwargs_scopes_conversation() -> None:
+    """The hook maps ``(agent_id, session_id)`` to a stable conversation id."""
+
+    adapter = OpenAIAdapter(_subscription_config(), _jwt_with_account())
+
+    context = adapter.request_context_kwargs(agent_id="orchestrator", session_id="sess-42")
+
+    assert context == {"conversation_id": "orchestrator:sess-42"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_codex_send_stamps_cache_scope_headers() -> None:
+    """The Codex request pins the prompt cache with per-conversation headers."""
+
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account("acct_openai"),
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "resp_1", "output": [], "usage": {"input_tokens": 1, "output_tokens": 1}},
+        )
+    )
+
+    await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gpt-5-codex",
+        conversation_id="orchestrator:sess-42",
+    )
+
+    request = route.calls.last.request
+    assert request.headers["session_id"] == "orchestrator:sess-42"
+    assert request.headers["x-client-request-id"] == "orchestrator:sess-42"
+    # The routing hint rides on headers only — never on the request body.
+    assert "conversation_id" not in json.loads(request.content)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_codex_send_omits_cache_scope_headers_without_conversation() -> None:
+    """Absent a conversation id, no cache-scope headers are sent (no blank values)."""
+
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account("acct_openai"),
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "resp_1", "output": [], "usage": {"input_tokens": 1, "output_tokens": 1}},
+        )
+    )
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5-codex")
+
+    request = route.calls.last.request
+    assert "session_id" not in request.headers
+    assert "x-client-request-id" not in request.headers
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_chat_completions_send_ignores_conversation_id() -> None:
+    """The ``api-key`` path drops the conversation id — never onto the wire."""
+
+    adapter = OpenAIAdapter(_platform_config(), "sk-test")
+    route = respx.post(OPENAI_API_KEY_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Hi"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+    )
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-4o", conversation_id="orchestrator:sess-42")
+
+    request = route.calls.last.request
+    assert "session_id" not in request.headers
+    assert "conversation_id" not in json.loads(request.content)
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_codex_send_preserves_xhigh_reasoning_effort() -> None:

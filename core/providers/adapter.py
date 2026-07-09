@@ -131,6 +131,25 @@ class ProviderAdapter(ABC):
         del model_id
         return frozenset()
 
+    # ------------------------------------------------------------------
+    # Per-request conversation context
+    # ------------------------------------------------------------------
+
+    def request_context_kwargs(self, *, agent_id: str, session_id: str) -> JsonObject:
+        """Return extra per-request kwargs derived from the conversation identity.
+
+        The chat layer calls this once per provider request and merges the
+        result into the ``send()``/``stream()`` kwargs, letting an adapter turn
+        the stable ``(agent_id, session_id)`` pair into a provider-specific
+        routing hint (e.g. the OpenAI Codex prompt-cache scope headers) without
+        the chat layer knowing any provider specifics.  The ABC default adds
+        nothing, so only adapters that override this ever receive the extra
+        kwargs — the chat call for every other provider is byte-for-byte
+        unchanged, and no wire that would reject an unknown field is touched.
+        """
+        del agent_id, session_id
+        return {}
+
     @abstractmethod
     async def aclose(self) -> None:
         """Close the HTTP client and release resources.
