@@ -402,6 +402,76 @@ def test_effective_skills_include_enabled_global(
     assert runtime_agent.allowed_skills == ["debugging", "deploy", "pdf"]
 
 
+def test_effective_skills_disabled_project_skill_stays_off_despite_optin(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # A disabled project skill is off entirely: the merged registry resolves a name
+    # collision to the project's own copy (project wins), so a same-named global or
+    # bundled opt-in must not resurrect the disabled project skill.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    project = projects.update(
+        "vbot",
+        skills_project_disabled=["deploy"],
+        skills_global_enabled=["deploy"],
+    )
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        project_skill_names={"vbot": frozenset({"debugging", "deploy"})},
+    )
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.allowed_skills == ["debugging"]
+
+
+def test_effective_skills_disabled_nonproject_name_leaves_optin_alone(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # ``skills_project_disabled`` turns off project skills only: a disabled name
+    # that is not a project skill stays inert and the opt-in keeps working.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    project = projects.update(
+        "vbot",
+        skills_project_disabled=["pdf"],
+        skills_bundled_enabled=["pdf"],
+    )
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        project_skill_names={"vbot": frozenset({"debugging"})},
+    )
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.allowed_skills == ["debugging", "pdf"]
+
+
+def test_effective_skills_drop_literal_wildcard_names(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # A repo skill *named* "*" (the lenient loader accepts that with a warning) must
+    # not smuggle the allowed_skills wildcard past the project whitelist and expose
+    # the whole global pool; the literal is dropped from every source list.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    project = projects.update("vbot", skills_global_enabled=["*"])
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        project_skill_names={"vbot": frozenset({"*", "debugging"})},
+    )
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+
+    assert runtime_agent.allowed_skills == ["debugging"]
+
+
 def test_model_chain_falls_back_to_project_default(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
