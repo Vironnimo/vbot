@@ -238,6 +238,20 @@ def _resolve_wire_media_support(adapter: Any, model_id: str) -> frozenset[str]:
     return frozenset()
 
 
+def _resolve_request_context_kwargs(adapter: Any, run: Run) -> dict[str, Any]:
+    """Resolve per-request conversation-context kwargs for one request build.
+
+    Mirrors ``_resolve_reasoning_replay_policy``: adapters and test doubles that
+    do not expose the hook contribute nothing, so the provider call is unchanged
+    for every adapter that has no use for the conversation identity.
+    """
+    if hasattr(adapter, "request_context_kwargs"):
+        return dict(
+            adapter.request_context_kwargs(agent_id=run.agent_id, session_id=run.session_id)
+        )
+    return {}
+
+
 def _connection_local_id(provider_id: str, connection_id: str) -> str | None:
     """Extract the provider-local connection id from a ``<provider>:<conn>[:<account>]`` id.
 
@@ -1697,6 +1711,7 @@ class ChatLoop:
         note_hook: Callable[[str], None] | None = None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
     ) -> ChatMessage:
+        request_context = _resolve_request_context_kwargs(adapter, run)
         if self._streaming:
             return await self._send_streaming_assistant_request(
                 agent,
@@ -1707,10 +1722,11 @@ class ChatLoop:
                 run,
                 note_hook=note_hook,
                 chunk_timeout_seconds=chunk_timeout_seconds,
+                request_context=request_context,
             )
 
         return await self._send_non_streaming_assistant_request(
-            agent, adapter, model_id, messages, tools
+            agent, adapter, model_id, messages, tools, request_context=request_context
         )
 
     async def _send_non_streaming_assistant_request(
@@ -1720,6 +1736,8 @@ class ChatLoop:
         model_id: str,
         messages: list[JsonObject],
         tools: list[JsonObject],
+        *,
+        request_context: dict[str, Any],
     ) -> ChatMessage:
         response = await adapter.send(
             messages,
@@ -1727,6 +1745,7 @@ class ChatLoop:
             temperature=agent.temperature,
             thinking_effort=agent.thinking_effort,
             tools=tools,
+            **request_context,
         )
         normalized = adapter.normalize_response(response, model_id=model_id)
         return _assistant_message_from_response(agent.model, normalized)
@@ -1741,6 +1760,7 @@ class ChatLoop:
         run: Run,
         note_hook: Callable[[str], None] | None = None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
+        request_context: dict[str, Any] | None = None,
     ) -> ChatMessage:
         # A transient drop before any visible output is replayed as a full stream
         # restart (the not-yet-visible analogue of the non-streaming fallback).
@@ -1758,6 +1778,7 @@ class ChatLoop:
                     note_hook,
                     can_restart=attempt < MAX_STREAM_RESTARTS,
                     chunk_timeout_seconds=chunk_timeout_seconds,
+                    request_context=request_context or {},
                 )
             except _StreamRestartNeeded as restart:
                 _LOGGER.warning(
@@ -1784,6 +1805,7 @@ class ChatLoop:
         *,
         can_restart: bool,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
+        request_context: dict[str, Any] | None = None,
     ) -> ChatMessage:
         accumulator = StreamingAccumulator()
         emitted_visible_delta = False
@@ -1793,6 +1815,7 @@ class ChatLoop:
             temperature=agent.temperature,
             thinking_effort=agent.thinking_effort,
             tools=tools,
+            **(request_context or {}),
         )
 
         try:
@@ -1825,6 +1848,7 @@ class ChatLoop:
                     model_id,
                     messages,
                     tools,
+                    request_context=request_context or {},
                 )
                 _emit_assistant_events(run, assistant_message)
                 return assistant_message
