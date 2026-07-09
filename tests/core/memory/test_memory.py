@@ -22,7 +22,10 @@ from core.memory import (
 from core.memory.memory import _MAX_ENTRY_LENGTH, _MAX_SCOPE_BUDGET, _MEMORY_GUIDANCE
 
 
-def test_memory_service_preserves_preamble_and_manages_entries(tmp_path: Path) -> None:
+def test_memory_service_stores_entries_as_bare_bullets(tmp_path: Path) -> None:
+    # The file holds only the entries now (bare "- " bullets) — no preamble, no
+    # "## Entries" heading. Any freeform prose already in the file is dropped on the
+    # first write; the memory tool fully owns the file's content.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     user_file = workspace / "USER.md"
@@ -39,9 +42,24 @@ def test_memory_service_preserves_preamble_and_manages_entries(tmp_path: Path) -
         "Uses Windows.",
     ]
     content = user_file.read_text(encoding="utf-8")
-    assert "Existing prose." in content
-    assert "## Entries" in content
-    assert "- Prefers concise answers." in content
+    assert content == "- Prefers concise answers.\n- Uses Windows.\n"
+    assert "Existing prose." not in content
+    assert "## Entries" not in content
+    assert "# User Profile" not in content
+
+
+def test_memory_service_reads_hand_written_bullets_as_entries(tmp_path: Path) -> None:
+    # Entries are just "- " bullet lines; there is no origin tracking, so a bullet
+    # typed into the file by hand is a real entry, indistinguishable from a tool-added
+    # one. A non-bullet line is not an entry and is ignored.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("- sonne ist toll\nloose prose\n", encoding="utf-8")
+    service = MemoryService()
+
+    entries = service.list_entries(workspace, "agent")
+
+    assert [entry.content for entry in entries] == ["sonne ist toll"]
 
 
 def test_memory_service_creates_missing_agent_memory_file(tmp_path: Path) -> None:
@@ -53,7 +71,9 @@ def test_memory_service_creates_missing_agent_memory_file(tmp_path: Path) -> Non
     assert entry.id == 1
     memory_file = workspace / "MEMORY.md"
     assert memory_file.exists()
-    assert "# Agent Memory" in memory_file.read_text(encoding="utf-8")
+    content = memory_file.read_text(encoding="utf-8")
+    assert content == "- Check session_search before guessing.\n"
+    assert "# Agent Memory" not in content
 
 
 def test_memory_service_replace_and_remove_entries(tmp_path: Path) -> None:
@@ -113,57 +133,54 @@ def test_memory_service_rejects_invalid_entry_id(tmp_path: Path) -> None:
         service.remove_entry(tmp_path, "user", 1)
 
 
-def test_read_prompt_files_returns_only_file_contents(tmp_path: Path) -> None:
-    # The producer's data half: just the <file>-wrapped contents, no <memory>
-    # wrapper and no guidance (those live in the declared memory:guidance block).
+def test_read_prompt_files_renders_scope_heading_and_entries(tmp_path: Path) -> None:
+    # The producer's data half: each selected scope under its heading label with its
+    # "- " bullet entries — no <file> wrapper, no <memory> wrapper, and no guidance
+    # (those live in the declared memory:guidance block). Agent scope renders first.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
-    (workspace / "USER.md").write_text("User memory", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("- Agent fact\n", encoding="utf-8")
+    (workspace / "USER.md").write_text("- User fact\n", encoding="utf-8")
     service = MemoryService()
 
     agent_only = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT)
     agent_and_user = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
     disabled = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_OFF)
 
-    assert agent_only == '<file name="MEMORY.md">\nAgent memory\n</file>'
+    assert agent_only == "# Agent Memory\n- Agent fact"
     assert "<memory>" not in agent_only
+    assert "<file name=" not in agent_only
     assert _MEMORY_GUIDANCE not in agent_only
-    assert '<file name="MEMORY.md">' in agent_and_user
-    assert '<file name="USER.md">' in agent_and_user
+    assert agent_and_user == "# Agent Memory\n- Agent fact\n\n# User Profile\n- User fact"
     assert disabled == ""
 
 
-def test_read_prompt_files_renders_default_for_missing_file(tmp_path: Path) -> None:
-    # Lazy ownership: a not-yet-created file is not omitted — it renders the same
-    # "no entries recorded" content an empty on-disk file would, so the model always
-    # sees the memory framing, and reading never creates the file.
+def test_read_prompt_files_renders_placeholder_for_missing_file(tmp_path: Path) -> None:
+    # Lazy ownership: a not-yet-created file is not omitted — its scope renders the
+    # empty-scope placeholder (identical to an emptied on-disk file), so the model
+    # always sees the scope, and reading never creates the file.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("- Agent fact\n", encoding="utf-8")
     service = MemoryService()
 
     files = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
 
-    assert "Agent memory" in files
-    assert '<file name="USER.md">' in files
-    assert "No tool-managed memory entries are recorded yet." in files
+    assert files == "# Agent Memory\n- Agent fact\n\n# User Profile\nNo entries yet."
     assert not (workspace / "USER.md").exists()
 
 
-def test_read_prompt_files_renders_defaults_when_no_files_exist(tmp_path: Path) -> None:
-    # With no memory files on disk, an enabled mode still renders both selected files
-    # via their default "no entries" content; only off reads nothing. Rendering never
-    # creates a file as a side effect.
+def test_read_prompt_files_renders_placeholders_when_no_files_exist(tmp_path: Path) -> None:
+    # With no memory files on disk, an enabled mode still renders both selected scopes
+    # via the empty-scope placeholder; only off reads nothing. Rendering never creates
+    # a file as a side effect.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     service = MemoryService()
 
     rendered = read_memory_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER, provider=service)
 
-    assert '<file name="MEMORY.md">' in rendered
-    assert '<file name="USER.md">' in rendered
-    assert "No tool-managed memory entries are recorded yet." in rendered
+    assert rendered == "# Agent Memory\nNo entries yet.\n\n# User Profile\nNo entries yet."
     assert read_memory_files(workspace, MEMORY_PROMPT_MODE_OFF, provider=service) == ""
     assert not (workspace / "MEMORY.md").exists()
     assert not (workspace / "USER.md").exists()
