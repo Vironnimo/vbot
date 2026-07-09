@@ -648,6 +648,82 @@ async def test_read_malformed_docx_falls_back_to_binary_notice(tmp_path: Path) -
     assert "[Binary file: broken.docx" in content
 
 
+def _minimal_pdf(lines: list[str]) -> bytes:
+    """Build a minimal single-page PDF drawing ``lines`` (empty → no text layer)."""
+    operators = b"BT /F1 24 Tf 72 720 Td "
+    for line in lines:
+        operators += b"(" + line.encode("latin-1") + b") Tj 0 -28 Td "
+    operators += b"ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(operators), operators),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets: list[int] = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf += b"%d 0 obj\n" % index + body + b"\nendobj\n"
+    xref_position = len(pdf)
+    pdf += b"xref\n0 %d\n" % (len(objects) + 1)
+    pdf += b"0000000000 65535 f \n"
+    for offset in offsets:
+        pdf += b"%010d 00000 n \n" % offset
+    pdf += b"trailer\n<< /Size %d /Root 1 0 R >>\n" % (len(objects) + 1)
+    pdf += b"startxref\n%d\n%%%%EOF" % xref_position
+    return bytes(pdf)
+
+
+@pytest.mark.asyncio
+async def test_read_extracts_pdf_as_text_with_page_headers(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("paper.pdf").write_bytes(_minimal_pdf(["Hello PDF"]))
+
+    result = await make_handler()(make_context(workspace), {"path": "paper.pdf"})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert content.startswith("[Extracted text from paper.pdf (PDF document)]:")
+    assert "# Page 1" in content
+    assert "Hello PDF" in content
+    # A rendering, not editable source: no `N|` gutter.
+    assert "1|" not in content
+
+
+@pytest.mark.asyncio
+async def test_read_scanned_pdf_without_text_layer_reports_no_text(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("scan.pdf").write_bytes(_minimal_pdf([]))
+
+    result = await make_handler()(make_context(workspace), {"path": "scan.pdf"})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert content == "[Extracted text from scan.pdf (PDF document)]:\n(no extractable text)"
+
+
+@pytest.mark.asyncio
+async def test_read_malformed_pdf_falls_back_to_binary_notice(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    # A .pdf that pypdf cannot parse: extraction fails, binary check takes over.
+    workspace.joinpath("broken.pdf").write_bytes(b"%PDF-1.4 not really a pdf \x00 body")
+
+    result = await make_handler()(make_context(workspace), {"path": "broken.pdf"})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert "[Binary file: broken.pdf" in content
+
+
 @pytest.mark.asyncio
 async def test_read_records_stamp_so_write_edit_guard_passes(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"

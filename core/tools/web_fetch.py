@@ -18,6 +18,12 @@ from curl_cffi.requests.exceptions import RequestException
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.tools.arguments import coerce_bool
+from core.tools.read_extract import (
+    ExtractionError,
+    detect_extractable_document,
+    document_label,
+    extract_document_text,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -114,9 +120,10 @@ IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 WEB_FETCH_TOOL_NAME = "web_fetch"
 WEB_FETCH_TOOL_DESCRIPTION = (
     "Fetch a public HTTP or HTTPS URL and return the page content as clean, "
-    "readable text. An image URL is shown to you directly when the model supports "
-    "vision; other binary files (executables, archives, media) return a short "
-    "notice instead of raw bytes."
+    "readable text. PDF, Word, and Excel documents are returned as extracted "
+    "text. An image URL is shown to you directly when the model supports vision; "
+    "other binary files (executables, archives, media) return a short notice "
+    "instead of raw bytes."
 )
 WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -932,6 +939,28 @@ def _binary_notice(url: str, media_type: str, size_bytes: int) -> JsonObject:
     )
 
 
+def _fetch_document_result(url: str, sniffed: str, data: bytes) -> JsonObject | None:
+    """Render a fetched PDF/Office/notebook as text, or ``None`` to fall through.
+
+    ``None`` means the payload is not an extractable document, or extraction
+    failed on a malformed file — the caller then falls back to the binary-notice
+    or text path. An empty extraction (e.g. a scanned PDF with no text layer)
+    becomes an explicit note. The rendered text carries the shared 100 KB cap.
+    """
+    kind = detect_extractable_document(_filename_from_url(url), sniffed)
+    if kind is None:
+        return None
+    try:
+        extracted = extract_document_text(data, kind)
+    except ExtractionError:
+        return None
+
+    body = extracted.strip() or "(no extractable text)"
+    output = f"[Extracted text from {url} ({document_label(kind)})]\n---\n{body}"
+    content = _truncate_utf8_with_suffix(output, _MAX_URL_BYTES, _CONTENT_TRUNCATED_MARKER)
+    return tool_success({"content": content})
+
+
 def _shape_success(
     attachment_store: Any,
     result: _FetchResult,
@@ -949,7 +978,14 @@ def _shape_success(
     if sniffed.startswith("image/"):
         return _fetch_image_result(attachment_store, url, result.content)
 
-    # Binary payloads (executable, archive, media, PDF) would decode to mojibake;
+    # A PDF/Word/Excel document becomes readable text instead of a binary notice.
+    # Detection is by sniffed type first (a fetched URL often has no usable
+    # extension), and a malformed file falls through to the binary/text path below.
+    document = _fetch_document_result(url, sniffed, result.content)
+    if document is not None:
+        return document
+
+    # Binary payloads (executable, archive, media) would decode to mojibake;
     # a short notice — also regardless of ``raw`` — replaces the garbage.
     if _is_binary_payload(media_type, sniffed, result.content):
         return _binary_notice(url, sniffed, len(result.content))

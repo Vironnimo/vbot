@@ -742,6 +742,168 @@ async def test_web_fetch_handler_binary_detected_by_nul_without_content_type(
     assert "Binary content" in content
 
 
+def _minimal_pdf(lines: list[str]) -> bytes:
+    """Build a minimal single-page PDF drawing ``lines`` (empty → no text layer)."""
+    operators = b"BT /F1 24 Tf 72 720 Td "
+    for line in lines:
+        operators += b"(" + line.encode("latin-1") + b") Tj 0 -28 Td "
+    operators += b"ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(operators), operators),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets: list[int] = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf += b"%d 0 obj\n" % index + body + b"\nendobj\n"
+    xref_position = len(pdf)
+    pdf += b"xref\n0 %d\n" % (len(objects) + 1)
+    pdf += b"0000000000 65535 f \n"
+    for offset in offsets:
+        pdf += b"%010d 00000 n \n" % offset
+    pdf += b"trailer\n<< /Size %d /Root 1 0 R >>\n" % (len(objects) + 1)
+    pdf += b"startxref\n%d\n%%%%EOF" % xref_position
+    return bytes(pdf)
+
+
+def _minimal_docx(text: str) -> bytes:
+    """Build a docx whose ``[Content_Types].xml`` makes it sniff as a Word file."""
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    content_types = (
+        '<?xml version="1.0"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Override PartName="/word/document.xml" ContentType='
+        '"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"
+    )
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("word/document.xml", document)
+    return buffer.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_extracts_pdf_as_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/report.pdf"
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "application/pdf"},
+            content=_minimal_pdf(["Hello PDF"]),
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert f"[Extracted text from {url} (PDF document)]" in content
+    assert "# Page 1" in content
+    assert "Hello PDF" in content
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_extracts_docx_recognized_by_media_type_without_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    # A download URL with no usable extension: the sniffed OOXML type must drive
+    # detection, not the URL path.
+    url = "https://example.com/download"
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "application/octet-stream"},
+            content=_minimal_docx("Web doc body"),
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert f"[Extracted text from {url} (Word document)]" in content
+    assert "Web doc body" in content
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_scanned_pdf_reports_no_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/scan.pdf"
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "application/pdf"},
+            content=_minimal_pdf([]),
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert "(no extractable text)" in content
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_malformed_pdf_returns_binary_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/broken.pdf"
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.4 not really a pdf \x00 body",
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert "Binary content" in content
+    assert "application/pdf" in content
+
+
 @pytest.mark.asyncio
 async def test_web_fetch_handler_non_html_json_returns_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

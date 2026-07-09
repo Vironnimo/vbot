@@ -14,6 +14,7 @@ Fetches public HTTP(S) content: readable text for pages, a viewable image for im
 
 - Uses `curl_cffi`'s `AsyncSession` with Chrome browser impersonation for HTTP (real TLS/HTTP-2 fingerprint, so fingerprint-based bot walls — Cloudflare, Akamai, DataDome — that reject a plain HTTP client no longer see one). `impersonate` target is `_IMPERSONATE_TARGET` (`"chrome"`, latest supported). Interactive JS-challenge interstitials (e.g. Cloudflare Turnstile) still can't be passed by any non-browser client — that's expected.
 - Uses BeautifulSoup for HTML-to-text extraction.
+- PDF/Word/Excel text extraction is delegated to `core/tools/read_extract.py` (shared with the read tool: `pypdf` for PDF, stdlib `zipfile`/`xml.etree` for Office), not owned here.
 
 ## Constraints & Gotchas
 
@@ -26,6 +27,7 @@ Fetches public HTTP(S) content: readable text for pages, a viewable image for im
 - Retries transient HTTP 429/5xx up to 3 times with exponential backoff and jitter, honoring a server `Retry-After` hint as a floor (parsed via `core/utils/http_status.parse_retry_after`, delay math via `core/utils/retry.compute_retry_delay`).
 - **Response shaping by media type** (after a 2xx). The response bytes are captured (`_FetchResult.content`) and sniffed with `sniff_media_type` (magic bytes, see `attachments.md`); the branch is chosen from the sniff plus the content-type header, not the URL extension:
   - **Image** → promoted to an attachment via the injected store (reusing its size limit and MIME allowlist) plus a `read_media` artifact, exactly like `read`'s image branch. A non-vision model degrades to a text note **in the chat loop** (`_inject_read_media`), not here; an attachment-store rejection (oversize / disallowed type) maps to an `attachment_error` failure; a missing store degrades to a note.
-  - **Binary** (audio/video/PDF/archive/executable — anything the sniff does not call `text/*`, or any payload with a NUL in its leading bytes) → a short `[Binary content at <url> (<type>, <size> bytes)…]` notice instead of decoded mojibake.
+  - **Document** (PDF/Word/Excel, via `detect_extractable_document` on the sniffed type or URL filename — checked *before* the binary branch) → returned as extracted text: `[Extracted text from <url> (<label>)]\n---\n<body>`, capped at the shared 100 KB. A scanned PDF with no text layer becomes `(no extractable text)`; a malformed document returns `None` and falls through to the binary/text path.
+  - **Binary** (audio/video/archive/executable — anything the sniff does not call `text/*` and is not an extractable document, or any payload with a NUL in its leading bytes; a PDF that failed extraction lands here too) → a short `[Binary content at <url> (<type>, <size> bytes)…]` notice instead of decoded mojibake.
   - **Text** → returned as before: an HTML content-type is cleaned to readable text unless `raw`; other text (JSON/XML/plain, or unlabeled UTF-8) is returned truncated. A **textual content-type** (`text/*`, or one containing `html`/`json`/`xml`/`javascript`) always forces the text path even for non-UTF-8 bytes, so legacy-charset text is never mistaken for binary.
 - **Image and binary handling apply regardless of `raw`** — `raw` only ever governed HTML text cleaning; there is no textual "raw" form of an image, and raw bytes of an executable are still garbage.
