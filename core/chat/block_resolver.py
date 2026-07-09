@@ -16,11 +16,23 @@ JsonObject = dict[str, Any]
 
 _LOGGER = get_logger("chat.block_resolver")
 
-# Appended to the path note when a current-turn image reaches a model without
-# vision: the run degrades to the file path instead of aborting.
+# Reasons appended to a path note when an attachment cannot be delivered as
+# native content. The run degrades to the file path instead of aborting, so the
+# agent can still route the file (e.g. hand the path to a capable sub-agent).
 _VISION_UNAVAILABLE_REASON = (
     "this model has no vision capability, so the image itself cannot be shown; "
     "only the stored file path is provided"
+)
+_AUDIO_NO_STT_REASON = (
+    "this model cannot accept audio and no speech-to-text service is available, "
+    "so only the stored file path is provided"
+)
+_AUDIO_STT_FAILED_REASON = (
+    "speech-to-text could not transcribe this audio, so only the stored file path is provided"
+)
+_UNSUPPORTED_MEDIA_REASON = (
+    "this media type cannot be shown to the model directly, "
+    "so only the stored file path is provided"
 )
 
 
@@ -175,7 +187,13 @@ class ContentBlockResolver:
             # agent work on the file with tools instead.
             return [self._path_note_block("Video", attachment_id, filename, media_type)]
 
-        raise ChatError(f"unsupported media attachment type: {media_type}")
+        # An unexpected media prefix cannot be shown natively — hand over the file
+        # path rather than aborting the run.
+        return [
+            self._path_note_block(
+                "Media", attachment_id, filename, media_type, reason=_UNSUPPORTED_MEDIA_REASON
+            )
+        ]
 
     def _resolve_image_block(
         self,
@@ -247,9 +265,9 @@ class ContentBlockResolver:
             ]
 
         if record is None:
-            raise AttachmentResolveError(
-                f"Failed to load attachment metadata for id '{attachment_id}'"
-            )
+            # Metadata unreadable: degrade to a path note (renders "file no longer
+            # available") instead of aborting the run.
+            return [self._path_note_block("Audio", attachment_id, filename, media_type)]
 
         if "audio" in input_modalities and media_type in wire_media_types:
             blob_data = self._read_attachment_bytes(attachment_id)
@@ -263,23 +281,27 @@ class ContentBlockResolver:
                 self._path_note_block("Audio", attachment_id, filename, media_type),
             ]
 
-        transcription = await self._transcribe_attachment(record, filename, media_type)
-        return [
-            self._transcription_block(filename, media_type, transcription),
-            self._path_note_block("Audio", attachment_id, filename, media_type),
-        ]
+        return await self._transcribe_or_path_note(record, attachment_id, filename, media_type)
 
-    async def _transcribe_attachment(
+    async def _transcribe_or_path_note(
         self,
         record: Any,
+        attachment_id: str,
         filename: str,
         media_type: str,
-    ) -> str:
+    ) -> list[JsonObject]:
+        """Transcribe current-turn audio, or degrade to a path note on failure.
+
+        No transcriber, a speech-to-text error, or an empty result never aborts
+        the run: the agent keeps the file path to route the audio elsewhere (e.g.
+        to a capable sub-agent). Only a genuine blob I/O fault still raises.
+        """
         if self._transcriber is None:
-            raise ChatError(
-                "Model does not support audio input and no speech-to-text "
-                "service is available; cannot process audio attachment"
-            )
+            return [
+                self._path_note_block(
+                    "Audio", attachment_id, filename, media_type, reason=_AUDIO_NO_STT_REASON
+                )
+            ]
 
         blob_data = self._read_attachment_bytes(record.id)
         try:
@@ -287,19 +309,40 @@ class ContentBlockResolver:
                 blob_data, filename=filename, media_type=media_type
             )
         except SpeechError as exc:
-            raise ChatError(
-                f"Audio attachment '{filename}' could not be transcribed: {exc}"
-            ) from exc
+            _LOGGER.warning(
+                "Speech-to-text failed for audio %s (%s); degrading to path note: %s",
+                filename,
+                media_type,
+                exc,
+            )
+            return [
+                self._path_note_block(
+                    "Audio", attachment_id, filename, media_type, reason=_AUDIO_STT_FAILED_REASON
+                )
+            ]
 
         text = getattr(result, "text", None)
         if not isinstance(text, str) or not text.strip():
-            raise ChatError(f"Audio attachment '{filename}' produced an empty transcription")
+            _LOGGER.warning(
+                "Speech-to-text produced no text for audio %s (%s); degrading to path note",
+                filename,
+                media_type,
+            )
+            return [
+                self._path_note_block(
+                    "Audio", attachment_id, filename, media_type, reason=_AUDIO_STT_FAILED_REASON
+                )
+            ]
 
         try:
             self._attachment_store.set_transcription(record.id, text)
         except Exception as exc:
             _LOGGER.warning("Could not cache transcription for attachment %s: %s", record.id, exc)
-        return text
+
+        return [
+            self._transcription_block(filename, media_type, text),
+            self._path_note_block("Audio", attachment_id, filename, media_type),
+        ]
 
     @staticmethod
     def _transcription_block(filename: str, media_type: str, transcription: str) -> JsonObject:
