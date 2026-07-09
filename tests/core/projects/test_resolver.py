@@ -802,6 +802,67 @@ def test_scan_honors_project_source_format(
 
 
 # ---------------------------------------------------------------------------
+# Scan report: ORPHAN findings for anchor pointers (default agent, sessions).
+# ---------------------------------------------------------------------------
+
+
+def test_scan_reports_orphan_default_agent(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # Arrange: the anchor points at a default agent the scan does not produce.
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    project = projects.update("vbot", default_agent="ghost")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    # Act
+    result = resolver.scan_project_report(project)
+
+    # Assert: pointer-origin findings carry the pointer's id and no source file.
+    orphans = result.report.findings_of(FindingType.ORPHAN)
+    assert len(orphans) == 1
+    assert orphans[0].agent_id == "ghost"
+    assert orphans[0].source_path is None
+
+
+def test_scan_default_agent_on_team_is_not_orphan(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # Arrange
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    project = projects.update("vbot", default_agent="builder")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    # Act
+    result = resolver.scan_project_report(project)
+
+    # Assert
+    assert result.report.findings_of(FindingType.ORPHAN) == ()
+
+
+def test_scan_reports_orphan_session_owner(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # Arrange: sessions under the anchor for an agent the scan no longer yields
+    # (renamed/deleted in the repo) — and for one still on the team (no finding).
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    for owner in ("builder", "ghost"):
+        sessions_dir = projects.sessions_dir("vbot", owner)
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / "session-1.jsonl").write_text("{}\n", encoding="utf-8")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    # Act
+    result = resolver.scan_project_report(project)
+
+    # Assert: exactly the vanished session owner is flagged.
+    orphans = result.report.findings_of(FindingType.ORPHAN)
+    assert [finding.agent_id for finding in orphans] == ["ghost"]
+
+
+# ---------------------------------------------------------------------------
 # Identity path: unchanged.
 # ---------------------------------------------------------------------------
 
