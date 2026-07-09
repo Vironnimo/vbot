@@ -88,7 +88,7 @@ def test_normalize_catalog_entry_maps_m3_capabilities() -> None:
             ),
         ),
         context_window=1000000,
-        max_output_tokens=None,
+        max_output_tokens=131072,
     )
 
 
@@ -98,7 +98,7 @@ def test_normalize_catalog_entry_maps_m2_chat_model() -> None:
     assert model.model_id == "MiniMax-M2.7"
     assert model.name == "MiniMax M2.7"
     assert model.context_window == 204800
-    assert model.max_output_tokens is None
+    assert model.max_output_tokens == 65536
     assert model.capabilities.vision is False
     assert model.capabilities.tools is True
     assert model.capabilities.reasoning.supported is True
@@ -157,6 +157,63 @@ async def test_build_payload_suppresses_openai_reasoning_effort_for_m2(
     assert "thinking" not in request_body
     assert request_body["reasoning_split"] is True
     assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_send_defaults_max_tokens_to_recommended_ceiling_for_m2(
+    minimax_config: ProviderConfig,
+) -> None:
+    """Without a caller limit, M2.x sends its recommended ceiling, not the flat 8192."""
+    adapter = MiniMaxAdapter(
+        minimax_config,
+        API_KEY,
+        model_lookup=lambda model_id: MiniMaxAdapter.normalize_catalog_entry({"id": model_id}),
+    )
+    route = respx.post(MINIMAX_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="MiniMax-M2.7", thinking_effort="high")
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["max_tokens"] == 65536
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_send_defaults_max_tokens_to_recommended_ceiling_for_m3(
+    minimax_config: ProviderConfig,
+) -> None:
+    """Without a caller limit, M3 sends its recommended ceiling, not the flat 8192."""
+    adapter = MiniMaxAdapter(
+        minimax_config,
+        API_KEY,
+        model_lookup=lambda model_id: MiniMaxAdapter.normalize_catalog_entry({"id": model_id}),
+    )
+    route = respx.post(MINIMAX_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="MiniMax-M3", thinking_effort="high")
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["max_tokens"] == 131072
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_send_explicit_max_tokens_wins_over_ceiling(
+    minimax_config: ProviderConfig,
+) -> None:
+    """An explicit caller limit is never overridden by the ceiling default."""
+    adapter = MiniMaxAdapter(
+        minimax_config,
+        API_KEY,
+        model_lookup=lambda model_id: MiniMaxAdapter.normalize_catalog_entry({"id": model_id}),
+    )
+    route = respx.post(MINIMAX_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="MiniMax-M2.7", max_tokens=1024)
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["max_tokens"] == 1024
 
 
 def test_normalize_response_extracts_reasoning_details_text(

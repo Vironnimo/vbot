@@ -82,6 +82,11 @@ MAX_OUTPUT_TOKEN_KEYS = (
 )
 JSON_MODE_PARAMETER_NAMES = {"response_format", "structured_outputs", "json_mode"}
 REASONING_PARAMETER_NAMES = {"reasoning", "include_reasoning", "reasoning_effort"}
+# Any of these on a request means the caller set the output allowance
+# explicitly, so the model-ceiling default must not override it.
+OUTPUT_LIMIT_PARAMETER_NAMES = frozenset(
+    {"max_tokens", "max_completion_tokens", "max_output_tokens"}
+)
 
 
 class OpenAICompatibleAdapter(ProviderAdapter):
@@ -296,6 +301,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # do not clobber provider defaults below. Falsy-but-non-None values
         # (e.g. ``temperature=0.0``) must survive.
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        self._apply_model_output_limit(request_kwargs, model_id)
         payload: dict[str, Any] = {
             "model": model_id,
             "messages": [self._format_message(message) for message in messages],
@@ -309,6 +315,44 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
         return payload
+
+    def _apply_model_output_limit(self, request_kwargs: dict[str, Any], model_id: str) -> None:
+        """Default the output allowance to the model's own catalog ceiling.
+
+        The provider-config ``max_tokens`` default is a flat fallback (commonly
+        8192) applied to every model regardless of its real ceiling, so a model
+        whose output ceiling is higher gets truncated — reasoning models most of
+        all, since their thinking trace counts toward the same allowance. When
+        the caller set no explicit output limit and the catalog knows this
+        model's ``max_output_tokens``, inject it as ``max_tokens`` so it rides in
+        ``request_kwargs`` and wins over the flat config default (applied last in
+        :meth:`_build_payload`). A model whose ceiling is unknown keeps the config
+        fallback. Mirrors the Anthropic adapter's ceiling-aware ``max_tokens``.
+        """
+
+        if any(request_kwargs.get(key) is not None for key in OUTPUT_LIMIT_PARAMETER_NAMES):
+            return
+        ceiling = self._model_max_output_tokens(model_id)
+        if ceiling is not None:
+            request_kwargs["max_tokens"] = ceiling
+
+    def _model_max_output_tokens(self, model_id: str) -> int | None:
+        """The model's catalog output ceiling, or ``None`` when it is unknown.
+
+        Strips a ``::variant`` connection suffix and tolerates a missing lookup
+        or model. A gateway whose ids need richer resolution (flat vendor-prefixed
+        namespaces) overrides this.
+        """
+
+        if self._model_lookup is None:
+            return None
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return None
+        ceiling = model.max_output_tokens
+        if isinstance(ceiling, int) and not isinstance(ceiling, bool) and ceiling > 0:
+            return ceiling
+        return None
 
     def _model_reasoning_supported(self, model_id: str) -> bool | None:
         return model_reasoning_supported(self._model_lookup, model_id)
