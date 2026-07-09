@@ -1,6 +1,11 @@
 <script>
   import { t } from '$lib/i18n.js';
-  import { renderMarkdown, renderMarkdownStreaming } from '$lib/markdown.js';
+  import {
+    renderMarkdown,
+    renderMarkdownStreaming,
+    renderReasoningMarkdown,
+    renderReasoningMarkdownStreaming,
+  } from '$lib/markdown.js';
   import {
     avatarForItem,
     compactToolValue,
@@ -234,7 +239,12 @@
             Boolean(child.streaming),
             isReasoningOpen(child.id),
           )}
-          <div class="reasoning-body">{child.content}</div>
+          <div class="reasoning-body">
+            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+            {@html child.streaming
+              ? renderReasoningMarkdownStreaming(child.content ?? '')
+              : renderReasoningMarkdown(child.content ?? '')}
+          </div>
         </details>
       {:else if child.type === 'tool_call'}
         {#if isSubAgentTool(child)}
