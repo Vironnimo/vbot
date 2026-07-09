@@ -33,6 +33,11 @@ OpenAI-style runtime provider with Mistral-specific reasoning and model catalog 
 - If Mistral returns a content-block list, `text` blocks become `content` and `thinking` blocks become visible `reasoning` while usage, tool calls, and reasoning metadata use shared OpenAI-compatible helpers.
 - A `thinking` block's payload is itself a chunk list on current reasoning models (`{"type": "thinking", "thinking": [{"type": "text", "text": …}], "closed": true}`); `_flatten_thinking` flattens both that nested form and the older magistral plain-string form to reasoning text. The earlier string-only parse silently dropped reasoning from the current models.
 
+## Prompt Caching
+
+- **Automatic upstream — no lever, no marker.** la Plateforme prompt-caches on its own; vBot sends no cache directive and needs none. Reads come back as `usage.prompt_tokens_details.cached_tokens` and are folded into `usage.cache_read_tokens` by the shared `_openai_cached_prompt_tokens` (`openai_compatible.py`). There is no conversation-identity header (no Codex-style trap): the cache keys off prompt-prefix content + the API key.
+- **Verified live 2026-07-09** (`open-mistral-nemo`, stable ~13.5k-token prefix, 5 spaced turns, real `MistralAdapter.stream`): cold miss on turn 1, then `cached_tokens = 13504` on **3/4** later turns (one turn missed — the automatic cache is best-effort, warms/evicts server-side; not a vBot gap). No `cache_control` markers are sent or needed.
+
 ## Constraints & Gotchas
 
 - Do not infer reasoning support or the reasoning mode by model-id prefix; use raw Mistral capability fields, injected catalog reasoning facts, or the `metadata.mistral.prompt_mode` wire fact.
