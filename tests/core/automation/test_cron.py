@@ -227,7 +227,7 @@ async def test_run_once_job_fires_and_marks_completed(
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
-    monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(cron_module, "_sleep_until_utc", AsyncMock())
 
     # Act
     with caplog.at_level(logging.INFO, logger="vbot.automation.cron"):
@@ -277,7 +277,7 @@ async def test_run_once_job_retries_trigger_failure_without_completing(
 
     # Assert
     assert trigger_service.trigger_run.await_count == 2
-    assert sleep_delays[1] == cron_module._ONCE_RETRY_DELAY_SECONDS
+    assert sleep_delays == [cron_module._ONCE_RETRY_DELAY_SECONDS]
     updated = service.get_job(job.id)
     assert updated.status == "completed"
     assert updated.last_fired_at is not None
@@ -356,6 +356,7 @@ async def test_run_once_job_retries_completed_save_without_refiring(
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
+    monkeypatch.setattr(cron_module, "_sleep_until_utc", AsyncMock())
     monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
     save_attempts = 0
 
@@ -649,7 +650,7 @@ async def test_run_once_job_fires_with_project_id(
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
         project_id="vbot",
     )
-    monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(cron_module, "_sleep_until_utc", AsyncMock())
 
     # Act
     await service._run_once_job(job)
@@ -659,3 +660,47 @@ async def test_run_once_job_fires_with_project_id(
         "builder", "Once prompt", None, project_id="vbot"
     )
     assert service.get_job(job.id).status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_sleep_until_utc_returns_immediately_for_past_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    naps: list[float] = []
+
+    async def record_sleep(delay_seconds: float) -> None:
+        naps.append(delay_seconds)
+
+    monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
+
+    # Act
+    await cron_module._sleep_until_utc(datetime.now(UTC) - timedelta(seconds=1))
+
+    # Assert
+    assert naps == []
+
+
+@pytest.mark.asyncio
+async def test_sleep_until_utc_realigns_after_wall_clock_jump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange: the wall clock jumps past the target after the first bounded nap
+    # (e.g. NTP correcting a freshly booted Pi), so the wait must end at the
+    # next recheck instead of sleeping out the original full delay.
+    start = datetime.now(UTC)
+    target = start + timedelta(minutes=10)
+    clock = iter([start, target + timedelta(seconds=1)])
+    monkeypatch.setattr(cron_module, "_utc_now", lambda: next(clock))
+    naps: list[float] = []
+
+    async def record_sleep(delay_seconds: float) -> None:
+        naps.append(delay_seconds)
+
+    monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
+
+    # Act
+    await cron_module._sleep_until_utc(target)
+
+    # Assert
+    assert naps == [cron_module._WALL_CLOCK_RECHECK_SECONDS]
