@@ -59,6 +59,7 @@ from core.projects.scanners.base import (
     ScanResult,
     scan_project,
 )
+from core.skills import WILDCARD_ALLOWLIST
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -766,17 +767,32 @@ def _effective_allowed_tools(project: Project, scanned: ScannedAgent) -> list[st
 def _effective_allowed_skills(project: Project, project_skill_names: frozenset[str]) -> list[str]:
     """Return the config agent's skills from the project Skill Whitelist rule.
 
-    ``(project skills − skills_project_disabled) ∪ skills_bundled_enabled ∪
-    skills_global_enabled`` — the project's own scanned skills are active by default,
-    the named ones turned off, plus any bundled or global skills explicitly opted in
-    (decision 3). OpenCode does not narrow skills per agent in v1, so this is purely
+    ``(project skills ∪ skills_bundled_enabled ∪ skills_global_enabled) −
+    (skills_project_disabled ∩ project skills)`` — the project's own scanned skills
+    are active by default, plus any bundled or global skills explicitly opted in
+    (decision 3). Two hardenings on top of the plain union:
+
+    - **A disabled project skill name is off entirely.** The merged registry
+      resolves a name collision to the project's own copy, so leaving the name
+      allowed through a same-named bundled/global opt-in would silently serve the
+      disabled project skill. A disabled name that is *not* a project skill stays
+      inert (the opt-ins keep working).
+    - **The literal wildcard is dropped.** This list is a resolved set of exact
+      names; a repo-scanned skill *named* ``*`` (the lenient loader accepts that
+      with a warning) must not smuggle the ``allowed_skills`` wildcard past the
+      whitelist and expose the whole global pool to a project agent.
+
+    OpenCode does not narrow skills per agent in v1, so this is purely
     project-derived. The result is sorted for determinism; ``filter_allowed``
     harmlessly ignores any name that no longer resolves to a loadable skill.
     """
     disabled = set(project.skills_project_disabled)
     enabled_bundled = set(project.skills_bundled_enabled)
     enabled_global = set(project.skills_global_enabled)
-    return sorted((project_skill_names - disabled) | enabled_bundled | enabled_global)
+    allowed = set(project_skill_names) | enabled_bundled | enabled_global
+    allowed -= disabled & project_skill_names
+    allowed.discard(WILDCARD_ALLOWLIST)
+    return sorted(allowed)
 
 
 def _build_config_agent(
