@@ -13,6 +13,7 @@ import pytest
 from curl_cffi import CurlOpt
 from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 
+import core.tools.read_extract as read_extract_module
 import core.tools.web_fetch as web_fetch_module
 from core.attachments import AttachmentTooLargeError
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
@@ -97,6 +98,46 @@ def make_result(
     )
 
 
+class _StreamingResponse:
+    """Small curl-response stand-in for testing bounded response collection."""
+
+    def __init__(self, chunks: list[bytes], *, headers: dict[str, str] | None = None) -> None:
+        self._chunks = chunks
+        self.headers = headers or {}
+        self.status_code = 200
+        self.url = "https://example.com/stream"
+        self.content = b""
+
+    @property
+    def text(self) -> str:
+        return self.content.decode("utf-8", errors="replace")
+
+    async def aiter_content(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _StreamingRequest:
+    def __init__(self, response: _StreamingResponse) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _StreamingResponse:
+        return self._response
+
+    async def __aexit__(self, *arguments: object) -> None:
+        del arguments
+
+
+class _StreamingSession:
+    def __init__(self, response: _StreamingResponse) -> None:
+        self._response = response
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def stream(self, method: str, url: str, **kwargs: object) -> _StreamingRequest:
+        self.calls.append((method, url, kwargs))
+        return _StreamingRequest(self._response)
+
+
 def install_http_get(
     monkeypatch: pytest.MonkeyPatch,
     responder: Callable[[str], _FetchResult],
@@ -112,6 +153,57 @@ def install_http_get(
         return responder(url)
 
     monkeypatch.setattr(web_fetch_module, "_http_get", _fake_http_get)
+
+
+@pytest.mark.asyncio
+async def test_http_get_collects_streamed_response_with_existing_text_decoding() -> None:
+    session = _StreamingSession(
+        _StreamingResponse(
+            [b"hello ", b"world"],
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+        )
+    )
+
+    result = await web_fetch_module._http_get(cast(Any, session), "https://example.com/stream")
+
+    assert result.content == b"hello world"
+    assert result.text == "hello world"
+    assert session.calls == [
+        (
+            "GET",
+            "https://example.com/stream",
+            {"allow_redirects": False, "timeout": web_fetch_module._REQUEST_TIMEOUT},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_http_get_stops_unknown_length_response_at_download_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(web_fetch_module, "_MAX_RESPONSE_BYTES", 5)
+    session = _StreamingSession(_StreamingResponse([b"abc", b"def"]))
+
+    with pytest.raises(web_fetch_module._ResponseTooLargeError, match="download limit"):
+        await web_fetch_module._http_get(cast(Any, session), "https://example.com/stream")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_reports_response_over_download_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    async def _raise_too_large(_session: object, _url: str) -> _FetchResult:
+        raise web_fetch_module._ResponseTooLargeError("response exceeds the 50 MB download limit")
+
+    monkeypatch.setattr(web_fetch_module, "_http_get", _raise_too_large)
+
+    result = await web_fetch_handler(make_context(workspace), {"url": "https://example.com/large"})
+
+    error = assert_failure_envelope(result, "response_too_large")
+    assert error["retryable"] is False
 
 
 @pytest.fixture(autouse=True)
@@ -849,6 +941,35 @@ async def test_web_fetch_extracts_docx_recognized_by_media_type_without_extensio
     assert isinstance(content, str)
     assert f"[Extracted text from {url} (Word document)]" in content
     assert "Web doc body" in content
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_rejects_document_expansion_over_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/large.docx"
+    monkeypatch.setattr(read_extract_module, "_MAX_DOCUMENT_EXTRACTED_BYTES", 128)
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={
+                "Content-Type": (
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            },
+            content=_minimal_docx("x" * 512),
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), {"url": url})
+
+    error = assert_failure_envelope(result, "document_too_large")
+    assert error["retryable"] is False
 
 
 @pytest.mark.asyncio

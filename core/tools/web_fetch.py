@@ -20,6 +20,7 @@ from core.attachments import AttachmentError, sniff_media_type
 from core.tools.arguments import coerce_bool
 from core.tools.read_extract import (
     ExtractionError,
+    ExtractionLimitExceededError,
     detect_extractable_document,
     document_label,
     extract_document_text,
@@ -41,6 +42,8 @@ from core.utils.retry import MAX_RETRIES, sleep_for_retry
 _LOGGER = get_logger("tools.web_fetch")
 
 _MAX_URL_BYTES = 100 * 1024
+_MAX_RESPONSE_BYTES = 50 * 1024 * 1024
+_MAX_RESPONSE_SIZE_LABEL = "50 MB"
 _RESPONSE_TRUNCATED_MARKER = "\n\n[... response truncated ...]"
 _CONTENT_TRUNCATED_MARKER = "\n\n[... content truncated ...]"
 # A NUL byte within this leading window marks a payload as binary (the classic
@@ -171,6 +174,10 @@ class _RedirectLimitExceededError(Exception):
     """Raised when a redirect chain exceeds ``_MAX_REDIRECTS`` hops."""
 
 
+class _ResponseTooLargeError(Exception):
+    """Raised when a fetched response exceeds the bounded in-memory transfer limit."""
+
+
 def _make_session() -> AsyncSession:
     """Create a browser-impersonating session with an automatic cookie jar.
 
@@ -188,20 +195,56 @@ def _make_session() -> AsyncSession:
 
 
 async def _http_get(session: AsyncSession, url: str) -> _FetchResult:
-    """Perform one GET with redirects disabled — the patchable network seam.
+    """Perform a bounded GET with redirects disabled — the patchable network seam.
 
     Tests substitute this coroutine to feed canned responses without touching
-    the network; production drives the impersonating session.
+    the network; production streams into one bounded byte buffer so a missing or
+    dishonest ``Content-Length`` cannot make the process retain an unlimited body.
     """
-    response = await session.get(url, allow_redirects=False, timeout=_REQUEST_TIMEOUT)
-    headers = {name.lower(): value for name, value in response.headers.items()}
-    return _FetchResult(
-        status_code=response.status_code,
-        headers=headers,
-        text=response.text,
-        url=str(response.url),
-        content=response.content,
-    )
+    async with session.stream(
+        "GET",
+        url,
+        allow_redirects=False,
+        timeout=_REQUEST_TIMEOUT,
+    ) as response:
+        headers = {name.lower(): value for name, value in response.headers.items()}
+        declared_size = _declared_response_size(headers)
+        if declared_size is not None and declared_size > _MAX_RESPONSE_BYTES:
+            raise _ResponseTooLargeError(
+                f"response exceeds the {_MAX_RESPONSE_SIZE_LABEL} download limit"
+            )
+
+        body = bytearray()
+        async for chunk in response.aiter_content():
+            if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
+                raise _ResponseTooLargeError(
+                    f"response exceeds the {_MAX_RESPONSE_SIZE_LABEL} download limit"
+                )
+            body.extend(chunk)
+
+        content = bytes(body)
+        # curl_cffi decodes ``.text`` from this field using the response charset,
+        # so keep its established decoding behavior after streaming the body.
+        response.content = content
+        return _FetchResult(
+            status_code=response.status_code,
+            headers=headers,
+            text=response.text,
+            url=str(response.url),
+            content=content,
+        )
+
+
+def _declared_response_size(headers: dict[str, str]) -> int | None:
+    """Return a valid declared body size, when the server sent one."""
+    value = headers.get("content-length")
+    if value is None:
+        return None
+    try:
+        size = int(value)
+    except ValueError:
+        return None
+    return size if size >= 0 else None
 
 
 def _attr_to_text(value: object) -> str:
@@ -952,6 +995,8 @@ def _fetch_document_result(url: str, sniffed: str, data: bytes) -> JsonObject | 
         return None
     try:
         extracted = extract_document_text(data, kind)
+    except ExtractionLimitExceededError as error:
+        return tool_failure("document_too_large", str(error), retryable=False)
     except ExtractionError:
         return None
 
@@ -1060,6 +1105,8 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
                 result = await _fetch_with_retry(session, url, resolve_map)
         except ValueError as error:
             return tool_failure("validation_error", str(error), retryable=False)
+        except _ResponseTooLargeError as error:
+            return tool_failure("response_too_large", str(error), retryable=False)
         except _RedirectLimitExceededError as error:
             _LOGGER.warning("web_fetch redirect limit exceeded for %s", url)
             return tool_failure("request_error", str(error), retryable=False)

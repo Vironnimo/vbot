@@ -14,8 +14,10 @@ with no usable extension) with the filename extension as a fallback.
 from __future__ import annotations
 
 import json
+import zlib
 from io import BytesIO
 from pathlib import Path
+from threading import RLock
 from xml.etree import ElementTree
 
 # Human label per document kind, used in the extraction header the callers build.
@@ -46,6 +48,9 @@ _EXTENSION_KINDS = {
 # budget before the read tool's own line/byte truncation even runs.
 _MAX_ROWS_PER_SHEET = 5000
 _MAX_COLUMNS = 256
+_MAX_DOCUMENT_EXTRACTED_BYTES = 128 * 1024 * 1024
+_MAX_DOCUMENT_EXTRACTED_SIZE_LABEL = "128 MB"
+_PDF_DECOMPRESSION_LOCK = RLock()
 
 _WORDPROCESSING_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -53,6 +58,24 @@ _RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationship
 
 class ExtractionError(Exception):
     """Raised when an extractable document is malformed and cannot be rendered."""
+
+
+class ExtractionLimitExceededError(ExtractionError):
+    """Raised when document processing would exceed its decompression budget."""
+
+
+class _ExtractionBudget:
+    """Track the total uncompressed document data admitted to an extractor."""
+
+    def __init__(self) -> None:
+        self.remaining = _MAX_DOCUMENT_EXTRACTED_BYTES
+
+    def consume(self, size: int) -> None:
+        if size > self.remaining:
+            raise ExtractionLimitExceededError(
+                f"document exceeds the {_MAX_DOCUMENT_EXTRACTED_SIZE_LABEL} extraction limit"
+            )
+        self.remaining -= size
 
 
 def detect_extractable_document(filename: str, media_type: str) -> str | None:
@@ -76,18 +99,21 @@ def document_label(kind: str) -> str:
 
 def extract_document_text(data: bytes, kind: str) -> str:
     """Render document bytes of the given kind as plain text."""
+    budget = _ExtractionBudget()
     if kind == "pdf":
-        return _extract_pdf(data)
+        budget.consume(len(data))
+        return _extract_pdf(data, budget)
     if kind == "ipynb":
+        budget.consume(len(data))
         return _extract_ipynb(data)
     if kind == "docx":
-        return _extract_docx(data)
+        return _extract_docx(data, budget)
     if kind == "xlsx":
-        return _extract_xlsx(data)
+        return _extract_xlsx(data, budget)
     raise ExtractionError(f"unknown document kind: {kind}")
 
 
-def _extract_pdf(data: bytes) -> str:
+def _extract_pdf(data: bytes, budget: _ExtractionBudget) -> str:
     """Render a PDF's text layer, page-delimited by ``# Page N`` headers.
 
     A scanned (image-only) PDF has no text layer, so every page extracts empty;
@@ -98,23 +124,55 @@ def _extract_pdf(data: bytes) -> str:
     a malformed file (and page access is lazy), and a bad document must never take
     the run down — it is converted to a domain error, never swallowed.
     """
+    import pypdf.filters as pypdf_filters
     from pypdf import PdfReader
 
-    try:
-        reader = PdfReader(BytesIO(data))
-        if reader.is_encrypted:
-            # A PDF is often encrypted with an empty owner password purely to set
-            # permissions; that still opens for reading. A real password fails.
-            reader.decrypt("")
-        page_texts = [(page.extract_text() or "").strip() for page in reader.pages]
-    except ExtractionError:
-        raise
-    except Exception as error:
-        raise ExtractionError(f"cannot read PDF: {error}") from error
+    # pypdf's Flate decoder normally materializes a whole stream at once. Replace
+    # it only while this synchronous extraction runs, guarded process-wide because
+    # the decoder is a dependency-module global. The lock keeps concurrent callers
+    # from observing a partially restored decoder.
+    with _PDF_DECOMPRESSION_LOCK:
+        original_decompress = pypdf_filters.decompress
+        pypdf_filters.decompress = lambda data: _bounded_pdf_decompress(data, budget)
+        try:
+            reader = PdfReader(BytesIO(data))
+            if reader.is_encrypted:
+                # A PDF is often encrypted with an empty owner password purely to set
+                # permissions; that still opens for reading. A real password fails.
+                reader.decrypt("")
+            page_texts = [(page.extract_text() or "").strip() for page in reader.pages]
+        except ExtractionError:
+            raise
+        except Exception as error:
+            raise ExtractionError(f"cannot read PDF: {error}") from error
+        finally:
+            pypdf_filters.decompress = original_decompress
 
     if not any(page_texts):
         return ""
     return "\n\n".join(f"# Page {index}\n{text}" for index, text in enumerate(page_texts, start=1))
+
+
+def _bounded_pdf_decompress(data: bytes, budget: _ExtractionBudget) -> bytes:
+    """Decode one Flate stream without allowing pypdf to inflate beyond the budget."""
+    try:
+        decoder = zlib.decompressobj()
+        expanded = decoder.decompress(data, budget.remaining + 1)
+        if len(expanded) > budget.remaining or decoder.unconsumed_tail:
+            raise ExtractionLimitExceededError(
+                f"document exceeds the {_MAX_DOCUMENT_EXTRACTED_SIZE_LABEL} extraction limit"
+            )
+        tail = decoder.flush(budget.remaining - len(expanded) + 1)
+    except zlib.error as error:
+        raise ExtractionError(f"cannot decompress PDF stream: {error}") from error
+
+    if len(tail) > budget.remaining - len(expanded):
+        raise ExtractionLimitExceededError(
+            f"document exceeds the {_MAX_DOCUMENT_EXTRACTED_SIZE_LABEL} extraction limit"
+        )
+    content = expanded + tail
+    budget.consume(len(content))
+    return content
 
 
 def _local_name(tag: str) -> str:
@@ -151,16 +209,26 @@ def _extract_ipynb(data: bytes) -> str:
     return "\n\n".join(blocks)
 
 
-def _read_zip_member(data: bytes, member: str) -> bytes | None:
-    """Read one archive member from the in-memory zip, ``None`` if it is absent."""
+def _read_zip_member(data: bytes, member: str, budget: _ExtractionBudget) -> bytes | None:
+    """Read one archive member without exceeding the document's expansion budget."""
     from zipfile import BadZipFile, ZipFile
 
     try:
         with ZipFile(BytesIO(data)) as archive:
             try:
-                return archive.read(member)
+                info = archive.getinfo(member)
             except KeyError:
                 return None
+            budget.consume(info.file_size)
+            with archive.open(info) as handle:
+                content = handle.read(info.file_size + 1)
+            # ``ZipInfo.file_size`` is normally authoritative, but check the
+            # actual result as well so malformed metadata never bypasses the cap.
+            if len(content) > info.file_size:
+                raise ExtractionLimitExceededError(
+                    f"document exceeds the {_MAX_DOCUMENT_EXTRACTED_SIZE_LABEL} extraction limit"
+                )
+            return content
     except (BadZipFile, OSError) as error:
         raise ExtractionError(f"cannot open archive: {error}") from error
 
@@ -172,14 +240,14 @@ def _parse_xml(data: bytes) -> ElementTree.Element:
         raise ExtractionError(f"malformed XML: {error}") from error
 
 
-def _extract_docx(data: bytes) -> str:
+def _extract_docx(data: bytes, budget: _ExtractionBudget) -> str:
     """Collect paragraph text from ``word/document.xml``.
 
     Paragraphs (``w:p``) become lines; within a paragraph ``w:t`` runs are text,
     ``w:tab`` is a tab, and ``w:br``/``w:cr`` are newlines. Table cells contain
     their own paragraphs, so their text is picked up in document order too.
     """
-    document_xml = _read_zip_member(data, "word/document.xml")
+    document_xml = _read_zip_member(data, "word/document.xml", budget)
     if document_xml is None:
         raise ExtractionError("docx has no word/document.xml")
 
@@ -200,14 +268,14 @@ def _extract_docx(data: bytes) -> str:
     return "\n".join(paragraphs)
 
 
-def _extract_xlsx(data: bytes) -> str:
+def _extract_xlsx(data: bytes, budget: _ExtractionBudget) -> str:
     """Render each worksheet as tab-separated rows, sheets separated by headers."""
-    shared_strings = _load_shared_strings(data)
-    sheets = _resolve_worksheet_targets(data)
+    shared_strings = _load_shared_strings(data, budget)
+    sheets = _resolve_worksheet_targets(data, budget)
 
     rendered_sheets: list[str] = []
     for sheet_name, member in sheets:
-        sheet_xml = _read_zip_member(data, member)
+        sheet_xml = _read_zip_member(data, member, budget)
         if sheet_xml is None:
             continue
         rows = _render_worksheet_rows(_parse_xml(sheet_xml), shared_strings)
@@ -217,9 +285,9 @@ def _extract_xlsx(data: bytes) -> str:
     return "\n\n".join(rendered_sheets)
 
 
-def _load_shared_strings(data: bytes) -> list[str]:
+def _load_shared_strings(data: bytes, budget: _ExtractionBudget) -> list[str]:
     """Read the workbook's shared-string table (cell text is stored once there)."""
-    member = _read_zip_member(data, "xl/sharedStrings.xml")
+    member = _read_zip_member(data, "xl/sharedStrings.xml", budget)
     if member is None:
         return []
 
@@ -235,14 +303,14 @@ def _load_shared_strings(data: bytes) -> list[str]:
     return strings
 
 
-def _resolve_worksheet_targets(data: bytes) -> list[tuple[str, str]]:
+def _resolve_worksheet_targets(data: bytes, budget: _ExtractionBudget) -> list[tuple[str, str]]:
     """Map sheet display names to their archive members in workbook order.
 
     Falls back to the raw ``xl/worksheets/sheet*.xml`` members (sorted) when the
     workbook relationship metadata is missing or unreadable.
     """
-    workbook = _read_zip_member(data, "xl/workbook.xml")
-    relationships = _read_zip_member(data, "xl/_rels/workbook.xml.rels")
+    workbook = _read_zip_member(data, "xl/workbook.xml", budget)
+    relationships = _read_zip_member(data, "xl/_rels/workbook.xml.rels", budget)
     if workbook is None or relationships is None:
         return _fallback_worksheet_targets(data)
 
@@ -354,6 +422,7 @@ def _column_index(cell_reference: str) -> int:
 
 __all__ = [
     "ExtractionError",
+    "ExtractionLimitExceededError",
     "detect_extractable_document",
     "document_label",
     "extract_document_text",
