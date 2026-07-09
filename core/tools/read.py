@@ -11,9 +11,9 @@ from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, optional_int
 from core.tools.file_state import FileReadState
 from core.tools.read_extract import (
     ExtractionError,
+    detect_extractable_document,
     document_label,
     extract_document_text,
-    is_extractable_document,
 )
 from core.tools.tools import (
     JsonObject,
@@ -42,8 +42,8 @@ READ_TOOL_DESCRIPTION = (
     "writing or editing. Output is truncated to 2000 lines or 50 KB; use "
     "offset/limit for large files. Image files are shown to the model directly "
     "when it supports vision; audio files are transcribed to text; "
-    "Word/Excel/Jupyter files (.docx/.xlsx/.ipynb) are extracted to readable "
-    "text; video and other binary files return a short notice."
+    "PDF/Word/Excel/Jupyter files (.pdf/.docx/.xlsx/.ipynb) are extracted to "
+    "readable text; video and other binary files return a short notice."
 )
 READ_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -256,11 +256,12 @@ def make_read_handler(
             return await _read_audio(speech_service, resolved, raw, media_type)
         if media_type.startswith("video/"):
             return _read_video(resolved, media_type)
-        # Office/notebook extraction runs before the binary check: docx/xlsx are
-        # zip archives full of NUL bytes that would otherwise be dismissed as
-        # binary, and ipynb is JSON that would dump as unreadable raw text.
-        if is_extractable_document(resolved.name):
-            extracted = _read_extracted_document(resolved, arguments)
+        # PDF/Office/notebook extraction runs before the binary check: pdf/docx/xlsx
+        # are full of NUL bytes that would otherwise be dismissed as binary, and
+        # ipynb is JSON that would dump as unreadable raw text.
+        kind = detect_extractable_document(resolved.name, media_type)
+        if kind is not None:
+            extracted = _read_extracted_document(resolved.name, raw, kind, arguments)
             if extracted is not None:
                 return extracted
         if _looks_binary(raw):
@@ -284,16 +285,19 @@ def _read_text(raw: bytes, arguments: JsonObject) -> JsonObject:
     return tool_success({"content": content})
 
 
-def _read_extracted_document(resolved: Path, arguments: JsonObject) -> JsonObject | None:
-    """Return rendered text for an Office/notebook file, or ``None`` to fall through.
+def _read_extracted_document(
+    name: str, raw: bytes, kind: str, arguments: JsonObject
+) -> JsonObject | None:
+    """Return rendered text for a PDF/Office/notebook file, or ``None`` to fall through.
 
     On a malformed document the extractor raises ``ExtractionError``; returning
     ``None`` then lets the caller fall back to the binary-notice / text path. The
     rendered text is numbered-gutter-free (it is a rendering, not editable source)
-    but still passes through the shared line/byte truncation.
+    but still passes through the shared line/byte truncation. An empty extraction
+    (e.g. a scanned PDF with no text layer) becomes an explicit note.
     """
     try:
-        extracted = extract_document_text(resolved)
+        extracted = extract_document_text(raw, kind)
     except ExtractionError:
         return None
 
@@ -306,7 +310,7 @@ def _read_extracted_document(resolved: Path, arguments: JsonObject) -> JsonObjec
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
 
-    header = f"[Extracted text from {resolved.name} ({document_label(resolved.name)})]:"
+    header = f"[Extracted text from {name} ({document_label(kind)})]:"
     body = _render_text(extracted, start_line, max_lines, number=False)
     if not body.strip():
         body = "(no extractable text)"
