@@ -27,6 +27,7 @@ Your agent file lists any additional files to read on top of these. Apply the sa
 | Code review | **Reviewer** |
 | Web research (tech, libraries, APIs) | **Researcher** |
 | Codebase exploration & structured summaries | **Explorer** |
+| Bug investigation & root-cause analysis | **Investigator** |
 
 **No agent operates outside their role.** Only the Orchestrator and User touch git. Only the Orchestrator writes `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and files under `.vorch/domain-maps/`. Every other agent writes only within the scope defined by their role.
 
