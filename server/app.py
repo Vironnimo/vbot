@@ -135,6 +135,10 @@ def create_app(
             yield
         finally:
             server_logger.info("Server application stopping")
+            await _shutdown_local_catalog_refresh(
+                getattr(app.state, "local_catalog_refresh_task", None),
+                server_logger,
+            )
             _unregister_run_event_bridge(app.state)
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)
             await _shutdown_device_flow_engine(
@@ -535,9 +539,14 @@ def _mount_webui(app: FastAPIType) -> None:
 async def _stream_log_events(websocket: WebSocket, stream: Any) -> None:
     stream_iter = stream.__aiter__()
     disconnect_task = asyncio.create_task(websocket.receive())
+    # The pending log read survives across loop iterations: cancelling it to
+    # handle a stray client frame would finalize the tail's async generator
+    # (a cancelled __anext__ closes the generator), silently ending the stream.
+    event_task: asyncio.Task[Any] | None = None
     try:
         while True:
-            event_task = asyncio.create_task(stream_iter.__anext__())
+            if event_task is None:
+                event_task = asyncio.create_task(stream_iter.__anext__())
             done, _pending = await asyncio.wait(
                 {event_task, disconnect_task},
                 return_when=asyncio.FIRST_COMPLETED,
@@ -546,26 +555,42 @@ async def _stream_log_events(websocket: WebSocket, stream: Any) -> None:
             if disconnect_task in done:
                 message = disconnect_task.result()
                 if message.get("type") == "websocket.disconnect":
-                    event_task.cancel()
-                    with suppress(asyncio.CancelledError, StopAsyncIteration):
-                        await event_task
                     return
+                # Any other inbound frame is ignored; keep listening for the
+                # disconnect without disturbing the pending log read.
                 disconnect_task = asyncio.create_task(websocket.receive())
 
             if event_task in done:
+                completed_event_task = event_task
+                event_task = None
                 try:
-                    event = event_task.result()
+                    event = completed_event_task.result()
                 except StopAsyncIteration:
                     return
                 await websocket.send_json(event)
-            else:
-                event_task.cancel()
-                with suppress(asyncio.CancelledError, StopAsyncIteration):
-                    await event_task
     finally:
         disconnect_task.cancel()
         with suppress(asyncio.CancelledError):
             await disconnect_task
+        if event_task is not None:
+            event_task.cancel()
+            with suppress(asyncio.CancelledError, StopAsyncIteration):
+                await event_task
+
+
+async def _shutdown_local_catalog_refresh(
+    task: asyncio.Task[Any] | None, logger: logging.Logger
+) -> None:
+    """Cancel the startup catalog-refresh task so shutdown never leaves it orphaned."""
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logger.warning("Local model catalog refresh failed during shutdown", exc_info=True)
 
 
 async def _shutdown_log_viewer(log_viewer: LogViewer, logger: logging.Logger) -> None:
