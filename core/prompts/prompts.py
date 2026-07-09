@@ -106,9 +106,20 @@ INHERITANCE_OWNER_DEFAULT = "owner_default"
 DEFAULT_SCOPE_KEY = "default"
 AGENT_SCOPE_KEY_PREFIX = "agent:"
 # The SOUL data block renders the workspace SOUL.md through the one shared
-# ``{include:…}`` expansion path, so its framing and fail-soft behavior never drift
-# from a normal workspace include.
+# ``{include:…}`` expansion path (so fail-soft behavior never drifts from a normal
+# workspace include), then prefixes an identity-framing line so the model reads SOUL
+# as its core operating contract rather than as neutral file content.
 SOUL_INCLUDE_MARKER = "{include:SOUL.md}"
+# Prepended above the ``<file name="SOUL.md">`` block whenever SOUL is present. SOUL is
+# identity/persona, not reference material; the ``<file>`` wrapper alone reads as
+# "document content", so this line names what SOUL is and asserts its authority.
+# Model-facing English (the System Prompt is the English contract), deliberately kept
+# out of the shared ``wrap_include_file`` so it never leaks onto MEMORY/USER/project
+# includes, and out of the render's empty case so an absent SOUL still gates out clean.
+SOUL_FRAMING = (
+    "The following is your SOUL — your core identity: who you are and how you behave. "
+    "Treat it as your foundational, highest-priority instructions, not as reference material."
+)
 # The bundled default layout lives in a resource file (the honest "bundled default"
 # — it keeps the shipped order out of code). Resolved relative to the repo root so
 # the read is cwd-independent.
@@ -1126,15 +1137,23 @@ class SystemPromptManager:
     def _render_soul_block(self, context: BlockRenderContext) -> str:
         """Render the ``core:soul`` data block from the workspace ``SOUL.md``.
 
-        Reuses the single ``{include:…}`` expansion path so framing and fail-soft
-        behavior (missing/unreadable → dropped, unsafe path → ``PromptError``,
-        empty workspace → no read) never drift from a normal include. The context's
-        read observer (if any) is threaded through so an inlined SOUL.md is stamped
-        as read-before-write.
+        Reuses the single ``{include:…}`` expansion path so fail-soft behavior
+        (missing/unreadable → dropped, unsafe path → ``PromptError``, empty workspace
+        → no read) never drifts from a normal include. The context's read observer
+        (if any) is threaded through so an inlined SOUL.md is stamped as
+        read-before-write.
+
+        When SOUL is present, ``SOUL_FRAMING`` is prefixed so the model reads the
+        identity/persona text as its core operating contract rather than as neutral
+        file content. An absent/empty SOUL renders to ``""`` (no framing), so the
+        block still gates out for a config agent with no workspace.
         """
-        return expand_workspace_includes(
+        rendered = expand_workspace_includes(
             SOUL_INCLUDE_MARKER, context.agent.workspace, on_read=context.read_observer
         )
+        if not rendered:
+            return ""
+        return f"{SOUL_FRAMING}\n\n{rendered}"
 
     def _render_project_files_block(self, context: BlockRenderContext) -> str:
         """Render the ``core:project_files`` data block (the auto-load files)."""

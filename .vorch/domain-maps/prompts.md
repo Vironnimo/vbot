@@ -65,7 +65,7 @@ The six core text blocks read their **default text** from the editable fragment 
 
 ### Producers (`{generated:NAME}`)
 
-A producer turns build-time inputs into the text a `{generated:NAME}` marker expands to. The manager builds them as closures over the registries it already holds: `tool_list`, `channel_list`, `skill_list` feed the core tools/channels/skills text blocks, and `memory_files` renders the pinned-memory `<file>` contents for the `memory:guidance` block (the file reading lives in `core/memory/read_memory_files`). An **unknown** marker renders to `""` with a warning — fail-soft, like a missing `{include:…}`, never a `PromptError`. `BlockRenderContext` carries **no conversation messages** — message-dependent content belongs to the `context` extension hook, not the System Prompt.
+A producer turns build-time inputs into the text a `{generated:NAME}` marker expands to. The manager builds them as closures over the registries it already holds: `tool_list`, `channel_list`, `skill_list` feed the core tools/channels/skills text blocks, and `memory_files` renders the pinned-memory entries (each scope under its heading label with its `- ` bullets) for the `memory:guidance` block (the file reading lives in `core/memory/read_memory_files`). An **unknown** marker renders to `""` with a warning — fail-soft, like a missing `{include:…}`, never a `PromptError`. `BlockRenderContext` carries **no conversation messages** — message-dependent content belongs to the `context` extension hook, not the System Prompt.
 
 ### Runtime variables (replacements)
 
@@ -77,7 +77,7 @@ A static block's effective text resolves **agent override ← default-scope over
 
 ### Data blocks
 
-- `core:soul` renders the workspace `SOUL.md` through the single `{include:…}` expansion path (so framing/fail-soft never drift from a normal include) — empty when the file is missing or the workspace is `""` (a config agent), so the block gates out.
+- `core:soul` renders the workspace `SOUL.md` through the single `{include:…}` expansion path (so fail-soft never drifts from a normal include), then prepends the `SOUL_FRAMING` identity line so the model reads SOUL as its core operating contract, not as neutral file content. The framing stays out of the shared `wrap_include_file` (so it never leaks onto MEMORY/USER/project includes) and out of the render's empty case: when the file is missing or the workspace is `""` (a config agent) the render returns `""` before any framing, so the whole block gates out clean.
 - `core:project_files` renders the project's auto-load files in `auto_load` order (AGENTS.md is just the seeded first entry, not special-cased), each `<file name="…">`-wrapped via `wrap_include_file` (the one wrap source). Auto-load paths are taken **verbatim with no location restriction** — relative resolves against the project cwd at any depth, absolute is read as-is (the user's own config naming the user's own files; project philosophy: maximum agency). Lazy and fail-soft: a missing file is skipped silently, a present-but-unreadable file is logged and skipped — a prompt-load file never aborts the run. No size limit on readable files. Empty without a project context or readable files → gates out. This is the **single render** reused for `{project_files}` in the prompt **and** the visiting agent's `<system-reminder>` (`render_project_files`).
 - `core:agent_body` carries a config agent's verbatim prompt body as `data` default text (substituted as-is, its `{…}` never re-interpreted — like an include). Empty for identity agents → gates out.
 
