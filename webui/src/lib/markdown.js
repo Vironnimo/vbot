@@ -71,6 +71,27 @@ export function renderMarkdown(src) {
   return cachedRender(src);
 }
 
+// Providers embed literal HTML comments in reasoning text as section separators
+// (OpenAI's Responses summaries emit `\n\n<!-- -->` between parts). With
+// `html: false` markdown-it would escape those into visible `<!-- -->` noise, so
+// strip them before rendering. A partial `<!--` mid-stream simply stays until
+// its `-->` arrives and the pair is removed.
+const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
+
+function stripHtmlComments(src) {
+  return src.replace(HTML_COMMENT_PATTERN, '');
+}
+
+export function renderReasoningMarkdown(src) {
+  if (!src) return '';
+  return renderMarkdown(stripHtmlComments(src));
+}
+
+export function renderReasoningMarkdownStreaming(src) {
+  if (!src) return '';
+  return renderMarkdownStreaming(stripHtmlComments(src));
+}
+
 export function renderMarkdownStreaming(src) {
   if (!src) return '';
 

@@ -1565,6 +1565,44 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.msg.assistant a')).toBeNull();
   });
 
+  it('renders reasoning blocks as markdown and strips HTML comment separators', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-history-reasoning-markdown',
+    );
+    sessionState.messages = [
+      {
+        id: 'assistant-history-reasoning-markdown',
+        role: 'assistant',
+        content: 'Done.',
+        reasoning:
+          '**Analyzing the input**\n\n<!-- -->\n\n**Deciding next step**',
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const reasoningBody = document.querySelector(
+      '.reasoning-block .reasoning-body',
+    );
+    expect(reasoningBody).toBeTruthy();
+    // Bold markdown renders as <strong>, not literal asterisks.
+    expect(reasoningBody.querySelector('strong')).toBeTruthy();
+    expect(reasoningBody.textContent).not.toContain('**');
+    // The provider's `<!-- -->` separator is removed, not escaped into view.
+    expect(reasoningBody.textContent).not.toContain('<!--');
+    expect(reasoningBody.innerHTML).not.toContain('<!--');
+  });
+
   it('uses human-readable label instead of raw JSON for known tool', () => {
     const sessionState = ensureSessionState(
       createChatState(),

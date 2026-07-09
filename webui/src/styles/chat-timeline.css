@@ -82,7 +82,6 @@
 }
 
 .msg-body-text,
-.reasoning-body,
 .teb-code,
 .chat-terminal-event {
   white-space: pre-wrap;
@@ -149,6 +148,72 @@
   font-size: 13px;
   font-style: italic;
   line-height: 1.6;
+}
+
+/* Reasoning renders Markdown (bold, lists, code) but stays visually secondary:
+   headings never enlarge — they read as bold body text — so the thinking block
+   never competes with the answer below it. Providers like OpenAI emit reasoning
+   summaries as bold section titles, which would otherwise arrive as literal
+   `**...**`. */
+.reasoning-body :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0.6em 0 0.3em;
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.reasoning-body > :first-child {
+  margin-top: 0;
+}
+
+.reasoning-body > :last-child {
+  margin-bottom: 0;
+}
+
+.reasoning-body p {
+  margin: 0 0 0.5em;
+}
+
+.reasoning-body ul,
+.reasoning-body ol {
+  margin: 0.3em 0 0.3em 1.3em;
+  padding: 0;
+}
+
+.reasoning-body li {
+  margin-bottom: 0.15em;
+}
+
+.reasoning-body strong {
+  font-weight: 600;
+}
+
+.reasoning-body a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Monospace reads wrong in italic — reset code/pre to upright. */
+.reasoning-body code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.reasoning-body pre {
+  margin: 0.4em 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  background: var(--surface-2);
+  font-style: normal;
+}
+
+.reasoning-body pre code {
+  border: none;
+  padding: 0;
+  background: none;
 }
 
 .reasoning-block[open] .reasoning-body,

@@ -1,6 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
-  import { renderMarkdown } from '$lib/markdown.js';
+  import { renderMarkdown, renderReasoningMarkdown } from '$lib/markdown.js';
   import {
     attachmentFilename,
     attachmentPreviewLabel,
@@ -232,7 +232,10 @@
             onReasoningOpenChange(item.id, event.currentTarget.open)}
         >
           {@render reasoningSummary(false, isReasoningOpen(item.id))}
-          <div class="reasoning-body">{item.message.reasoning}</div>
+          <div class="reasoning-body">
+            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+            {@html renderReasoningMarkdown(item.message.reasoning ?? '')}
+          </div>
         </details>
       {/if}
       {#if hasUserContentBlocks(item.message)}
@@ -377,7 +380,10 @@
               onReasoningOpenChange(item.id, event.currentTarget.open)}
           >
             {@render reasoningSummary(false, isReasoningOpen(item.id))}
-            <div class="reasoning-body">{textFromEvent(item.event)}</div>
+            <div class="reasoning-body">
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+              {@html renderReasoningMarkdown(textFromEvent(item.event) ?? '')}
+            </div>
           </details>
         {:else if hasUserContentBlocks(messageFromEvent(item.event))}
           <div class="msg-body-blocks">
