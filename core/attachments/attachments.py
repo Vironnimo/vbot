@@ -70,7 +70,6 @@ class AttachmentRecord:
     size_bytes: int
     stored_at: str
     file_path: str
-    text_content: str | None
     # Cached speech-to-text result for audio attachments; written once on first
     # transcription so later requests reuse it instead of re-calling STT.
     transcription: str | None = None
@@ -127,7 +126,6 @@ class AttachmentStore:
 
         blob_path = self._blob_path(attachment_id)
         sidecar_path = self._sidecar_path(attachment_id)
-        text_content = _extract_text_content(data, media_type)
         record = AttachmentRecord(
             id=attachment_id,
             filename=filename,
@@ -135,7 +133,6 @@ class AttachmentStore:
             size_bytes=size_bytes,
             stored_at=stored_at,
             file_path=str(blob_path),
-            text_content=text_content,
         )
 
         self._write_blob(blob_path, data)
@@ -356,12 +353,6 @@ def _is_utf8_text(data: bytes) -> bool:
     return True
 
 
-def _extract_text_content(data: bytes, media_type: str) -> str | None:
-    if not media_type.startswith("text/"):
-        return None
-    return data.decode("utf-8")
-
-
 def _is_allowed_mime(media_type: str) -> bool:
     if media_type.startswith(("text/", "audio/", "video/")):
         return True
@@ -381,10 +372,6 @@ def _record_from_dict(data: JsonObject) -> AttachmentRecord:
     if not isinstance(size_bytes, int) or isinstance(size_bytes, bool):
         raise AttachmentError("Attachment metadata field 'size_bytes' must be an integer")
 
-    text_content = data.get("text_content")
-    if text_content is not None and not isinstance(text_content, str):
-        raise AttachmentError("Attachment metadata field 'text_content' must be a string or null")
-
     transcription = data.get("transcription")
     if transcription is not None and not isinstance(transcription, str):
         raise AttachmentError("Attachment metadata field 'transcription' must be a string or null")
@@ -396,7 +383,6 @@ def _record_from_dict(data: JsonObject) -> AttachmentRecord:
         size_bytes=size_bytes,
         stored_at=stored_at,
         file_path=file_path,
-        text_content=text_content,
         transcription=transcription,
     )
 

@@ -86,12 +86,12 @@ def test_sniff_media_type_rejects_oversized_ooxml_content_types() -> None:
 
 
 @pytest.mark.parametrize(
-    ("filename", "data", "expected_media_type", "expected_text_content"),
+    ("filename", "data", "expected_media_type"),
     [
-        ("photo.jpg", b"\xff\xd8\xff\x00\x10", "image/jpeg", None),
-        ("diagram.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00", "image/png", None),
-        ("report.pdf", b"%PDF-1.7\n1 0 obj\n", "application/pdf", None),
-        ("notes.txt", b"line one\nline two\n", "text/plain", "line one\nline two\n"),
+        ("photo.jpg", b"\xff\xd8\xff\x00\x10", "image/jpeg"),
+        ("diagram.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00", "image/png"),
+        ("report.pdf", b"%PDF-1.7\n1 0 obj\n", "application/pdf"),
+        ("notes.txt", b"line one\nline two\n", "text/plain"),
     ],
 )
 def test_store_happy_path_persists_blob_and_sidecar(
@@ -99,7 +99,6 @@ def test_store_happy_path_persists_blob_and_sidecar(
     filename: str,
     data: bytes,
     expected_media_type: str,
-    expected_text_content: str | None,
 ) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
@@ -112,7 +111,6 @@ def test_store_happy_path_persists_blob_and_sidecar(
     assert record.filename == filename
     assert record.media_type == expected_media_type
     assert record.size_bytes == len(data)
-    assert record.text_content == expected_text_content
 
     blob_path = Path(record.file_path)
     assert blob_path.exists()
@@ -126,7 +124,7 @@ def test_store_happy_path_persists_blob_and_sidecar(
     assert sidecar_payload["filename"] == filename
     assert sidecar_payload["media_type"] == expected_media_type
     assert sidecar_payload["size_bytes"] == len(data)
-    assert sidecar_payload["text_content"] == expected_text_content
+    assert "text_content" not in sidecar_payload
 
     loaded = store.get(record.id)
     assert loaded == record
@@ -161,7 +159,6 @@ def test_store_accepts_audio_and_video_files(
 
     # Assert
     assert record.media_type == expected_media_type
-    assert record.text_content is None
     assert record.transcription is None
 
 

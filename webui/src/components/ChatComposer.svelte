@@ -238,10 +238,6 @@
     typeof mediaType === 'string' &&
     /^(image|audio|video)\//.test(mediaType.toLowerCase());
 
-  const hasTextMediaType = (mediaType) =>
-    typeof mediaType === 'string' &&
-    mediaType.toLowerCase().startsWith('text/');
-
   const _removeAttachment = (index) => {
     const attachment = pendingAttachments[index];
     if (!attachment) {
@@ -278,7 +274,6 @@
           typeof file.type === 'string' && file.type.trim().length > 0
             ? file.type
             : 'application/octet-stream',
-        text_content: null,
         preview_url: previewUrl,
         uploading: true,
       };
@@ -296,7 +291,6 @@
             attachment_id: result.attachment_id,
             filename: result.filename,
             media_type: result.media_type,
-            text_content: result.text_content ?? null,
             uploading: false,
           };
         });
@@ -538,16 +532,6 @@
             filename: attachment.filename,
             media_type: attachment.media_type,
           };
-
-          // A text attachment is carried as a file reference (resolved to a path
-          // note so the agent can forward or reopen the original) plus its content.
-          if (
-            hasTextMediaType(attachment.media_type) &&
-            typeof attachment.text_content === 'string' &&
-            attachment.text_content.length > 0
-          ) {
-            return [fileBlock, { type: 'text', text: attachment.text_content }];
-          }
 
           return [fileBlock];
         });

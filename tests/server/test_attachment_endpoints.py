@@ -55,10 +55,10 @@ def test_upload_valid_jpeg_returns_attachment_metadata(tmp_path: Path) -> None:
     assert body["filename"] == "photo.jpg"
     assert body["media_type"] == "image/jpeg"
     assert body["size_bytes"] == len(payload)
-    assert body["text_content"] is None
+    assert "text_content" not in body
 
 
-def test_upload_text_file_returns_embedded_text_content(tmp_path: Path) -> None:
+def test_upload_text_file_returns_attachment_metadata_only(tmp_path: Path) -> None:
     payload = b"hello from text file\nsecond line"
 
     with _create_client(tmp_path) as client:
@@ -74,7 +74,7 @@ def test_upload_text_file_returns_embedded_text_content(tmp_path: Path) -> None:
     assert body["filename"] == "note.txt"
     assert body["media_type"].startswith("text/")
     assert body["size_bytes"] == len(payload)
-    assert body["text_content"] == "hello from text file\nsecond line"
+    assert "text_content" not in body
 
 
 def test_upload_rejects_payload_over_20_mib_limit(tmp_path: Path) -> None:

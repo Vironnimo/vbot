@@ -17,6 +17,7 @@ from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
 from core.model_tasks import SpeechExecutionError
 from core.tools.file_state import FileReadState
+from core.tools.read import render_text_file
 
 TEXT_IMAGE = frozenset({"text", "image"})
 TEXT_ONLY = frozenset({"text"})
@@ -314,14 +315,15 @@ def test_file_block_resolves_to_text_path_note(tmp_path: Path, current_turn: boo
 
 
 @pytest.mark.parametrize("current_turn", [True, False])
-def test_text_file_block_resolves_to_path_note_only(tmp_path: Path, current_turn: bool) -> None:
-    # A text attachment arrives as a file reference (for the path note) plus a
-    # sibling text block (for the content). The file reference must resolve to a
-    # path note only, never a native document — even on the current turn and even
-    # when the model advertises a generic file modality the wire could carry, since
-    # that would send the content a second time.
+def test_text_file_block_resolves_through_the_read_renderer(
+    tmp_path: Path,
+    current_turn: bool,
+) -> None:
+    # Text attachments use the same renderer as the read tool, including line
+    # gutters and its 50 KiB / 2,000-line boundary.
     store = AttachmentStore(tmp_path)
-    record = store.store("notes.txt", b"line one\nline two\n")
+    source = b"".join(f"line {index}\n".encode() for index in range(1, 2_500))
+    record = store.store("notes.txt", source)
     resolver = ContentBlockResolver(store)
     message_id = "user-current" if current_turn else "user-historical"
     messages = [
@@ -334,8 +336,7 @@ def test_text_file_block_resolves_to_path_note_only(tmp_path: Path, current_turn
                     "attachment_id": record.id,
                     "filename": record.filename,
                     "media_type": record.media_type,
-                },
-                {"type": "text", "text": "line one\nline two\n"},
+                }
             ],
         }
     ]
@@ -353,7 +354,46 @@ def test_text_file_block_resolves_to_path_note_only(tmp_path: Path, current_turn
             "type": "text",
             "text": f"[File: notes.txt (text/plain) — Path: {record.file_path}]",
         },
-        {"type": "text", "text": "line one\nline two\n"},
+        {"type": "text", "text": render_text_file(source)},
+    ]
+
+
+def test_full_text_previously_persisted_beside_an_attachment_is_suppressed(tmp_path: Path) -> None:
+    # Earlier sessions stored a complete text copy after the file block. On the
+    # next request it must be replaced by the bounded shared read rendering.
+    store = AttachmentStore(tmp_path)
+    source = b"x" * 60_000
+    record = store.store("large.txt", source)
+    resolver = ContentBlockResolver(store)
+    messages = [
+        {
+            "id": "user-current",
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "attachment_id": record.id,
+                    "filename": record.filename,
+                    "media_type": record.media_type,
+                },
+                {"type": "text", "text": source.decode("utf-8")},
+            ],
+        }
+    ]
+
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_ONLY,
+    )
+
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": f"[File: large.txt (text/plain) — Path: {record.file_path}]",
+        },
+        {"type": "text", "text": render_text_file(source)},
     ]
 
 

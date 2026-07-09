@@ -151,8 +151,13 @@ def _resolve_read_path(context: ToolContext, path: str) -> Path:
     return (context.effective_cwd / candidate).resolve()
 
 
-def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> str:
-    """Render file bytes as numbered text with offset/limit controls and truncation."""
+def render_text_file(raw: bytes, offset: object = None, limit: object = None) -> str:
+    """Render file bytes as numbered text with offset/limit controls and truncation.
+
+    Text attachments call this same renderer before entering a provider request, so
+    accepting a file through a channel has exactly the same 50 KiB, 2,000-line,
+    and continuation behavior as an explicit ``read`` call.
+    """
     position = _parse_read_position(offset)
     max_lines = optional_int(limit, field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
 
@@ -346,7 +351,7 @@ def make_read_handler(
 def _read_text(raw: bytes, arguments: JsonObject) -> JsonObject:
     """Return the text-rendering envelope for non-media (text/unknown) files."""
     try:
-        content = _read_file_text(
+        content = render_text_file(
             raw,
             offset=arguments.get("offset"),
             limit=arguments.get("limit"),
@@ -513,6 +518,7 @@ def register_read_tool(
 __all__ = [
     "DEFAULT_LINE_LIMIT",
     "MAX_FILE_BYTES",
+    "render_text_file",
     "READ_TOOL_DESCRIPTION",
     "READ_TOOL_NAME",
     "READ_TOOL_PARAMETERS",
