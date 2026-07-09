@@ -833,19 +833,80 @@ describe('SystemPromptView', () => {
     projectOption.click();
     flushSync();
 
-    const refreshButton = Array.from(
-      document.body.querySelectorAll('button'),
-    ).find((button) => button.textContent.trim() === 'Refresh');
-    refreshButton.click();
-    flushSync();
-
+    // Selecting the project agent auto-loads its preview — no Refresh click.
     await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
+      () =>
+        rpcMock.mock.calls.some(
+          (call) =>
+            call[0] === 'prompt.preview' &&
+            call[1]?.agent_id === 'builder@vbot',
+        ),
       100,
     );
 
     expect(lastCall('prompt.preview')[1]).toEqual({ agent_id: 'builder@vbot' });
     expect(document.body.textContent).toContain('Project agent preview');
+  });
+
+  it('loads the preview automatically on mount without pressing Refresh', async () => {
+    rpcMock.mockImplementation(
+      createRpcMock({
+        promptPreview: { text: 'Auto-loaded preview', tokens: 321 },
+      }),
+    );
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    // No Refresh click — the preview fetches for the first selected agent.
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
+      100,
+    );
+
+    expect(lastCall('prompt.preview')[1]).toMatchObject({
+      agent_id: 'agent-1',
+    });
+    await waitForCondition(
+      () => document.body.textContent.includes('Auto-loaded preview'),
+      50,
+    );
+  });
+
+  it('reloads the preview when the preview agent changes', async () => {
+    rpcMock.mockImplementation(createRpcMock());
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    // The initial auto-load previews the first agent (agent-1).
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          (call) =>
+            call[0] === 'prompt.preview' && call[1]?.agent_id === 'agent-1',
+        ),
+      100,
+    );
+
+    // Switching the preview agent re-fetches for the newly selected agent with
+    // no Refresh click.
+    openDropdown(agentTrigger());
+    const betaOption = dropdownOptionButtons().find((button) =>
+      button.textContent.includes('Beta'),
+    );
+    expect(betaOption, 'Beta option not found').toBeTruthy();
+    betaOption.click();
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          (call) =>
+            call[0] === 'prompt.preview' && call[1]?.agent_id === 'agent-2',
+        ),
+      100,
+    );
   });
 
   it('all new i18n keys have t() calls in the component source', () => {

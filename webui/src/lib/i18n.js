@@ -572,8 +572,7 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.preview.agentLabel': 'Agent',
   'systemPrompt.preview.agentGroup.identity': 'Identity agents',
   'systemPrompt.preview.agentGroup.project': 'Project agents',
-  'systemPrompt.preview.empty':
-    'Click Refresh to generate a preview for the selected scope.',
+  'systemPrompt.preview.empty': 'Select an agent to preview its system prompt.',
   'systemPrompt.error.loadFailed': 'Failed to load prompt data',
   'systemPrompt.error.saveFailed': 'Failed to save',
   'systemPrompt.error.resetFailed': 'Failed to reset',
