@@ -16,6 +16,13 @@ JsonObject = dict[str, Any]
 
 _LOGGER = get_logger("chat.block_resolver")
 
+# Appended to the path note when a current-turn image reaches a model without
+# vision: the run degrades to the file path instead of aborting.
+_VISION_UNAVAILABLE_REASON = (
+    "this model has no vision capability, so the image itself cannot be shown; "
+    "only the stored file path is provided"
+)
+
 
 class SpeechTranscriber(Protocol):
     """Speech-to-text hook used to degrade audio attachments to text."""
@@ -180,11 +187,20 @@ class ContentBlockResolver:
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
     ) -> list[JsonObject]:
-        # A current-turn image sent to a model that cannot see is a hard error —
-        # the agent intended the model to look at it. (Historical images degrade
-        # quietly regardless of model capability, so this gate is current-turn only.)
+        # A current-turn image to a model that cannot see degrades to a path note
+        # explaining why, instead of aborting the run — a channel run would
+        # otherwise fail on any inbound image. (Historical images degrade quietly
+        # regardless of capability, below.)
         if is_current_turn and "image" not in input_modalities:
-            raise ChatError("Model does not support vision; cannot process image attachment")
+            return [
+                self._path_note_block(
+                    "Image",
+                    attachment_id,
+                    filename,
+                    media_type,
+                    reason=_VISION_UNAVAILABLE_REASON,
+                )
+            ]
 
         if not (is_current_turn and media_type in wire_media_types):
             # Either an earlier turn, or a vision model whose wire cannot carry this
@@ -301,19 +317,23 @@ class ContentBlockResolver:
         attachment_id: str,
         filename: str,
         media_type: str,
+        *,
+        reason: str | None = None,
     ) -> JsonObject:
         # Media that is not resent as binary content keeps the blob path visible
-        # so the agent can still open the file with the read tool.
+        # so the agent can still open the file with the read tool. An optional
+        # reason explains why the binary content itself was withheld.
         record = self._load_record_or_none(attachment_id)
         if record is None:
             return {
                 "type": "text",
                 "text": f"[{label}: {filename} ({media_type}) — file no longer available]",
             }
-        return {
-            "type": "text",
-            "text": f"[{label}: {filename} ({media_type}) — Path: {record.file_path}]",
-        }
+        reason_prefix = f"{reason} — " if reason else ""
+        note_text = (
+            f"[{label}: {filename} ({media_type}) — {reason_prefix}Path: {record.file_path}]"
+        )
+        return {"type": "text", "text": note_text}
 
     def _resolve_file_block(
         self,

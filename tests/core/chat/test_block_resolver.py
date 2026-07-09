@@ -490,24 +490,33 @@ def test_text_block_resolves_to_text_dict(tmp_path: Path, current_turn: bool) ->
     assert resolved[0]["content"] == [{"type": "text", "text": "hello"}]
 
 
-def test_current_turn_image_raises_when_vision_not_supported(tmp_path: Path) -> None:
-    # Arrange
+def test_current_turn_image_degrades_to_path_note_when_vision_not_supported(
+    tmp_path: Path,
+) -> None:
+    # A current-turn image to a non-vision model must not abort the run: it
+    # degrades to a path note that explains the model cannot see it.
     store = AttachmentStore(tmp_path)
     record = store.store("photo.png", b"\x89PNG\r\n\x1a\nimage")
     resolver = ContentBlockResolver(store)
     messages = [_media_message(record)]
 
-    # Act / Assert
-    with pytest.raises(
-        ChatError,
-        match="Model does not support vision; cannot process image attachment",
-    ):
-        _resolve(
-            resolver,
-            messages,
-            current_user_message_id="user-current",
-            input_modalities=TEXT_ONLY,
-        )
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_ONLY,
+    )
+
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                "[Image: photo.png (image/png) — this model has no vision "
+                "capability, so the image itself cannot be shown; only the stored "
+                f"file path is provided — Path: {record.file_path}]"
+            ),
+        }
+    ]
 
 
 def test_current_turn_native_audio_resolves_to_base64_for_audio_model(tmp_path: Path) -> None:
