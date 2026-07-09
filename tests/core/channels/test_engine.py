@@ -1228,6 +1228,26 @@ async def test_group_command_from_non_owner_is_denied_without_dispatch(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_group_mention_from_non_owner_starts_a_normal_run(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="research complete"))
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        owner_user_ids=["99"],
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", user_id=50, mentioned_bot=True),
+        "Please research the topic.",
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once()
+    assert transport.sent_texts == ["research complete"]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
 async def test_group_command_denied_for_everyone_when_owner_list_is_empty(
     tmp_path: Path,
 ) -> None:
