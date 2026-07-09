@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,8 @@ from server.app import (
     _bus_last_sequence,
     _parse_query_string,
     _register_run_event_bridge,
+    _shutdown_local_catalog_refresh,
+    _stream_log_events,
     create_app,
 )
 from server.clients import ClientRegistry
@@ -337,6 +340,100 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
             "sse_url": "/api/runs/run-running/events",
         }
     ]
+
+
+class _ScriptedLogWebSocket:
+    """Minimal /ws/logs websocket double: scripted inbound frames, recorded sends."""
+
+    def __init__(self) -> None:
+        self.incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.sent: list[dict[str, Any]] = []
+
+    async def receive(self) -> dict[str, Any]:
+        return await self.incoming.get()
+
+    async def send_json(self, event: dict[str, Any]) -> None:
+        self.sent.append(event)
+
+
+def _queue_log_stream(queue: asyncio.Queue[Any]) -> Any:
+    """A real async generator, so a cancelled __anext__ finalizes it like the live tail."""
+
+    async def generate() -> Any:
+        while True:
+            item = await queue.get()
+            if item is None:
+                return
+            yield item
+
+    return generate()
+
+
+@pytest.mark.asyncio
+async def test_stream_log_events_survives_stray_client_frames() -> None:
+    # Arrange
+    websocket = _ScriptedLogWebSocket()
+    log_events: asyncio.Queue[Any] = asyncio.Queue()
+    streamer = asyncio.create_task(
+        _stream_log_events(cast(Any, websocket), _queue_log_stream(log_events))
+    )
+
+    # Act: a stray client frame arrives while no log event is pending; a log
+    # event afterwards must still be delivered instead of the tail dying.
+    await websocket.incoming.put({"type": "websocket.receive", "text": "keepalive"})
+    await log_events.put({"line": "hello"})
+
+    async def wait_for_delivery() -> None:
+        while not websocket.sent:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_for_delivery(), timeout=1)
+    await websocket.incoming.put({"type": "websocket.disconnect"})
+    await asyncio.wait_for(streamer, timeout=1)
+
+    # Assert
+    assert websocket.sent == [{"line": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_local_catalog_refresh_cancels_pending_task() -> None:
+    # Arrange
+    refresh_started = asyncio.Event()
+
+    async def never_finishes() -> None:
+        refresh_started.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(never_finishes())
+    await refresh_started.wait()
+
+    # Act
+    await _shutdown_local_catalog_refresh(task, logging.getLogger("test-shutdown"))
+
+    # Assert
+    assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_local_catalog_refresh_logs_failed_task_without_raising(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Arrange: the refresh already failed before shutdown reaches it.
+    async def explode() -> None:
+        raise RuntimeError("refresh boom")
+
+    task = asyncio.create_task(explode())
+    await asyncio.sleep(0)
+
+    # Act
+    with caplog.at_level(logging.WARNING, logger="test-shutdown"):
+        await _shutdown_local_catalog_refresh(task, logging.getLogger("test-shutdown"))
+
+    # Assert
+    assert any(
+        "Local model catalog refresh failed during shutdown" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_active_runs_snapshot_keeps_project_id_none_for_identity_run(
