@@ -271,9 +271,31 @@ def test_main_skips_pytest_without_mirrored_tests(monkeypatch, capsys):
     assert module.main() == 0
 
     captured = capsys.readouterr()
-    assert "SKIP (no mirrored tests)" in captured.out
+    assert "NO TESTS (nothing mirrored)" in captured.out
     assert "note: webui/package.json" in captured.out
     assert not any(cmd[2] == "pytest" for cmd in commands)
+
+
+def test_main_reports_no_tests_when_pytest_collects_none(monkeypatch, capsys):
+    module = _load_quality_module()
+    # A mirrored test file exists, but pytest collects nothing (exit code 5).
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "core/prompts/prompts.py"])
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        if cmd[2] == "pytest":
+            return module.subprocess.CompletedProcess(
+                cmd, 5, stdout="no tests ran in 0.01s\n", stderr=""
+            )
+        return module.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+
+    captured = capsys.readouterr()
+    pytest_line = next(line for line in captured.out.splitlines() if line.startswith("pytest"))
+    assert "NO TESTS" in pytest_line
+    assert "PASS" not in pytest_line
 
 
 def test_main_fails_when_fix_step_crashes(monkeypatch, capsys):

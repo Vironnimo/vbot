@@ -111,12 +111,18 @@ def changed_snapshot_paths(before: dict[str, str], after: dict[str, str]) -> lis
 
 
 def describe_fix_result(returncode: int, elapsed: float, changed_files: list[str]) -> str:
-    """Return the status text for an auto-fix step."""
+    """Return the status text for an auto-fix step.
+
+    A fix step reports the *action* it took, never a verdict: it applied fixes
+    (``FIXED``), it had nothing to change (``NO CHANGES``), or it left unfixable
+    issues for the follow-up gate step (``UNCHANGED``). "PASS" is reserved for the
+    validation and test steps so a run that changed nothing never reads as passed.
+    """
     if changed_files:
         file_word = "file" if len(changed_files) == 1 else "files"
         return f"FIXED ({elapsed:.1f}s, {len(changed_files)} {file_word})"
     if returncode == 0:
-        return f"PASS ({elapsed:.1f}s, no fixes needed)"
+        return f"NO CHANGES ({elapsed:.1f}s)"
     return f"UNCHANGED ({elapsed:.1f}s, no automatic fixes applied)"
 
 

@@ -7,9 +7,10 @@ Usage:
 Paths can be files or directories, relative to the project root
 (e.g. ``webui/src/components/Foo.svelte`` or just ``src/``).
 If no paths are given, the full frontend is checked. Explicit test-file paths
-are passed directly to vitest; other file paths are translated to their parent
-directory. All npm commands
-run with ``cwd="webui"``.
+are passed directly to vitest; a source file is translated to its mirrored
+``__tests__`` test (searched from its own directory up to ``src/``), falling back
+to the nearest ancestor directory that holds tests when it has no dedicated one.
+All npm commands run with ``cwd="webui"``.
 """
 
 import re
@@ -17,6 +18,8 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
+from pathlib import Path
 
 from _quality_common import (
     PROJECT_ROOT,
@@ -31,6 +34,7 @@ from _quality_common import (
 configure_console_encoding()
 
 WEBUI_ROOT = PROJECT_ROOT / "webui"
+SRC_ROOT = WEBUI_ROOT / "src"
 FRONTEND_FILE_SUFFIXES = {
     ".cjs",
     ".css",
@@ -82,21 +86,130 @@ def _is_explicit_test_file(path: str) -> bool:
     return ".test." in filename or ".spec." in filename
 
 
-def translate_to_vitest_targets(paths: list[str]) -> list[str]:
-    """Translate input paths to the narrowest useful Vitest targets.
+# Test files live in ``__tests__`` dirs and carry one of these extensions.
+TEST_FILE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
 
-    Explicit test files stay file-scoped. Other file paths expand to their
-    parent directory so Vitest can auto-discover nearby tests.
+
+def _looks_like_test_file(name: str) -> bool:
+    """Return whether file *name* is a Vitest test file."""
+    return ".test." in name or ".spec." in name
+
+
+def _relative_to_webui(path: Path) -> str:
+    """Return *path* as a posix string relative to the webui dir."""
+    return path.relative_to(WEBUI_ROOT).as_posix()
+
+
+def _iter_dirs_up_to_src(start_dir: Path) -> Iterator[Path]:
+    """Yield *start_dir* and each parent up to and including ``src/``.
+
+    Stops at ``src/`` and never climbs above it; yields nothing when *start_dir*
+    is neither ``src/`` nor one of its descendants.
     """
-    result: list[str] = []
+    directory = start_dir
+    while directory == SRC_ROOT or SRC_ROOT in directory.parents:
+        yield directory
+        if directory == SRC_ROOT:
+            return
+        directory = directory.parent
+
+
+def _dir_has_tests(directory: Path) -> bool:
+    """Return whether *directory*'s subtree contains any test file."""
+    return any(
+        entry.is_file() and _looks_like_test_file(entry.name) for entry in directory.rglob("*")
+    )
+
+
+def _find_named_test_files(stem: str, start_dir: Path) -> list[Path]:
+    """Return the mirrored test files for source *stem*, nearest level first.
+
+    Searches the ``__tests__`` dir at *start_dir* and each parent up to ``src/``
+    for ``<stem>.test.*`` / ``<stem>.spec.*``, returning the matches from the
+    nearest level that has any (empty when none exists). This is what lets a
+    changed ``src/components/settings/SettingsProvidersPanel.svelte`` find its
+    test in ``src/components/__tests__/`` one level up.
+    """
+    for directory in _iter_dirs_up_to_src(start_dir):
+        tests_dir = directory / "__tests__"
+        if not tests_dir.is_dir():
+            continue
+        matches = [
+            entry
+            for entry in sorted(tests_dir.iterdir())
+            if entry.is_file()
+            and entry.suffix in TEST_FILE_SUFFIXES
+            and (entry.name.startswith(f"{stem}.test.") or entry.name.startswith(f"{stem}.spec."))
+        ]
+        if matches:
+            return matches
+    return []
+
+
+def _nearest_ancestor_with_tests(start_dir: Path) -> Path | None:
+    """Return the nearest dir (from *start_dir* up to ``src/``) that holds tests."""
+    for directory in _iter_dirs_up_to_src(start_dir):
+        if _dir_has_tests(directory):
+            return directory
+    return None
+
+
+def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]:
+    """Translate input paths to the Vitest targets that actually cover them.
+
+    Returns ``(targets, notes)``. Explicit test files stay file-scoped. A source
+    file resolves to its mirrored test (``<stem>.test.*`` / ``.spec.*``) in a
+    ``__tests__`` dir from the file's own directory up to ``src/``; a directory
+    that holds tests runs directly. When a file has no dedicated test, or a
+    directory keeps its tests one level up, the nearest ancestor directory that
+    holds any tests runs instead so a broader suite still exercises it. Inputs
+    with no tests anywhere become a note, not a Vitest argument, so the runner
+    reports "no tests" honestly instead of a silent green pass.
+    """
+    targets: list[str] = []
+    notes: list[str] = []
+
+    def add(target: str) -> None:
+        if target not in targets:
+            targets.append(target)
+
     for p in paths:
         if _is_explicit_test_file(p):
-            result.append(p)
-        elif "/" in p and _has_extension(p):
-            result.append(p.rsplit("/", 1)[0])
+            add(p)
+            continue
+
+        absolute = WEBUI_ROOT / p
+
+        if absolute.is_dir():
+            if _dir_has_tests(absolute):
+                add(p)
+                continue
+            ancestor = _nearest_ancestor_with_tests(absolute)
+            if ancestor is None:
+                notes.append(f"{p}: no tests found")
+            else:
+                relative = _relative_to_webui(ancestor)
+                add(relative)
+                notes.append(f"{p}: no tests here, running {relative}/ instead")
+            continue
+
+        filename = p.rsplit("/", 1)[-1]
+        stem = filename.rsplit(".", 1)[0]
+        named = _find_named_test_files(stem, absolute.parent)
+        if named:
+            for test_file in named:
+                add(_relative_to_webui(test_file))
+            continue
+
+        ancestor = _nearest_ancestor_with_tests(absolute.parent)
+        if ancestor is None:
+            notes.append(f"{p}: no tests found")
         else:
-            result.append(p)
-    return result
+            relative = _relative_to_webui(ancestor)
+            add(relative)
+            notes.append(f"{p}: no {stem} test, running {relative}/ instead")
+
+    return deduplicate_paths(targets, _has_extension), notes
 
 
 # ---------- vitest output parsing ----------
@@ -184,12 +297,13 @@ def main() -> int:
         prettier_paths = stripped
         eslint_fix_paths = stripped
         eslint_check_paths = stripped
-        vitest_paths = translate_to_vitest_targets(stripped)
+        vitest_paths, vitest_notes = translate_to_vitest_targets(stripped)
     else:
         prettier_paths = ["src/"]
         eslint_fix_paths = ["src/"]
         eslint_check_paths = ["src/"]
         vitest_paths = ["src/"]
+        vitest_notes = []
 
     # Each step: (label, command, kind)
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
@@ -233,6 +347,15 @@ def main() -> int:
     build_warnings: list[tuple[str, str]] = []  # (label, stderr) — non-fatal
 
     for label, cmd, kind, snapshot_paths in steps:
+        # A scoped run whose inputs map to no test files must not fall through to
+        # ``vitest`` with no path argument — that would silently run the whole
+        # suite. Report the honest "no tests" outcome and move on.
+        if kind == "test" and not vitest_paths:
+            print(f"{label:<14}.... NO TESTS (nothing to run)")
+            for note in vitest_notes:
+                print(f"{'':<18}note: {note}")
+            continue
+
         before_snapshot: dict[str, str] = {}
         if kind == "fix" and snapshot_paths is not None:
             before_snapshot = snapshot_target_files(
@@ -279,7 +402,7 @@ def main() -> int:
             passed, total = parse_vitest_counts(output)
             if result.returncode == 0:
                 if total == 0:
-                    status = f"PASS ({elapsed:.1f}s, no tests)"
+                    status = f"NO TESTS ({elapsed:.1f}s)"
                 else:
                     status = f"PASS ({elapsed:.1f}s, {passed}/{total})"
             else:
@@ -316,6 +439,9 @@ def main() -> int:
         if changed_files:
             for changed_path in changed_files:
                 print(f"{'':<18}{changed_path}")
+        if kind == "test":
+            for note in vitest_notes:
+                print(f"{'':<18}note: {note}")
 
     print()
 

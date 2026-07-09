@@ -40,17 +40,83 @@ def test_parse_vitest_counts_returns_zero_without_summary_line():
 def test_translate_to_vitest_targets_keeps_explicit_test_file():
     module = _load_quality_frontend_module()
 
-    assert module.translate_to_vitest_targets(
+    targets, notes = module.translate_to_vitest_targets(
         ["src/components/__tests__/SettingsView.test.js"]
-    ) == ["src/components/__tests__/SettingsView.test.js"]
+    )
+
+    assert targets == ["src/components/__tests__/SettingsView.test.js"]
+    assert notes == []
 
 
-def test_translate_to_vitest_targets_uses_parent_dir_for_non_test_file():
+def test_translate_to_vitest_targets_resolves_named_mirror_test():
     module = _load_quality_frontend_module()
 
-    assert module.translate_to_vitest_targets(["src/components/SettingsView.svelte"]) == [
-        "src/components"
-    ]
+    # A component with a same-named mirror test resolves straight to that file.
+    targets, notes = module.translate_to_vitest_targets(["src/components/SettingsView.svelte"])
+
+    assert targets == ["src/components/__tests__/SettingsView.test.js"]
+    assert notes == []
+
+
+def test_translate_to_vitest_targets_finds_test_one_level_up():
+    module = _load_quality_frontend_module()
+
+    # The settings panels keep their tests in the parent components/__tests__ dir,
+    # not a co-located one — the resolver must climb to find the named mirror.
+    targets, notes = module.translate_to_vitest_targets(
+        ["src/components/settings/SettingsProvidersPanel.svelte"]
+    )
+
+    assert targets == ["src/components/__tests__/SettingsProvidersPanel.test.js"]
+    assert notes == []
+
+
+def test_translate_to_vitest_targets_maps_testless_dir_to_ancestor():
+    module = _load_quality_frontend_module()
+
+    # src/components/settings has no __tests__ of its own; its tests live one
+    # level up, so scoping the directory runs the component suite and notes why.
+    targets, notes = module.translate_to_vitest_targets(["src/components/settings"])
+
+    assert targets == ["src/components"]
+    assert len(notes) == 1
+    assert "src/components/settings" in notes[0]
+    assert "src/components" in notes[0]
+
+
+def test_translate_to_vitest_targets_falls_back_for_untested_source_file():
+    module = _load_quality_frontend_module()
+
+    # A subcomponent with no same-named test (exercised through AgentsView) falls
+    # back to the nearest ancestor dir that holds tests, with a note.
+    targets, notes = module.translate_to_vitest_targets(
+        ["src/components/agents/AgentEditor.svelte"]
+    )
+
+    assert targets == ["src/components"]
+    assert len(notes) == 1
+    assert "src/components/agents/AgentEditor.svelte" in notes[0]
+
+
+def test_translate_to_vitest_targets_keeps_dir_with_colocated_tests():
+    module = _load_quality_frontend_module()
+
+    targets, notes = module.translate_to_vitest_targets(["src/lib"])
+
+    assert targets == ["src/lib"]
+    assert notes == []
+
+
+def test_translate_to_vitest_targets_notes_file_without_any_tests():
+    module = _load_quality_frontend_module()
+
+    # A webui file outside src has no tests: no vitest arg, just a note — so the
+    # runner reports "no tests" honestly instead of running the whole suite.
+    targets, notes = module.translate_to_vitest_targets(["package.json"])
+
+    assert targets == []
+    assert len(notes) == 1
+    assert "package.json" in notes[0]
 
 
 def test_filter_vitest_failure_output_removes_pass_noise():
@@ -117,6 +183,57 @@ def test_main_runs_vitest_with_verbose_reporter(monkeypatch, capsys):
         "--passWithNoTests",
     ]
     assert vitest_command[-1] == "src/components/__tests__/AgentsView.test.js"
+
+
+def test_main_reports_no_tests_instead_of_pass(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        ["quality-frontend.py", "webui/src/components/__tests__/AgentsView.test.js"],
+    )
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        if cmd[1] == "vitest":
+            # vitest ran but collected nothing (no summary count line).
+            return module.subprocess.CompletedProcess(
+                cmd, 0, stdout="No test files found\n", stderr=""
+            )
+        return module.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+
+    captured = capsys.readouterr()
+    vitest_line = next(line for line in captured.out.splitlines() if line.startswith("vitest"))
+    assert "NO TESTS" in vitest_line
+    assert "PASS" not in vitest_line
+    # The auto-fix steps changed nothing, so they report the action, not a pass.
+    assert "NO CHANGES" in captured.out
+
+
+def test_main_reports_no_tests_when_scope_maps_to_none(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    # A webui file with no tests must not fall through to a full-suite vitest run.
+    monkeypatch.setattr(module.sys, "argv", ["quality-frontend.py", "webui/package.json"])
+
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        return module.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+
+    captured = capsys.readouterr()
+    assert "NO TESTS" in captured.out
+    assert "note: package.json" in captured.out
+    assert not any(cmd[1] == "vitest" for cmd in commands)
 
 
 def test_main_filters_vitest_failure_output(monkeypatch, capsys):

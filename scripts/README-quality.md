@@ -39,9 +39,9 @@ Use the current Python interpreter directly — no virtual environment is assume
 
 Every step is one external tool run. Steps are one of four kinds, which decides how the status is computed:
 
-- **fix** — auto-fixer. Success is reported as `FIXED (n files)`, `PASS (no fixes needed)`, or `UNCHANGED`. A fixer exiting `1` (unfixable issues remain) is **not** a failure here — the follow-up lint gate reports those with full detail. Only a harder error (exit ≥ 2) fails the step.
+- **fix** — auto-fixer. It reports the *action* it took, never a verdict: `FIXED (n files)`, `NO CHANGES` (nothing to fix), or `UNCHANGED` (unfixable issues remain — **not** a failure here; the follow-up lint gate reports those with full detail). Only a harder error (exit ≥ 2) fails the step. `PASS` is reserved for the gate and test steps, so a run that changed nothing never reads as passed.
 - **gate** — pass/fail validation (`ruff check`, `mypy`, `eslint`). Nonzero exit fails the gate.
-- **test** — the test runner, with a `passed/total` count in the status.
+- **test** — the test runner, with a `passed/total` count in the status, or `NO TESTS` when the selected scope has none (never a `PASS` — a run that tested nothing does not read as passed).
 - **build** — frontend full-project build; see below.
 
 Backend (`quality.py`), in order: `ruff format` (fix) → `ruff check --fix` (fix) → `ruff check` (gate) → `mypy --pretty` (gate) → `pytest -v --tb=short --timeout=30` (test).
@@ -61,7 +61,7 @@ Quality Gates
 ruff format   .... FIXED (0.4s, 2 files)
                     core/utils/config.py
                     core/utils/errors.py
-ruff fix      .... PASS (0.3s, no fixes needed)
+ruff fix      .... NO CHANGES (0.3s)
 ruff check    .... PASS (0.2s)
 mypy          .... PASS (3.1s)
 pytest        .... PASS (2.0s, 41/41)
@@ -88,17 +88,19 @@ When you pass a source path, `quality.py` runs the tests that mirror it — the 
 Two guardrails worth knowing:
 
 - **Bad paths abort with exit 2 before any tool runs.** A nonexistent input path would otherwise make pytest-xdist collect zero items across the whole invocation and silently skip even the valid paths beside it — a green run that tested nothing. Rejecting up front turns a typo into a clear error.
-- **A scoped run that maps to no tests skips pytest** (`SKIP (no mirrored tests)`) rather than falling back to running the entire suite.
+- **A scoped run that maps to no tests skips pytest** (`NO TESTS (nothing mirrored)`) rather than falling back to running the entire suite.
 
 ## How frontend paths map to tests
 
-`quality-frontend.py` strips a leading `webui/` from each path (all npm commands run inside `webui/`), then chooses Vitest targets:
+`quality-frontend.py` strips a leading `webui/` from each path (all npm commands run inside `webui/`), then resolves each to the Vitest target that actually covers it — the frontend equivalent of the backend source→test mapping:
 
 - An **explicit test file** — a path under a `/__tests__/` directory, or a filename containing `.test.` or `.spec.` — stays file-scoped.
-- Any other **file** path expands to its parent directory, so Vitest auto-discovers the tests next to it.
-- A **directory** path is used as-is.
+- A **source file** resolves to its mirrored test `<stem>.test.*` / `<stem>.spec.*`, searched in the `__tests__` dir of the file's own directory and each parent up to `src/`. This is what lets a change in `src/components/settings/SettingsProvidersPanel.svelte` find `src/components/__tests__/SettingsProvidersPanel.test.js` one level up — the panels keep their tests in the parent's `__tests__`, not a co-located one.
+- If a source file has **no** dedicated mirror test, the nearest ancestor directory that holds any tests runs instead (with a `note:`), so a broader suite still exercises it — e.g. a subcomponent covered only through its view's test.
+- A **directory** that holds tests is used as-is; a directory whose tests live one level up maps to that nearest ancestor (with a `note:`).
+- An input with no tests anywhere (e.g. a config file outside `src/`) selects no Vitest target and reports `NO TESTS` with a `note:`, instead of falling through to a whole-suite run.
 
-Vitest runs with `--passWithNoTests`, so scoping to a path that has no nearby tests does not fail the gate. As on the backend, an input path that does not exist under `webui/` aborts with exit 2 before any tool runs.
+Because a source file resolves to its **actual** mirrored test rather than just its parent directory, a scoped run can no longer silently report a green pass while running zero of the tests that cover the change. Vitest still runs with `--passWithNoTests` as a safety net, and — as on the backend — an input path that does not exist under `webui/` aborts with exit 2 before any tool runs.
 
 ## How "auto-fixed files" is detected
 
@@ -119,7 +121,7 @@ The gates are the contract, so prefer them over calling the underlying tools by 
 Where the relevant behavior lives, when you come to fix it:
 
 - **Noise filtering** that could hide a real failure: `filter_pytest_failure_output` / `_is_pytest_progress_nodeid_line` in `quality.py`, `filter_vitest_failure_output` in `quality-frontend.py`.
-- **Test selection** that could miss or over-select tests: `translate_to_test_paths` and its `_owned_test_files` / `_owning_source_stem` helpers in `quality.py`; `translate_to_vitest_targets` / `_is_explicit_test_file` in `quality-frontend.py`.
+- **Test selection** that could miss or over-select tests: `translate_to_test_paths` and its `_owned_test_files` / `_owning_source_stem` helpers in `quality.py`; `translate_to_vitest_targets` and its `_find_named_test_files` / `_nearest_ancestor_with_tests` / `_is_explicit_test_file` helpers in `quality-frontend.py`.
 - **Fix detection** that could miss a changed file: the snapshot suffix sets and ignored-dir sets at the top of each runner, plus `snapshot_target_files` / `changed_snapshot_paths` in `_quality_common.py`.
 
-Their tests live in `tests/scripts/` (`test_quality.py`, `test_quality_frontend.py`) — extend those alongside any change so the gate's own behavior stays gated.
+Their tests live in `tests/scripts/` (`test_quality.py`, `test_quality_frontend.py`, `test__quality_common.py`) — extend those alongside any change so the gate's own behavior stays gated.
