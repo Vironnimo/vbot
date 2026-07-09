@@ -25,7 +25,8 @@ MiniMax is wired as an OpenAI-compatible chat-completions provider with provider
 - Known M2.x models normalize as text-input chat models with 204,800 token context windows, tools, and `reasoning_split`.
 - `MiniMax-M3` normalizes with a 1,000,000 token context window, text/image/video input metadata, tools, `stream_options`, `reasoning_split`, and MiniMax `thinking`.
 - Unknown MiniMax model ids fall back to generic OpenAI-compatible normalization instead of being dropped.
-- Normalized `max_output_tokens` remains `null` for known MiniMax entries because the official model list and overview document context windows but not separate output ceilings.
+- Known MiniMax entries carry an output ceiling (`max_output_tokens`) set to MiniMax's **recommended** allowance, not its hard max: M2.x = 65,536, M3 = 131,072 (`MINIMAX_M2_RECOMMENDED_MAX_OUTPUT` / `MINIMAX_M3_RECOMMENDED_MAX_OUTPUT`). MiniMax publishes both a recommended and a hard-max value per model (M2.x hard max 204,800 — which equals the context window; M3 hard max 524,288); vBot pins the recommended value because the M2.x hard max equals the context window, so defaulting the output allowance to it would collide with any non-trivial prompt and 400. A caller can still request more explicitly (up to the hard max). Source: https://platform.minimax.io/docs/api-reference/text-chat-openai.
+- Runtime effect: the shared OpenAI-compatible base defaults request `max_tokens` to this ceiling when the caller sends no explicit output limit (see `providers.md` → "Output allowance defaults to the model's catalog ceiling"), so a MiniMax turn is no longer capped at the flat 8,192 `minimax.json` config default — reasoning models truncated there because the split thinking trace counts toward the same allowance.
 
 ## Reasoning
 
@@ -58,5 +59,6 @@ not yet live-verified (no credentials in this environment):
 ## Constraints & Gotchas
 
 - The provider uses MiniMax's OpenAI-compatible protocol, not vBot's Anthropic adapter, even though MiniMax also exposes an Anthropic-compatible endpoint.
+- The output allowance rides on the wire as `max_tokens` for every MiniMax model. M3's OpenAI-compatible endpoint documents `max_completion_tokens` as the current key and marks `max_tokens` deprecated, but still accepts `max_tokens`; vBot sends `max_tokens` uniformly (the shared base builder) rather than branching the field name per model.
 - `MiniMax-M3` documents image and video input. vBot's generic attachment path formats media as OpenAI `image_url` content; video-specific input still depends on callers providing MiniMax-compatible content blocks.
 - Durable MiniMax catalog facts belong in `MiniMaxAdapter.normalize_catalog_entry()`/`MINIMAX_MODEL_FACTS`, not in hand edits to `resources/models/minimax.json`.

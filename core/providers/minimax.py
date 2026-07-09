@@ -48,52 +48,72 @@ MINIMAX_M3_SUPPORTED_PARAMETERS = (
 )
 MINIMAX_REASONING_PAYLOAD_KEYS = ("reasoning", "reasoning_effort", "include_reasoning")
 
+# MiniMax publishes a *recommended* and a *hard-max* output allowance per model
+# (https://platform.minimax.io/docs/api-reference/text-chat-openai). vBot pins
+# the output ceiling to the RECOMMENDED value, not the hard max: for the M2.x
+# series the hard max (204,800) equals the context window, so defaulting the
+# output allowance to it would collide with any non-trivial prompt and 400. The
+# recommended value is a safe, non-truncating default an order of magnitude above
+# the old flat 8,192 config cap; a caller can still request more explicitly (M3
+# up to 524,288, M2.x up to 204,800). This ceiling is what the OpenAI-compatible
+# base defaults ``max_tokens`` to when the caller sends none.
+MINIMAX_M2_RECOMMENDED_MAX_OUTPUT = 65536
+MINIMAX_M3_RECOMMENDED_MAX_OUTPUT = 131072
+
 MINIMAX_MODEL_FACTS: dict[str, dict[str, Any]] = {
     "MiniMax-M2": {
         "name": "MiniMax M2",
         "context_window": 204800,
+        "max_output_tokens": MINIMAX_M2_RECOMMENDED_MAX_OUTPUT,
         "input_modalities": ("text",),
         "supported_parameters": MINIMAX_M2_SUPPORTED_PARAMETERS,
     },
     "MiniMax-M2.1": {
         "name": "MiniMax M2.1",
         "context_window": 204800,
+        "max_output_tokens": MINIMAX_M2_RECOMMENDED_MAX_OUTPUT,
         "input_modalities": ("text",),
         "supported_parameters": MINIMAX_M2_SUPPORTED_PARAMETERS,
     },
     "MiniMax-M2.1-highspeed": {
         "name": "MiniMax M2.1 Highspeed",
         "context_window": 204800,
+        "max_output_tokens": MINIMAX_M2_RECOMMENDED_MAX_OUTPUT,
         "input_modalities": ("text",),
         "supported_parameters": MINIMAX_M2_SUPPORTED_PARAMETERS,
     },
     "MiniMax-M2.5": {
         "name": "MiniMax M2.5",
         "context_window": 204800,
+        "max_output_tokens": MINIMAX_M2_RECOMMENDED_MAX_OUTPUT,
         "input_modalities": ("text",),
         "supported_parameters": MINIMAX_M2_SUPPORTED_PARAMETERS,
     },
     "MiniMax-M2.5-highspeed": {
         "name": "MiniMax M2.5 Highspeed",
         "context_window": 204800,
+        "max_output_tokens": MINIMAX_M2_RECOMMENDED_MAX_OUTPUT,
         "input_modalities": ("text",),
         "supported_parameters": MINIMAX_M2_SUPPORTED_PARAMETERS,
     },
     "MiniMax-M2.7": {
         "name": "MiniMax M2.7",
         "context_window": 204800,
+        "max_output_tokens": MINIMAX_M2_RECOMMENDED_MAX_OUTPUT,
         "input_modalities": ("text",),
         "supported_parameters": MINIMAX_M2_SUPPORTED_PARAMETERS,
     },
     "MiniMax-M2.7-highspeed": {
         "name": "MiniMax M2.7 Highspeed",
         "context_window": 204800,
+        "max_output_tokens": MINIMAX_M2_RECOMMENDED_MAX_OUTPUT,
         "input_modalities": ("text",),
         "supported_parameters": MINIMAX_M2_SUPPORTED_PARAMETERS,
     },
     MINIMAX_M3_MODEL_ID: {
         "name": "MiniMax M3",
         "context_window": 1000000,
+        "max_output_tokens": MINIMAX_M3_RECOMMENDED_MAX_OUTPUT,
         "input_modalities": ("text", "image", "video"),
         "supported_parameters": MINIMAX_M3_SUPPORTED_PARAMETERS,
     },
@@ -136,7 +156,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
                 supported_parameters=tuple(facts["supported_parameters"]),
             ),
             context_window=int(facts["context_window"]),
-            max_output_tokens=None,
+            max_output_tokens=int(facts["max_output_tokens"]),
         )
 
     def _build_payload(

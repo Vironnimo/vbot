@@ -2714,6 +2714,95 @@ class TestLifecycle:
             assert isinstance(adapter, OpenAICompatibleAdapter)
 
 
+def _model_with_output_ceiling(model_id: str, ceiling: int | None) -> Model:
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+        ),
+        context_window=200_000,
+        max_output_tokens=ceiling,
+    )
+
+
+class TestOutputLimitDefault:
+    """The output allowance defaults to the model's catalog ceiling.
+
+    Sibling of the Anthropic adapter's ceiling-aware ``max_tokens``: the flat
+    provider-config ``max_tokens`` default (e.g. 4096/8192) truncates any model
+    whose real ceiling is higher, so an unspecified allowance defaults to the
+    catalog ``max_output_tokens`` instead.
+    """
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_defaults_max_tokens_to_model_ceiling_over_config_default(self):
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = OpenAICompatibleAdapter(
+            OPENAI_CONFIG,  # config default max_tokens=4096
+            API_KEY,
+            model_lookup=lambda model_id: _model_with_output_ceiling(model_id, 128_000),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["max_tokens"] == 128_000
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_caller_limit_wins_over_ceiling(self):
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = OpenAICompatibleAdapter(
+            OPENAI_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _model_with_output_ceiling(model_id, 128_000),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", max_tokens=512)
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["max_tokens"] == 512
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_max_completion_tokens_suppresses_ceiling_default(self):
+        """A caller output limit under any accepted key suppresses the ceiling inject."""
+        adapter = OpenAICompatibleAdapter(
+            NO_DEFAULTS_CONFIG,  # no config max_tokens fallback to muddy the assertion
+            API_KEY,
+            model_lookup=lambda model_id: _model_with_output_ceiling(model_id, 128_000),
+        )
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="minimal-model", max_completion_tokens=777)
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["max_completion_tokens"] == 777
+        assert "max_tokens" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unknown_ceiling_keeps_config_default(self):
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = OpenAICompatibleAdapter(
+            OPENAI_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _model_with_output_ceiling(model_id, None),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["max_tokens"] == 4096
+
+
 class TestNormalizeCatalogEntry:
     """Verify generic OpenAI-compatible catalog normalization."""
 

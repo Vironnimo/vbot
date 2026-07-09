@@ -32,8 +32,6 @@ PROTOCOL_OPENAI = "openai"
 # warn, so a newly added model is never silently misrouted onto the wrong wire.
 _DEFAULT_PROTOCOL = PROTOCOL_OPENAI
 
-_OUTPUT_LIMIT_KEYS = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
-
 # ``_model_protocol`` runs on every send/stream, so an unmarked model would re-log
 # its routing warning on each request and flood the log. Track which model ids have
 # already warned in this process and emit each once — "once per server runtime"
@@ -144,15 +142,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             )
         return super().stream(messages, model_id=model_id, **request_kwargs)
 
-    def _build_payload(
-        self,
-        messages: list[dict[str, Any]],
-        model_id: str,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
-        return super()._build_payload(messages, model_id, **request_kwargs)
-
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -172,13 +161,19 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         kwargs: dict[str, Any],
     ) -> dict[str, Any]:
-        request_kwargs = dict(kwargs)
-        if _has_explicit_output_limit(request_kwargs):
-            return request_kwargs
+        """Copy the caller kwargs with the model output ceiling defaulted in.
 
-        max_output_tokens = self._model_max_output_tokens(model_id)
-        if max_output_tokens is not None:
-            request_kwargs["max_tokens"] = max_output_tokens
+        Both wire routes need it stamped here: the OpenAI path funnels through
+        the shared ``_build_payload`` (which would apply it anyway), but the
+        Anthropic messages path bypasses ``_build_payload``, so the ceiling has
+        to be resolved before the request splits. The explicit-vs-ceiling logic
+        lives in the base ``_apply_model_output_limit``; this adapter only
+        contributes flat-namespace candidate resolution via its
+        ``_model_max_output_tokens`` override.
+        """
+
+        request_kwargs = dict(kwargs)
+        self._apply_model_output_limit(request_kwargs, model_id)
         return request_kwargs
 
     def _model_max_output_tokens(self, model_id: str) -> int | None:
@@ -241,10 +236,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             # caller warns and defaults rather than scanning weaker candidates.
             return None
         return None
-
-
-def _has_explicit_output_limit(kwargs: dict[str, Any]) -> bool:
-    return any(key in kwargs for key in _OUTPUT_LIMIT_KEYS)
 
 
 def _model_lookup_candidates(model_id: str) -> tuple[str, ...]:
