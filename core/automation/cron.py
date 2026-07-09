@@ -36,6 +36,12 @@ _ONCE_RETRY_BACKOFF_FACTOR = 2.0
 _ONCE_RETRY_MAX_DELAY_SECONDS = 3600.0
 _ONCE_MAX_FIRE_ATTEMPTS = 5
 _ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
+# asyncio.sleep counts monotonic time, so one full-length sleep would shift a
+# fire time by the size of any system-clock correction (e.g. a Raspberry Pi
+# syncing NTP after boot). Bounded naps re-derive the remaining delay from the
+# wall clock, re-aligning the wake-up to within one interval of the corrected
+# clock.
+_WALL_CLOCK_RECHECK_SECONDS = 60.0
 _MUTABLE_FIELDS = frozenset(
     (
         "agent_id",
@@ -392,8 +398,7 @@ class CronService:
             if next_fire_local.tzinfo is None:
                 next_fire_local = next_fire_local.replace(tzinfo=timezone)
 
-            delay_seconds = max((next_fire_local.astimezone(UTC) - _utc_now()).total_seconds(), 0.0)
-            await asyncio.sleep(delay_seconds)
+            await _sleep_until_utc(next_fire_local.astimezone(UTC))
 
             latest = self._jobs.get(job.id)
             if latest is None or latest.status != "active" or latest.schedule_type != "cron":
@@ -426,8 +431,7 @@ class CronService:
                 return
 
             run_at_utc = self._parse_run_at_utc(current)
-            delay_seconds = max((run_at_utc - _utc_now()).total_seconds(), 0.0)
-            await asyncio.sleep(delay_seconds)
+            await _sleep_until_utc(run_at_utc)
 
             latest = self._jobs.get(job.id)
             if latest is None or latest.status != "active" or latest.schedule_type != "once":
@@ -741,6 +745,15 @@ def _once_retry_delay(attempt: int) -> float:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+async def _sleep_until_utc(target_utc: datetime) -> None:
+    """Sleep until a UTC wall-clock instant, re-reading the clock each bounded nap."""
+    while True:
+        remaining_seconds = (target_utc - _utc_now()).total_seconds()
+        if remaining_seconds <= 0:
+            return
+        await asyncio.sleep(min(remaining_seconds, _WALL_CLOCK_RECHECK_SECONDS))
 
 
 def _utc_now_iso() -> str:
