@@ -11,6 +11,7 @@ from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, optional_int
 from core.tools.file_state import FileReadState
 from core.tools.read_extract import (
     ExtractionError,
+    ExtractionLimitExceededError,
     detect_extractable_document,
     document_label,
     extract_document_text,
@@ -298,6 +299,8 @@ def _read_extracted_document(
     """
     try:
         extracted = extract_document_text(raw, kind)
+    except ExtractionLimitExceededError as error:
+        return tool_failure("document_too_large", str(error))
     except ExtractionError:
         return None
 

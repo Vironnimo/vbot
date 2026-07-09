@@ -11,6 +11,7 @@ from zipfile import ZipFile
 
 import pytest
 
+import core.tools.read_extract as read_extract_module
 from core.attachments import AttachmentTooLargeError
 from core.model_tasks import SpeechError, SpeechTranscriptionResult
 from core.tools import (
@@ -614,6 +615,27 @@ async def test_read_extracts_docx_as_text_without_gutter(tmp_path: Path) -> None
     assert content == "[Extracted text from report.docx (Word document)]:\nReport body"
     # A rendering, not editable source: no `N|` gutter.
     assert "1|" not in content
+
+
+@pytest.mark.asyncio
+async def test_read_reports_document_extraction_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    document_xml = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>" + "x" * 512 + "</w:t></w:r></w:p></w:body></w:document>"
+    )
+    target = workspace / "large.docx"
+    with ZipFile(target, "w") as archive:
+        archive.writestr("word/document.xml", document_xml)
+    monkeypatch.setattr(read_extract_module, "_MAX_DOCUMENT_EXTRACTED_BYTES", 128)
+
+    result = await make_handler()(make_context(workspace), {"path": "large.docx"})
+
+    error = assert_failure_envelope(result, "document_too_large")
+    assert "128 MB extraction limit" in error["message"]
 
 
 @pytest.mark.asyncio

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import zlib
 from io import BytesIO
 from zipfile import ZipFile
 
 import pytest
 
+import core.tools.read_extract as read_extract_module
 from core.tools.read_extract import (
     ExtractionError,
+    ExtractionLimitExceededError,
     detect_extractable_document,
     document_label,
     extract_document_text,
@@ -113,6 +116,36 @@ def _pdf_bytes(lines: list[str]) -> bytes:
     return bytes(pdf)
 
 
+def _compressed_pdf_bytes(text: str) -> bytes:
+    """Build a PDF whose page content is Flate-compressed."""
+    operators = b"BT /F1 24 Tf 72 720 Td (" + text.encode("latin-1") + b") Tj ET"
+    compressed = zlib.compress(operators)
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d /Filter /FlateDecode >>\nstream\n%s\nendstream"
+        % (len(compressed), compressed),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets: list[int] = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf += b"%d 0 obj\n" % index + body + b"\nendobj\n"
+
+    xref_position = len(pdf)
+    pdf += b"xref\n0 %d\n" % (len(objects) + 1)
+    pdf += b"0000000000 65535 f \n"
+    for offset in offsets:
+        pdf += b"%010d 00000 n \n" % offset
+    pdf += b"trailer\n<< /Size %d /Root 1 0 R >>\n" % (len(objects) + 1)
+    pdf += b"startxref\n%d\n%%%%EOF" % xref_position
+    return bytes(pdf)
+
+
 def test_detect_extractable_document_recognizes_kinds_by_extension() -> None:
     assert detect_extractable_document("notes.ipynb", "text/plain") == "ipynb"
     assert detect_extractable_document("report.DOCX", "application/octet-stream") == "docx"
@@ -174,6 +207,16 @@ def test_extract_pdf_without_text_layer_returns_empty() -> None:
     assert extract_document_text(_pdf_bytes([]), "pdf") == ""
 
 
+def test_extract_pdf_rejects_compressed_stream_that_expands_beyond_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _compressed_pdf_bytes("x" * 4096)
+    monkeypatch.setattr(read_extract_module, "_MAX_DOCUMENT_EXTRACTED_BYTES", len(document) + 64)
+
+    with pytest.raises(ExtractionLimitExceededError, match="128 MB extraction limit"):
+        extract_document_text(document, "pdf")
+
+
 def test_extract_malformed_pdf_raises_extraction_error() -> None:
     with pytest.raises(ExtractionError):
         extract_document_text(b"not a pdf at all", "pdf")
@@ -182,6 +225,15 @@ def test_extract_malformed_pdf_raises_extraction_error() -> None:
 def test_extract_malformed_docx_raises_extraction_error() -> None:
     with pytest.raises(ExtractionError):
         extract_document_text(b"not a zip archive at all", "docx")
+
+
+def test_extract_docx_rejects_content_that_expands_beyond_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(read_extract_module, "_MAX_DOCUMENT_EXTRACTED_BYTES", 128)
+
+    with pytest.raises(ExtractionLimitExceededError, match="128 MB extraction limit"):
+        extract_document_text(_docx_bytes(), "docx")
 
 
 def test_extract_malformed_ipynb_raises_extraction_error() -> None:
