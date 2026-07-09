@@ -12,7 +12,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.attachments import AttachmentStore
-from core.chat import ChatError, ChatLoop, ChatMessage, ChatSession
+from core.chat import ChatLoop, ChatMessage, ChatSession
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
 from core.model_tasks import SpeechExecutionError
@@ -629,22 +629,34 @@ def test_audio_model_on_image_only_wire_degrades_to_transcription(tmp_path: Path
     assert "from stt" in resolved[0]["content"][0]["text"]
 
 
-def test_audio_model_on_image_only_wire_without_transcriber_raises(tmp_path: Path) -> None:
-    # Same contradiction, no transcriber available: a clear ChatError instead of
-    # the adapter being handed audio it cannot carry.
+def test_audio_model_on_image_only_wire_without_transcriber_degrades_to_path_note(
+    tmp_path: Path,
+) -> None:
+    # Same contradiction, no transcriber available: the audio cannot be carried
+    # and cannot be transcribed, so it degrades to a path note instead of aborting.
     store = AttachmentStore(tmp_path)
     record = store.store("clip.wav", WAV_BYTES)
     resolver = ContentBlockResolver(store)
     messages = [_media_message(record)]
 
-    with pytest.raises(ChatError, match="no speech-to-text"):
-        _resolve(
-            resolver,
-            messages,
-            current_user_message_id="user-current",
-            input_modalities=TEXT_IMAGE_AUDIO,
-            wire_media_types=IMAGE_WIRE,
-        )
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE_AUDIO,
+        wire_media_types=IMAGE_WIRE,
+    )
+
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                "[Audio: clip.wav (audio/wav) — this model cannot accept audio and "
+                "no speech-to-text service is available, so only the stored file "
+                f"path is provided — Path: {record.file_path}]"
+            ),
+        }
+    ]
 
 
 def test_cached_transcription_is_reused_without_new_stt_call(tmp_path: Path) -> None:
@@ -715,38 +727,81 @@ def test_historical_audio_without_transcription_resolves_to_path_note(tmp_path: 
     ]
 
 
-def test_current_turn_audio_without_transcriber_raises_clear_error(tmp_path: Path) -> None:
-    # Arrange
+def test_current_turn_audio_without_transcriber_degrades_to_path_note(tmp_path: Path) -> None:
+    # A non-audio model with no speech-to-text service does not abort the run:
+    # the audio degrades to a path note so the agent can still route the file.
     store = AttachmentStore(tmp_path)
     record = store.store("voice.ogg", OGG_BYTES)
     resolver = ContentBlockResolver(store)
     messages = [_media_message(record)]
 
-    # Act / Assert
-    with pytest.raises(ChatError, match="no speech-to-text"):
-        _resolve(
-            resolver,
-            messages,
-            current_user_message_id="user-current",
-            input_modalities=TEXT_IMAGE,
-        )
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE,
+    )
+
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                "[Audio: voice.ogg (audio/ogg) — this model cannot accept audio and "
+                "no speech-to-text service is available, so only the stored file "
+                f"path is provided — Path: {record.file_path}]"
+            ),
+        }
+    ]
 
 
-def test_current_turn_audio_transcription_failure_raises_chat_error(tmp_path: Path) -> None:
-    # Arrange
+def test_current_turn_audio_transcription_failure_degrades_to_path_note(tmp_path: Path) -> None:
+    # A speech-to-text failure degrades to a path note instead of aborting the run.
     store = AttachmentStore(tmp_path)
     record = store.store("voice.ogg", OGG_BYTES)
     resolver = ContentBlockResolver(store, transcriber=_FailingTranscriber())
     messages = [_media_message(record)]
 
-    # Act / Assert
-    with pytest.raises(ChatError, match="could not be transcribed"):
-        _resolve(
-            resolver,
-            messages,
-            current_user_message_id="user-current",
-            input_modalities=TEXT_IMAGE,
-        )
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE,
+    )
+
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                "[Audio: voice.ogg (audio/ogg) — speech-to-text could not transcribe "
+                f"this audio, so only the stored file path is provided — Path: {record.file_path}]"
+            ),
+        }
+    ]
+
+
+def test_current_turn_audio_empty_transcription_degrades_to_path_note(tmp_path: Path) -> None:
+    # An empty speech-to-text result degrades to a path note rather than aborting.
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", OGG_BYTES)
+    resolver = ContentBlockResolver(store, transcriber=_StubTranscriber(text="   "))
+    messages = [_media_message(record)]
+
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE,
+    )
+
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                "[Audio: voice.ogg (audio/ogg) — speech-to-text could not transcribe "
+                f"this audio, so only the stored file path is provided — Path: {record.file_path}]"
+            ),
+        }
+    ]
 
 
 @pytest.mark.parametrize("current_turn", [True, False])
