@@ -35,6 +35,22 @@ OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhi
 OPENROUTER_REASONING_OFF = {"enabled": False}
 OPENROUTER_NONE_EFFORT = "none"
 
+# Prompt caching for Claude-family models routed through OpenRouter. Anthropic
+# caches nothing unless a content block carries ``cache_control`` (verified live:
+# a stable 13k-token prefix returned 0 cache reads across 6 turns without it).
+# OpenRouter forwards Anthropic's own semantics but on the OpenAI ``/chat/
+# completions`` wire, so the marker rides **inside a content part** ("envelope
+# layout"), not as a native top-level ``system`` block the way the Anthropic
+# adapter places it. Same strategy as the native path otherwise: one marker on
+# the system message (caches tools + system, which Anthropic renders first) and
+# up to three rolling markers on the most recent non-system messages, never more
+# than Anthropic's four-breakpoint limit. Non-Claude models are left untouched —
+# OpenAI/Gemini cache implicitly and a stray ``cache_control`` key risks tripping
+# a strict upstream. The ``{"type": "ephemeral"}`` marker is the 5-minute TTL.
+OPENROUTER_CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
+OPENROUTER_CACHE_BREAKPOINT_LIMIT = 4
+OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS = 3
+
 # OpenRouter uses the ``output_modalities`` query parameter to filter models
 # by their output capability.  The default ``/models`` call returns only
 # text-output models, so every non-text-output catalog family needs its own
@@ -228,25 +244,30 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         if reasoning_supported is False:
             payload.pop("reasoning", None)
             payload.pop("include_reasoning", None)
-            return payload
+        else:
+            # Snap against the effective per-model ladder when the DB carries one;
+            # the provider-global constant is only the floor for a model without a
+            # feed ladder.
+            intent = resolve_reasoning_intent(
+                supported=reasoning_supported,
+                control=model_reasoning_control(self._model_lookup, model_id),
+                levels=(
+                    model_reasoning_levels(self._model_lookup, model_id)
+                    or tuple(OPENROUTER_REASONING_EFFORTS)
+                ),
+                effort=thinking_effort or reasoning_effort,
+                budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
+                # OpenRouter resolves a budget from the effort internally, so vBot
+                # deliberately never sends a token budget here (no ``max_tokens``).
+                max_tokens=None,
+            )
+            _render_openrouter_reasoning(payload, intent)
 
-        # Snap against the effective per-model ladder when the DB carries one;
-        # the provider-global constant is only the floor for a model without a
-        # feed ladder.
-        intent = resolve_reasoning_intent(
-            supported=reasoning_supported,
-            control=model_reasoning_control(self._model_lookup, model_id),
-            levels=(
-                model_reasoning_levels(self._model_lookup, model_id)
-                or tuple(OPENROUTER_REASONING_EFFORTS)
-            ),
-            effort=thinking_effort or reasoning_effort,
-            budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
-            # OpenRouter resolves a budget from the effort internally, so vBot
-            # deliberately never sends a token budget here (no ``max_tokens``).
-            max_tokens=None,
-        )
-        _render_openrouter_reasoning(payload, intent)
+        # Cache stable prefixes last, after every other payload mutation, so the
+        # markers land on the final messages that go on the wire. Claude-only:
+        # non-Claude models cache implicitly and reject a stray marker.
+        if _is_claude_family(model_id):
+            _apply_openrouter_prompt_caching(payload)
         return payload
 
 
@@ -275,6 +296,89 @@ def _render_openrouter_reasoning(payload: dict[str, Any], intent: ReasoningInten
             payload["include_reasoning"] = True
         else:
             payload["reasoning"] = dict(OPENROUTER_REASONING_OFF)
+
+
+def _is_claude_family(model_id: str) -> bool:
+    """True for Anthropic Claude models on OpenRouter (``anthropic/claude-*``).
+
+    Matching on the ``claude`` substring covers the vendor-prefixed slug, the
+    tilde auto-router form (``~anthropic/claude-haiku-latest``), and any dated
+    variant, while never matching a non-Claude model. Only these need explicit
+    ``cache_control`` — every other family caches implicitly upstream.
+    """
+
+    return "claude" in model_id.lower()
+
+
+def _apply_openrouter_prompt_caching(payload: dict[str, Any]) -> None:
+    """Place ``cache_control`` breakpoints on the OpenAI-wire message array.
+
+    Envelope layout (marker inside a content part): one marker on the last
+    system message (caches tools + system) and up to
+    :data:`OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS` rolling markers on the most
+    recent non-system messages, capped at :data:`OPENROUTER_CACHE_BREAKPOINT_LIMIT`.
+    A message whose content cannot carry a marker (empty string, or a pure
+    tool-call assistant turn with ``None`` content) is skipped so a breakpoint is
+    never wasted on a part OpenRouter would ignore.
+    """
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return
+
+    remaining = OPENROUTER_CACHE_BREAKPOINT_LIMIT
+    last_system = _last_index(messages, role="system")
+    if last_system is not None and _mark_openrouter_message(messages[last_system]):
+        remaining -= 1
+
+    history_budget = min(remaining, OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS)
+    marked = 0
+    for index in range(len(messages) - 1, -1, -1):
+        if marked >= history_budget:
+            break
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") == "system":
+            continue
+        if _mark_openrouter_message(message):
+            marked += 1
+
+
+def _last_index(messages: list[Any], *, role: str) -> int | None:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, dict) and message.get("role") == role:
+            return index
+    return None
+
+
+def _mark_openrouter_message(message: dict[str, Any]) -> bool:
+    """Add ``cache_control`` to a message's last content part; return whether it did.
+
+    A string content is wrapped into a single ``text`` part to carry the marker;
+    a list content takes the marker on its last dict part. Empty/`None` content
+    carries nothing (``False``), so the caller moves the breakpoint to an older
+    message.
+    """
+
+    content = message.get("content")
+    if isinstance(content, str):
+        if not content.strip():
+            return False
+        message["content"] = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": dict(OPENROUTER_CACHE_CONTROL_EPHEMERAL),
+            }
+        ]
+        return True
+    if isinstance(content, list):
+        for index in range(len(content) - 1, -1, -1):
+            part = content[index]
+            if isinstance(part, dict):
+                part["cache_control"] = dict(OPENROUTER_CACHE_CONTROL_EPHEMERAL)
+                return True
+    return False
 
 
 def _normalize_image_parameters(raw_parameters: Any) -> dict[str, Any]:
