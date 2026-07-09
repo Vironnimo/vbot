@@ -940,6 +940,35 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_sanitizes_tool_input_schema(self, anthropic_adapter):
+        """A nullable-union tool schema is collapsed before it reaches the wire."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        tool = {
+            "name": "search",
+            "description": "Search records",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "tag": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["query"],
+            },
+        }
+
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            tools=[tool],
+        )
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["tools"][0]["input_schema"]["properties"]["tag"] == {"type": "string"}
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_groups_multiple_tool_results_in_one_user_message(self, anthropic_adapter):
         """Consecutive canonical tool messages become one Anthropic user message."""
         route = respx.post(ANTHROPIC_URL).mock(
