@@ -63,6 +63,7 @@ from core.providers.reasoning import (
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
+from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
@@ -1301,7 +1302,9 @@ def _apply_anthropic_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> N
         {
             "name": tool["name"],
             "description": tool["description"],
-            "input_schema": tool["parameters"],
+            "input_schema": sanitize_anthropic_tool_input_schema(
+                tool["parameters"], tool_name=tool["name"]
+            ),
         }
         for tool in tools
     ]

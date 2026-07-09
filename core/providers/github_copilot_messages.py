@@ -16,6 +16,7 @@ from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
 from core.providers.reasoning import effort_to_budget
+from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
 
 TEXT_BLOCK_TYPE = "text"
 IMAGE_BLOCK_TYPE = "image"
@@ -334,7 +335,7 @@ def _safe_tool(tool: Any) -> dict[str, Any]:
     return {
         "name": name,
         "description": description if isinstance(description, str) else "",
-        "input_schema": parameters,
+        "input_schema": sanitize_anthropic_tool_input_schema(parameters, tool_name=name),
     }
 
 
