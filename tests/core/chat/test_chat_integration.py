@@ -586,10 +586,10 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
 
         assert "Soul template for integration" in prompt
         assert "Version test-version" in prompt
-        # Memory files are lazy: with nothing written yet, the block embeds USER.md's
-        # default "no entries" content rather than a seeded template.
-        assert '<file name="USER.md">' in prompt
-        assert "No tool-managed memory entries are recorded yet." in prompt
+        # Memory files are lazy: with nothing written yet, the user scope renders its
+        # heading label and the empty-scope placeholder rather than a seeded template.
+        assert "# User Profile" in prompt
+        assert "No entries yet." in prompt
         assert "- read_file: Read a workspace file." in prompt
         assert "shell" not in prompt
         assert "<name>agent-cli</name>" in prompt

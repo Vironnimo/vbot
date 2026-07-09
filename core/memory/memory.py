@@ -32,12 +32,22 @@ MEMORY_PROMPT_MODES: tuple[MemoryPromptMode, ...] = (
     MEMORY_PROMPT_MODE_AGENT,
     MEMORY_PROMPT_MODE_AGENT_USER,
 )
-MEMORY_PROMPT_FILES: dict[MemoryPromptMode, tuple[str, ...]] = {
+MEMORY_PROMPT_MODE_SCOPES: dict[MemoryPromptMode, tuple[MemoryScope, ...]] = {
     MEMORY_PROMPT_MODE_OFF: (),
-    MEMORY_PROMPT_MODE_AGENT: (MEMORY_FILES["agent"],),
-    MEMORY_PROMPT_MODE_AGENT_USER: (MEMORY_FILES["agent"], MEMORY_FILES["user"]),
+    MEMORY_PROMPT_MODE_AGENT: ("agent",),
+    MEMORY_PROMPT_MODE_AGENT_USER: ("agent", "user"),
 }
-MEMORY_SECTION_HEADING = "## Entries"
+# The heading each scope renders under in the memory block. The file itself holds only
+# the entries (bare "- " bullets); this label is added at render time, so the model
+# never sees the backing filename — it edits memory through the tool, not the file.
+# "Agent"/"User" map transparently onto the tool's scope enum.
+MEMORY_SCOPE_LABELS: dict[MemoryScope, str] = {
+    "agent": "# Agent Memory",
+    "user": "# User Profile",
+}
+# Rendered in place of the bullet list for a scope with no entries (a not-yet-created
+# or emptied file), so the model still sees that the scope exists.
+_EMPTY_SCOPE_TEXT = "No entries yet."
 _BULLET_PREFIX = "- "
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 _MAX_ENTRY_LENGTH = 2_000
@@ -80,9 +90,9 @@ MEMORY_BLOCK_OWNER = "memory"
 MEMORY_FILES_PRODUCER_NAME = "memory_files"
 # The block's default text: the guidance prose, then the embedded files marker, all
 # inside the ``<memory>`` wrapper — one sortable unit (D2). Whenever the block renders
-# (memory tool on), the marker renders the selected files, showing an explicit "no
-# entries recorded" for a file not written (and thus not created) yet — so the framing
-# is identical before and after the lazily-created file exists.
+# (memory tool on), the marker renders each selected scope under its heading label with
+# its entries, or the empty-scope placeholder when a scope has none — so the framing is
+# identical before and after the lazily-created file exists.
 _MEMORY_BLOCK_TEMPLATE = "<memory>\n{guidance}\n\n{{generated:{producer}}}\n</memory>"
 
 
@@ -130,14 +140,14 @@ class FilePinnedMemoryBackend:
 
     def list_entries(self, workspace: Path, scope: MemoryScope) -> list[MemoryEntry]:
         validated_scope = validate_memory_scope(scope)
-        _preamble, entries, _suffix = _read_memory_parts(self._path(workspace, validated_scope))
+        entries = _read_entries(self._path(workspace, validated_scope))
         return _memory_entries(validated_scope, entries)
 
     def add_entry(self, workspace: Path, scope: MemoryScope, content: str) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
-            preamble, entries, suffix = _read_memory_parts(path)
+            entries = _read_entries(path)
             normalized = _normalize_entry_content(content)
             if normalized in entries:
                 existing_index = entries.index(normalized) + 1
@@ -146,7 +156,7 @@ class FilePinnedMemoryBackend:
             previous_total = sum(len(entry) for entry in entries)
             entries.append(normalized)
             _enforce_scope_budget(validated_scope, entries, previous_total)
-            _write_memory_parts(path, preamble, entries, suffix)
+            _write_entries(path, entries)
             return MemoryEntry(id=len(entries), scope=validated_scope, content=normalized)
 
     def replace_entry(
@@ -159,42 +169,57 @@ class FilePinnedMemoryBackend:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
-            preamble, entries, suffix = _read_memory_parts(path)
+            entries = _read_entries(path)
             index = _entry_index(entry_id, entries)
             normalized = _normalize_entry_content(content)
             previous_total = sum(len(entry) for entry in entries)
             entries[index] = normalized
             _enforce_scope_budget(validated_scope, entries, previous_total)
-            _write_memory_parts(path, preamble, entries, suffix)
+            _write_entries(path, entries)
             return MemoryEntry(id=entry_id, scope=validated_scope, content=normalized)
 
     def remove_entry(self, workspace: Path, scope: MemoryScope, entry_id: int) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
-            preamble, entries, suffix = _read_memory_parts(path)
+            entries = _read_entries(path)
             index = _entry_index(entry_id, entries)
             removed = entries.pop(index)
-            _write_memory_parts(path, preamble, entries, suffix)
+            _write_entries(path, entries)
             return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
 
     def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
-        """Return the ``<file>``-wrapped pinned-memory file contents for a mode.
+        """Return the rendered pinned-memory entries for a mode.
 
-        The data half of the memory block — only the file contents, with no
-        ``<memory>`` wrapper and no guidance (the guidance lives in the block's own
-        text now). The ``memory_files`` producer calls this so the file reading stays
-        in the memory domain. ``off`` mode reads nothing (``""``); every file the mode
-        selects is always rendered, a not-yet-created one via its default "no entries"
-        content (see :func:`_read_prompt_file`), and an unreadable file raises
-        :class:`MemoryError`.
+        The data half of the memory block — only the per-scope entry lists, with no
+        ``<memory>`` wrapper and no guidance (those live in the ``memory:guidance``
+        block itself). Each selected scope renders under its heading label (see
+        :data:`MEMORY_SCOPE_LABELS`) followed by its ``- `` bullet entries, or the
+        empty-scope placeholder when it has none. The ``memory_files`` producer calls
+        this so the file reading stays in the memory domain. ``off`` mode reads nothing
+        (``""``); a not-yet-created or emptied file renders as its label plus the
+        placeholder, and an unreadable file raises :class:`MemoryError`.
         """
         validated_mode = validate_memory_prompt_mode(mode)
         blocks = [
-            _read_prompt_file(Path(workspace) / filename)
-            for filename in MEMORY_PROMPT_FILES[validated_mode]
+            self._render_scope_block(Path(workspace), scope)
+            for scope in MEMORY_PROMPT_MODE_SCOPES[validated_mode]
         ]
         return "\n\n".join(blocks)
+
+    def _render_scope_block(self, workspace: Path, scope: MemoryScope) -> str:
+        """Render one scope's memory block: its heading label plus its entries.
+
+        Reads the scope's entries (never creating the file — a missing file reads as
+        no entries), then renders the label followed by the ``- `` bullet list, or the
+        empty-scope placeholder when there are none.
+        """
+        entries = _read_entries(self._path(workspace, scope))
+        label = MEMORY_SCOPE_LABELS[scope]
+        if not entries:
+            return f"{label}\n{_EMPTY_SCOPE_TEXT}"
+        body = "\n".join(f"{_BULLET_PREFIX}{entry}" for entry in entries)
+        return f"{label}\n{body}"
 
     def _path(self, workspace: Path, scope: MemoryScope) -> Path:
         workspace_path = Path(workspace)
@@ -233,7 +258,7 @@ class _MemoryFileReader(Protocol):
     """The one method :func:`read_memory_files` needs from a memory provider."""
 
     def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
-        """Return the ``<file>``-wrapped pinned-memory file contents for a mode."""
+        """Return the rendered pinned-memory entries for a mode."""
         ...
 
 
@@ -242,11 +267,11 @@ def read_memory_files(
 ) -> str:
     """Render the embedded ``{generated:memory_files}`` text for one agent/mode.
 
-    The single file-reading entry point the ``memory_files`` producer wraps: only
-    the ``<file>``-wrapped pinned-memory contents (no guidance, no ``<memory>``
-    wrapper), ``""`` only when the mode is ``off`` — a mode that selects files always
-    renders them, a not-yet-created file via its default "no entries" content. Kept in
-    the memory domain so the producer the manager registers stays a thin closure;
+    The single entry point the ``memory_files`` producer wraps: only the rendered
+    pinned-memory entries (each scope's heading label plus its ``- `` bullets, no
+    guidance, no ``<memory>`` wrapper), ``""`` only when the mode is ``off`` — a mode
+    that selects scopes always renders them, an empty scope via its placeholder. Kept
+    in the memory domain so the producer the manager registers stays a thin closure;
     *provider* is the manager's memory provider (a :class:`MemoryService` or any stub
     exposing ``read_prompt_files``).
     """
@@ -256,20 +281,20 @@ def read_memory_files(
 def memory_prompt_file_paths(workspace: Path, mode: MemoryPromptMode) -> list[Path]:
     """Resolved absolute paths of the pinned-memory files a mode injects that exist.
 
-    The prompt renders every file a mode selects — a not-yet-created one via its
-    default "no entries" content — but only an on-disk file can be stamped as
-    read-before-write: a still-absent file has nothing whose ``(mtime, size)`` to
-    record, and a later ``write`` to it is a new-file write (exempt) anyway. So this
-    returns just the existing selected files, resolved the same way ``read_prompt_files``
-    reads them (``workspace / filename``), for the chat loop to stamp. ``off`` mode
-    selects no file, so it returns ``[]``. The caller must not pass an empty-string
-    workspace (a config agent) — that would resolve against ``Path(".")``; config
-    agents are ``off`` mode and gated out upstream regardless.
+    The prompt renders every scope a mode selects — an empty one via its placeholder
+    — but only an on-disk file can be stamped as read-before-write: a still-absent
+    file has nothing whose ``(mtime, size)`` to record, and a later ``write`` to it is
+    a new-file write (exempt) anyway. So this returns just the existing selected files,
+    resolved the same way the backend reads them (``workspace / the scope's file``),
+    for the chat loop to stamp. ``off`` mode selects no scope, so it returns ``[]``.
+    The caller must not pass an empty-string workspace (a config agent) — that would
+    resolve against ``Path(".")``; config agents are ``off`` mode and gated out
+    upstream regardless.
     """
     workspace_path = Path(workspace)
     paths: list[Path] = []
-    for filename in MEMORY_PROMPT_FILES[validate_memory_prompt_mode(mode)]:
-        path = (workspace_path / filename).resolve()
+    for scope in MEMORY_PROMPT_MODE_SCOPES[validate_memory_prompt_mode(mode)]:
+        path = (workspace_path / MEMORY_FILES[scope]).resolve()
         if path.is_file():
             paths.append(path)
     return paths
@@ -324,72 +349,28 @@ def validate_memory_prompt_mode(mode: object) -> MemoryPromptMode:
     raise MemoryError(f"memory_prompt_mode must be one of: {supported}")
 
 
-def _read_prompt_file(path: Path) -> str:
-    try:
-        content = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        # Lazy file ownership: the memory files are created only on the first tool
-        # write, so a not-yet-created file renders the exact content an empty on-disk
-        # file would hold. The prompt is then identical whether or not the file exists
-        # yet, and the model always sees an explicit "no entries recorded" instead of
-        # the file silently missing.
-        content = _default_file_content(path.name)
-    except OSError as exc:
-        raise MemoryError(f"failed to read memory prompt file {path}: {exc}") from exc
-    return f'<file name="{path.name}">\n{content}\n</file>'
+def _read_entries(path: Path) -> list[str]:
+    """Read a memory file's entries — its ``- `` bullet lines, in order.
 
-
-def _default_file_content(filename: str) -> str:
-    """Return the prompt content a not-yet-created memory file renders as.
-
-    Identical to an empty on-disk file (default preamble + an empty ``## Entries``
-    section), so a lazily-created file is indistinguishable in the prompt before and
-    after it physically exists.
+    The file holds only entries now (no preamble, no section heading), so every
+    ``- `` line is an entry and anything else is ignored. A not-yet-created file
+    reads as no entries — lazy ownership: the file is created only on the first
+    write. An unreadable file raises :class:`MemoryError`.
     """
-    return _render_memory_text(_default_preamble(filename), [], "")
-
-
-def _read_memory_parts(path: Path) -> tuple[str, list[str], str]:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return _default_preamble(path.name), [], ""
+        return []
     except OSError as exc:
         raise MemoryError(f"failed to read memory file {path}: {exc}") from exc
+    return _parse_entries(text)
 
-    return _parse_memory_text(text)
 
-
-def _parse_memory_text(text: str) -> tuple[str, list[str], str]:
-    lines = text.splitlines()
-    heading_index = _entries_heading_index(lines)
-    if heading_index is None:
-        return text.rstrip(), [], ""
-
-    next_heading_index = _next_heading_index(lines, heading_index + 1)
-    section_end = next_heading_index if next_heading_index is not None else len(lines)
-    preamble = "\n".join(lines[:heading_index]).rstrip()
-    section_lines = lines[heading_index + 1 : section_end]
-    suffix = "\n".join(lines[section_end:]).rstrip() if next_heading_index is not None else ""
+def _parse_entries(text: str) -> list[str]:
     entries = [
-        _strip_entry_bullet(line) for line in section_lines if line.startswith(_BULLET_PREFIX)
+        _strip_entry_bullet(line) for line in text.splitlines() if line.startswith(_BULLET_PREFIX)
     ]
-    return preamble, [entry for entry in entries if entry], suffix
-
-
-def _entries_heading_index(lines: list[str]) -> int | None:
-    for index, line in enumerate(lines):
-        if line.strip().casefold() == MEMORY_SECTION_HEADING.casefold():
-            return index
-    return None
-
-
-def _next_heading_index(lines: list[str], start_index: int) -> int | None:
-    for index in range(start_index, len(lines)):
-        line = lines[index].strip()
-        if line.startswith("## ") and line.casefold() != MEMORY_SECTION_HEADING.casefold():
-            return index
-    return None
+    return [entry for entry in entries if entry]
 
 
 def _strip_entry_bullet(line: str) -> str:
@@ -399,29 +380,24 @@ def _strip_entry_bullet(line: str) -> str:
     return line.removeprefix(_BULLET_PREFIX).strip()
 
 
-def _write_memory_parts(path: Path, preamble: str, entries: list[str], suffix: str) -> None:
-    text = _render_memory_text(preamble, entries, suffix)
+def _write_entries(path: Path, entries: list[str]) -> None:
+    text = _render_entries_file(entries)
     try:
         atomic_write_text(path, text)
     except OSError as exc:
         raise MemoryError(f"failed to write memory file {path}: {exc}") from exc
 
 
-def _render_memory_text(preamble: str, entries: list[str], suffix: str) -> str:
-    blocks: list[str] = []
-    if preamble.strip():
-        blocks.append(preamble.strip())
+def _render_entries_file(entries: list[str]) -> str:
+    """Render the on-disk memory file: one ``- `` bullet per entry, nothing else.
 
-    entry_lines = [MEMORY_SECTION_HEADING, ""]
-    if entries:
-        entry_lines.extend(f"{_BULLET_PREFIX}{_escape_entry_content(entry)}" for entry in entries)
-    else:
-        entry_lines.append("No tool-managed memory entries are recorded yet.")
-    blocks.append("\n".join(entry_lines))
-
-    if suffix.strip():
-        blocks.append(suffix.strip())
-    return "\n\n".join(blocks).rstrip() + "\n"
+    An empty entry list renders an empty file — the last ``remove`` leaves the file
+    present but empty, which reads back as no entries.
+    """
+    if not entries:
+        return ""
+    lines = [f"{_BULLET_PREFIX}{_escape_entry_content(entry)}" for entry in entries]
+    return "\n".join(lines) + "\n"
 
 
 def _escape_entry_content(content: str) -> str:
@@ -467,16 +443,3 @@ def _memory_entries(scope: MemoryScope, entries: list[str]) -> list[MemoryEntry]
     return [
         MemoryEntry(id=index, scope=scope, content=entry) for index, entry in enumerate(entries, 1)
     ]
-
-
-def _default_preamble(filename: str) -> str:
-    if filename == "USER.md":
-        return (
-            "# User Profile\n\n"
-            "Use this file for stable facts about the user: preferences, communication style, "
-            "expectations, workflow habits, and durable context."
-        )
-    return (
-        "# Agent Memory\n\n"
-        "Use this file for stable agent/workflow notes that should guide future sessions."
-    )
