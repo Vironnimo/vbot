@@ -147,6 +147,21 @@
     void selectScope(nextKey);
   });
 
+  // Auto-load the preview whenever the settled preview target changes — the
+  // initial data load, an agent pick, or a scope switch — so the user never has
+  // to press Refresh to see the current scope's prompt. Gated on `isLoadingData`
+  // so it fires once per settled target, not while blocks/scopes are still
+  // loading; `refreshPreview` no-ops when there is no valid target.
+  $effect(() => {
+    if (isLoadingData) {
+      return;
+    }
+    if (!canRefreshPreview()) {
+      return;
+    }
+    void refreshPreview();
+  });
+
   async function loadData() {
     isLoadingData = true;
 
@@ -1229,11 +1244,15 @@
           <div class="sp-preview-body">
             {#if previewText}
               <pre class="sp-preview-pre">{previewText}</pre>
+            {:else if isRefreshingPreview}
+              <div class="sp-preview-empty">
+                {t('common.loading', 'Loading…')}
+              </div>
             {:else}
               <div class="sp-preview-empty">
                 {t(
                   'systemPrompt.preview.empty',
-                  'Click Refresh to generate a preview for the selected scope.',
+                  'Select an agent to preview its system prompt.',
                 )}
               </div>
             {/if}
@@ -1432,7 +1451,10 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    margin: 0;
+    /* Only zero the block margins — the inline margins stay `auto` (from
+       `.sp-scroll > *`) so the list centers on the same measure as the header
+       and preview instead of sitting flush-left. */
+    margin-block: 0;
     padding: 0;
     list-style: none;
   }
