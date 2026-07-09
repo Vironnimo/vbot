@@ -389,11 +389,16 @@ class AnthropicAdapter(ProviderAdapter):
             payload["system"] = system_content
         _apply_anthropic_tools(payload, request_kwargs)
         reasoning_supported = self._model_reasoning_supported(model_id)
+        # Resolve the output allowance once: it both bounds any thinking budget
+        # and is the ``max_tokens`` that goes on the wire (set after overrides
+        # below so it wins over the provider-default fallback).
+        resolved_max_tokens = self._resolve_max_tokens(request_kwargs, model_id)
         self._apply_reasoning(
             payload,
             request_kwargs,
             model_id,
             reasoning_supported=reasoning_supported,
+            max_tokens=resolved_max_tokens,
         )
 
         # Sampling parameters must never reach the wire in two cases: when
@@ -429,6 +434,11 @@ class AnthropicAdapter(ProviderAdapter):
                 payload.setdefault(key, value)
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
+        # Pin the resolved output allowance last so the model's own ceiling wins
+        # over the provider-default fallback (Anthropic requires a positive
+        # ``max_tokens`` and rejects one above the model's output ceiling).
+        if resolved_max_tokens is not None:
+            payload["max_tokens"] = resolved_max_tokens
         # Cache stable prefixes last, after every other payload mutation, so the
         # markers land on the final system/messages that go on the wire.
         _apply_prompt_caching(payload)
@@ -465,6 +475,7 @@ class AnthropicAdapter(ProviderAdapter):
         model_id: str,
         *,
         reasoning_supported: bool | None,
+        max_tokens: int | None,
     ) -> None:
         """Resolve the shared reasoning intent and render it onto the payload.
 
@@ -472,14 +483,14 @@ class AnthropicAdapter(ProviderAdapter):
         control and sends nothing. Otherwise the provider-neutral intent
         (:func:`resolve_reasoning_intent`) is rendered into Anthropic's
         ``thinking``/``output_config`` shape — including native ``budget_tokens``
-        for a ``budget`` Claude.
+        for a ``budget`` Claude. ``max_tokens`` (the resolved output allowance)
+        bounds any thinking budget so it stays strictly under the output cap.
         """
 
         thinking_effort = request_kwargs.pop("thinking_effort", "")
         if reasoning_supported is False:
             remove_reasoning_kwargs(request_kwargs, *ANTHROPIC_REASONING_PARAMETER_NAMES)
             return
-        max_tokens = self._resolve_max_tokens(request_kwargs)
         intent = resolve_reasoning_intent(
             supported=reasoning_supported,
             control=model_reasoning_control(self._model_lookup, model_id),
@@ -529,18 +540,44 @@ class AnthropicAdapter(ProviderAdapter):
         elif intent.kind == REASONING_INTENT_OFF:
             payload["thinking"] = {"type": "disabled"}
 
-    def _resolve_max_tokens(self, request_kwargs: dict[str, Any]) -> int | None:
-        """Return the effective ``max_tokens`` (caller kwarg, else provider default).
+    def _resolve_max_tokens(self, request_kwargs: dict[str, Any], model_id: str) -> int | None:
+        """Return the output ``max_tokens`` for the request.
 
-        Used to keep a thinking ``budget_tokens`` strictly under the output
-        allowance — caller value wins over the provider default, mirroring payload
-        assembly precedence.
+        Anthropic requires a positive ``max_tokens`` and rejects one above the
+        model's output ceiling. Precedence:
+
+        1. An explicit positive caller value (a non-positive one is ignored — it
+           would 400 at the wire, so it is treated as unspecified).
+        2. The model's catalog output ceiling — the default, so each model uses
+           its own full allowance instead of a flat provider cap. This is what
+           keeps a thinking budget from starving the answer: a shared 8K-style
+           cap would let a mid/high effort budget consume the whole allowance.
+        3. The provider-config ``max_tokens`` default, as the fallback only when
+           the ceiling is unknown (no lookup / offline refresh).
         """
 
-        value = request_kwargs.get("max_tokens")
-        if value is None and self._config.defaults:
-            value = self._config.defaults.get("max_tokens")
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+        explicit = request_kwargs.get("max_tokens")
+        if _is_positive_int(explicit):
+            return explicit
+        ceiling = self._model_max_output_tokens(model_id)
+        if _is_positive_int(ceiling):
+            return ceiling
+        default = self._config.defaults.get("max_tokens") if self._config.defaults else None
+        return default if _is_positive_int(default) else None
+
+    def _model_max_output_tokens(self, model_id: str) -> int | None:
+        """The model's catalog output ceiling, or ``None`` when it is unknown.
+
+        Mirrors :meth:`_model_supports_temperature`'s lookup: it strips a
+        ``::variant`` suffix and tolerates a missing lookup or model.
+        """
+
+        if self._model_lookup is None:
+            return None
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return None
+        return model.max_output_tokens
 
     # ------------------------------------------------------------------
     # Error detail helper (Anthropic-specific)
@@ -811,6 +848,12 @@ def _anthropic_supports_temperature(supported: bool, *, adaptive: bool, enabled:
     """
 
     return not (supported and adaptive and not enabled)
+
+
+def _is_positive_int(value: Any) -> bool:
+    """True for a real positive integer (``bool`` and non-integers excluded)."""
+
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _read_catalog_string(raw: Mapping[str, Any], key: str) -> str:

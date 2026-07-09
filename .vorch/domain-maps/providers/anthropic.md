@@ -27,6 +27,12 @@ The live `/models` listing is authoritative and rich — each entry carries `max
 - Canonical assistant tool calls become `tool_use` blocks. Provider tool definitions become Anthropic `tools` entries with `input_schema`.
 - Anthropic SSE uses framed `event:`/`data:` events; consume complete SSE data payloads rather than parsing it as OpenAI-style line JSON.
 
+## Output allowance (`max_tokens`)
+
+- Anthropic requires a positive `max_tokens` (the output cap) on every request and rejects one above the model's output ceiling. `_resolve_max_tokens(request_kwargs, model_id)` resolves it, precedence: an explicit positive caller value → the model's catalog `max_output_tokens` (the **default**, via the injected lookup, so each model uses its own full allowance) → the provider-config `max_tokens` default as the **fallback only when the ceiling is unknown** (no lookup / offline refresh). A non-positive caller value is ignored (it would 400). The resolved value is pinned onto the payload after caller/default merge, so the ceiling wins over the config fallback.
+- Why: this replaced a flat provider-config cap (`anthropic.json` still carries `max_tokens: 8192`, now only the ceiling-unknown fallback) that applied to every model regardless of its real ceiling. Under that flat cap a `budget`-control Claude's `budget_tokens` was clamped to `max_tokens - 1`, so `high`/`xhigh`/`max` effort all collapsed to the same ~8K budget (no extra reasoning above medium), and a long thinking+answer turn truncated at the shared cap. Defaulting to the model ceiling removes that artificial ceiling. Verified live 2026-07-09: `max_tokens` = the model's catalog output ceiling (e.g. 64000 on a budget Sonnet) is accepted (HTTP 200) and returns full answers.
+- The reasoning `budget_tokens` is still clamped strictly under this resolved `max_tokens` (see Reasoning).
+
 ## Prompt Caching
 
 - Anthropic caching is **opt-in on the write side** — unlike OpenAI-style wires it caches nothing unless a content block carries `cache_control`. `_build_payload` calls `_apply_prompt_caching(payload)` last (after all other mutations, so markers land on the final wire shape); it is always on (no setting). The read side is already canonical (see Response Normalization → Usage).

@@ -325,7 +325,9 @@ def _anthropic_control_model(
             ),
         ),
         context_window=200000,
-        max_output_tokens=8192,
+        # A realistic budget-Claude output ceiling: large enough that an effort's
+        # thinking budget fits without the max_tokens clamp confounding the test.
+        max_output_tokens=64000,
     )
 
 
@@ -1206,19 +1208,27 @@ class TestSendRequestFormat:
     @respx.mock
     @pytest.mark.asyncio
     async def test_send_budget_model_clamps_under_max_tokens(self):
-        """The budget stays strictly under the output ``max_tokens`` allowance."""
+        """The budget stays strictly under an explicit output ``max_tokens``."""
         route = respx.post(ANTHROPIC_URL).mock(
             return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
         )
         adapter = AnthropicAdapter(
-            ANTHROPIC_CONFIG,  # provider default max_tokens=4096
+            ANTHROPIC_CONFIG,
             API_KEY,
             model_lookup=lambda model_id: _anthropic_control_model(model_id, control="budget"),
         )
 
-        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="high")
+        # An explicit small max_tokens wins over the model ceiling; the high-effort
+        # budget (16384) is clamped strictly under it.
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-opus-4-1",
+            thinking_effort="high",
+            max_tokens=4096,
+        )
 
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["max_tokens"] == 4096
         assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 4095}
 
     @respx.mock
@@ -1256,6 +1266,102 @@ class TestSendRequestFormat:
 
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+
+class TestMaxTokensResolution:
+    """The output ``max_tokens`` defaults to the model's catalog ceiling."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_defaults_max_tokens_to_model_ceiling(self):
+        """With no caller value, ``max_tokens`` is the model's output ceiling."""
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(model_id, control="budget"),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1")
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["max_tokens"] == 64000
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_explicit_max_tokens_wins_over_ceiling(self):
+        """An explicit positive caller value overrides the model ceiling."""
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(model_id, control="budget"),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", max_tokens=1234)
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["max_tokens"] == 1234
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_non_positive_max_tokens_falls_back_to_ceiling(self):
+        """A non-positive caller value is ignored (it would 400) — ceiling wins."""
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(model_id, control="budget"),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", max_tokens=0)
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["max_tokens"] == 64000
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_max_tokens_falls_back_to_config_default_without_ceiling(self):
+        """When the ceiling is unknown (no lookup), the config default is used."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(ANTHROPIC_CONFIG, API_KEY)  # default max_tokens=4096, no lookup
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["max_tokens"] == 4096
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_budget_effort_keeps_output_headroom_under_ceiling(self):
+        """Regression: a mid-effort budget no longer consumes the whole allowance.
+
+        Under a flat 8K cap the ``medium`` budget (8192) was clamped to ~8191,
+        leaving ~1 token for the answer. Defaulting ``max_tokens`` to the model's
+        real ceiling leaves the budget intact with ample output headroom.
+        """
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(model_id, control="budget"),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-opus-4-1", thinking_effort="medium")
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["max_tokens"] == 64000
+        assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 8192}
 
 
 # ---------------------------------------------------------------------------
