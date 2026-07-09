@@ -10,6 +10,7 @@ from core.attachments import AttachmentStore
 from core.chat.errors import ChatError
 from core.chat.file_mentions import file_mention_request_text
 from core.model_tasks import SpeechError
+from core.tools.read import render_text_file
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -106,7 +107,19 @@ class ContentBlockResolver:
 
         is_current_turn = message.get("id") == current_user_message_id
         resolved_content: list[JsonObject] = []
-        for block in content:
+        block_index = 0
+        while block_index < len(content):
+            block = content[block_index]
+            if self._is_text_attachment_block(block):
+                attachment_blocks, raw = self._resolve_text_attachment_block(block)
+                resolved_content.extend(attachment_blocks)
+                if raw is not None and block_index + 1 < len(content):
+                    following_block = content[block_index + 1]
+                    if self._is_duplicate_attachment_text(following_block, raw):
+                        block_index += 2
+                        continue
+                block_index += 1
+                continue
             resolved_content.extend(
                 await self._resolve_block(
                     block,
@@ -115,6 +128,7 @@ class ContentBlockResolver:
                     wire_media_types=wire_media_types,
                 )
             )
+            block_index += 1
         resolved_message["content"] = resolved_content
         return resolved_message
 
@@ -391,9 +405,6 @@ class ContentBlockResolver:
         media_type = self._require_string(block, "media_type")
 
         modality = "pdf" if media_type == "application/pdf" else "file"
-        # A text file's content rides inline in its sibling text block, so the file
-        # reference only contributes the path note — never a native document, which
-        # would send the same content a second time.
         native = (
             is_current_turn
             and not media_type.startswith("text/")
@@ -418,6 +429,52 @@ class ContentBlockResolver:
         # Not native (text, unsupported model/wire, or an earlier turn): the path
         # note keeps the blob openable with the read tool and forwardable as a file.
         return [self._path_note_block("File", attachment_id, filename, media_type)]
+
+    def _resolve_text_attachment_block(
+        self, block: JsonObject
+    ) -> tuple[list[JsonObject], bytes | None]:
+        """Render a text attachment through the read tool's shared text renderer.
+
+        The file block remains the sole persisted representation. This keeps a
+        complete source file out of session history while preserving the exact
+        bounded initial read that an agent gets from the ``read`` tool.
+        """
+        attachment_id = self._require_string(block, "attachment_id")
+        filename = self._require_string(block, "filename")
+        media_type = self._require_string(block, "media_type")
+        path_note = self._path_note_block("File", attachment_id, filename, media_type)
+        try:
+            raw = self._read_attachment_bytes(attachment_id)
+        except AttachmentResolveError:
+            return [path_note], None
+
+        content = render_text_file(raw)
+        rendered = [path_note]
+        if content:
+            rendered.append({"type": "text", "text": content})
+        return rendered, raw
+
+    @staticmethod
+    def _is_text_attachment_block(block: Any) -> bool:
+        return (
+            isinstance(block, dict)
+            and block.get("type") == "file"
+            and isinstance(block.get("media_type"), str)
+            and block["media_type"].startswith("text/")
+        )
+
+    @staticmethod
+    def _is_duplicate_attachment_text(block: Any, raw: bytes) -> bool:
+        """Recognize the former file-reference-plus-full-text representation.
+
+        Exact duplicate content is never meaningful as a second block. Omitting it
+        on request assembly immediately bounds already-persisted conversations,
+        while text that merely follows a file attachment remains intact.
+        """
+        if not isinstance(block, dict) or block.get("type") != "text":
+            return False
+        text = block.get("text")
+        return isinstance(text, str) and text.encode("utf-8") == raw
 
     def _load_record_or_none(self, attachment_id: str) -> Any | None:
         try:

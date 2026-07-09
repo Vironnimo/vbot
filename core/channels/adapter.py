@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
-from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock, TextBlock
+from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock
 from core.extensions import InteractionButton
 
 if TYPE_CHECKING:
@@ -176,13 +176,12 @@ def content_blocks_for_attachment(record: AttachmentRecord) -> list[ContentBlock
 
     Shared by every channel adapter so inbound-file handling cannot drift between
     platforms. image/audio/video become a MediaBlock (the chat-layer resolver then
-    decides native input vs. transcription vs. a path note). A text file becomes a
-    FileBlock reference — which the resolver renders as a path note, so the agent can
-    forward or reopen the original — plus a TextBlock with the extracted content; a
-    text file with no extracted content yields the reference alone. Everything else
-    stays a generic FileBlock. This is the single classification point regardless of
-    how the platform delivered the file (e.g. a Telegram MP3 sent as a "document" is
-    media, not a generic file).
+    decides native input vs. transcription vs. a path note). Text files remain a
+    FileBlock too: the chat resolver renders them through the shared read renderer,
+    keeping the original local and applying the read tool's 50 KiB, 2,000-line
+    boundary. Everything else stays a generic FileBlock. This is the single
+    classification point regardless of how the platform delivered the file (e.g. a
+    Telegram MP3 sent as a "document" is media, not a generic file).
     """
     if record.media_type.startswith(("image/", "audio/", "video/")):
         return [
@@ -199,8 +198,6 @@ def content_blocks_for_attachment(record: AttachmentRecord) -> list[ContentBlock
         filename=record.filename,
         media_type=record.media_type,
     )
-    if record.media_type.startswith("text/") and record.text_content:
-        return [file_block, TextBlock(type="text", text=record.text_content)]
     return [file_block]
 
 

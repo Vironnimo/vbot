@@ -542,14 +542,13 @@ describe('ChatComposer', () => {
     });
   });
 
-  it('sends uploaded text files as a file reference plus embedded content', async () => {
+  it('sends uploaded text files as a file reference', async () => {
     const onSendMessage = vi.fn();
     uploadAttachment.mockResolvedValue({
       attachment_id: 'attachment-text-1',
       filename: 'note.txt',
       media_type: 'text/plain',
       size_bytes: 5,
-      text_content: 'hello',
     });
 
     mountedComponent = mount(ChatComposer, {
@@ -570,7 +569,6 @@ describe('ChatComposer', () => {
         filename: 'note.txt',
         media_type: 'text/plain',
       },
-      { type: 'text', text: 'hello' },
     ]);
   });
 
@@ -581,7 +579,6 @@ describe('ChatComposer', () => {
       filename: 'empty.txt',
       media_type: 'text/plain',
       size_bytes: 0,
-      text_content: '',
     });
 
     mountedComponent = mount(ChatComposer, {
@@ -612,7 +609,6 @@ describe('ChatComposer', () => {
       filename: 'photo.png',
       media_type: 'image/png',
       size_bytes: 7,
-      text_content: null,
     });
 
     mountedComponent = mount(ChatComposer, {
@@ -646,7 +642,6 @@ describe('ChatComposer', () => {
       filename,
       media_type: mediaType,
       size_bytes: 9,
-      text_content: null,
     });
 
     mountedComponent = mount(ChatComposer, {
@@ -677,7 +672,6 @@ describe('ChatComposer', () => {
       filename: 'paper.pdf',
       media_type: 'application/pdf',
       size_bytes: 11,
-      text_content: null,
     });
 
     mountedComponent = mount(ChatComposer, {
