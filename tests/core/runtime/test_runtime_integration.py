@@ -785,7 +785,7 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
                         ),
                     },
                     "offset": {
-                        "type": "number",
+                        "type": ["number", "string"],
                         "description": "Line number to start reading from (1-indexed).",
                     },
                     "limit": {

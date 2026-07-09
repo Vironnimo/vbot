@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,7 @@ READ_TOOL_PARAMETERS: JsonObject = {
             ),
         },
         "offset": {
-            "type": "number",
+            "type": ["number", "string"],
             "description": "Line number to start reading from (1-indexed).",
         },
         "limit": {
@@ -67,6 +68,14 @@ READ_TOOL_PARAMETERS: JsonObject = {
     "required": ["path"],
     "additionalProperties": False,
 }
+
+
+@dataclass(frozen=True)
+class _ReadPosition:
+    """A 1-indexed source position, optionally inside one physical line."""
+
+    line: int
+    character: int = 1
 
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:
@@ -102,16 +111,26 @@ def _build_read_hint(
     total_lines: int,
     *,
     byte_limited: bool,
+    continuation_offset: str | None = None,
 ) -> str:
     message = f"[Showing lines {shown_start}-{shown_end} of {total_lines}."
     if byte_limited:
         message += " Output truncated at 50 KB."
-    if shown_end < total_lines:
+    if continuation_offset is not None:
+        message += f" Use offset={continuation_offset} to continue."
+    elif shown_end < total_lines:
         message += f" Use offset={shown_end + 1} to continue."
     return message + "]"
 
 
-def _add_line_numbers(lines: list[str], start_line: int) -> list[str]:
+def _line_gutter(line: int, character: int = 1) -> str:
+    """Return a display gutter for a full line or an in-line continuation."""
+    if character == 1:
+        return f"{line}{LINE_NUMBER_GUTTER_SEPARATOR}"
+    return f"{line}:{character}{LINE_NUMBER_GUTTER_SEPARATOR}"
+
+
+def _add_line_numbers(lines: list[str], start_line: int, start_character: int = 1) -> list[str]:
     """Prefix each line with a compact ``N|`` reference gutter.
 
     The gutter is deliberately unpadded: padding to a fixed width is pure token
@@ -120,7 +139,7 @@ def _add_line_numbers(lines: list[str], start_line: int) -> list[str]:
     (``keepends``); the number goes in front, file-absolute from ``start_line``.
     """
     return [
-        f"{start_line + index}{LINE_NUMBER_GUTTER_SEPARATOR}{line}"
+        f"{_line_gutter(start_line + index, start_character if index == 0 else 1)}{line}"
         for index, line in enumerate(lines)
     ]
 
@@ -134,16 +153,45 @@ def _resolve_read_path(context: ToolContext, path: str) -> Path:
 
 def _read_file_text(raw: bytes, offset: object = None, limit: object = None) -> str:
     """Render file bytes as numbered text with offset/limit controls and truncation."""
-    start_line = optional_int(offset, field_name="offset", minimum=1) or 1
+    position = _parse_read_position(offset)
     max_lines = optional_int(limit, field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
 
     if raw.startswith(_UTF8_BOM_BYTES):
         raw = raw[len(_UTF8_BOM_BYTES) :]
     decoded = raw.decode("utf-8", errors="replace")
-    return _render_text(decoded, start_line, max_lines, number=True)
+    return _render_text(
+        decoded,
+        position.line,
+        max_lines,
+        number=True,
+        start_character=position.character,
+    )
 
 
-def _render_text(text: str, start_line: int, max_lines: int, *, number: bool) -> str:
+def _parse_read_position(offset: object) -> _ReadPosition:
+    """Parse a normal line offset or an in-line continuation address."""
+    if isinstance(offset, str) and ":" in offset:
+        parts = offset.split(":")
+        if len(parts) != 2:
+            raise ValueError("offset must be a line number or line:character address")
+        line = optional_int(parts[0], field_name="offset line", minimum=1)
+        character = optional_int(parts[1], field_name="offset character", minimum=1)
+        if line is None or character is None:
+            raise ValueError("offset must be a line number or line:character address")
+        return _ReadPosition(line, character)
+
+    line = optional_int(offset, field_name="offset", minimum=1) or 1
+    return _ReadPosition(line)
+
+
+def _render_text(
+    text: str,
+    start_line: int,
+    max_lines: int,
+    *,
+    number: bool,
+    start_character: int = 1,
+) -> str:
     """Apply offset/limit, optional line numbering, and truncation safeguards.
 
     Shared by the literal-file path (``number=True`` adds the ``N|`` gutter) and
@@ -161,13 +209,22 @@ def _render_text(text: str, start_line: int, max_lines: int, *, number: bool) ->
         return (
             f"[Offset {start_line} is beyond end of file ({total_lines} lines). Nothing to show.]"
         )
+    source_line = all_lines[start_index]
+    if start_character > len(source_line):
+        return (
+            f"[Character offset {start_character} is beyond end of line {start_line}. "
+            "Nothing to show.]"
+        )
 
     selected_lines = all_lines[start_index : start_index + max_lines]
+    selected_lines[0] = selected_lines[0][start_character - 1 :]
     line_limited = start_index + len(selected_lines) < total_lines
 
     # Number before any byte fitting so the gutter counts against the 50 KB
     # budget and the model can cite/patch lines without hand-counting.
-    rendered_lines = _add_line_numbers(selected_lines, start_line) if number else selected_lines
+    rendered_lines = (
+        _add_line_numbers(selected_lines, start_line, start_character) if number else selected_lines
+    )
     output = "".join(rendered_lines)
     output_bytes = output.encode("utf-8")
     byte_limited = len(output_bytes) > MAX_FILE_BYTES
@@ -176,21 +233,34 @@ def _render_text(text: str, start_line: int, max_lines: int, *, number: bool) ->
         return output
 
     shown_line_count = len(rendered_lines)
+    continuation_offset: str | None = None
     if byte_limited:
+        long_first_line = len(rendered_lines[0].encode("utf-8")) > MAX_FILE_BYTES
         provisional_count = max(1, min(len(rendered_lines), shown_line_count))
         while True:
             provisional_end = min(total_lines, start_line + provisional_count - 1)
+            possible_continuation = (
+                f"{start_line}:{start_character + MAX_FILE_BYTES}" if long_first_line else None
+            )
             hint = _build_read_hint(
                 start_line,
                 provisional_end,
                 total_lines,
                 byte_limited=True,
+                continuation_offset=possible_continuation,
             )
             reserved_bytes = len(hint.encode("utf-8")) + 2
             available_bytes = max(MAX_FILE_BYTES - reserved_bytes, 0)
             output, fitted_count = _fit_lines_within_byte_limit(rendered_lines, available_bytes)
             if fitted_count == provisional_count:
                 shown_line_count = fitted_count
+                first_line_was_cut = (
+                    fitted_count == 1 and len(rendered_lines[0].encode("utf-8")) > available_bytes
+                )
+                if first_line_was_cut:
+                    gutter = _line_gutter(start_line, start_character) if number else ""
+                    shown_source = output[len(gutter) :]
+                    continuation_offset = f"{start_line}:{start_character + len(shown_source)}"
                 break
             provisional_count = max(1, fitted_count)
 
@@ -203,6 +273,7 @@ def _render_text(text: str, start_line: int, max_lines: int, *, number: bool) ->
         shown_end,
         total_lines,
         byte_limited=byte_limited,
+        continuation_offset=continuation_offset,
     )
 
     return output + ("\n\n" if output and not output.endswith("\n") else "") + hint
@@ -305,7 +376,7 @@ def _read_extracted_document(
         return None
 
     try:
-        start_line = optional_int(arguments.get("offset"), field_name="offset", minimum=1) or 1
+        position = _parse_read_position(arguments.get("offset"))
         max_lines = (
             optional_int(arguments.get("limit"), field_name="limit", minimum=1)
             or DEFAULT_LINE_LIMIT
@@ -314,7 +385,13 @@ def _read_extracted_document(
         return tool_failure("invalid_arguments", str(error))
 
     header = f"[Extracted text from {name} ({document_label(kind)})]:"
-    body = _render_text(extracted, start_line, max_lines, number=False)
+    body = _render_text(
+        extracted,
+        position.line,
+        max_lines,
+        number=False,
+        start_character=position.character,
+    )
     if not body.strip():
         body = "(no extractable text)"
     return tool_success({"content": f"{header}\n{body}"})
