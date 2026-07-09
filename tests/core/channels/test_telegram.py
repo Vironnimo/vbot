@@ -33,7 +33,7 @@ from core.chat import MessageSender
 from core.chat.commands import CommandAction, CommandHandled, NotACommand
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.extensions import ExtensionRegistry, InteractionButton, purge_extension_modules
-from core.runs import ASSISTANT_OUTPUT_EVENT, Run
+from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
 
@@ -236,12 +236,21 @@ def make_adapter(
 
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
+
+    async def trigger_with_admission(*args: Any, **kwargs: Any) -> Any:
+        kwargs.pop("waiting_work_admission", None)
+        return await trigger_mock(*args, **kwargs)
+
     trigger_service = SimpleNamespace(
-        trigger_run=trigger_mock,
+        trigger_run=trigger_with_admission,
         retry_run=retry_run or AsyncMock(),
         compact_session=compact_session or AsyncMock(return_value="Context compacted."),
         # Synchronous like the real one (a bool, not a coroutine); idle by default.
         has_active_run=Mock(return_value=False),
+        reserve_waiting_work=Mock(
+            return_value=WaitingWorkAdmission(id="test-admission", scope="test:chat")
+        ),
+        release_waiting_work=Mock(return_value=True),
     )
     resolved_command_dispatcher = command_dispatcher or make_command_dispatcher()
 
@@ -1593,7 +1602,7 @@ async def test_run_prefix_tap_wakes_agent_and_bypasses_dispatcher(
         allowed_chat_ids=[12345],
     )
     adapter._interaction_dispatcher = dispatcher
-    wake = Mock(return_value=True)
+    wake = AsyncMock(return_value=True)
     adapter._engine.trigger_interaction_reply = wake  # type: ignore[method-assign]
 
     update = make_callback_update(
@@ -1632,7 +1641,7 @@ async def test_run_prefix_tap_denied_does_not_close_keyboard(
     )
     # Engine reports the tap unauthorized (a non-owner group tap): the adapter still
     # acks the spinner but must NOT close the shared message's keyboard.
-    wake = Mock(return_value=False)
+    wake = AsyncMock(return_value=False)
     adapter._engine.trigger_interaction_reply = wake  # type: ignore[method-assign]
 
     update = make_callback_update(chat_id=12345, user_id=99, data="run:done")
@@ -2146,7 +2155,7 @@ async def test_inbound_pdf_document_triggers_file_block(
 
 
 @pytest.mark.asyncio
-async def test_inbound_text_document_triggers_text_block_with_content(
+async def test_inbound_text_document_triggers_file_block(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2184,12 +2193,10 @@ async def test_inbound_text_document_triggers_text_block_with_content(
     assert await_args is not None
     blocks = await_args.args[1]
     assert isinstance(blocks, list)
-    assert len(blocks) == 2
+    assert len(blocks) == 1
     assert isinstance(blocks[0], FileBlock)
     assert blocks[0].filename == "notes.txt"
     assert blocks[0].media_type == "text/plain"
-    assert isinstance(blocks[1], TextBlock)
-    assert blocks[1].text == "hello from text file"
     await adapter.stop()
 
 

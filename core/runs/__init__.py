@@ -6,6 +6,7 @@ from core.runs.runs import (
     COMPACTION_COMPLETED_EVENT,
     DEFAULT_COMPLETED_RUN_RETENTION_LIMIT,
     DEFAULT_RUN_EVENT_RETENTION_LIMIT,
+    DEFAULT_WAITING_WORK_LIMIT,
     ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     REASONING_DELTA_EVENT,
@@ -32,6 +33,8 @@ from core.runs.runs import (
     RunExecutor,
     RunNotFoundError,
     RunStatus,
+    WaitingWorkAdmission,
+    WaitingWorkLimitError,
 )
 
 __all__ = [
@@ -43,6 +46,7 @@ __all__ = [
     "ChatRunManager",
     "DEFAULT_COMPLETED_RUN_RETENTION_LIMIT",
     "DEFAULT_RUN_EVENT_RETENTION_LIMIT",
+    "DEFAULT_WAITING_WORK_LIMIT",
     "ERROR_MESSAGE_PERSISTED_EVENT",
     "MODEL_FALLBACK_ACTIVATED_EVENT",
     "QueuedRunItem",
@@ -59,6 +63,8 @@ __all__ = [
     "RunExecutor",
     "RunNotFoundError",
     "RunStatus",
+    "WaitingWorkAdmission",
+    "WaitingWorkLimitError",
     "TERMINAL_EVENT_TYPES",
     "TOOL_CALL_DELTA_EVENT",
     "TOOL_CALL_RESULT_EVENT",

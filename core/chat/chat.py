@@ -138,6 +138,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
     RunExecutor,
+    WaitingWorkAdmission,
 )
 from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, ChatSession, skill_activation_names
 from core.utils.errors import ConfigError, ProviderError, VBotError
@@ -409,6 +410,7 @@ class ChatLoop:
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
         project_id: str | None = None,
+        waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
 
@@ -435,6 +437,7 @@ class ChatLoop:
             display_content=_display_content_preview(content),
             internal=internal,
             project_id=project_id,
+            waiting_work_admission=waiting_work_admission,
         )
 
     def build_queue_update(

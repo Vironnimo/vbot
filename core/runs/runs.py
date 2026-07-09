@@ -31,6 +31,7 @@ _LOGGER = logging.getLogger("vbot.runs")
 DEFAULT_RUN_EVENT_RETENTION_LIMIT = 4096
 DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT = 4096
 DEFAULT_COMPLETED_RUN_RETENTION_LIMIT = 512
+DEFAULT_WAITING_WORK_LIMIT = 32
 
 RUN_STARTED_EVENT = "run_started"
 USER_MESSAGE_EVENT = "user_message_persisted"
@@ -77,6 +78,24 @@ class RunCancelledError(RunError):
     """Raised when awaiting a cancelled run."""
 
 
+class WaitingWorkLimitError(RunError):
+    """Raised when accepting more waiting work would exceed a queue limit."""
+
+
+@dataclass(frozen=True, slots=True)
+class WaitingWorkAdmission:
+    """One reserved waiting-work slot held before a Run can be enqueued.
+
+    Channel ingress obtains this reservation before downloading media. The
+    reservation is either released once work begins or atomically transferred
+    to a queued Run, so the shared manager remains the authority for all
+    waiting-work capacity.
+    """
+
+    id: str
+    scope: str
+
+
 @dataclass
 class QueuedRunItem:
     """One queued run request waiting for a session turn slot."""
@@ -87,6 +106,7 @@ class QueuedRunItem:
     internal: bool
     future: asyncio.Future[Run]
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    waiting_scope: str | None = field(default=None, repr=False)
 
     def to_dict(self) -> JsonObject:
         """Return a server-safe queued item dictionary."""
@@ -429,18 +449,78 @@ class ChatRunManager:
         *,
         completed_run_retention_limit: int = DEFAULT_COMPLETED_RUN_RETENTION_LIMIT,
         run_event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
+        waiting_work_limit: int = DEFAULT_WAITING_WORK_LIMIT,
     ) -> None:
         if completed_run_retention_limit < 1:
             raise ValueError("completed_run_retention_limit must be positive")
         if run_event_retention_limit < 1:
             raise ValueError("run_event_retention_limit must be positive")
+        if waiting_work_limit < 1:
+            raise ValueError("waiting_work_limit must be positive")
         self._lock = asyncio.Lock()
         self._active_by_session: dict[SessionKey, Run] = {}
         self._queues: dict[SessionKey, deque[QueuedRunItem]] = {}
+        self._waiting_work_admissions: dict[str, WaitingWorkAdmission] = {}
         self._runs: dict[str, Run] = {}
         self._run_started_callbacks: list[Callable[[Run], None]] = []
         self._completed_run_retention_limit = completed_run_retention_limit
         self._run_event_retention_limit = run_event_retention_limit
+        self._waiting_work_limit = waiting_work_limit
+
+    def reserve_waiting_work(
+        self,
+        *,
+        scope: str,
+        scope_limit: int,
+    ) -> WaitingWorkAdmission:
+        """Reserve one waiting-work slot before expensive ingress processing.
+
+        Reservations cover work that has been accepted by an ingress path but
+        cannot yet become a queued Run, for example a channel attachment that
+        must not be downloaded until capacity is known. A reservation later
+        moves atomically into :meth:`enqueue` or is released when processing
+        starts without creating a Run.
+        """
+        if not scope:
+            raise ValueError("waiting work scope must not be empty")
+        if scope_limit < 1:
+            raise ValueError("waiting work scope_limit must be positive")
+
+        waiting_count = self._waiting_work_count()
+        if waiting_count >= self._waiting_work_limit:
+            _LOGGER.warning(
+                "Waiting work rejected by global limit (scope=%s waiting=%d limit=%d)",
+                scope,
+                waiting_count,
+                self._waiting_work_limit,
+            )
+            raise WaitingWorkLimitError("global waiting work limit reached")
+
+        scoped_waiting_count = self._waiting_work_count_for_scope(scope)
+        if scoped_waiting_count >= scope_limit:
+            _LOGGER.warning(
+                "Waiting work rejected by scope limit (scope=%s waiting=%d limit=%d)",
+                scope,
+                scoped_waiting_count,
+                scope_limit,
+            )
+            raise WaitingWorkLimitError("waiting work scope limit reached")
+
+        admission = WaitingWorkAdmission(id=str(uuid.uuid4()), scope=scope)
+        self._waiting_work_admissions[admission.id] = admission
+        return admission
+
+    def release_waiting_work(self, admission: WaitingWorkAdmission) -> bool:
+        """Release an unused ingress reservation, returning whether it was held."""
+        current = self._waiting_work_admissions.get(admission.id)
+        if current != admission:
+            return False
+        self._waiting_work_admissions.pop(admission.id)
+        return True
+
+    def waiting_work_count(self) -> int:
+        """Return the system-wide number of tasks waiting for processing."""
+        return self._waiting_work_count()
 
     def add_run_started_callback(self, callback: Callable[[Run], None]) -> Callable[[], None]:
         """Register a callback invoked whenever this manager starts a Run."""
@@ -485,6 +565,7 @@ class ChatRunManager:
         display_content: str = "",
         internal: bool = False,
         project_id: str | None,
+        waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> QueuedRunItem:
         """Start immediately when idle or append one item to the session queue."""
         session_key = (project_id, agent_id, session_id)
@@ -500,6 +581,7 @@ class ChatRunManager:
         async with self._lock:
             active_run = self._active_by_session.get(session_key)
             if active_run is None or active_run.status != RunStatus.RUNNING:
+                self._consume_waiting_work_admission(waiting_work_admission)
                 run = self._start_run_locked(
                     session_key=session_key,
                     executor=item.executor,
@@ -508,6 +590,17 @@ class ChatRunManager:
                 item.future.set_result(run)
                 return item
 
+            waiting_scope = self._consume_waiting_work_admission(waiting_work_admission)
+            if waiting_scope is None and self._waiting_work_count() >= self._waiting_work_limit:
+                _LOGGER.warning(
+                    "Run rejected by global waiting-work limit (agent=%s session=%s limit=%d)",
+                    agent_id,
+                    session_id,
+                    self._waiting_work_limit,
+                )
+                raise WaitingWorkLimitError("global waiting work limit reached")
+
+            item.waiting_scope = waiting_scope
             queue = self._queues.setdefault(session_key, deque())
             queue.append(item)
             _LOGGER.info(
@@ -517,6 +610,26 @@ class ChatRunManager:
                 len(queue),
             )
             return item
+
+    def _consume_waiting_work_admission(self, admission: WaitingWorkAdmission | None) -> str | None:
+        """Remove one held reservation and return its scope for a queued Run."""
+        if admission is None:
+            return None
+        current = self._waiting_work_admissions.get(admission.id)
+        if current != admission:
+            raise ValueError("waiting work admission is no longer active")
+        self._waiting_work_admissions.pop(admission.id)
+        return admission.scope
+
+    def _waiting_work_count(self) -> int:
+        return len(self._waiting_work_admissions) + sum(
+            len(queue) for queue in self._queues.values()
+        )
+
+    def _waiting_work_count_for_scope(self, scope: str) -> int:
+        return sum(
+            admission.scope == scope for admission in self._waiting_work_admissions.values()
+        ) + sum(item.waiting_scope == scope for queue in self._queues.values() for item in queue)
 
     def list_queued(
         self, agent_id: str, session_id: str, *, project_id: str | None

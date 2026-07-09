@@ -6,15 +6,25 @@ Run lifecycle, cancellation, replayable timeline events, and in-memory busy-sess
 
 `core/runs/` owns the provider-agnostic execution envelope around one active Session turn. It does not own provider/tool execution, ChatMessage construction, Session persistence, server transport, or WebUI state; those domains consume Run state through `core.runs`. `ChatLoop` builds the `RunExecutor` and calls `ChatRunManager.start(...)` or `enqueue(...)`; the manager creates the `Run`, runs the executor in a background task, publishes lifecycle events, and drains queued work.
 
+## Terms
+
+Core term Run lives in `.vorch/GLOSSARY.md`.
+
+### Waiting-Work Admission
+
+**Definition:** A manager-owned reservation for an inbound item that has been accepted but cannot yet be represented as a queued Run, such as a channel attachment before its download. It atomically becomes a queued Run or is released when work starts or aborts.
+
+**Not:** A second queue or a Run; it only accounts for capacity in the existing `ChatRunManager`.
+
 ## Data Model
 
 - `RunStatus` — `running`, `completed`, `failed`, or `cancelled`.
 - `RunEvent` — replayable timeline event with Run-local `sequence`, ids, `type`, JSON `payload`, and UTC ISO `timestamp`. It also carries `project_id` (the emitting Run's anchor, `None` for an identity run): `agent_id` stays bare, so a consumer that keys by the outside `agent@projekt` address rebuilds it from this field. Mirrored into `to_dict()` and the `/ws` bridge payload.
 - `Run` — active execution state: bounded replay buffer, bounded live subscriber queues, cancellation callbacks, terminal status/result/error, and the executor task used for best-effort cancellation.
-- `QueuedRunItem` — pending request with display preview, executor, `internal` flag, created timestamp, and `future`; the future resolves to the started `Run` or is cancelled if the queued item is removed before start. It carries no project field — the queue key owns the project anchor, and the drain derives the started Run's `project_id` from that key.
-- `ChatRunManager` — in-memory owner of active Runs, completed-Run lookup retention, per-session FIFO queues, cancellation, and Run-start callbacks.
+- `QueuedRunItem` — pending request with display preview, executor, `internal` flag, created timestamp, and `future`; the future resolves to the started `Run` or is cancelled if the queued item is removed before start. It carries no project field — the queue key owns the project anchor, and the drain derives the started Run's `project_id` from that key. A channel-originated item may additionally retain an internal waiting-work scope while it waits; it is not exposed in the queue RPC payload.
+- `ChatRunManager` — in-memory owner of active Runs, completed-Run lookup retention, per-session FIFO queues, cancellation, Run-start callbacks, and the bounded system-wide waiting-work accounting used by channel ingress.
 - `RunExecutor` — async callable receiving the `Run` object and returning the final result. The manager translates returned results, raised errors, and cancellation into terminal Run state.
-- `RunError`, `ActiveRunError`, `RunNotFoundError`, and `RunCancelledError` are expected domain errors for caller/RPC mapping.
+- `RunError`, `ActiveRunError`, `RunNotFoundError`, `RunCancelledError`, and `WaitingWorkLimitError` are expected domain errors for caller/RPC mapping.
 
 ## Event Contract
 
@@ -37,6 +47,7 @@ Run event payload ownership stays with the domain that emits the event. `core/ch
 - `Run.clear_tool_cancel(tool_call_id)` removes the per-tool-call cancel registry entry.
 - `Run.raise_if_cancelled()` lets executors stop between provider/tool steps once cancellation was requested.
 - `ChatRunManager.start(agent_id, session_id, executor, *, project_id)` starts immediately or raises `ActiveRunError` when that Session already has a running Run. `enqueue(...)` starts immediately when idle and resolves the item future at once; otherwise it appends a FIFO `QueuedRunItem` for that session key. `project_id` enters the session key **and** is stored on the created `Run` for session I/O.
+- **Waiting-work capacity is manager-owned.** At most `DEFAULT_WAITING_WORK_LIMIT` (32) tasks may wait system-wide; active Runs do not count. `enqueue` rejects a new normal queued Run at that ceiling. Channel ingress calls `reserve_waiting_work(scope, scope_limit)` before accepting raw work or downloading media; the reservation counts against the same ceiling and its per-scope limit. It is released when non-Run work begins, or transferred atomically through `enqueue(..., waiting_work_admission=...)`, so no second queue can over-admit. `release_waiting_work(...)` cleans up a reservation when processing fails or shuts down; `waiting_work_count()` is the central diagnostic count.
 - **The dedup key is `(project_id, agent_id, session_id)`** (`SessionKey`). The project anchor is part of the key because `session.create` accepts caller-chosen session ids, so identity `builder` and project `builder@vbot` can both own a session named `main` — the two sessions must never block, cancel, or guard each other (the recall FTS index was scoped by project for exactly this case). Every key-touching method (`start`, `enqueue`, `active_run`, `cancel_by_session`, `list_queued`, `remove_queued`, `update_queued`, `has_activity_for_agent`, `has_activity_for_session`) takes a **required** keyword-only `project_id` (`None` = the identity anchor), so no caller can silently fall into the wrong scope. Every RPC surface knows the project from its parsed `agent@projekt` address; the queue RPCs (`chat.queue_*`) parse the address too.
 - `ChatRunManager.list_queued(...)`, `remove_queued(...)`, and `update_queued(...)` are raw queue controls. They include internal items; public RPC filtering belongs in `server/rpc/chat_methods.py`.
 - `ChatRunManager.get(run_id)`, `active_run(...)`, `cancel(run_id)`, and `cancel_by_session(...)` are the lookup/cancellation surface used by server RPCs, slash commands, channels, tools, and sub-agent cleanup.
@@ -49,13 +60,13 @@ Run event payload ownership stays with the domain that emits the event. `core/ch
 - `core/chat/` owns provider calls, tool execution, message persistence, retry/fallback behavior, and which Run events to emit. New chat execution paths should call the manager instead of constructing `Run` directly.
 - `core/sessions/` owns durable history. Run timelines are process-local replay buffers and are not a substitute for JSONL Session history.
 - `server/` exposes `Run.events` in RPC responses, streams raw Run events over SSE, and bridges non-delta events to WebSocket lifecycle summaries. Delta events are SSE-only.
-- `core/automation/`, `core/subagents/`, channels, tools, and slash commands share the same `ChatRunManager`; they must not create parallel per-domain busy-session queues.
+- `core/automation/`, `core/subagents/`, channels, tools, and slash commands share the same `ChatRunManager`; they must not create parallel per-domain busy-session queues. Channel ingress reservations are manager state, not a separate scheduler, and are transferred to the normal Run FIFO when a turn is busy.
 - `webui/` treats queue state and Run lifecycle truth as server-owned projections.
 
 ## Constraints & Gotchas
 
 - Only one Run may be active per `(project_id, agent_id, session_id)`; Runs in different Sessions (including a project and an identity session sharing agent/session ids) execute in parallel. `Run.project_id` mirrors the key's project dimension and is what the executor's session I/O reads.
-- Queue state, active Run lookup, completed Run lookup, and Run event replay windows are all in-memory and bounded. Process restart loses queue state and old timeline replay.
+- Queue state, ingress reservations, active Run lookup, completed Run lookup, and Run event replay windows are all in-memory and bounded. The shared waiting-work ceiling is 32 across queued Runs and reservations; process restart loses queue state and old timeline replay.
 - `enqueue(...)` is not "always queued"; callers must handle the item future already being resolved to a running Run.
 - Removing a queued item cancels its future. Updating a queued item replaces both executor and display preview, so build replacements through `ChatLoop.build_queue_update(...)` when user-visible chat content changes.
 - The manager starts terminal bookkeeping. Normal executors should emit domain events and return or raise; they should not call `mark_completed`, `mark_failed`, or `mark_cancelled` themselves unless they deliberately own lifecycle completion.

@@ -24,7 +24,7 @@ from core.chat import MessageSender
 from core.chat.commands import NotACommand
 from core.chat.content_blocks import MediaBlock, TextBlock
 from core.extensions import InteractionButton
-from core.runs import ASSISTANT_OUTPUT_EVENT, Run
+from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
 
@@ -201,10 +201,19 @@ def make_adapter(
 ) -> tuple[DiscordChannelAdapter, ChatSessionManager, AsyncMock, FakeClient]:
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
+
+    async def trigger_with_admission(*args: Any, **kwargs: Any) -> Any:
+        kwargs.pop("waiting_work_admission", None)
+        return await trigger_mock(*args, **kwargs)
+
     trigger_service = SimpleNamespace(
-        trigger_run=trigger_mock,
+        trigger_run=trigger_with_admission,
         retry_run=AsyncMock(),
         compact_session=AsyncMock(return_value="Context compacted."),
+        reserve_waiting_work=Mock(
+            return_value=WaitingWorkAdmission(id="test-admission", scope="test:chat")
+        ),
+        release_waiting_work=Mock(return_value=True),
     )
     adapter = DiscordChannelAdapter(
         make_config(
@@ -490,10 +499,19 @@ async def test_mention_backfills_history_since_last_bot_reply_in_order(
         return make_completed_run(session_id=session_id)
 
     trigger_mock = AsyncMock(side_effect=trigger_run)
+
+    async def trigger_with_admission(*args: Any, **kwargs: Any) -> Any:
+        kwargs.pop("waiting_work_admission", None)
+        return await trigger_mock(*args, **kwargs)
+
     trigger_service = SimpleNamespace(
-        trigger_run=trigger_mock,
+        trigger_run=trigger_with_admission,
         retry_run=AsyncMock(),
         compact_session=AsyncMock(return_value="Context compacted."),
+        reserve_waiting_work=Mock(
+            return_value=WaitingWorkAdmission(id="test-admission", scope="test:chat")
+        ),
+        release_waiting_work=Mock(return_value=True),
     )
     adapter = DiscordChannelAdapter(
         make_config(allowed_chat_ids=[100]),

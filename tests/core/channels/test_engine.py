@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -27,7 +28,7 @@ from core.chat import MessageSender
 from core.chat.commands import CommandAction, CommandHandled, NotACommand
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.extensions.interactions import InteractionButton, InteractionEvent
-from core.runs import ASSISTANT_OUTPUT_EVENT, Run
+from core.runs import ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
 SESSION_ID = "ch-tg-assistant-12345"
@@ -194,16 +195,42 @@ def make_engine(
     has_active_run: Mock | None = None,
     command_dispatcher: object | None = None,
     transport: FakeTransport | None = None,
+    waiting_work_manager: ChatRunManager | None = None,
 ) -> tuple[ChannelConversationEngine, ChatSessionManager, AsyncMock, FakeTransport]:
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
+
+    async def trigger_with_admission(*args: Any, **kwargs: Any) -> Any:
+        admission = kwargs.pop("waiting_work_admission", None)
+        if waiting_work_manager is not None and isinstance(admission, WaitingWorkAdmission):
+            waiting_work_manager.release_waiting_work(admission)
+        return await trigger_mock(*args, **kwargs)
+
+    admission_ids = count()
+
+    def reserve_waiting_work(*, scope: str, scope_limit: int) -> WaitingWorkAdmission:
+        if waiting_work_manager is not None:
+            return waiting_work_manager.reserve_waiting_work(
+                scope=scope,
+                scope_limit=scope_limit,
+            )
+        del scope_limit
+        return WaitingWorkAdmission(id=f"admission-{next(admission_ids)}", scope=scope)
+
+    def release_waiting_work(admission: WaitingWorkAdmission | None) -> bool:
+        if waiting_work_manager is not None and admission is not None:
+            return waiting_work_manager.release_waiting_work(admission)
+        return True
+
     trigger_service = SimpleNamespace(
-        trigger_run=trigger_mock,
+        trigger_run=trigger_with_admission,
         retry_run=retry_run or AsyncMock(),
         compact_session=compact_session or AsyncMock(return_value="Context compacted."),
         # Synchronous on purpose: the real has_active_run returns a bool, not a
         # coroutine. An AsyncMock would return a truthy coroutine -> always "busy".
         has_active_run=has_active_run or Mock(return_value=False),
+        reserve_waiting_work=reserve_waiting_work,
+        release_waiting_work=release_waiting_work,
     )
     resolved_transport = transport or FakeTransport()
     engine = ChannelConversationEngine(
@@ -750,6 +777,236 @@ async def test_non_command_text_queues_behind_blocked_worker(
     assert queue is not None
     assert queue.qsize() == 1
 
+    release_relay.set()
+    await drain(engine, 12345)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_chat_waiting_limit_rejects_ninth_followup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    waiting_work_manager = ChatRunManager(waiting_work_limit=16)
+    trigger_mock = AsyncMock(
+        return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
+    )
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        waiting_work_manager=waiting_work_manager,
+    )
+    relay_started = asyncio.Event()
+    release_relay = asyncio.Event()
+    first_relay = True
+
+    async def block_first_relay(_run: Run, _reply_plan: ReplyPlanFacts) -> None:
+        nonlocal first_relay
+        if first_relay:
+            first_relay = False
+            relay_started.set()
+            await release_relay.wait()
+
+    monkeypatch.setattr(engine, "_relay_run_events", block_first_relay)
+
+    await engine.handle_inbound_text(make_conversation(), "running")
+    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    for index in range(engine_module.CHANNEL_WAITING_WORK_LIMIT):
+        await engine.handle_inbound_text(make_conversation(), f"queued {index}")
+
+    assert waiting_work_manager.waiting_work_count() == engine_module.CHANNEL_WAITING_WORK_LIMIT
+    await engine.handle_inbound_text(make_conversation(), "overflow")
+
+    queue = engine._chat_queues["12345"]
+    assert queue.qsize() == engine_module.CHANNEL_WAITING_WORK_LIMIT
+    assert transport.sent_texts == [engine_module._BUSY_REPLY]
+    release_relay.set()
+    await drain(engine, 12345)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_global_waiting_limit_rejects_followup_from_another_chat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waiting_work_manager = ChatRunManager(waiting_work_limit=2)
+    trigger_mock = AsyncMock(
+        return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
+    )
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        waiting_work_manager=waiting_work_manager,
+    )
+    first_relays_started = {"12345": asyncio.Event(), "67890": asyncio.Event()}
+    release_relays = asyncio.Event()
+
+    async def block_first_relay(_run: Run, reply_plan: ReplyPlanFacts) -> None:
+        started = first_relays_started[reply_plan.platform_target]
+        if not started.is_set():
+            started.set()
+            await release_relays.wait()
+
+    monkeypatch.setattr(engine, "_relay_run_events", block_first_relay)
+
+    await engine.handle_inbound_text(make_conversation(chat_id=12345), "running one")
+    await asyncio.wait_for(first_relays_started["12345"].wait(), timeout=1)
+    await engine.handle_inbound_text(make_conversation(chat_id=12345), "queued one")
+    await engine.handle_inbound_text(make_conversation(chat_id=67890), "running two")
+    await asyncio.wait_for(first_relays_started["67890"].wait(), timeout=1)
+    await engine.handle_inbound_text(make_conversation(chat_id=67890), "queued two")
+
+    assert waiting_work_manager.waiting_work_count() == 2
+    await engine.handle_inbound_text(make_conversation(chat_id=12345), "global overflow")
+
+    assert transport.sent_texts == [engine_module._BUSY_REPLY]
+    assert engine._chat_queues["12345"].qsize() == 1
+    release_relays.set()
+    await drain(engine, 12345)
+    await drain(engine, 67890)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_channel_fifo_preserves_arrival_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trigger_mock = AsyncMock(
+        return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
+    )
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+    relay_started = asyncio.Event()
+    release_relay = asyncio.Event()
+    first_relay = True
+
+    async def block_first_relay(_run: Run, _reply_plan: ReplyPlanFacts) -> None:
+        nonlocal first_relay
+        if first_relay:
+            first_relay = False
+            relay_started.set()
+            await release_relay.wait()
+
+    monkeypatch.setattr(engine, "_relay_run_events", block_first_relay)
+
+    for text in ("first", "second", "third"):
+        await engine.handle_inbound_text(make_conversation(), text)
+        if text == "first":
+            await asyncio.wait_for(relay_started.wait(), timeout=1)
+
+    release_relay.set()
+    await drain(engine, 12345)
+
+    assert [call.args[1] for call in trigger_mock.await_args_list] == ["first", "second", "third"]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_overflow_busy_reply_is_throttled_per_chat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waiting_work_manager = ChatRunManager(waiting_work_limit=16)
+    trigger_mock = AsyncMock(
+        return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
+    )
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        waiting_work_manager=waiting_work_manager,
+    )
+    relay_started = asyncio.Event()
+    release_relay = asyncio.Event()
+
+    async def block_relay(_run: Run, _reply_plan: ReplyPlanFacts) -> None:
+        relay_started.set()
+        await release_relay.wait()
+
+    monkeypatch.setattr(engine, "_relay_run_events", block_relay)
+
+    await engine.handle_inbound_text(make_conversation(), "running")
+    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    for index in range(engine_module.CHANNEL_WAITING_WORK_LIMIT):
+        await engine.handle_inbound_text(make_conversation(), f"queued {index}")
+    await engine.handle_inbound_text(make_conversation(), "overflow one")
+    await engine.handle_inbound_text(make_conversation(), "overflow two")
+
+    assert transport.sent_texts == [engine_module._BUSY_REPLY]
+    release_relay.set()
+    await drain(engine, 12345)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_overflow_rejects_media_before_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waiting_work_manager = ChatRunManager(waiting_work_limit=16)
+    media_builder = AsyncMock(return_value=[])
+    transport = FakeTransport(media_builder=media_builder)
+    trigger_mock = AsyncMock(
+        return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
+    )
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        transport=transport,
+        waiting_work_manager=waiting_work_manager,
+    )
+    relay_started = asyncio.Event()
+    release_relay = asyncio.Event()
+
+    async def block_relay(_run: Run, _reply_plan: ReplyPlanFacts) -> None:
+        relay_started.set()
+        await release_relay.wait()
+
+    monkeypatch.setattr(engine, "_relay_run_events", block_relay)
+
+    await engine.handle_inbound_text(make_conversation(), "running")
+    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    for index in range(engine_module.CHANNEL_WAITING_WORK_LIMIT):
+        await engine.handle_inbound_text(make_conversation(), f"queued {index}")
+    await engine.handle_inbound_media(make_conversation(), (SimpleNamespace(caption="photo"),))
+
+    media_builder.assert_not_awaited()
+    assert transport.sent_texts == [engine_module._BUSY_REPLY]
+    release_relay.set()
+    await drain(engine, 12345)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_command_bypasses_full_waiting_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waiting_work_manager = ChatRunManager(waiting_work_limit=1)
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    trigger_mock = AsyncMock(
+        return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
+    )
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        command_dispatcher=command_dispatcher,
+        waiting_work_manager=waiting_work_manager,
+    )
+    relay_started = asyncio.Event()
+    release_relay = asyncio.Event()
+
+    async def block_relay(_run: Run, _reply_plan: ReplyPlanFacts) -> None:
+        relay_started.set()
+        await release_relay.wait()
+
+    monkeypatch.setattr(engine, "_relay_run_events", block_relay)
+
+    await engine.handle_inbound_text(make_conversation(), "running")
+    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await engine.handle_inbound_text(make_conversation(), "queued")
+    await engine.handle_inbound_text(make_conversation(), "/stop")
+
+    command_dispatcher.dispatch.assert_called_once_with("assistant", SESSION_ID, "/stop")
+    assert transport.sent_texts == ["Run cancelled."]
     release_relay.set()
     await drain(engine, 12345)
     await engine.stop()
@@ -1490,7 +1747,7 @@ async def test_interaction_tap_enqueues_internal_run_with_state(tmp_path: Path) 
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
     engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
 
-    authorized = engine.trigger_interaction_reply(
+    authorized = await engine.trigger_interaction_reply(
         make_conversation(kind="direct", user_id=50), _interaction_event()
     )
     await drain(engine, 12345)
@@ -1513,7 +1770,7 @@ async def test_group_owner_interaction_tap_enqueues(tmp_path: Path) -> None:
         tmp_path, owner_user_ids=["50"], trigger_run=trigger_mock
     )
 
-    authorized = engine.trigger_interaction_reply(
+    authorized = await engine.trigger_interaction_reply(
         make_conversation(kind="group", user_id=50, message_id="777"), _interaction_event()
     )
     await drain(engine, 12345)
@@ -1533,7 +1790,7 @@ async def test_group_non_owner_interaction_tap_is_dropped(
     )
 
     caplog.set_level(logging.INFO, logger="vbot.channels.engine")
-    authorized = engine.trigger_interaction_reply(
+    authorized = await engine.trigger_interaction_reply(
         make_conversation(kind="group", user_id=99, message_id="777"), _interaction_event()
     )
     await drain(engine, 12345)

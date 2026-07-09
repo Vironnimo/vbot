@@ -631,7 +631,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if conversation.kind == "direct":
             start_payload = _parse_start_command(message_text)
             if start_payload is not None:
-                self._engine.trigger_internal_reply(
+                await self._engine.trigger_internal_reply(
                     conversation, _start_greeting_prompt(start_payload)
                 )
                 return
@@ -859,7 +859,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             # extension dispatcher is intentionally bypassed.
             with contextlib.suppress(ChannelError):
                 await responder.answer()
-            if self._engine.trigger_interaction_reply(conversation, event):
+            if await self._engine.trigger_interaction_reply(conversation, event):
                 with contextlib.suppress(ChannelError):
                     await responder.edit(buttons=[])
             return

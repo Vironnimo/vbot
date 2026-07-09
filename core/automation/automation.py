@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from core.chat import ChatLoop, MessageSender
 from core.chat.content_blocks import ContentBlock
-from core.runs import ActiveRunError, ChatRunManager, Run
+from core.runs import ActiveRunError, ChatRunManager, Run, WaitingWorkAdmission
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
@@ -37,6 +37,7 @@ class TriggerService:
         internal: bool = False,
         sender: MessageSender | None = None,
         project_id: str | None = None,
+        waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle.
 
@@ -52,23 +53,7 @@ class TriggerService:
 
         try:
             if internal:
-                return await self._trigger_chat_loop.start_run(
-                    agent_id,
-                    message,
-                    session_id=target_session_id,
-                    internal=True,
-                    project_id=project_id,
-                )
-            return await self._trigger_chat_loop.start_run(
-                agent_id,
-                message,
-                session_id=target_session_id,
-                sender=sender,
-                project_id=project_id,
-            )
-        except ActiveRunError:
-            if internal:
-                queued_item = await self._trigger_chat_loop.queue_run(
+                run = await self._trigger_chat_loop.start_run(
                     agent_id,
                     message,
                     session_id=target_session_id,
@@ -76,14 +61,74 @@ class TriggerService:
                     project_id=project_id,
                 )
             else:
-                queued_item = await self._trigger_chat_loop.queue_run(
+                run = await self._trigger_chat_loop.start_run(
                     agent_id,
                     message,
                     session_id=target_session_id,
                     sender=sender,
                     project_id=project_id,
                 )
-            return await queued_item.future
+        except ActiveRunError:
+            try:
+                if internal:
+                    if waiting_work_admission is None:
+                        queued_item = await self._trigger_chat_loop.queue_run(
+                            agent_id,
+                            message,
+                            session_id=target_session_id,
+                            internal=True,
+                            project_id=project_id,
+                        )
+                    else:
+                        queued_item = await self._trigger_chat_loop.queue_run(
+                            agent_id,
+                            message,
+                            session_id=target_session_id,
+                            internal=True,
+                            project_id=project_id,
+                            waiting_work_admission=waiting_work_admission,
+                        )
+                else:
+                    if waiting_work_admission is None:
+                        queued_item = await self._trigger_chat_loop.queue_run(
+                            agent_id,
+                            message,
+                            session_id=target_session_id,
+                            sender=sender,
+                            project_id=project_id,
+                        )
+                    else:
+                        queued_item = await self._trigger_chat_loop.queue_run(
+                            agent_id,
+                            message,
+                            session_id=target_session_id,
+                            sender=sender,
+                            project_id=project_id,
+                            waiting_work_admission=waiting_work_admission,
+                        )
+                return await queued_item.future
+            except BaseException:
+                self.release_waiting_work(waiting_work_admission)
+                raise
+        except BaseException:
+            self.release_waiting_work(waiting_work_admission)
+            raise
+        else:
+            self.release_waiting_work(waiting_work_admission)
+            return run
+
+    def reserve_waiting_work(self, *, scope: str, scope_limit: int) -> WaitingWorkAdmission:
+        """Reserve shared queue capacity before an ingress path does costly work."""
+        return self._chat_run_manager.reserve_waiting_work(
+            scope=scope,
+            scope_limit=scope_limit,
+        )
+
+    def release_waiting_work(self, admission: WaitingWorkAdmission | None) -> bool:
+        """Release an ingress reservation that did not become a queued Run."""
+        if admission is None:
+            return False
+        return self._chat_run_manager.release_waiting_work(admission)
 
     async def retry_run(
         self, agent_id: str, session_id: str, *, project_id: str | None = None
