@@ -267,6 +267,15 @@ def _bad_model_finding(member: ScannedAgent) -> ScanFinding:
     )
 
 
+def _orphan_finding(agent_id: str, detail: str) -> ScanFinding:
+    """Build an ``ORPHAN`` finding for an anchor pointer at a non-team agent id.
+
+    Pointer-origin findings carry no ``source_path`` — the pointer lives in the
+    anchor (``project.json`` / the sessions subtree), not in a repo source file.
+    """
+    return ScanFinding(type=FindingType.ORPHAN, detail=detail, agent_id=agent_id)
+
+
 class ModelConfigurationChecker:
     """Decides whether a ``<provider>/<model-id>[::connection[:account]]`` can run here.
 
@@ -565,13 +574,16 @@ class AgentResolver:
         return {"value": None, "source": None}
 
     def scan_project_report(self, project: Project) -> ScanResult:
-        """Scan a project into Team + a **complete** report (incl. model findings).
+        """Scan a project into Team + a **complete** report (incl. model + pointer findings).
 
         This is the project-scoped scan the open/re-scan path uses: it runs the
         structural scan, then appends one ``BAD_MODEL`` finding per config agent
         whose declared model is not configured in this instance (via the
-        :meth:`ScanReport.with_model_findings` seam). The model check happens
-        **here, at scan time** — not lazily at first run.
+        :meth:`ScanReport.with_model_findings` seam) and one ``ORPHAN`` finding per
+        anchor pointer — the project's ``default_agent`` and every session-owning
+        agent under the anchor — that names an agent the scan did not produce (via
+        :meth:`ScanReport.with_pointer_findings`). Both checks happen **here, at
+        scan time** — not lazily at first run.
         """
         result = scan_project(
             _project_root(project),
@@ -579,7 +591,10 @@ class AgentResolver:
             source_format=project.source_format,
         )
         model_findings = self._model_findings(result.team)
-        report = result.report.with_model_findings(model_findings)
+        pointer_findings = self._pointer_findings(project, result.team)
+        report = result.report.with_model_findings(model_findings).with_pointer_findings(
+            pointer_findings
+        )
         return ScanResult(team=result.team, report=report)
 
     def rescan_project(self, project: Project) -> ScanResult:
@@ -687,6 +702,37 @@ class AgentResolver:
             for member in team
             if member.model and not self._model_checker.is_configured(member.model)
         ]
+
+    def _pointer_findings(self, project: Project, team: list[ScannedAgent]) -> list[ScanFinding]:
+        """Build the scan's ``ORPHAN`` findings for the project's anchor pointers.
+
+        The pointers live in the anchor, not the repo, so the structural scan
+        cannot see them: the project's ``default_agent`` and every session-owning
+        agent under the anchor must name an agent the current scan produced. A
+        pointer at an id the scan did not yield is unclean under what exists — the
+        default agent cannot resolve, and orphaned sessions belong to an agent that
+        is no longer in the repo (renamed or deleted). A project without a default
+        agent and without sessions yields no findings (clean empty is normal).
+        """
+        team_ids = {member.agent_id for member in team}
+        findings: list[ScanFinding] = []
+        if project.default_agent and project.default_agent not in team_ids:
+            findings.append(
+                _orphan_finding(
+                    project.default_agent,
+                    f"default agent '{project.default_agent}' is not in the scanned team",
+                )
+            )
+        for owner in self._projects.session_owning_agents(project.project_id):
+            if owner not in team_ids:
+                findings.append(
+                    _orphan_finding(
+                        owner,
+                        f"agent '{owner}' owns sessions in this project "
+                        f"but is not in the scanned team",
+                    )
+                )
+        return findings
 
 
 def runtime_agent_body(agent: RuntimeAgent) -> str:
