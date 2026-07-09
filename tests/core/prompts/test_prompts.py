@@ -30,6 +30,7 @@ from core.prompts.blocks import (
     validate_workspace_include,
 )
 from core.prompts.prompts import (
+    SOUL_FRAMING,
     PinnedSkillCatalog,
     ProjectPromptContext,
     PromptAgent,
@@ -198,8 +199,8 @@ def workspace(tmp_path: Path) -> Path:
     directory = tmp_path / "workspace"
     directory.mkdir()
     (directory / "SOUL.md").write_text("Soul text", encoding="utf-8")
-    (directory / "MEMORY.md").write_text("Memory text", encoding="utf-8")
-    (directory / "USER.md").write_text("User text", encoding="utf-8")
+    (directory / "MEMORY.md").write_text("- Memory text\n", encoding="utf-8")
+    (directory / "USER.md").write_text("- User text\n", encoding="utf-8")
     return directory
 
 
@@ -300,13 +301,16 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "<name>agent-cli</name>" in prompt
     assert "<description>Delegate coding tasks</description>" in prompt
     assert "news" not in prompt
-    # Data blocks: SOUL + memory files.
+    # Data blocks: SOUL + memory entries.
     assert "Soul text" in prompt
-    assert "Memory text" in prompt
-    assert "User text" in prompt
+    assert "- Memory text" in prompt
+    assert "- User text" in prompt
     assert '<file name="SOUL.md">' in prompt
-    assert '<file name="MEMORY.md">' in prompt
-    assert '<file name="USER.md">' in prompt
+    # Memory renders under scope headings, not a <file> wrapper (tool-owned content).
+    assert "# Agent Memory" in prompt
+    assert "# User Profile" in prompt
+    assert '<file name="MEMORY.md">' not in prompt
+    assert '<file name="USER.md">' not in prompt
     # No leftover placeholders / no "- None" / clean normalization.
     assert "{" not in prompt
     assert "- None" not in prompt
@@ -340,9 +344,9 @@ def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:
 
     assert "<memory>" in prompt
     assert "declarative facts" in prompt  # the guidance prose
-    assert '<file name="MEMORY.md">' in prompt
-    assert '<file name="USER.md">' in prompt
-    assert "No tool-managed memory entries are recorded yet." in prompt
+    assert "# Agent Memory" in prompt
+    assert "# User Profile" in prompt
+    assert "No entries yet." in prompt
     assert not (empty_workspace / "MEMORY.md").exists()
     assert not (empty_workspace / "USER.md").exists()
 
@@ -366,9 +370,9 @@ def test_memory_block_includes_only_agent_memory(workspace: Path, tmp_path: Path
     prompt = manager.build_system_prompt(agent)
 
     assert "<memory>" in prompt
-    assert '<file name="MEMORY.md">' in prompt
-    assert "Memory text" in prompt
-    assert '<file name="USER.md">' not in prompt
+    assert "# Agent Memory" in prompt
+    assert "- Memory text" in prompt
+    assert "# User Profile" not in prompt
     assert "User text" not in prompt
 
 
@@ -804,6 +808,31 @@ def test_soul_block_wraps_content_in_xml_file_tag(workspace: Path, tmp_path: Pat
     prompt = manager.build_system_prompt(agent)
 
     assert '<file name="SOUL.md">\nSoul text\n</file>' in prompt
+
+
+def test_soul_block_prefixes_identity_framing_above_file_tag(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # SOUL is identity, not reference material: the framing line names it as such and
+    # sits immediately above the file tag so the model reads it as its core contract.
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF, allowed_tools=[])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert f'{SOUL_FRAMING}\n\n<file name="SOUL.md">\nSoul text\n</file>' in prompt
+
+
+def test_soul_framing_absent_when_block_gates_out(tmp_path: Path) -> None:
+    # A config agent (workspace "") has no SOUL: the framing line must never render on
+    # its own — it renders only as a prefix to a present SOUL, so it gates out with it.
+    manager = _manager(tmp_path)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF, allowed_tools=[])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert '<file name="SOUL.md">' not in prompt
+    assert SOUL_FRAMING not in prompt
 
 
 def test_soul_block_never_aborts_run_on_unreadable_file(
