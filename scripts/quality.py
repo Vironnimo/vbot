@@ -292,7 +292,7 @@ def main() -> int:
         # Without any mirrored test path, running pytest with no arguments
         # would execute the full suite — skip explicitly instead.
         if kind == "pytest" and not test_paths:
-            print(f"{label:<14}.... SKIP (no mirrored tests)")
+            print(f"{label:<14}.... NO TESTS (nothing mirrored)")
             for note in test_notes:
                 print(f"{'':<18}note: {note}")
             continue
@@ -339,7 +339,7 @@ def main() -> int:
             # Exit code 5 = "no tests collected" — not a failure, just nothing to run.
             if result.returncode == 0 or result.returncode == 5:
                 if total == 0:
-                    status = f"PASS ({elapsed:.1f}s, no tests)"
+                    status = f"NO TESTS ({elapsed:.1f}s)"
                 else:
                     status = f"PASS ({elapsed:.1f}s, {passed}/{total})"
             else:
