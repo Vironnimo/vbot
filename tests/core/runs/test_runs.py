@@ -23,6 +23,7 @@ from core.runs import (
     RunCancelledError,
     RunNotFoundError,
     RunStatus,
+    WaitingWorkLimitError,
 )
 from core.utils.errors import VBotError
 
@@ -75,6 +76,82 @@ async def test_rejects_second_active_run_for_same_session() -> None:
 
     release.set()
     assert await first_run.wait() == first_run.id
+
+
+async def test_waiting_work_limit_rejects_the_next_queued_run() -> None:
+    manager = ChatRunManager(waiting_work_limit=2)
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    active_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
+    first = await manager.enqueue(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
+    second = await manager.enqueue(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
+
+    assert manager.waiting_work_count() == 2
+    with pytest.raises(WaitingWorkLimitError, match="limit"):
+        await manager.enqueue(
+            agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        )
+
+    release.set()
+    assert await active_run.wait() == "done"
+    assert await (await first.future).wait() == "done"
+    assert await (await second.future).wait() == "done"
+
+
+async def test_waiting_work_admission_transfers_to_a_queued_run() -> None:
+    manager = ChatRunManager(waiting_work_limit=1)
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    active_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
+    admission = manager.reserve_waiting_work(scope="channel:chat", scope_limit=8)
+
+    queued = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=execute,
+        project_id=None,
+        waiting_work_admission=admission,
+    )
+
+    assert manager.waiting_work_count() == 1
+    assert manager.release_waiting_work(admission) is False
+    with pytest.raises(WaitingWorkLimitError, match="limit"):
+        manager.reserve_waiting_work(scope="other:chat", scope_limit=8)
+
+    release.set()
+    assert await active_run.wait() == "done"
+    started_queued_run = await queued.future
+    assert manager.waiting_work_count() == 0
+    assert await started_queued_run.wait() == "done"
+
+
+async def test_waiting_work_admission_enforces_its_scope_limit() -> None:
+    manager = ChatRunManager(waiting_work_limit=4)
+
+    first = manager.reserve_waiting_work(scope="channel:chat", scope_limit=2)
+    second = manager.reserve_waiting_work(scope="channel:chat", scope_limit=2)
+
+    with pytest.raises(WaitingWorkLimitError, match="scope"):
+        manager.reserve_waiting_work(scope="channel:chat", scope_limit=2)
+
+    assert manager.release_waiting_work(first) is True
+    assert manager.release_waiting_work(second) is True
 
 
 async def test_allows_parallel_runs_for_different_sessions() -> None:

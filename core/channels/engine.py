@@ -13,8 +13,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
+import time
+from collections import OrderedDict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
@@ -36,6 +38,8 @@ from core.runs import (
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
+    WaitingWorkAdmission,
+    WaitingWorkLimitError,
 )
 from core.sessions.sessions import CHANNEL_MESSAGE_NOTE_PREFIX, SESSION_ID_PATTERN
 from core.utils.logging import get_logger
@@ -55,7 +59,12 @@ _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text 
 _UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
 _FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
 _MEDIA_FAILED_REPLY = "Sorry, I couldn't process the attached file. Please try again."
+_BUSY_REPLY = "I'm busy with earlier messages. Please try again shortly."
 _SENDER_TAG_UNSAFE_CHARACTERS = str.maketrans("", "", "[]|\r\n")
+
+CHANNEL_WAITING_WORK_LIMIT = 8
+BUSY_REPLY_COOLDOWN_SECONDS = 30
+BUSY_REPLY_TRACKING_LIMIT = 512
 
 # Metadata-sidecar key on a conversation anchor that points at the chat's currently
 # active session (the "Wegweiser" pointer). Absent = the anchor itself is the session.
@@ -110,12 +119,14 @@ class ConversationTransport(Protocol):
 class _QueuedInboundMessage:
     conversation: ConversationFacts
     message: MessageFacts
+    admission: WaitingWorkAdmission | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class _QueuedCommandAction:
     conversation: ConversationFacts
     action: CommandAction
+    admission: WaitingWorkAdmission | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -124,18 +135,21 @@ class _QueuedInboundMedia:
     # Raw platform messages; conversion to content blocks happens in the per-conversation
     # worker via the transport so the adapter's update pipeline never blocks.
     messages: tuple[Any, ...]
+    admission: WaitingWorkAdmission | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class _QueuedObservedMessage:
     conversation: ConversationFacts
     note: str
+    admission: WaitingWorkAdmission | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class _QueuedInternalPrompt:
     conversation: ConversationFacts
     prompt: str
+    admission: WaitingWorkAdmission | None = None
 
 
 _QueuedWork = (
@@ -171,6 +185,7 @@ class ChannelConversationEngine:
         )
         self._chat_queues: dict[str, asyncio.Queue[_QueuedWork]] = {}
         self._chat_workers: dict[str, asyncio.Task[None]] = {}
+        self._busy_reply_times: OrderedDict[str, float] = OrderedDict()
 
     # -- Inbound entry points ---------------------------------------------------------
 
@@ -224,13 +239,14 @@ class ChannelConversationEngine:
             )
             return
 
-        self._enqueue_chat_work(
+        if not self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedInboundMessage(
                 conversation=conversation,
                 message=MessageFacts(content=message_text),
             ),
-        )
+        ):
+            await self._reject_overflow(conversation)
 
     async def handle_inbound_media(
         self,
@@ -265,13 +281,14 @@ class ChannelConversationEngine:
             )
             return
 
-        self._enqueue_chat_work(
+        if not self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedInboundMedia(
                 conversation=conversation,
                 messages=tuple(raw_messages),
             ),
-        )
+        ):
+            await self._reject_overflow(conversation)
 
     def observe_inbound_text(
         self,
@@ -288,19 +305,22 @@ class ChannelConversationEngine:
             _format_observed_message(conversation, message_text),
         )
 
-    def trigger_internal_reply(self, conversation: ConversationFacts, prompt: str) -> None:
+    async def trigger_internal_reply(self, conversation: ConversationFacts, prompt: str) -> bool:
         """Queue an internal note-driven Run whose reply goes back to the conversation.
 
         Platform rituals such as Telegram's ``/start`` use this: the prompt is
         persisted as a kernel-internal note (never a visible user message), the model
         acts on it, and its reply is relayed like any other channel answer.
         """
-        self._enqueue_chat_work(
+        if self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedInternalPrompt(conversation=conversation, prompt=prompt),
-        )
+        ):
+            return True
+        await self._reject_overflow(conversation)
+        return False
 
-    def trigger_interaction_reply(
+    async def trigger_interaction_reply(
         self,
         conversation: ConversationFacts,
         event: InteractionEvent,
@@ -324,8 +344,9 @@ class ChannelConversationEngine:
                 conversation.user_id,
             )
             return False
-        self.trigger_internal_reply(conversation, _format_interaction_note(conversation, event))
-        return True
+        return await self.trigger_internal_reply(
+            conversation, _format_interaction_note(conversation, event)
+        )
 
     def prepare_inbound_route(
         self,
@@ -333,7 +354,13 @@ class ChannelConversationEngine:
     ) -> tuple[RouteFacts, ReplyPlanFacts]:
         """Ensure the routed Session exists and refresh its channel metadata."""
         route, _session = self._ensure_channel_session(conversation)
-        reply_plan = ReplyPlanFacts(
+        reply_plan = self._reply_plan_for(conversation)
+        self._update_session_metadata(route, conversation, reply_plan)
+        return route, reply_plan
+
+    def _reply_plan_for(self, conversation: ConversationFacts) -> ReplyPlanFacts:
+        """Build a reply target without creating or changing a Session."""
+        return ReplyPlanFacts(
             channel_id=self._config.id,
             platform_target=conversation.chat_id,
             # Group replies reference the triggering message so it is clear which
@@ -343,8 +370,6 @@ class ChannelConversationEngine:
             # models topics inside one chat (Telegram forum topics).
             thread_id=conversation.thread_id,
         )
-        self._update_session_metadata(route, conversation, reply_plan)
-        return route, reply_plan
 
     def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure the Session mirroring a conversation exists with channel context."""
@@ -558,18 +583,38 @@ class ChannelConversationEngine:
     # -- Queue / workers --------------------------------------------------------------
 
     def _enqueue_observed_message(self, conversation: ConversationFacts, note: str) -> None:
-        self._enqueue_chat_work(
+        if self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedObservedMessage(conversation=conversation, note=note),
+        ):
+            return
+        _LOGGER.warning(
+            "Observed channel context rejected by queue limit (channel=%s target=%s)",
+            self._config.id,
+            conversation.chat_id,
         )
 
-    def _enqueue_chat_work(self, platform_target: str, queued: _QueuedWork) -> None:
+    def _enqueue_chat_work(self, platform_target: str, queued: _QueuedWork) -> bool:
+        """Admit one channel item before it reaches the per-chat FIFO.
+
+        The Run manager owns the bounded waiting-work accounting. This ingress
+        FIFO retains only already-admitted items so it can preserve a channel's
+        arrival order and defer media downloads until after admission.
+        """
+        try:
+            admission = self._trigger_service.reserve_waiting_work(
+                scope=self._waiting_scope(platform_target),
+                scope_limit=CHANNEL_WAITING_WORK_LIMIT,
+            )
+        except WaitingWorkLimitError:
+            return False
+
         queue = self._chat_queues.get(platform_target)
         if queue is None:
             queue = asyncio.Queue()
             self._chat_queues[platform_target] = queue
 
-        queue.put_nowait(queued)
+        queue.put_nowait(replace(queued, admission=admission))
 
         worker = self._chat_workers.get(platform_target)
         if worker is None or worker.done():
@@ -578,6 +623,7 @@ class ChannelConversationEngine:
                 name=f"channel:{self._config.id}:{platform_target}",
             )
             self._chat_workers[platform_target] = worker
+        return True
 
     async def _run_chat_queue(
         self,
@@ -598,6 +644,7 @@ class ChannelConversationEngine:
                         exc_info=(type(error), error, error.__traceback__),
                     )
                 finally:
+                    self._trigger_service.release_waiting_work(queued.admission)
                     queue.task_done()
         except asyncio.CancelledError:
             raise
@@ -614,6 +661,7 @@ class ChannelConversationEngine:
             # Deferred actions re-resolve at processing time like every other queued
             # item: a /new that ran ahead of this action in the queue has moved the
             # pointer by now, and e.g. /compact must act on the now-active session.
+            self._trigger_service.release_waiting_work(queued.admission)
             route, reply_plan = self.prepare_inbound_route(queued.conversation)
             await self._handle_command_action(
                 queued.action,
@@ -627,11 +675,18 @@ class ChannelConversationEngine:
             return
         if isinstance(queued, _QueuedInternalPrompt):
             route, reply_plan = self.prepare_inbound_route(queued.conversation)
-            await self._trigger_and_relay(route, reply_plan, queued.prompt, internal=True)
+            await self._trigger_and_relay(
+                route,
+                reply_plan,
+                queued.prompt,
+                internal=True,
+                waiting_work_admission=queued.admission,
+            )
             return
         await self._process_queued_message(queued)
 
     async def _process_queued_observed_message(self, queued: _QueuedObservedMessage) -> None:
+        self._trigger_service.release_waiting_work(queued.admission)
         route, session = self._ensure_channel_session(queued.conversation)
         reply_plan = ReplyPlanFacts(
             channel_id=self._config.id,
@@ -653,6 +708,7 @@ class ChannelConversationEngine:
             reply_plan,
             queued.message.content,
             sender=self._sender_for(queued.conversation),
+            waiting_work_admission=queued.admission,
         )
 
     async def _process_queued_media(self, queued: _QueuedInboundMedia) -> None:
@@ -685,6 +741,7 @@ class ChannelConversationEngine:
             reply_plan,
             content_blocks,
             sender=self._sender_for(queued.conversation),
+            waiting_work_admission=queued.admission,
         )
 
     # -- Trigger / relay --------------------------------------------------------------
@@ -697,6 +754,7 @@ class ChannelConversationEngine:
         *,
         sender: MessageSender | None = None,
         internal: bool = False,
+        waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> None:
         _LOGGER.info(
             "Channel message routed (channel=%s target=%s agent=%s session=%s%s)",
@@ -710,19 +768,37 @@ class ChannelConversationEngine:
             # An internal run persists the content as a kernel note instead of a
             # visible user message; it never carries a sender.
             if internal:
-                run = await self._trigger_service.trigger_run(
-                    route.agent_id,
-                    content,
-                    route.session_id,
-                    internal=True,
-                )
+                if waiting_work_admission is None:
+                    run = await self._trigger_service.trigger_run(
+                        route.agent_id,
+                        content,
+                        route.session_id,
+                        internal=True,
+                    )
+                else:
+                    run = await self._trigger_service.trigger_run(
+                        route.agent_id,
+                        content,
+                        route.session_id,
+                        internal=True,
+                        waiting_work_admission=waiting_work_admission,
+                    )
             else:
-                run = await self._trigger_service.trigger_run(
-                    route.agent_id,
-                    content,
-                    route.session_id,
-                    sender=sender,
-                )
+                if waiting_work_admission is None:
+                    run = await self._trigger_service.trigger_run(
+                        route.agent_id,
+                        content,
+                        route.session_id,
+                        sender=sender,
+                    )
+                else:
+                    run = await self._trigger_service.trigger_run(
+                        route.agent_id,
+                        content,
+                        route.session_id,
+                        sender=sender,
+                        waiting_work_admission=waiting_work_admission,
+                    )
         except Exception as error:
             _LOGGER.error(
                 "Channel trigger run failed (channel=%s agent=%s session=%s target=%s): %s",
@@ -775,6 +851,38 @@ class ChannelConversationEngine:
             thread_id=reply_plan.thread_id,
         )
 
+    def _waiting_scope(self, platform_target: str) -> str:
+        return f"{self._config.id}:{platform_target}"
+
+    async def _reject_overflow(self, conversation: ConversationFacts) -> None:
+        """Log one rejected inbound item and send a throttled busy reply."""
+        _LOGGER.warning(
+            "Channel inbound work rejected by queue limit (channel=%s target=%s)",
+            self._config.id,
+            conversation.chat_id,
+        )
+        if not self._should_send_busy_reply(conversation.chat_id):
+            _LOGGER.debug(
+                "Channel busy reply throttled (channel=%s target=%s)",
+                self._config.id,
+                conversation.chat_id,
+            )
+            return
+        await self._send_reply(self._reply_plan_for(conversation), _BUSY_REPLY)
+
+    def _should_send_busy_reply(self, platform_target: str) -> bool:
+        now = time.monotonic()
+        last_reply_at = self._busy_reply_times.get(platform_target)
+        if last_reply_at is not None and now - last_reply_at < BUSY_REPLY_COOLDOWN_SECONDS:
+            self._busy_reply_times.move_to_end(platform_target)
+            return False
+
+        self._busy_reply_times[platform_target] = now
+        self._busy_reply_times.move_to_end(platform_target)
+        if len(self._busy_reply_times) > BUSY_REPLY_TRACKING_LIMIT:
+            self._busy_reply_times.popitem(last=False)
+        return True
+
     # -- Command actions --------------------------------------------------------------
 
     async def _handle_dispatch_result(
@@ -797,13 +905,14 @@ class ChannelConversationEngine:
                 # Command actions can run long (compact = model call, retry = full Run
                 # relay). The adapter feeds updates sequentially, so they must not be
                 # awaited in the update handler; the per-conversation worker owns slow work.
-                self._enqueue_chat_work(
+                if not self._enqueue_chat_work(
                     conversation.chat_id,
                     _QueuedCommandAction(
                         conversation=conversation,
                         action=dispatch_result,
                     ),
-                )
+                ):
+                    await self._reject_overflow(conversation)
             else:
                 await self._handle_command_action(
                     dispatch_result, route, reply_plan, self._derive_session_id(conversation)
@@ -961,7 +1070,13 @@ class ChannelConversationEngine:
         """Cancel all per-conversation workers and await their cancellation."""
         workers = list(self._chat_workers.values())
         self._chat_workers.clear()
+        for queue in self._chat_queues.values():
+            while not queue.empty():
+                queued = queue.get_nowait()
+                self._trigger_service.release_waiting_work(queued.admission)
+                queue.task_done()
         self._chat_queues.clear()
+        self._busy_reply_times.clear()
         for worker in workers:
             worker.cancel()
         if workers:
