@@ -225,15 +225,15 @@ def normalize_aliases(arguments: JsonObject, aliases: dict[str, str]) -> JsonObj
 
 
 def looks_like_line_numbered_content(text: str) -> bool:
-    """Return whether ``text`` is dominated by the read tool's ``N|`` gutter.
+    """Return whether ``text`` is dominated by the read tool's reference gutter.
 
-    The read tool prefixes each line with its number as ``N|`` for reference. If
-    a model echoes that display format back into a write or edit, the file is
-    silently corrupted with ``N|`` prefixes. This detects that case so the write
-    path can reject it, while still letting sparse literal-pipe content through (a
-    lone ``1|value`` line, a Markdown table). The signal is deliberately strict:
-    at least two lines, a majority of non-blank lines prefixed by digits and the
-    separator, and those numbers running consecutively (as a pasted read page is).
+    The read tool prefixes each line with ``N|`` and an in-line continuation with
+    ``N:C|``. If a model echoes either display format back into a write or edit,
+    the file is silently corrupted with reference gutters. This detects that case
+    so the write path can reject it, while still letting sparse literal-pipe content
+    through (a lone ``1|value`` line, a Markdown table). The signal is deliberately
+    strict: at least two lines, a majority of non-blank lines prefixed by a line
+    number and the separator, and those line numbers running consecutively.
     """
     if not isinstance(text, str):
         return False
@@ -245,8 +245,9 @@ def looks_like_line_numbered_content(text: str) -> bool:
     numbers: list[int] = []
     for line in lines:
         prefix, separator, _rest = line.lstrip().partition(LINE_NUMBER_GUTTER_SEPARATOR)
-        if separator and prefix.isdigit():
-            numbers.append(int(prefix))
+        line_number, colon, character = prefix.partition(":")
+        if separator and line_number.isdigit() and (not colon or character.isdigit()):
+            numbers.append(int(line_number))
 
     if len(numbers) < _LINE_NUMBER_GUTTER_MIN_LINES:
         return False

@@ -169,6 +169,7 @@ class TestLooksLikeLineNumberedContent:
         "text",
         [
             "1|import os\n2|import sys\n3|\n",  # consecutive, blank gutter line included
+            "50:50001|continuing line\n51|next line",  # continuation gutter then next line
             "  10|alpha\n  11|beta\n  12|gamma",  # indented gutter, multi-digit
             "5|a\n6|b",  # the minimum: two consecutive numbered lines
         ],

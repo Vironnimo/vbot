@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -147,6 +148,7 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     assert parameters["required"] == ["path"]
     assert parameters["additionalProperties"] is False
     assert set(parameters["properties"]) == {"path", "offset", "limit"}
+    assert parameters["properties"]["offset"]["type"] == ["number", "string"]
     assert "description" not in parameters["properties"]
 
 
@@ -333,6 +335,50 @@ async def test_read_line_gutter_uses_file_absolute_numbers_with_offset(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_read_accepts_in_line_offset_without_advertising_another_parameter(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_bytes(b"one\nsecond\nthird\n")
+
+    result = await make_handler()(make_context(workspace), {"path": "notes.txt", "offset": "2:3"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "2:3|cond\n3|third\n"
+
+
+@pytest.mark.asyncio
+async def test_read_emits_and_accepts_in_line_continuation_after_byte_truncation(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = "x" * 60_000 + "\nsecond\n"
+    workspace.joinpath("minified.txt").write_bytes(source.encode("utf-8"))
+    handler = make_handler()
+
+    first = await handler(make_context(workspace), {"path": "minified.txt"})
+    first_content = assert_success_envelope(first)["content"]
+    assert isinstance(first_content, str)
+    match = re.search(r"Use offset=(1:\d+) to continue", first_content)
+    assert match is not None
+    continuation_offset = match.group(1)
+    continuation_character = int(continuation_offset.split(":", maxsplit=1)[1])
+    first_visible = first_content.split("\n\n[Showing", maxsplit=1)[0]
+    assert first_visible == f"1|{source[: continuation_character - 1]}"
+
+    continued = await handler(
+        make_context(workspace),
+        {"path": "minified.txt", "offset": continuation_offset},
+    )
+    continued_content = assert_success_envelope(continued)["content"]
+    assert isinstance(continued_content, str)
+    remaining_first_line = source[continuation_character - 1 : source.index("\n")]
+    assert continued_content == f"{continuation_offset}|{remaining_first_line}\n2|second\n"
+
+
+@pytest.mark.asyncio
 async def test_read_returns_eof_notice_when_offset_is_past_end(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -354,6 +400,7 @@ async def test_read_returns_eof_notice_when_offset_is_past_end(tmp_path: Path) -
         ({"offset": 0}, "offset must be >= 1"),
         ({"offset": True}, "offset must be an integer"),
         ({"offset": 1.5}, "offset must be an integer"),
+        ({"offset": "2:0"}, "offset character must be >= 1"),
     ],
 )
 async def test_read_returns_failure_envelope_for_invalid_line_controls(
