@@ -251,9 +251,11 @@ The app shell is a fixed sidebar (210px) plus a fluid main content area. The sid
 
 Sidebar navigation is grouped by usage cadence into Work / Configure / Insights, each group introduced by a mono-xs uppercase section label (`--text-lo`, no divider lines); on mobile (≤640px) the groups collapse to a single scrolling top-bar row and the labels hide.
 
-Within views, two-pane splits (Agents: 240px list + fluid detail; Settings: 208px index + fluid document) use a thin `border` divider with no gap. Padding inside panels is 20–32px depending on context.
+Within views, two-pane splits (Agents: 240px list + fluid detail; Settings: 216px index + fluid document) use a thin `border` divider with no gap. Padding inside panels is 20–32px depending on context.
 
-Settings is the one-document pattern: the left column is a search input plus a grouped table of contents (mono-caps group labels, scrollspy highlight in the accent nav-item style, non-matching entries dim to 35% during a search), and the right side is a single scrolling column of section cards (`--content-max-narrow` measure, `lg` radius, `border` outline, faint white fill) each headed by a 15px/600 title and a `text-med` subtitle above a divider.
+Settings is the one-document pattern, built on three background layers: the app sidebar sits on `--surface`, the settings index and document scroll area sit on `--bg`, and each section card lifts back to `--surface` (`--content-max-narrow` measure, `lg` radius, `border` outline) headed by a 15px/600 title and a `text-med` subtitle above a divider. The left column is a search input plus a grouped table of contents (15px/600 "Settings" heading, mono-caps group labels); index entries are 12.5px/500 `text-med` rows with a 2px left accent rail as the active marker (accent text, 7% accent tint, radius only on the free right edge), hover brightens to `text-hi`, and non-matching entries dim to 35% during a search.
+
+Dense detail inside settings rows (provider accounts, per-target task-model options, extension config forms) collapses behind a disclosure: a 22px bordered chevron square (`▸`, `text-med`, rotates 90° when open, accent on hover) at the row's trailing edge, opening an indented sub-block carried by a 2px `border-2` left rail — the same visual language as expanded tool calls in chat. The collapsed sub stays in the DOM (`hidden` attribute) so settings search still matches its text.
 
 In scrollable edit surfaces, the primary save action belongs at the bottom of the scroll region in a sticky footer, not in the panel header. This keeps the action visually near the edited fields and available after long scrolls.
 
