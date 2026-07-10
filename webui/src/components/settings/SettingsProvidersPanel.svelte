@@ -66,51 +66,83 @@
   // held while the key-input modal is open so a live edit is never interrupted.
   let pendingSettingsReload = $state(false);
   let lastModelsRefreshToken = null;
-  // Disclosure state: connection details (accounts) and per-provider local
-  // model context start collapsed; the sub stays in the DOM so search matches.
-  const expandedConnectionKeys = new SvelteSet();
-  const expandedLocalContextProviders = new SvelteSet();
+  // Disclosure state: each provider is one collapsed row; connections,
+  // accounts, and the local-context editor live in its sub. The sub stays in
+  // the DOM while collapsed so search matches.
+  const expandedProviders = new SvelteSet();
 
-  function connectionKey(provider, connection) {
-    return `${provider.id}:${connection.id}`;
-  }
-
-  function toggleConnectionDetails(provider, connection) {
-    const key = connectionKey(provider, connection);
-    if (expandedConnectionKeys.has(key)) {
-      expandedConnectionKeys.delete(key);
+  function toggleProviderDetails(provider) {
+    if (expandedProviders.has(provider.id)) {
+      expandedProviders.delete(provider.id);
     } else {
-      expandedConnectionKeys.add(key);
+      expandedProviders.add(provider.id);
     }
   }
 
-  function toggleLocalContext(provider) {
-    if (expandedLocalContextProviders.has(provider.id)) {
-      expandedLocalContextProviders.delete(provider.id);
-    } else {
-      expandedLocalContextProviders.add(provider.id);
-    }
-  }
-
-  // A connection row gets a disclosure chevron only when the sub would hold
-  // something: account rows or an add-account action on an enabled, key-based
-  // connection.
-  function connectionHasDetails(connection) {
-    if (!isConnectionEnabled(connection) || isKeylessConnection(connection)) {
-      return false;
-    }
-    return (
-      getConnectionAccounts(connection).length > 0 ||
-      connectionSupportsAddAccount(connection)
-    );
-  }
-
-  // Collapsed rows still need a status at a glance: summarize the account
-  // states into the head chip when the per-account chips are folded away.
   function connectionAccountsUsable(connection) {
     return getConnectionAccounts(connection).some((account) =>
       isAccountUsable(account),
     );
+  }
+
+  function connectionStatus(connection) {
+    if (!isConnectionEnabled(connection)) {
+      return 'disabled';
+    }
+    if (connectionReachability(connection) === false) {
+      return 'unreachable';
+    }
+    if (
+      isKeylessConnection(connection) ||
+      getConnectionAccounts(connection).length === 0 ||
+      connectionAccountsUsable(connection)
+    ) {
+      return 'connected';
+    }
+    return 'not_usable';
+  }
+
+  // The collapsed provider row needs a status at a glance: the head chip
+  // shows the best state across its connections (connected beats a warning,
+  // any warning beats all-disabled).
+  function providerSummaryStatus(provider) {
+    const statuses = getConfiguredConnections(provider).map(connectionStatus);
+    if (statuses.includes('connected')) {
+      return 'connected';
+    }
+    if (statuses.includes('unreachable')) {
+      return 'unreachable';
+    }
+    if (statuses.includes('not_usable')) {
+      return 'not_usable';
+    }
+    return 'disabled';
+  }
+
+  function providerSummaryChip(provider) {
+    const status = providerSummaryStatus(provider);
+    if (status === 'connected') {
+      return {
+        variant: 'success',
+        label: t('settings.providers.connected', 'Connected'),
+      };
+    }
+    if (status === 'unreachable') {
+      return {
+        variant: 'warn',
+        label: t('settings.providers.notReachableChip', 'Not reachable'),
+      };
+    }
+    if (status === 'not_usable') {
+      return {
+        variant: 'warn',
+        label: t('settings.providers.accounts.notUsable', 'Not usable'),
+      };
+    }
+    return {
+      variant: 'warn',
+      label: t('settings.providers.disabledChip', 'Disabled'),
+    };
   }
 
   let providerItems = $derived(getProviderItems(settings));
@@ -589,7 +621,7 @@
   {:else}
     {#each connectedProviders as provider (provider.id)}
       <div class="s-provider-card">
-        <div class="s-row s-row--provider">
+        <div class="s-provider-head">
           <div class="s-row-info">
             <div class="s-row-label">
               {providerDisplayName(provider)}
@@ -598,102 +630,102 @@
               {describeProvider(provider, t)}
             </div>
           </div>
+          <div class="s-row-actions s-row-actions--provider">
+            <StatusChip variant={providerSummaryChip(provider).variant}>
+              {providerSummaryChip(provider).label}
+            </StatusChip>
+            <Button
+              variant="tertiary"
+              icon
+              class="s-disclosure-btn"
+              ariaLabel={t(
+                'settings.providers.detailsAria',
+                'Details for {id}',
+                {
+                  id: provider.id,
+                },
+              )}
+              aria-expanded={expandedProviders.has(provider.id)}
+              onClick={() => toggleProviderDetails(provider)}
+            >
+              ▸
+            </Button>
+          </div>
         </div>
 
-        <div class="s-provider-connections">
-          {#each getConfiguredConnections(provider) as connection (connection.id)}
-            <div class="s-provider-connection-row">
-              <div class="s-provider-connection-head">
-                <div class="s-row-info">
-                  <div class="s-provider-connection-label">
-                    {connection.label ?? connection.id}
+        <div
+          class="s-disclosure-sub"
+          hidden={!expandedProviders.has(provider.id)}
+        >
+          <div class="s-provider-connections">
+            {#each getConfiguredConnections(provider) as connection (connection.id)}
+              <div class="s-provider-connection-row">
+                <div class="s-provider-connection-head">
+                  <div class="s-row-info">
+                    <div class="s-provider-connection-label">
+                      {connection.label ?? connection.id}
+                    </div>
+                    <div class="s-row-desc">
+                      {connectionDescription(connection)}
+                    </div>
                   </div>
-                  <div class="s-row-desc">
-                    {connectionDescription(connection)}
-                  </div>
-                </div>
 
-                <div class="s-row-actions s-row-actions--provider">
-                  {#if !isConnectionEnabled(connection)}
-                    <StatusChip variant="warn">
-                      {t('settings.providers.disabledChip', 'Disabled')}
-                    </StatusChip>
-                    <Button
-                      variant="secondary"
-                      disabled={connectionToggleBusy}
-                      ariaLabel={t(
-                        'settings.providers.enableAria',
-                        'Enable connection {id}',
-                        { id: connection.id },
-                      )}
-                      onClick={() =>
-                        setConnectionEnabled(provider, connection, true)}
-                    >
-                      {t('settings.providers.enable', 'Enable')}
-                    </Button>
-                  {:else}
-                    {#if connectionReachability(connection) === false}
+                  <div class="s-row-actions s-row-actions--provider">
+                    {#if !isConnectionEnabled(connection)}
                       <StatusChip variant="warn">
-                        {t(
-                          'settings.providers.notReachableChip',
-                          'Not reachable',
+                        {t('settings.providers.disabledChip', 'Disabled')}
+                      </StatusChip>
+                      <Button
+                        variant="secondary"
+                        disabled={connectionToggleBusy}
+                        ariaLabel={t(
+                          'settings.providers.enableAria',
+                          'Enable connection {id}',
+                          { id: connection.id },
                         )}
-                      </StatusChip>
-                    {:else if getConnectionAccounts(connection).length === 0 || isKeylessConnection(connection) || connectionAccountsUsable(connection)}
-                      <StatusChip variant="success">
-                        {t('settings.providers.connected', 'Connected')}
-                      </StatusChip>
+                        onClick={() =>
+                          setConnectionEnabled(provider, connection, true)}
+                      >
+                        {t('settings.providers.enable', 'Enable')}
+                      </Button>
                     {:else}
-                      <StatusChip variant="warn">
-                        {t(
-                          'settings.providers.accounts.notUsable',
-                          'Not usable',
+                      {#if connectionReachability(connection) === false}
+                        <StatusChip variant="warn">
+                          {t(
+                            'settings.providers.notReachableChip',
+                            'Not reachable',
+                          )}
+                        </StatusChip>
+                      {:else if getConnectionAccounts(connection).length === 0 || isKeylessConnection(connection) || connectionAccountsUsable(connection)}
+                        <StatusChip variant="success">
+                          {t('settings.providers.connected', 'Connected')}
+                        </StatusChip>
+                      {:else}
+                        <StatusChip variant="warn">
+                          {t(
+                            'settings.providers.accounts.notUsable',
+                            'Not usable',
+                          )}
+                        </StatusChip>
+                      {/if}
+                      <Button
+                        variant="secondary"
+                        disabled={connectionToggleBusy}
+                        ariaLabel={t(
+                          'settings.providers.disableAria',
+                          'Disable connection {id}',
+                          { id: connection.id },
                         )}
-                      </StatusChip>
+                        onClick={() =>
+                          setConnectionEnabled(provider, connection, false)}
+                      >
+                        {t('settings.providers.disable', 'Disable')}
+                      </Button>
                     {/if}
-                    <Button
-                      variant="secondary"
-                      disabled={connectionToggleBusy}
-                      ariaLabel={t(
-                        'settings.providers.disableAria',
-                        'Disable connection {id}',
-                        { id: connection.id },
-                      )}
-                      onClick={() =>
-                        setConnectionEnabled(provider, connection, false)}
-                    >
-                      {t('settings.providers.disable', 'Disable')}
-                    </Button>
-                  {/if}
-                  {#if connectionHasDetails(connection)}
-                    <Button
-                      variant="tertiary"
-                      icon
-                      class="s-disclosure-btn"
-                      ariaLabel={t(
-                        'settings.providers.detailsAria',
-                        'Account details for {id}',
-                        { id: connection.id },
-                      )}
-                      aria-expanded={expandedConnectionKeys.has(
-                        connectionKey(provider, connection),
-                      )}
-                      onClick={() =>
-                        toggleConnectionDetails(provider, connection)}
-                    >
-                      ▸
-                    </Button>
-                  {/if}
+                  </div>
                 </div>
-              </div>
 
-              {#if connectionHasDetails(connection)}
-                <div
-                  class="s-disclosure-sub"
-                  hidden={!expandedConnectionKeys.has(
-                    connectionKey(provider, connection),
-                  )}
-                >
+                {#if isConnectionEnabled(connection) && !isKeylessConnection(connection)}
                   {#if getConnectionAccounts(connection).length > 0}
                     <ul class="s-connection-accounts">
                       {#each getConnectionAccounts(connection) as account (account.id)}
@@ -788,26 +820,27 @@
                       </Button>
                     </div>
                   {/if}
-                </div>
-              {/if}
-            </div>
-          {/each}
+                {/if}
+              </div>
+            {/each}
 
-          {#if getAddableConnections(provider).length > 0}
-            <div class="s-provider-add-connection">
-              <Button
-                variant="secondary"
-                onClick={() => openAddConnectionModal(provider)}
-              >
-                {t('settings.providers.add.connectionButton', 'Add connection')}
-              </Button>
-            </div>
-          {/if}
-        </div>
+            {#if getAddableConnections(provider).length > 0}
+              <div class="s-provider-add-connection">
+                <Button
+                  variant="secondary"
+                  onClick={() => openAddConnectionModal(provider)}
+                >
+                  {t(
+                    'settings.providers.add.connectionButton',
+                    'Add connection',
+                  )}
+                </Button>
+              </div>
+            {/if}
+          </div>
 
-        {#if (localModelsByProvider[provider.id] ?? []).length > 0}
-          <div class="s-provider-local-context">
-            <div class="s-provider-connection-head">
+          {#if (localModelsByProvider[provider.id] ?? []).length > 0}
+            <div class="s-provider-local-context">
               <div class="s-row-info">
                 <div class="s-provider-connection-label">
                   {t(
@@ -822,27 +855,6 @@
                   )}
                 </div>
               </div>
-              <div class="s-row-actions s-row-actions--provider">
-                <Button
-                  variant="tertiary"
-                  icon
-                  class="s-disclosure-btn"
-                  ariaLabel={t(
-                    'settings.providers.localContext.detailsAria',
-                    'Context window settings for {id}',
-                    { id: provider.id },
-                  )}
-                  aria-expanded={expandedLocalContextProviders.has(provider.id)}
-                  onClick={() => toggleLocalContext(provider)}
-                >
-                  ▸
-                </Button>
-              </div>
-            </div>
-            <div
-              class="s-disclosure-sub"
-              hidden={!expandedLocalContextProviders.has(provider.id)}
-            >
               {#each localModelsByProvider[provider.id] as model (model.id)}
                 <div class="s-local-context-row">
                   <span class="s-local-context-model">{model.model_id}</span>
@@ -874,8 +886,8 @@
                 </div>
               {/each}
             </div>
-          </div>
-        {/if}
+          {/if}
+        </div>
       </div>
     {/each}
   {/if}
