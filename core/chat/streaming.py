@@ -47,6 +47,7 @@ class StreamRecoveryAction(Enum):
     leaving an interruption note, or re-raising — stays in the chat loop.
     """
 
+    ACCEPT_COMPLETE = "accept_complete"
     RESTART = "restart"
     FALLBACK = "fallback"
     PRESERVE_PARTIAL = "preserve_partial"
@@ -60,6 +61,7 @@ def decide_stream_recovery(
     emitted_visible_delta: bool,
     can_restart: bool,
     has_partial_content: bool,
+    finish_received: bool = False,
 ) -> StreamRecoveryAction:
     """Decide how to recover from a broken streaming attempt.
 
@@ -69,7 +71,10 @@ def decide_stream_recovery(
     escape?" gates whether a replay could duplicate, and the accumulated content
     decides between preserving the partial answer and merely leaving a note.
 
-    Before any visible delta a not-yet-visible drop can be replayed cleanly: a
+    A normalized finish delta is the provider's logical completion boundary. A
+    later transport error therefore cannot turn the completed response back into
+    a partial one; the accumulated response is accepted as complete. Before any
+    visible delta a not-yet-visible drop can otherwise be replayed cleanly: a
     streaming-unsupported error falls back to a non-streaming request, a
     restartable transient (transport/timeout drop or chunk stall) replays the
     whole stream while restarts remain, anything else fails. Once visible output
@@ -77,6 +82,8 @@ def decide_stream_recovery(
     as an interrupted assistant turn, a reasoning-only interruption leaves a
     partial-thinking note, and the error otherwise propagates.
     """
+    if finish_received:
+        return StreamRecoveryAction.ACCEPT_COMPLETE
     if not emitted_visible_delta:
         if _is_streaming_fallback_error(error):
             return StreamRecoveryAction.FALLBACK

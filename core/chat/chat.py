@@ -1843,8 +1843,17 @@ class ChatLoop:
                 emitted_visible_delta=emitted_visible_delta,
                 can_restart=can_restart,
                 has_partial_content=accumulator.partial_content is not None,
+                finish_received=accumulator.finish_reason is not None,
             )
-            if action is StreamRecoveryAction.FALLBACK:
+            if action is StreamRecoveryAction.ACCEPT_COMPLETE:
+                _LOGGER.warning(
+                    "Provider stream transport failed after a finish delta; "
+                    "accepting the completed response (%s: %s)",
+                    type(exc).__name__,
+                    exc,
+                )
+                assistant_fields = accumulator.finalize_assistant_fields()
+            elif action is StreamRecoveryAction.FALLBACK:
                 assistant_message = await self._send_non_streaming_assistant_request(
                     agent,
                     adapter,
@@ -1855,13 +1864,14 @@ class ChatLoop:
                 )
                 _emit_assistant_events(run, assistant_message)
                 return assistant_message
-            if action is StreamRecoveryAction.RESTART:
+            elif action is StreamRecoveryAction.RESTART:
                 raise _StreamRestartNeeded(exc) from exc
-            if action is StreamRecoveryAction.PRESERVE_PARTIAL:
+            elif action is StreamRecoveryAction.PRESERVE_PARTIAL:
                 return self._finalize_interrupted_partial(agent, accumulator, run)
-            if action is StreamRecoveryAction.DISCARD_WITH_NOTE:
-                _maybe_persist_partial_thinking(accumulator, note_hook)
-            raise
+            else:
+                if action is StreamRecoveryAction.DISCARD_WITH_NOTE:
+                    _maybe_persist_partial_thinking(accumulator, note_hook)
+                raise
         except asyncio.CancelledError:
             # User cancel mid-stream. Output the user already saw must not
             # vanish (GLOSSARY → Cancel), so accumulated visible content is
