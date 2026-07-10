@@ -378,6 +378,52 @@ describe('model suitability filter', () => {
       'no tool calling · below 32k context',
     );
   });
+
+  it('badges an unreachable local model but keeps it suitable and selectable', () => {
+    const options = buildModelSelectOptions({
+      models: [
+        {
+          id: 'ollama/big',
+          provider_id: 'ollama',
+          name: 'ollama/big',
+          capabilities: { tools: true },
+          context_window: 262144,
+          effective_context_window: 32768,
+          reachable: false,
+        },
+      ],
+      connections: [usableConnection('ollama:local', 'ollama', 'Local')],
+      emptyLabel: 'None',
+      translate: translateWithValues,
+    });
+
+    expect(options[1].suitable).toBe(true);
+    expect(options[1].secondaryLabel).toBe('service not running');
+  });
+
+  it('appends the unreachable badge after suitability reasons', () => {
+    const options = buildModelSelectOptions({
+      models: [
+        {
+          id: 'ollama/tiny',
+          provider_id: 'ollama',
+          name: 'ollama/tiny',
+          capabilities: { tools: false },
+          context_window: 8192,
+          effective_context_window: 8192,
+          reachable: false,
+        },
+      ],
+      connections: [usableConnection('ollama:local', 'ollama', 'Local')],
+      emptyLabel: 'None',
+      translate: translateWithValues,
+    });
+
+    expect(options[1].suitable).toBe(false);
+    expect(options[1].secondaryLabel).toBe(
+      'no tool calling · below 32k context · service not running',
+    );
+  });
 });
 
 describe('filterModelSelectOptions', () => {

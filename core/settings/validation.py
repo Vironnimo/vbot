@@ -52,6 +52,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "max_subagents_per_turn",
         "model_tasks",
         "port",
+        "providers",
         "recall",
         "reflection",
         "server_port",
@@ -79,6 +80,7 @@ DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
 MAX_TRACE_LIMIT = 500
 REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_tool_call_interval"})
 LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
+PROVIDERS_FIELDS = frozenset({"connections"})
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
 
 AGENT_FIELDS = frozenset(
@@ -383,6 +385,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_debug(diagnostics, data.get("debug"))
     _validate_reflection(diagnostics, data.get("reflection"))
     _validate_local_models(diagnostics, data.get("local_models"))
+    _validate_providers(diagnostics, data.get("providers"))
     return diagnostics
 
 
@@ -1008,6 +1011,29 @@ def _validate_local_models(diagnostics: list[JsonDiagnostic], value: Any) -> Non
             continue
         if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
             _error(diagnostics, key_path, "must be a positive integer")
+
+
+def _validate_providers(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.providers", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.providers", value, PROVIDERS_FIELDS, "providers field")
+    connections = value.get("connections")
+    if connections is None:
+        return
+    if not isinstance(connections, Mapping):
+        _error(diagnostics, "$.providers.connections", "must be an object")
+        return
+    for key, enabled in connections.items():
+        key_path = f"$.providers.connections['{key}']"
+        if not isinstance(key, str) or ":" not in key or not key.strip():
+            _error(diagnostics, key_path, "key must be a '<provider>:<connection>' string")
+            continue
+        if not isinstance(enabled, bool):
+            _error(diagnostics, key_path, "must be a boolean")
 
 
 def _validate_reflection(diagnostics: list[JsonDiagnostic], value: Any) -> None:

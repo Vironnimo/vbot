@@ -119,6 +119,21 @@ class ConnectionConfig:
     auto_refresh: bool = False
 
 
+def connection_default_enabled(connection: ConnectionConfig) -> bool:
+    """Return whether *connection* is enabled when the user has not decided.
+
+    Keyed connections (``api_key``/``oauth``) default to enabled — their
+    credential requirement already gates them, so presence of a key/login is
+    the opt-in. Keyless ``none`` connections (local endpoints like Ollama)
+    default to disabled: they pass every credential gate, so without an
+    explicit user opt-in vBot would probe and list a service the user may
+    never run. Per-connection user overrides live in settings
+    ``providers.connections`` and win over this default.
+    """
+
+    return connection.type != "none"
+
+
 # ---------------------------------------------------------------------------
 # Provider configuration
 # ---------------------------------------------------------------------------

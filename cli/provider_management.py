@@ -144,6 +144,95 @@ def provider_unset_key(
     return CommandResult(ok=True, message=message, instance=instance)
 
 
+def provider_set_enabled(
+    instance: ServerInstance,
+    provider_id: str,
+    enabled: bool,
+    connection_id: str | None = None,
+) -> CommandResult:
+    """Enable or disable one provider connection via `connection.set_enabled` RPC.
+
+    Without an explicit connection id, the provider's single connection is
+    resolved automatically; a multi-connection provider requires --connection.
+    """
+
+    if connection_id is None:
+        resolved, error = _resolve_single_connection_id(instance, provider_id)
+        if error is not None:
+            return error
+        connection_id = resolved
+
+    payload = _rpc_call(
+        instance,
+        "connection.set_enabled",
+        {"provider_id": provider_id, "connection_id": connection_id, "enabled": enabled},
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+
+    resolved_connection_id = _string_or_default(payload.data.get("connection_id"), "?")
+    state = "enabled" if payload.data.get("enabled") else "disabled"
+    lines = [f"{state} {resolved_connection_id}"]
+    if "reachable" in payload.data:
+        reachable = payload.data.get("reachable")
+        if reachable is True:
+            lines.append("endpoint reachable; model catalog refreshed")
+        elif reachable is False:
+            lines.append(
+                "endpoint not reachable — the connection stays enabled; "
+                "start the local service (e.g. Ollama) and its models appear automatically"
+            )
+    if payload.data.get("enabled") and not payload.data.get("configured"):
+        lines.append(
+            f"no credential configured yet; set one with: provider set-key {provider_id} <api-key>"
+        )
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def _resolve_single_connection_id(
+    instance: ServerInstance,
+    provider_id: str,
+) -> tuple[str | None, CommandResult | None]:
+    """Resolve a provider's single connection id, or explain which to pass."""
+
+    payload = _rpc_call(instance, "connection.list", {})
+    if not payload.ok:
+        return None, payload.to_command_result()
+    connections = payload.data.get("connections")
+    if not isinstance(connections, list):
+        return None, CommandResult(
+            ok=False,
+            message="RPC result missing connections list",
+            instance=instance,
+        )
+    provider_connections = _filter_connections(connections, provider_id, None)
+    if not provider_connections:
+        return None, CommandResult(
+            ok=False,
+            message=_format_status_not_found(provider_id, None, connections),
+            instance=instance,
+        )
+    if len(provider_connections) > 1:
+        candidate_ids = _connection_ids(provider_connections)
+        return None, CommandResult(
+            ok=False,
+            message=(
+                f"provider '{provider_id}' has multiple connections; pass --connection "
+                f"with one of: {', '.join(candidate_ids)}"
+            ),
+            instance=instance,
+        )
+    connection = provider_connections[0]
+    connection_id = connection.get("id") if isinstance(connection, dict) else None
+    if not isinstance(connection_id, str):
+        return None, CommandResult(
+            ok=False,
+            message="RPC result missing connection id",
+            instance=instance,
+        )
+    return connection_id, None
+
+
 def provider_connect(
     instance: ServerInstance,
     provider_id: str,
@@ -307,14 +396,20 @@ def _format_connection_row(connection: object) -> str:
     provider_id = _string_or_default(connection.get("provider_id"), "?")
     connection_type = _string_or_default(connection.get("type"), "?")
     label = _string_or_default(connection.get("label"), "?")
+    enabled = "yes" if connection.get("enabled") else "no"
     usable = "yes" if connection.get("usable") else "no"
     header = (
         f"- id: {connection_id}"
         f"  provider_id: {provider_id}"
         f"  type: {connection_type}"
         f"  label: {label}"
+        f"  enabled: {enabled}"
         f"  usable: {usable}"
     )
+    if "reachable" in connection:
+        reachable = connection.get("reachable")
+        reachable_text = "unknown" if reachable is None else ("yes" if reachable else "no")
+        header = f"{header}  reachable: {reachable_text}"
     return "\n".join([header, _format_account_rows(connection.get("accounts"))])
 
 

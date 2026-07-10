@@ -53,7 +53,8 @@ def _runtime_for_connection(
         SimpleNamespace(
             providers=SimpleNamespace(get=lambda _provider_id: provider_config),
             provider_credentials=SimpleNamespace(
-                has_credentials=lambda _provider_id, connection_id: connection_id in usable
+                has_credentials=lambda _provider_id, connection_id: connection_id in usable,
+                is_usable=lambda _provider_id, connection_id: connection_id in usable,
             ),
             models=SimpleNamespace(get=models_get),
         ),

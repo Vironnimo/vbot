@@ -823,7 +823,8 @@ async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_pat
         provider_credentials=SimpleNamespace(
             has_credentials=lambda _provider_id, connection_id=None: (
                 connection_id == "openai:api-key"
-            )
+            ),
+            is_usable=lambda _provider_id, connection_id=None: connection_id == "openai:api-key",
         ),
         models=SimpleNamespace(get=lambda _provider_id, _model_id: SimpleNamespace(connections=())),
         chat_sessions=ChatSessionManager(tmp_path),

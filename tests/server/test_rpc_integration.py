@@ -418,6 +418,14 @@ class IntegrationRuntime:
             def has_credentials(self, provider_id: str, _connection_id: str | None = None) -> bool:
                 return runtime.has_provider_credentials(provider_id)
 
+            def is_connection_enabled(
+                self, provider_id: str, _connection_id: str | None = None
+            ) -> bool:
+                return True
+
+            def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
+                return self.has_credentials(provider_id, connection_id)
+
             def list_accounts(
                 self, provider_id: str, local_connection_id: str
             ) -> list[ProviderAccount]:
@@ -508,6 +516,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                                 "type": "api_key",
                                 "label": "API Key",
                                 "configured": False,
+                                "enabled": True,
                                 "accounts": [],
                                 "credential_key": "ANTHROPIC_API_KEY",
                             }
@@ -529,6 +538,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                                 "type": "api_key",
                                 "label": "API Key",
                                 "configured": True,
+                                "enabled": True,
                                 "accounts": [
                                     {
                                         "id": "default",
@@ -544,6 +554,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                                 "type": "oauth",
                                 "label": "ChatGPT Plus/Pro",
                                 "configured": True,
+                                "enabled": True,
                                 "accounts": [
                                     {
                                         "id": "default",

@@ -608,6 +608,9 @@ class StubProviderCredentials:
     def has_credentials(self, _provider_id: str, connection_id: str | None = None) -> bool:
         return connection_id in self._usable_connection_ids
 
+    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
+        return self.has_credentials(provider_id, connection_id)
+
 
 @dataclass(frozen=True)
 class StubModelEntry:

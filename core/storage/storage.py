@@ -34,6 +34,7 @@ from core.settings.normalizers import (
     normalize_json_object,
     normalize_local_models_settings,
     normalize_model_task_settings,
+    normalize_providers_settings,
     normalize_recall_settings,
     normalize_reflection_settings,
     normalize_skill_directories,
@@ -505,6 +506,39 @@ class StorageManager:
         normalized = normalize_local_models_settings({"context_windows": merged})
         settings["local_models"] = normalized
         return dict(normalized)
+
+    def load_providers_settings(self) -> dict[str, Any]:
+        """Return normalized persisted providers settings.
+
+        Shape: ``{"connections": {"<provider>:<connection>": bool}}`` — the
+        per-connection enabled/disabled overrides. Read live at call time (no
+        reload hook) by the provider credential resolver's usability checks.
+        """
+
+        settings = self.load_settings()
+        return normalize_providers_settings(settings.get("providers"))
+
+    def set_provider_connection_enabled(self, connection_key: str, enabled: bool) -> None:
+        """Persist one connection's enabled override in a settings transaction.
+
+        *connection_key* is the public ``<provider>:<connection>`` id. The value
+        is stored explicitly (not as a delta against the type default) so a later
+        change of a connection's shipped default never flips a user's choice.
+        """
+
+        if not isinstance(connection_key, str) or ":" not in connection_key:
+            raise StorageError("Provider connection key must be a '<provider>:<connection>' string")
+        if not isinstance(enabled, bool):
+            raise StorageError("Provider connection enabled value must be a boolean")
+
+        def _mutate(settings: dict[str, Any]) -> None:
+            connections = dict(
+                normalize_providers_settings(settings.get("providers"))["connections"]
+            )
+            connections[connection_key] = enabled
+            settings["providers"] = normalize_providers_settings({"connections": connections})
+
+        self.update_settings(_mutate)
 
     def load_debug_settings(self) -> dict[str, Any]:
         """Return normalized persisted debug settings."""

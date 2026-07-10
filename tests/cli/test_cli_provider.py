@@ -1041,3 +1041,230 @@ def test_run_provider_set_key_dispatches_and_prints_plain_output(
     assert capsys.readouterr().out.splitlines() == [
         "set openrouter:api-key credential OPENROUTER_API_KEY"
     ]
+
+
+def test_parse_args_supports_provider_enable_and_disable() -> None:
+    enable_args = cli_main.parse_args(["provider", "enable", "ollama"])
+    disable_args = cli_main.parse_args(
+        ["provider", "disable", "ollama", "--connection", "ollama:local"]
+    )
+
+    assert enable_args.area == "provider"
+    assert enable_args.command == "enable"
+    assert enable_args.provider == "ollama"
+    assert enable_args.connection is None
+    assert disable_args.command == "disable"
+    assert disable_args.connection == "ollama:local"
+
+
+def test_provider_set_enabled_with_explicit_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "provider_id": "ollama",
+                    "connection_id": "ollama:local",
+                    "enabled": True,
+                    "configured": True,
+                    "reachable": True,
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_set_enabled(instance, "ollama", True, "ollama:local")
+
+    assert result.ok is True
+    assert "enabled ollama:local" in result.message
+    assert "endpoint reachable" in result.message
+    assert calls == [
+        {
+            "method": "connection.set_enabled",
+            "params": {
+                "provider_id": "ollama",
+                "connection_id": "ollama:local",
+                "enabled": True,
+            },
+        }
+    ]
+
+
+def test_provider_set_enabled_reports_unreachable_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "provider_id": "ollama",
+                    "connection_id": "ollama:local",
+                    "enabled": True,
+                    "configured": True,
+                    "reachable": False,
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_set_enabled(instance, "ollama", True, "ollama:local")
+
+    assert result.ok is True
+    assert "enabled ollama:local" in result.message
+    assert "endpoint not reachable" in result.message
+    assert "stays enabled" in result.message
+
+
+def test_provider_set_enabled_resolves_single_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --connection, a single-connection provider resolves automatically."""
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        if json["method"] == "connection.list":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "connections": [
+                            {
+                                "id": "openrouter:api-key",
+                                "provider_id": "openrouter",
+                                "type": "api_key",
+                                "label": "API Key",
+                                "enabled": True,
+                                "usable": True,
+                                "accounts": [],
+                            }
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "provider_id": "openrouter",
+                    "connection_id": "openrouter:api-key",
+                    "enabled": False,
+                    "configured": True,
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_set_enabled(instance, "openrouter", False)
+
+    assert result.ok is True
+    assert "disabled openrouter:api-key" in result.message
+    assert calls[0]["method"] == "connection.list"
+    assert calls[1] == {
+        "method": "connection.set_enabled",
+        "params": {
+            "provider_id": "openrouter",
+            "connection_id": "openrouter:api-key",
+            "enabled": False,
+        },
+    }
+
+
+def test_provider_set_enabled_requires_connection_for_multi_connection_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "connections": [
+                        {
+                            "id": "ollama:local",
+                            "provider_id": "ollama",
+                            "type": "none",
+                            "label": "Local",
+                            "enabled": False,
+                            "usable": False,
+                            "accounts": [],
+                        },
+                        {
+                            "id": "ollama:cloud",
+                            "provider_id": "ollama",
+                            "type": "api_key",
+                            "label": "Ollama Cloud",
+                            "enabled": True,
+                            "usable": False,
+                            "accounts": [],
+                        },
+                    ]
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_set_enabled(instance, "ollama", True)
+
+    assert result.ok is False
+    assert "pass --connection" in result.message
+    assert "ollama:cloud" in result.message
+    assert "ollama:local" in result.message
+
+
+def test_provider_set_enabled_reports_missing_credential_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "provider_id": "ollama",
+                    "connection_id": "ollama:cloud",
+                    "enabled": True,
+                    "configured": False,
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_set_enabled(instance, "ollama", True, "ollama:cloud")
+
+    assert result.ok is True
+    assert "no credential configured yet" in result.message
+    assert "provider set-key ollama" in result.message

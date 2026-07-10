@@ -936,6 +936,22 @@ export function isConnectionConfigured(connection) {
   );
 }
 
+// Whether the user has the connection switched on. The server always sends the
+// field; treating "absent" as enabled keeps keyed connections working if a
+// payload ever omits it.
+export function isConnectionEnabled(connection) {
+  return connection?.enabled !== false;
+}
+
+// Last local-catalog probe outcome: false only when the server positively knows
+// the local endpoint (e.g. Ollama) did not answer. Remote connections have no
+// probe and return null (no statement).
+export function connectionReachability(connection) {
+  return typeof connection?.reachable === 'boolean'
+    ? connection.reachable
+    : null;
+}
+
 function providerHasConfiguredConnection(provider) {
   return (
     Array.isArray(provider?.connections) &&

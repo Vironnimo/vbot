@@ -102,15 +102,29 @@ function suitabilityBadgeLabel(reasons, translate) {
 
 function suitabilityFields(model, translate) {
   const { suitable, reasons } = modelSuitability(model);
+  // A known-down local endpoint (model.list `reachable: false`, e.g. Ollama
+  // not running) badges the option but never hides it — the model stays
+  // selectable so agents can be configured ahead of starting the service.
+  const unreachableLabel =
+    model?.reachable === false
+      ? translate('models.filter.unreachable', 'service not running')
+      : '';
 
   if (suitable) {
-    return { suitable: true, suitabilityReasons: [] };
+    return unreachableLabel
+      ? {
+          suitable: true,
+          suitabilityReasons: [],
+          secondaryLabel: unreachableLabel,
+        }
+      : { suitable: true, suitabilityReasons: [] };
   }
 
+  const badge = suitabilityBadgeLabel(reasons, translate);
   return {
     suitable: false,
     suitabilityReasons: reasons,
-    secondaryLabel: suitabilityBadgeLabel(reasons, translate),
+    secondaryLabel: unreachableLabel ? `${badge} · ${unreachableLabel}` : badge,
   };
 }
 

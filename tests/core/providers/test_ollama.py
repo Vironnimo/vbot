@@ -711,6 +711,26 @@ class TestStreamNdjson:
             async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="ministral-3:8b"):
                 pass
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_connect_error_names_the_stopped_service(
+        self, adapter: OllamaAdapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refused connection surfaces 'is Ollama running?' instead of a socket error."""
+
+        # Arrange — bypass retry backoff so the retryable NetworkError fails fast.
+        async def _single_attempt(func, **_kwargs):
+            return await func()
+
+        monkeypatch.setattr("core.providers.ollama.retry_async", _single_attempt)
+        respx.post(OLLAMA_CHAT_URL).mock(side_effect=httpx.ConnectError("connection refused"))
+
+        # Act / Assert
+        from core.providers.errors import NetworkError
+
+        with pytest.raises(NetworkError, match="is the Ollama service running"):
+            await adapter.send(SAMPLE_MESSAGES, model_id="ministral-3:8b")
+
 
 # ---------------------------------------------------------------------------
 # Catalog normalization and enrichment

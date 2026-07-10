@@ -144,10 +144,27 @@ class OllamaAdapter(ProviderAdapter):
         # ``get_adapter`` call site; both Ollama connections speak one wire.
         del connection_mode
         super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
+        self._base_url = base_url or config.base_url
         self._client = build_async_client(
-            base_url=base_url or config.base_url,
+            base_url=self._base_url,
             debug_recorder=debug_recorder,
         )
+
+    def _wrap_transport_error(self, exc: httpx.TransportError) -> Exception:
+        """Classify a transport failure, naming the likely cause for connect errors.
+
+        A refused/failed connection to an Ollama endpoint almost always means
+        the service is simply not running — say so instead of surfacing a bare
+        socket error. Stays a retryable ``NetworkError`` so the shared retry
+        and chat-loop error handling are unchanged.
+        """
+
+        if isinstance(exc, httpx.ConnectError):
+            return NetworkError(
+                f"Ollama is not reachable at {self._base_url} — "
+                f"is the Ollama service running? ({exc})"
+            )
+        return wrap_network_error(exc)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -413,7 +430,7 @@ class OllamaAdapter(ProviderAdapter):
             try:
                 response = await self._client.post(CHAT_ENDPOINT, json=payload, headers=headers)
             except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
+                raise self._wrap_transport_error(exc) from exc
             if response.status_code >= 400:
                 detail = _build_error_detail(response.status_code, response.text)
                 classify_http_status(
@@ -458,7 +475,7 @@ class OllamaAdapter(ProviderAdapter):
             try:
                 response = await self._client.send(request, stream=True)
             except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
+                raise self._wrap_transport_error(exc) from exc
             if response.status_code >= 400:
                 error_body = (await response.aread()).decode("utf-8", errors="replace")
                 await response.aclose()

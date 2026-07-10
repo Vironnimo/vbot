@@ -6,6 +6,7 @@
   import { t } from '$lib/i18n.js';
   import {
     accountDisplayName,
+    connectionReachability,
     connectionSupportsAddAccount,
     describeAccountSource,
     describeProvider,
@@ -17,6 +18,7 @@
     getProviderItems,
     getPublicConnectionId,
     isAccountUsable,
+    isConnectionEnabled,
     isKeylessConnection,
     isOAuthAccount,
     isOAuthConnection,
@@ -218,7 +220,68 @@
     return provider?.name ?? provider?.id ?? 'Provider';
   }
 
+  let connectionToggleBusy = $state(false);
+
+  async function setConnectionEnabled(provider, connection, enabled) {
+    onError('');
+    connectionToggleBusy = true;
+
+    try {
+      const result = await rpc('connection.set_enabled', {
+        provider_id: provider.id,
+        connection_id: getPublicConnectionId(connection),
+        enabled,
+      });
+
+      const connectionLabel = connection.label ?? connection.id;
+      if (!enabled) {
+        onToast({
+          title: t(
+            'settings.providers.disabledToast',
+            '{connection} disabled.',
+            {
+              connection: connectionLabel,
+            },
+          ),
+          variant: 'success',
+        });
+      } else if (result?.reachable === false) {
+        onToast({
+          title: t(
+            'settings.providers.enabledUnreachableToast',
+            '{connection} enabled, but the endpoint is not reachable. Start the service and its models appear automatically.',
+            { connection: connectionLabel },
+          ),
+          variant: 'warn',
+        });
+      } else if (result?.reachable === true) {
+        onToast({
+          title: t(
+            'settings.providers.enabledReachableToast',
+            '{connection} enabled — endpoint reachable, model catalog refreshed.',
+            { connection: connectionLabel },
+          ),
+          variant: 'success',
+        });
+      }
+
+      await onReloadSettings();
+    } catch (error) {
+      onError(
+        `${t('settings.providers.toggleError', 'Provider connection could not be updated.')} ${error.message}`,
+      );
+    } finally {
+      connectionToggleBusy = false;
+    }
+  }
+
   function connectionDescription(connection) {
+    if (!isConnectionEnabled(connection)) {
+      return t(
+        'settings.providers.disabledDescription',
+        'Disabled — not probed and offering no models until you enable it.',
+      );
+    }
     if (isKeylessConnection(connection)) {
       return t(
         'settings.providers.keylessDescription',
@@ -499,26 +562,66 @@
                 </div>
 
                 <div class="s-row-actions s-row-actions--provider">
-                  {#if getConnectionAccounts(connection).length === 0 || isKeylessConnection(connection)}
-                    <StatusChip variant="success">
-                      {t('settings.providers.connected', 'Connected')}
+                  {#if !isConnectionEnabled(connection)}
+                    <StatusChip variant="warn">
+                      {t('settings.providers.disabledChip', 'Disabled')}
                     </StatusChip>
-                  {/if}
-                  {#if connectionSupportsAddAccount(connection)}
                     <Button
                       variant="secondary"
-                      onClick={() => openAddAccountModal(provider, connection)}
-                    >
-                      {t(
-                        'settings.providers.accounts.addButton',
-                        'Add account…',
+                      disabled={connectionToggleBusy}
+                      ariaLabel={t(
+                        'settings.providers.enableAria',
+                        'Enable connection {id}',
+                        { id: connection.id },
                       )}
+                      onClick={() =>
+                        setConnectionEnabled(provider, connection, true)}
+                    >
+                      {t('settings.providers.enable', 'Enable')}
+                    </Button>
+                  {:else}
+                    {#if connectionReachability(connection) === false}
+                      <StatusChip variant="warn">
+                        {t(
+                          'settings.providers.notReachableChip',
+                          'Not reachable',
+                        )}
+                      </StatusChip>
+                    {:else if getConnectionAccounts(connection).length === 0 || isKeylessConnection(connection)}
+                      <StatusChip variant="success">
+                        {t('settings.providers.connected', 'Connected')}
+                      </StatusChip>
+                    {/if}
+                    {#if connectionSupportsAddAccount(connection)}
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          openAddAccountModal(provider, connection)}
+                      >
+                        {t(
+                          'settings.providers.accounts.addButton',
+                          'Add account…',
+                        )}
+                      </Button>
+                    {/if}
+                    <Button
+                      variant="secondary"
+                      disabled={connectionToggleBusy}
+                      ariaLabel={t(
+                        'settings.providers.disableAria',
+                        'Disable connection {id}',
+                        { id: connection.id },
+                      )}
+                      onClick={() =>
+                        setConnectionEnabled(provider, connection, false)}
+                    >
+                      {t('settings.providers.disable', 'Disable')}
                     </Button>
                   {/if}
                 </div>
               </div>
 
-              {#if getConnectionAccounts(connection).length > 0 && !isKeylessConnection(connection)}
+              {#if isConnectionEnabled(connection) && getConnectionAccounts(connection).length > 0 && !isKeylessConnection(connection)}
                 <ul class="s-connection-accounts">
                   {#each getConnectionAccounts(connection) as account (account.id)}
                     <li class="s-connection-account-row">

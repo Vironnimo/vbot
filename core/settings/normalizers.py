@@ -421,6 +421,43 @@ def _coerce_local_models_section(local_models: Any) -> dict[str, Any]:
     return dict(local_models)
 
 
+# --- providers -------------------------------------------------------------------
+
+
+def normalize_providers_settings(providers: Any) -> dict[str, Any]:
+    """Return the normalized providers settings section.
+
+    Shape: ``{"connections": {"<provider>:<connection>": bool}}`` — per-connection
+    enabled/disabled overrides. An absent key falls back to the connection's type
+    default (keyed connections enabled, keyless local connections disabled — see
+    ``connection_default_enabled`` in ``core/providers``).
+    """
+
+    if providers is None:
+        section: dict[str, Any] = {}
+    elif isinstance(providers, Mapping):
+        section = dict(providers)
+    else:
+        raise StorageError("Expected settings.providers to be an object")
+
+    raw_connections = section.get("connections")
+    if raw_connections is None:
+        return {"connections": {}}
+    if not isinstance(raw_connections, Mapping):
+        raise StorageError("Expected settings.providers.connections to be an object")
+
+    connections: dict[str, bool] = {}
+    for key, enabled in raw_connections.items():
+        if not isinstance(key, str) or ":" not in key or not key.strip():
+            raise StorageError(
+                "providers.connections keys must be '<provider>:<connection>' strings"
+            )
+        if not isinstance(enabled, bool):
+            raise StorageError(f"providers.connections['{key}'] must be a boolean")
+        connections[key] = enabled
+    return {"connections": connections}
+
+
 # --- reflection ----------------------------------------------------------------
 
 

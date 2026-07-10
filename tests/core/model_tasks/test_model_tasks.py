@@ -1060,6 +1060,9 @@ class _Credentials:
     def has_credentials(self, _provider_id: str, connection_id: str) -> bool:
         return connection_id in self._granted
 
+    def is_usable(self, provider_id: str, connection_id: str) -> bool:
+        return self.has_credentials(provider_id, connection_id)
+
 
 class _Storage:
     def load_model_task_settings(self) -> dict[str, object]:

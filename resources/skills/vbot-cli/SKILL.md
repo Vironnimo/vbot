@@ -36,7 +36,7 @@ Read the reference file before using an area's write commands — it has the exa
 | `autostart` | `enable` `disable` `status` | `references/server.md` |
 | `desktop` | open the desktop window | `references/server.md` |
 | `doctor` | `settings` `config` — validate config files locally | `references/server.md` |
-| `provider` | `list` `status` `set-key` `unset-key` `connect` `connect-status` `disconnect` | `references/providers.md` |
+| `provider` | `list` `status` `enable` `disable` `set-key` `unset-key` `connect` `connect-status` `disconnect` | `references/providers.md` |
 | `model` | `list` `refresh [<provider>]` | `references/providers.md` |
 | `task-model` | `list` `targets` `options` `set` `clear` | `references/providers.md` |
 | `agent` | `list` `show` `create` `update` `delete` | `references/agents-projects.md` |

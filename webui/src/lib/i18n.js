@@ -271,6 +271,7 @@ export const englishCatalog = Object.freeze({
   'agents.form.modelUnavailableConnectionOption':
     'Unavailable / custom: {model} ({connection})',
   'models.filter.noTools': 'no tool calling',
+  'models.filter.unreachable': 'service not running',
   'models.filter.belowMinContext': 'below 32k context',
   'models.filter.contextUnknown': 'context unknown',
   'models.filter.showAll': 'Show all models ({count} hidden)',
@@ -826,6 +827,20 @@ export const englishCatalog = Object.freeze({
   'settings.providers.connect': 'Connect',
   'settings.providers.disconnect': 'Disconnect',
   'settings.providers.connected': 'Connected',
+  'settings.providers.disabledChip': 'Disabled',
+  'settings.providers.notReachableChip': 'Not reachable',
+  'settings.providers.enable': 'Enable',
+  'settings.providers.enableAria': 'Enable connection {id}',
+  'settings.providers.disable': 'Disable',
+  'settings.providers.disableAria': 'Disable connection {id}',
+  'settings.providers.disabledDescription':
+    'Disabled — not probed and offering no models until you enable it.',
+  'settings.providers.enabledReachableToast':
+    '{connection} enabled — endpoint reachable, model catalog refreshed.',
+  'settings.providers.enabledUnreachableToast':
+    '{connection} enabled, but the endpoint is not reachable. Start the service and its models appear automatically.',
+  'settings.providers.disabledToast': '{connection} disabled.',
+  'settings.providers.toggleError': 'Provider connection could not be updated.',
   'settings.providers.connectError':
     'Provider connection could not be started.',
   'settings.providers.disconnectError':

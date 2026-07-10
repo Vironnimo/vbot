@@ -8,7 +8,7 @@ Bootstrap entry point. Wires services and manages start/stop lifecycle.
 
 - `ConfigProtocol` — `get(key: str, default: Any = None) -> Any` (the one injected dependency).
 - `LoggerProtocol` — `debug/info/warning/error(msg, *args)`; types the public `logger` attribute.
-- `ProviderCredentialResolverProtocol` — `has_credentials` / `get_credentials` / `list_accounts` / `resolve_account_id`; the central provider-credential access contract (`RuntimeServices.provider_credentials`).
+- `ProviderCredentialResolverProtocol` — `has_credentials` / `is_connection_enabled` / `is_usable` / `get_credentials` / `list_accounts` / `resolve_account_id`; the central provider-credential and connection-usability contract (`RuntimeServices.provider_credentials`; usable = enabled + credentialed, `providers.md` → Terms → Usable).
 - `RuntimeServices` — the service surface of a *started* runtime as consumed by core modules that genuinely need the whole runtime handle (chat loop, tool dispatch, sub-agent coordination). Read-only properties `agents`, `providers`, `models`, `provider_credentials`, `storage`, `chat_sessions`, `chat_run_manager`, `tools`, `skills`, `extensions` (`ExtensionRegistry | None`), `system_prompts`, `process_manager`, `streaming_chat_loop`, plus `get_adapter(provider_id, connection_id)`. A missing attribute is a wiring bug, not a silently disabled feature — consumers access services directly, never via `getattr` probes. The heavy service types are imported under `TYPE_CHECKING` only, and consumers must likewise import `RuntimeServices` under `TYPE_CHECKING` (a runtime import of `core.runtime` loads `Runtime` and everything behind it — import cycle).
 
 ## Runtime class
@@ -24,7 +24,7 @@ Idempotent — a second call logs at debug and preserves the existing service in
 1. Create the `vbot.core` logger, log `Runtime startup initiated`, and record `started_at` (UTC).
 2. Build `StorageManager`, `ensure_directories()`, load `settings.json`, and read the `attachment_max_size_bytes` / `speech_upload_max_size_bytes` size limits (positive-int validated, else default with a warning).
 3. Instantiate the runtime-owned `AttachmentStore` (`<data_dir>/attachments/`, sized by `attachment_max_size_bytes`); read `<data_dir>/.env` as a fallback credential snapshot **without** mutating `os.environ`. (Prompt fragments are no longer seeded into the data dir at startup — bundled resources are read live; see `storage.md`.)
-4. Load provider + model registries; instantiate the OAuth `TokenStore` and the central `ProviderCredentialResolver` (process environment takes precedence over the data-dir fallback).
+4. Load provider + model registries; instantiate the OAuth `TokenStore` and the central `ProviderCredentialResolver` (process environment takes precedence over the data-dir fallback; wired with the live settings enabled-overrides loader so connection enable/disable applies without a restart).
 5. Create `TaskModelService`, then `SpeechService` (STT/TTS + artifacts) and `ImageService` (image generation).
 6. Wire `AgentStore` with `defaults_provider=lambda: storage.load_defaults().get("agent", {})` so resolved Agent reads always use the latest persisted defaults without rewriting agent files.
 7. Create `ProcessManager`; start its sweeper only when startup happens inside a running asyncio loop.

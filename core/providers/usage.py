@@ -151,7 +151,7 @@ class _ProviderLookupProtocol(Protocol):
 
 
 class _ProviderCredentialsProtocol(Protocol):
-    def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool: ...
+    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool: ...
 
 
 class UsageProbeRuntime(Protocol):
@@ -304,7 +304,7 @@ class ProviderUsageService:
 
     def _connection_usable(self, connection: _SupportedConnection) -> bool:
         try:
-            return self._runtime.provider_credentials.has_credentials(
+            return self._runtime.provider_credentials.is_usable(
                 connection.provider_id, connection.connection_id
             )
         except (KeyError, ConfigError):
