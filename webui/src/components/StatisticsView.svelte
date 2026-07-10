@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
 
+  import Badge from './ui/Badge.svelte';
   import Button from './ui/Button.svelte';
   import InfoHint from './ui/InfoHint.svelte';
   import { rpc } from '$lib/api.js';
@@ -326,13 +327,15 @@
 
 {#snippet estimatedBadge()}
   <span
-    class="stats-badge"
+    class="tooltip-anchor"
     use:tooltip={t(
       'statistics.estimatedHint',
       'Estimated tokens are approximated, not provider-reported.',
     )}
   >
-    {t('statistics.estimatedBadge', '~ estimated')}
+    <Badge variant="warn">
+      {t('statistics.estimatedBadge', '~ estimated')}
+    </Badge>
   </span>
 {/snippet}
 
@@ -342,7 +345,7 @@
     <span class="stats-agent__name">{display.name}</span>
     {#if display.projectId}
       <span
-        class="stats-agent__project"
+        class="stats-agent__project tooltip-anchor"
         use:tooltip={t(
           'statistics.agent.projectBadgeTitle',
           'Project: {project}',
@@ -351,7 +354,7 @@
           },
         )}
       >
-        {display.projectId}
+        <Badge variant="info">{display.projectId}</Badge>
       </span>
     {/if}
   </span>
@@ -1155,7 +1158,7 @@
 {#snippet skillOrigins(origins)}
   <span class="stats-origins">
     {#each origins ?? [] as origin (origin)}
-      <span class="stats-origin">{originLabel(origin)}</span>
+      <Badge variant="neutral">{originLabel(origin)}</Badge>
     {/each}
   </span>
 {/snippet}
@@ -1220,12 +1223,12 @@
                   <span class="stats-skill-name">
                     <span>{skill.name}</span>
                     {#if neverActivated}
-                      <span class="stats-skill-badge">
+                      <Badge variant="warn">
                         {t(
                           'statistics.skills.neverUsedBadge',
                           'Never activated',
                         )}
-                      </span>
+                      </Badge>
                     {/if}
                   </span>
                 </td>
@@ -1557,16 +1560,6 @@
   .stats-tokens__est {
     color: var(--amber);
   }
-  .stats-badge {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--amber);
-    border: 1px solid var(--amber);
-    border-radius: 10px;
-    padding: 1px 6px;
-  }
   .stats-agent {
     display: inline-flex;
     align-items: center;
@@ -1578,15 +1571,10 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Layout-only slot for the project Badge: keep it from shrinking next to the
+     ellipsized agent name (the pill styling now lives in the Badge primitive). */
   .stats-agent__project {
     flex-shrink: 0;
-    font-family: var(--font-mono);
-    font-size: 9px;
-    letter-spacing: 0.04em;
-    color: var(--accent);
-    border: 1px solid var(--accent);
-    border-radius: 10px;
-    padding: 1px 6px;
   }
   /* Zero-activation skills are the delete/improve candidates — highlight the
      whole row with a warm amber tint + left rule so they read as actionable at
@@ -1603,29 +1591,15 @@
     gap: 8px;
     min-width: 0;
   }
-  .stats-skill-badge {
+  /* Keep the "never activated" Badge from shrinking inside the inline-flex name
+     cell (the pill styling now lives in the Badge primitive). */
+  .stats-skill-name :global(.badge) {
     flex-shrink: 0;
-    font-family: var(--font-mono);
-    font-size: 9px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--amber);
-    border: 1px solid var(--amber);
-    border-radius: 10px;
-    padding: 1px 6px;
   }
   .stats-origins {
     display: inline-flex;
     flex-wrap: wrap;
     gap: 4px;
-  }
-  .stats-origin {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-med);
-    background: var(--surface-3);
-    border-radius: var(--r-sm);
-    padding: 1px 6px;
   }
   .stats-bars {
     list-style: none;

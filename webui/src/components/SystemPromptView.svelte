@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
+  import Badge from './ui/Badge.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Toggle from './ui/Toggle.svelte';
@@ -1017,60 +1018,68 @@
                   <div class="sp-block-id-row">
                     <span class="sp-block-id">{block.id}</span>
                     {#if isCustomBlock(block)}
-                      <span class="sp-badge sp-badge--custom">
+                      <Badge variant="info">
                         {t('systemPrompt.blockList.customBadge', 'custom')}
-                      </span>
+                      </Badge>
                     {/if}
                     {#if block.kind === 'data'}
                       <span
-                        class="sp-badge sp-badge--data"
+                        class="tooltip-anchor"
                         use:tooltip={t(
                           'systemPrompt.blockList.dataHint',
                           'Generated content — rebuilt automatically, not editable.',
                         )}
                       >
-                        {t('systemPrompt.blockList.dataBadge', 'auto')}
+                        <Badge variant="neutral">
+                          {t('systemPrompt.blockList.dataBadge', 'auto')}
+                        </Badge>
                       </span>
                     {/if}
                     {#if isAgentScope && isInherited(block)}
                       <span
-                        class="sp-badge sp-badge--inherited"
+                        class="tooltip-anchor"
                         use:tooltip={t(
                           'systemPrompt.blockList.inheritedHint',
                           'Inherited from the Default scope — editing creates an override.',
                         )}
                       >
-                        {t(
-                          'systemPrompt.blockList.inheritedBadge',
-                          'inherited',
-                        )}
+                        <Badge variant="neutral">
+                          {t(
+                            'systemPrompt.blockList.inheritedBadge',
+                            'inherited',
+                          )}
+                        </Badge>
                       </span>
                     {:else if block.editable && block.isModified}
                       <span
-                        class="sp-badge sp-badge--modified"
+                        class="tooltip-anchor"
                         use:tooltip={t(
                           'systemPrompt.fragmentEditor.modifiedHint',
                           'Edited — differs from the built-in default.',
                         )}
                       >
-                        {t(
-                          'systemPrompt.fragmentEditor.modifiedIndicator',
-                          'modified',
-                        )}
+                        <Badge variant="info">
+                          {t(
+                            'systemPrompt.fragmentEditor.modifiedIndicator',
+                            'modified',
+                          )}
+                        </Badge>
                       </span>
                     {/if}
                     {#if block.editable && block.isDirty}
                       <span
-                        class="sp-badge sp-badge--dirty"
+                        class="tooltip-anchor"
                         use:tooltip={t(
                           'systemPrompt.fragmentEditor.dirtyIndicator',
                           'Unsaved changes',
                         )}
                       >
-                        {t(
-                          'systemPrompt.fragmentEditor.dirtyIndicator',
-                          'unsaved',
-                        )}
+                        <Badge variant="warn">
+                          {t(
+                            'systemPrompt.fragmentEditor.dirtyIndicator',
+                            'unsaved',
+                          )}
+                        </Badge>
                       </span>
                     {/if}
                   </div>
@@ -1563,48 +1572,6 @@
     font-family: var(--font-ui);
     font-size: 11px;
     letter-spacing: 0.01em;
-  }
-
-  .sp-badge {
-    display: inline-block;
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.04em;
-    line-height: 1.6;
-    text-transform: lowercase;
-  }
-
-  .sp-badge--dirty {
-    color: var(--amber, #f59e0b);
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid rgba(245, 158, 11, 0.22);
-  }
-
-  .sp-badge--modified {
-    color: var(--accent);
-    background: var(--accent-dim);
-    border: 1px solid rgba(232, 135, 10, 0.2);
-  }
-
-  .sp-badge--inherited {
-    color: var(--text-med);
-    background: var(--surface-2);
-    border: 1px solid var(--border-2);
-  }
-
-  .sp-badge--custom {
-    color: var(--accent);
-    background: var(--accent-dim);
-    border: 1px solid rgba(232, 135, 10, 0.2);
-  }
-
-  .sp-badge--data {
-    color: var(--text-lo);
-    background: var(--surface-2);
-    border: 1px solid var(--border-2);
   }
 
   .sp-block-actions {

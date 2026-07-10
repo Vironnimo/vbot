@@ -697,6 +697,53 @@ textarea::placeholder {
   background: var(--surface-3);
 }
 
+/* Canonical metadata-badge variants. `Badge` (`components/ui/Badge.svelte`)
+   emits `badge badge--<variant>` for small metadata tags — kind markers,
+   origins, versions, scopes — the counterpart to StatusChip's semantic-status
+   `.chip`. Accent tints come only from the `--accent-XX` ramp. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  line-height: 1;
+}
+
+.badge--neutral {
+  border-color: var(--border-2);
+  background: var(--surface-3);
+  color: var(--text-med);
+}
+
+.badge--info {
+  border-color: var(--accent-30);
+  background: var(--accent-08);
+  color: var(--accent);
+}
+
+.badge--success {
+  border-color: rgba(74, 222, 128, 0.28);
+  background: rgba(74, 222, 128, 0.1);
+  color: var(--green);
+}
+
+.badge--warn {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--amber);
+}
+
+.badge--error {
+  border-color: rgba(252, 129, 129, 0.28);
+  background: rgba(252, 129, 129, 0.1);
+  color: var(--red);
+}
+
 .toggle,
 .tl-toggle {
   position: relative;

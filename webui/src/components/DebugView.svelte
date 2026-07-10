@@ -21,6 +21,7 @@
   import DebugModelProbe from './debug/DebugModelProbe.svelte';
   import DebugTraceDetail from './debug/DebugTraceDetail.svelte';
   import DebugTraceList from './debug/DebugTraceList.svelte';
+  import Badge from './ui/Badge.svelte';
   import Button from './ui/Button.svelte';
 
   const TRACE_LIMIT_MAX = 500;
@@ -253,12 +254,12 @@
 
   <div class="debug-view__status-bar">
     <div class="debug-view__status-info">
-      <span class="debug-view__status-chip debug-view__status-chip--count">
+      <Badge variant="neutral">
         {t('debug.statusCount', '{count} / {limit} traces', {
           count: status.traceCount,
           limit: status.traceLimit,
         })}
-      </span>
+      </Badge>
     </div>
 
     <div class="debug-view__status-controls">
@@ -444,22 +445,6 @@
     display: flex;
     align-items: center;
     gap: 10px;
-  }
-
-  .debug-view__status-chip {
-    padding: 4px 9px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    color: var(--text-med);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 500;
-  }
-
-  .debug-view__status-chip--count {
-    border-color: var(--border-2);
-    color: var(--text-hi);
   }
 
   .debug-view__status-controls {

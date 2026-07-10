@@ -565,13 +565,8 @@ describe('SystemPromptView', () => {
       scope: { type: 'agent', agent_id: 'agent-1' },
     });
 
-    await waitForCondition(
-      () => document.body.querySelector('.sp-badge--inherited'),
-      100,
-    );
-    expect(document.body.querySelectorAll('.sp-badge--inherited').length).toBe(
-      3,
-    );
+    await waitForCondition(() => inheritedBadges().length > 0, 100);
+    expect(inheritedBadges().length).toBe(3);
 
     // Editing an inherited block autosaves the override with the agent scope.
     vi.useFakeTimers();
@@ -1113,6 +1108,14 @@ function createRpcMock(options = {}) {
 
 function blockElements() {
   return Array.from(document.body.querySelectorAll('li.sp-block'));
+}
+
+// The "inherited" marker is now the shared Badge primitive, identified by its
+// translated label rather than a bespoke per-variant class.
+function inheritedBadges() {
+  return Array.from(document.body.querySelectorAll('.badge')).filter(
+    (element) => element.textContent.trim() === 'inherited',
+  );
 }
 
 function blockIds() {
