@@ -5,6 +5,7 @@
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import FormField from '../ui/FormField.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -475,96 +476,99 @@
                 field.type === JSON_OPTION_TYPE
                   ? taskModelJsonError(row.taskType, field)
                   : ''}
-              <svelte:element
-                this={field.type === 'select' || field.type === JSON_OPTION_TYPE
-                  ? 'div'
-                  : 'label'}
-                class={`s-field${field.type === JSON_OPTION_TYPE ? ' s-field--full' : ''}`}
+              {@const fieldControlId = `task-model-${row.taskType}-${field.name}`}
+              <FormField
+                controlId={fieldControlId}
+                full={field.type === JSON_OPTION_TYPE}
+                label={field.label}
+                help={field.description ?? ''}
+                error={jsonError
+                  ? t(
+                      'settings.specializedModels.jsonInvalid',
+                      'Invalid JSON: {error}',
+                      { error: jsonError },
+                    )
+                  : ''}
               >
-                <span class="s-field-label">{field.label}</span>
-                {#if field.type === 'select'}
-                  <Dropdown
-                    value={taskModelOptionValue(row.taskType, field)}
-                    options={field.options}
-                    ariaLabel={field.label}
-                    disabled={taskModelSaving}
-                    triggerClass="settings-view__dropdown"
-                    listClass="settings-view__thinking-list"
-                    onValueChange={(value) =>
-                      setTaskModelOption(row.taskType, field, value)}
-                  />
-                {:else if field.type === 'textarea'}
-                  <TextArea
-                    rows="3"
-                    value={taskModelOptionValue(row.taskType, field)}
-                    disabled={taskModelSaving}
-                    onInput={(_value, event) =>
-                      handleTaskModelOptionChange(row.taskType, field, event)}
-                  />
-                {:else if field.type === JSON_OPTION_TYPE}
-                  <TextArea
-                    code
-                    invalid={Boolean(jsonError)}
-                    rows="8"
-                    spellcheck="false"
-                    autocapitalize="off"
-                    autocorrect="off"
-                    aria-describedby={jsonError
-                      ? `s-task-model-json-error-${row.taskType}-${field.name}`
-                      : undefined}
-                    placeholder={t(
-                      'settings.specializedModels.jsonPlaceholder',
-                      '[ … ] or { … }',
-                    )}
-                    value={taskModelOptionValue(row.taskType, field)}
-                    disabled={taskModelSaving}
-                    onInput={(_value, event) =>
-                      handleTaskModelOptionChange(row.taskType, field, event)}
-                  />
-                  {#if jsonError}
-                    <span
-                      id={`s-task-model-json-error-${row.taskType}-${field.name}`}
-                      class="s-field-error"
-                      role="alert"
-                    >
-                      {t(
-                        'settings.specializedModels.jsonInvalid',
-                        'Invalid JSON: {error}',
-                        { error: jsonError },
+                {#snippet children(formField)}
+                  {#if field.type === 'select'}
+                    <Dropdown
+                      id={formField.controlId}
+                      value={taskModelOptionValue(row.taskType, field)}
+                      options={field.options}
+                      ariaLabel={field.label}
+                      ariaDescribedby={formField.describedBy}
+                      disabled={taskModelSaving}
+                      triggerClass="settings-view__dropdown"
+                      listClass="settings-view__thinking-list"
+                      onValueChange={(value) =>
+                        setTaskModelOption(row.taskType, field, value)}
+                    />
+                  {:else if field.type === 'textarea'}
+                    <TextArea
+                      id={formField.controlId}
+                      rows="3"
+                      aria-describedby={formField.describedBy}
+                      value={taskModelOptionValue(row.taskType, field)}
+                      disabled={taskModelSaving}
+                      onInput={(_value, event) =>
+                        handleTaskModelOptionChange(row.taskType, field, event)}
+                    />
+                  {:else if field.type === JSON_OPTION_TYPE}
+                    <TextArea
+                      id={formField.controlId}
+                      code
+                      invalid={formField.invalid}
+                      rows="8"
+                      spellcheck="false"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      aria-describedby={formField.describedBy}
+                      placeholder={t(
+                        'settings.specializedModels.jsonPlaceholder',
+                        '[ … ] or { … }',
                       )}
-                    </span>
+                      value={taskModelOptionValue(row.taskType, field)}
+                      disabled={taskModelSaving}
+                      onInput={(_value, event) =>
+                        handleTaskModelOptionChange(row.taskType, field, event)}
+                    />
+                  {:else if field.type === 'number'}
+                    <TextField
+                      id={formField.controlId}
+                      type="number"
+                      aria-describedby={formField.describedBy}
+                      min={field.min ?? undefined}
+                      max={field.max ?? undefined}
+                      step={field.step ?? 'any'}
+                      value={taskModelOptionValue(row.taskType, field)}
+                      disabled={taskModelSaving}
+                      onInput={(_next, event) =>
+                        handleTaskModelOptionChange(row.taskType, field, event)}
+                    />
+                  {:else if field.type === 'boolean'}
+                    <Toggle
+                      id={formField.controlId}
+                      checked={taskModelOptionValue(row.taskType, field) ===
+                        true}
+                      disabled={taskModelSaving}
+                      ariaLabel={field.label}
+                      aria-describedby={formField.describedBy}
+                      onChange={(next) =>
+                        setTaskModelOption(row.taskType, field, next)}
+                    />
+                  {:else}
+                    <TextField
+                      id={formField.controlId}
+                      value={taskModelOptionValue(row.taskType, field)}
+                      aria-describedby={formField.describedBy}
+                      disabled={taskModelSaving}
+                      onInput={(_next, event) =>
+                        handleTaskModelOptionChange(row.taskType, field, event)}
+                    />
                   {/if}
-                {:else if field.type === 'number'}
-                  <TextField
-                    type="number"
-                    min={field.min ?? undefined}
-                    max={field.max ?? undefined}
-                    step={field.step ?? 'any'}
-                    value={taskModelOptionValue(row.taskType, field)}
-                    disabled={taskModelSaving}
-                    onInput={(_next, event) =>
-                      handleTaskModelOptionChange(row.taskType, field, event)}
-                  />
-                {:else if field.type === 'boolean'}
-                  <Toggle
-                    checked={taskModelOptionValue(row.taskType, field) === true}
-                    disabled={taskModelSaving}
-                    ariaLabel={field.label}
-                    onChange={(next) =>
-                      setTaskModelOption(row.taskType, field, next)}
-                  />
-                {:else}
-                  <TextField
-                    value={taskModelOptionValue(row.taskType, field)}
-                    disabled={taskModelSaving}
-                    onInput={(_next, event) =>
-                      handleTaskModelOptionChange(row.taskType, field, event)}
-                  />
-                {/if}
-                {#if field.description}
-                  <span class="s-field-help">{field.description}</span>
-                {/if}
-              </svelte:element>
+                {/snippet}
+              </FormField>
             {/each}
           </div>
         </div>

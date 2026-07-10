@@ -1006,7 +1006,7 @@ describe('SettingsView', () => {
 
     await waitForCondition(
       () =>
-        document.body.querySelector('.s-field-error') === null &&
+        document.body.querySelector('.form-field__error') === null &&
         jsonTextarea.getAttribute('aria-invalid') === 'false',
     );
 
@@ -1103,12 +1103,12 @@ describe('SettingsView', () => {
     setTextareaValue('.text-area--code', '[{"text": "hi"');
 
     await waitForCondition(
-      () => document.body.querySelector('.s-field-error') !== null,
+      () => document.body.querySelector('.form-field__error') !== null,
     );
 
     const jsonTextarea = document.body.querySelector('.text-area--code');
     expect(jsonTextarea.getAttribute('aria-invalid')).toBe('true');
-    expect(document.body.querySelector('.s-field-error')).toBeTruthy();
+    expect(document.body.querySelector('.form-field__error')).toBeTruthy();
     expect(document.body.textContent).toContain('Invalid JSON');
 
     // The parse error means the typed text was NOT applied to the
@@ -1152,7 +1152,7 @@ describe('SettingsView', () => {
     );
 
     await waitForCondition(
-      () => document.body.querySelector('.s-field-error') === null,
+      () => document.body.querySelector('.form-field__error') === null,
     );
     expect(jsonTextarea.getAttribute('aria-invalid')).toBe('false');
   });

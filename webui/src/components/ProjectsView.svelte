@@ -7,6 +7,7 @@
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import EmptyState from './ui/EmptyState.svelte';
+  import FormField from './ui/FormField.svelte';
   import Modal from './ui/Modal.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import TextField from './ui/TextField.svelte';
@@ -2417,10 +2418,14 @@
               )}
             </p>
 
-            <label class="modal-field">
-              <span class="modal-label">
-                {t('projects.add.cwd', 'Repository path')}
-              </span>
+            <FormField
+              controlId="projects-add-cwd"
+              label={t('projects.add.cwd', 'Repository path')}
+              help={t(
+                'projects.add.cwdHelp',
+                'The folder must exist. The project is created immediately and then scanned — you can remove it again afterwards.',
+              )}
+            >
               <TextField
                 id="projects-add-cwd"
                 variant="modal"
@@ -2432,18 +2437,12 @@
                 disabled={addingProject}
                 onInput={(next) => updateAddField('cwd', next)}
               />
-              <span class="projects-help">
-                {t(
-                  'projects.add.cwdHelp',
-                  'The folder must exist. The project is created immediately and then scanned — you can remove it again afterwards.',
-                )}
-              </span>
-            </label>
+            </FormField>
 
-            <label class="modal-field">
-              <span class="modal-label">
-                {t('projects.add.displayName', 'Display name')}
-              </span>
+            <FormField
+              controlId="projects-add-display-name"
+              label={t('projects.add.displayName', 'Display name')}
+            >
               <TextField
                 id="projects-add-display-name"
                 variant="modal"
@@ -2455,23 +2454,18 @@
                 disabled={addingProject}
                 onInput={(next) => updateAddField('display_name', next)}
               />
-            </label>
+            </FormField>
 
             {#if addShowsFormatChoice}
-              <div
-                class="modal-field"
+              <FormField
+                label={t('projects.add.format', 'Source format')}
+                help={t(
+                  'projects.add.formatHelp',
+                  'This repository carries both ecosystems. Pick which one this project uses — its agents and skills come only from that one. You can switch later in the project settings.',
+                )}
                 role="radiogroup"
                 aria-label={t('projects.add.format', 'Source format')}
               >
-                <span class="modal-label">
-                  {t('projects.add.format', 'Source format')}
-                </span>
-                <span class="projects-help">
-                  {t(
-                    'projects.add.formatHelp',
-                    'This repository carries both ecosystems. Pick which one this project uses — its agents and skills come only from that one. You can switch later in the project settings.',
-                  )}
-                </span>
                 <div class="projects-format-choice">
                   {#each PROJECT_SOURCE_FORMATS as formatKey (formatKey)}
                     <button
@@ -2502,7 +2496,7 @@
                     </button>
                   {/each}
                 </div>
-              </div>
+              </FormField>
             {:else if addDetectedFormat}
               <p class="projects-help">
                 {t('projects.add.formatDetected', 'Detected: {format}', {
@@ -2575,10 +2569,10 @@
                 'The repository folder for this project no longer exists. Point it at the new location to restore the project.',
               )}
             </p>
-            <label class="modal-field">
-              <span class="modal-label">
-                {t('projects.rePoint.cwd', 'New repository path')}
-              </span>
+            <FormField
+              controlId="projects-repoint-cwd"
+              label={t('projects.rePoint.cwd', 'New repository path')}
+            >
               <TextField
                 id="projects-repoint-cwd"
                 variant="modal"
@@ -2593,7 +2587,7 @@
                   rePointError = '';
                 }}
               />
-            </label>
+            </FormField>
 
             {#if rePointError}
               <Banner variant="error" role="alert">

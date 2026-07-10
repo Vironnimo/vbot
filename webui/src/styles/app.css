@@ -1251,13 +1251,60 @@ textarea::placeholder {
   padding: 20px;
 }
 
-.modal-field {
+/* Canonical anatomy for ordinary form controls. Layout containers may size the
+   field, but labels, supporting copy, errors, and their rhythm stay here. */
+.form-field {
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
 }
 
-.modal-label,
+.form-field--full {
+  grid-column: 1 / -1;
+}
+
+.form-field__label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.form-field__required {
+  color: var(--accent);
+}
+
+.form-field__help {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
+}
+
+.form-field__error {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  letter-spacing: 0.01em;
+  line-height: 1.35;
+}
+
+.form-field__error::before {
+  color: var(--red);
+  content: '×';
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
 .section-label,
 .pane-title,
 .detail-group-title,

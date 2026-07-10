@@ -21,6 +21,7 @@
     searchText = '',
     disabled = false,
     ariaLabel = '',
+    ariaDescribedby = undefined,
     triggerClass = '',
     panelClass = '',
     // Optional action row pinned under the options (e.g. the model pickers'
@@ -223,6 +224,7 @@
     type="button"
     {disabled}
     aria-label={ariaLabel || placeholder}
+    aria-describedby={ariaDescribedby}
     aria-haspopup="listbox"
     aria-expanded={isOpen}
     onclick={toggleOpen}

@@ -1,6 +1,7 @@
 <script>
   import { untrack } from 'svelte';
   import Button from '../ui/Button.svelte';
+  import FormField from '../ui/FormField.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
@@ -347,36 +348,38 @@
 </script>
 
 {#snippet accountField(fieldDisabled)}
-  <label class="modal-field">
-    <span class="modal-label">
-      {t('settings.providers.accounts.nameLabel', 'Account')}
-    </span>
-    <TextField
-      autocomplete="off"
-      placeholder={DEFAULT_ACCOUNT_ID}
-      value={accountValue}
-      disabled={fieldDisabled || accountFixed}
-      onInput={(next) => {
-        accountValue = next;
-        errorMessage = '';
-      }}
-    />
-  </label>
-  {#if accountInvalid}
-    <p class="provider-connect-modal__error" role="alert">
-      {t(
-        'settings.providers.accounts.invalidId',
-        'Account names use 1–32 lowercase letters, digits, or underscores and start with a letter or digit.',
-      )}
-    </p>
-  {:else if !accountFixed}
-    <p class="provider-connect-modal__hint">
-      {t(
-        'settings.providers.accounts.nameHint',
-        'Optional name for this account. Only needed if you add more than one — otherwise leave it empty.',
-      )}
-    </p>
-  {/if}
+  <FormField
+    controlId="provider-account-name"
+    label={t('settings.providers.accounts.nameLabel', 'Account')}
+    help={!accountInvalid && !accountFixed
+      ? t(
+          'settings.providers.accounts.nameHint',
+          'Optional name for this account. Only needed if you add more than one — otherwise leave it empty.',
+        )
+      : ''}
+    error={accountInvalid
+      ? t(
+          'settings.providers.accounts.invalidId',
+          'Account names use 1–32 lowercase letters, digits, or underscores and start with a letter or digit.',
+        )
+      : ''}
+  >
+    {#snippet children(field)}
+      <TextField
+        id={field.controlId}
+        autocomplete="off"
+        placeholder={DEFAULT_ACCOUNT_ID}
+        value={accountValue}
+        invalid={field.invalid}
+        aria-describedby={field.describedBy}
+        disabled={fieldDisabled || accountFixed}
+        onInput={(next) => {
+          accountValue = next;
+          errorMessage = '';
+        }}
+      />
+    {/snippet}
+  </FormField>
 {/snippet}
 
 <Modal
@@ -461,11 +464,12 @@
         </div>
       {:else if step === 'api-key'}
         <form id="provider-connect-key-form" onsubmit={submitApiKey}>
-          <label class="modal-field">
-            <span class="modal-label">
-              {t('settings.providers.add.apiKeyLabel', 'API key')}
-            </span>
+          <FormField
+            controlId="provider-api-key"
+            label={t('settings.providers.add.apiKeyLabel', 'API key')}
+          >
             <TextField
+              id="provider-api-key"
               type="password"
               autocomplete="off"
               placeholder={t(
@@ -479,7 +483,7 @@
                 errorMessage = '';
               }}
             />
-          </label>
+          </FormField>
           {@render accountField(saving)}
           {#if selectedConnection.credential_key}
             <p class="provider-connect-modal__hint">

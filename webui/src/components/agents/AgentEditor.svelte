@@ -6,6 +6,7 @@
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
+  import FormField from '../ui/FormField.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -828,79 +829,82 @@
         {t('agents.detail.identity', 'Identity')}
       </div>
       <div class="detail-fields">
-        <label class="f">
-          <span class="f-label">{t('agents.form.id', 'Agent ID')}</span>
-          <TextField
-            invalid={Boolean(formErrors.id)}
-            value={formValues.id}
-            onInput={(next) => (formValues.id = next)}
-            disabled={formMode === AGENT_FORM_MODE_EDIT}
-            aria-describedby="agent-id-help agent-id-error"
-          />
-          <small id="agent-id-help" class="agents-view__field-help">
-            {t('agents.form.idHelp', 'Agent IDs are immutable after creation.')}
-          </small>
-          {#if formErrors.id}
-            <small id="agent-id-error" class="agents-view__field-error">
-              {fieldError('id')}
-            </small>
-          {/if}
-        </label>
+        <FormField
+          controlId="agent-id"
+          label={t('agents.form.id', 'Agent ID')}
+          help={t(
+            'agents.form.idHelp',
+            'Agent IDs are immutable after creation.',
+          )}
+          error={formErrors.id ? fieldError('id') : ''}
+        >
+          {#snippet children(field)}
+            <TextField
+              id={field.controlId}
+              invalid={field.invalid}
+              value={formValues.id}
+              onInput={(next) => (formValues.id = next)}
+              disabled={formMode === AGENT_FORM_MODE_EDIT}
+              aria-describedby={field.describedBy}
+            />
+          {/snippet}
+        </FormField>
 
-        <label class="f">
-          <span class="f-label">{t('agents.form.name', 'Name')}</span>
-          <TextField
-            invalid={Boolean(formErrors.name)}
-            value={formValues.name}
-            onInput={(next) => (formValues.name = next)}
-          />
-          {#if formErrors.name}
-            <small class="agents-view__field-error">
-              {fieldError('name')}
-            </small>
-          {/if}
-        </label>
+        <FormField
+          controlId="agent-name"
+          label={t('agents.form.name', 'Name')}
+          error={formErrors.name ? fieldError('name') : ''}
+        >
+          {#snippet children(field)}
+            <TextField
+              id={field.controlId}
+              invalid={field.invalid}
+              aria-describedby={field.describedBy}
+              value={formValues.name}
+              onInput={(next) => (formValues.name = next)}
+            />
+          {/snippet}
+        </FormField>
 
-        <label class="f wide">
-          <span class="f-label">
-            {t('agents.form.workspace', 'Workspace')}
-          </span>
-          <TextField
-            id="agent-workspace"
-            class="mono"
-            invalid={Boolean(formErrors.workspace)}
-            value={formValues.workspace}
-            onInput={(next) => (formValues.workspace = next)}
-            disabled={formMode === AGENT_FORM_MODE_CREATE}
-            aria-describedby="agent-workspace-help agent-workspace-error"
-          />
-          <small id="agent-workspace-help" class="agents-view__field-help">
-            {formMode === AGENT_FORM_MODE_CREATE
-              ? t(
-                  'agents.form.workspaceAssignedByServer',
-                  'Workspace is assigned by the server when the agent is created.',
-                )
-              : t(
-                  'agents.form.workspaceEditableHelp',
-                  "Home of this agent's identity and memory files (SOUL.md, USER.md, MEMORY.md); the memory tool works here. File tools follow the session's working directory instead — the project repository in project sessions.",
-                )}
-          </small>
-          {#if workspaceIsCustom}
-            <Button
-              variant="tertiary"
-              class="agents-view__reset-inherit"
-              disabled={isSaving || isDeleting}
-              onClick={resetWorkspaceToDefault}
-            >
-              {t('agents.form.workspaceSetToDefault', 'Set to default')}
-            </Button>
-          {/if}
-          {#if formErrors.workspace}
-            <small id="agent-workspace-error" class="agents-view__field-error">
-              {fieldError('workspace')}
-            </small>
-          {/if}
-        </label>
+        <FormField
+          controlId="agent-workspace"
+          full
+          label={t('agents.form.workspace', 'Workspace')}
+          help={formMode === AGENT_FORM_MODE_CREATE
+            ? t(
+                'agents.form.workspaceAssignedByServer',
+                'Workspace is assigned by the server when the agent is created.',
+              )
+            : t(
+                'agents.form.workspaceEditableHelp',
+                "Home of this agent's identity and memory files (SOUL.md, USER.md, MEMORY.md); the memory tool works here. File tools follow the session's working directory instead — the project repository in project sessions.",
+              )}
+          error={formErrors.workspace ? fieldError('workspace') : ''}
+        >
+          {#snippet children(field)}
+            <TextField
+              id={field.controlId}
+              class="mono"
+              invalid={field.invalid}
+              value={formValues.workspace}
+              onInput={(next) => (formValues.workspace = next)}
+              disabled={formMode === AGENT_FORM_MODE_CREATE}
+              aria-describedby={field.describedBy}
+            />
+          {/snippet}
+          {#snippet actions()}
+            {#if workspaceIsCustom}
+              <Button
+                variant="tertiary"
+                class="agents-view__reset-inherit"
+                disabled={isSaving || isDeleting}
+                onClick={resetWorkspaceToDefault}
+              >
+                {t('agents.form.workspaceSetToDefault', 'Set to default')}
+              </Button>
+            {/if}
+          {/snippet}
+        </FormField>
       </div>
     </div>
 
@@ -909,8 +913,11 @@
         {t('agents.detail.model', 'Model')}
       </div>
       <div class="detail-fields agents-view__model-fields">
-        <label class="f wide">
-          <span class="f-label">{t('agents.form.model', 'Model')}</span>
+        <FormField
+          controlId="agent-model"
+          full
+          label={t('agents.form.model', 'Model')}
+        >
           <SearchableDropdown
             id="agent-model"
             value={modelSelectValue}
@@ -930,11 +937,11 @@
             onValueChange={(selectedValue) =>
               updateModelSelection('model', selectedValue)}
           />
-          {@render globalDefaultsLink()}
-        </label>
+          {#snippet actions()}{@render globalDefaultsLink()}{/snippet}
+        </FormField>
 
-        <label class="f">
-          <span class="f-label">
+        <FormField controlId="agent-fallback-model">
+          {#snippet labelContent()}
             {t('agents.form.fallbackModel', 'Fallback model')}
             <InfoHint
               text={t(
@@ -942,7 +949,7 @@
                 'Used automatically when the primary model fails or is unavailable.',
               )}
             />
-          </span>
+          {/snippet}
           <SearchableDropdown
             id="agent-fallback-model"
             value={fallbackModelSelectValue}
@@ -963,11 +970,20 @@
             onValueChange={(selectedValue) =>
               updateModelSelection('fallback_model', selectedValue)}
           />
-          {@render globalDefaultsLink()}
-        </label>
+          {#snippet actions()}{@render globalDefaultsLink()}{/snippet}
+        </FormField>
 
-        <label class="f agents-view__thinking-field">
-          <span class="f-label">
+        <FormField
+          controlId="agent-thinking-effort"
+          class="agents-view__thinking-field"
+          help={effortDropdownDisabled
+            ? t(
+                'agents.form.thinkingEffortUnsupported',
+                'This model does not support reasoning.',
+              )
+            : ''}
+        >
+          {#snippet labelContent()}
             {t('agents.form.thinkingEffort', 'Thinking effort')}
             <InfoHint
               text={t(
@@ -975,7 +991,7 @@
                 'How much internal reasoning the model may spend before answering. Leave at — for the default.',
               )}
             />
-          </span>
+          {/snippet}
           <Dropdown
             id="agent-thinking-effort"
             value={formValues.thinking_effort}
@@ -988,24 +1004,28 @@
               formValues.thinking_effort = selectedValue;
             }}
           />
-          {#if effortDropdownDisabled}
-            <small
-              class="agents-view__field-help"
-              data-testid="thinking-effort-disabled-hint"
-            >
-              {t(
-                'agents.form.thinkingEffortUnsupported',
-                'This model does not support reasoning.',
-              )}
-            </small>
-          {/if}
-          {#if formValues.thinking_effort === ''}
-            {@render globalDefaultsLink()}
-          {/if}
-        </label>
+          {#snippet actions()}
+            {#if formValues.thinking_effort === ''}
+              {@render globalDefaultsLink()}
+            {/if}
+          {/snippet}
+        </FormField>
 
-        <label class="f">
-          <span class="f-label">
+        <FormField
+          controlId="agent-temperature"
+          help={temperatureIsInherit
+            ? inheritSource('temperature') === 'global_default'
+              ? t('inherit.hint', 'Inherited: {value} (global default)', {
+                  value: inheritDisplayValue('temperature'),
+                })
+              : t(
+                  'inherit.hintProviderDefault',
+                  'Provider default — nothing is set here or in the global defaults.',
+                )
+            : ''}
+          error={formErrors.temperature ? fieldError('temperature') : ''}
+        >
+          {#snippet labelContent()}
             {t('agents.form.temperature', 'Temperature')}
             <InfoHint
               text={t(
@@ -1013,55 +1033,42 @@
                 'Sampling randomness, typically 0–2. Leave empty to use the default.',
               )}
             />
-          </span>
-          <div class="agents-view__temperature-input">
-            <TextField
-              inputmode="decimal"
-              invalid={Boolean(formErrors.temperature)}
-              value={formValues.temperature}
-              onInput={(next) => (formValues.temperature = next)}
-            />
-            {#if !temperatureIsInherit}
-              <Button
-                variant="tertiary"
-                class="agents-view__reset-inherit"
-                tooltip={t(
-                  'inherit.resetToInherit',
-                  'Reset to inherited value',
-                )}
-                ariaLabel={t(
-                  'inherit.resetToInherit',
-                  'Reset to inherited value',
-                )}
-                onClick={clearTemperature}
-              >
-                {EMPTY_VALUE}
-              </Button>
+          {/snippet}
+          {#snippet children(field)}
+            <div class="agents-view__temperature-input">
+              <TextField
+                id={field.controlId}
+                inputmode="decimal"
+                invalid={field.invalid}
+                aria-describedby={field.describedBy}
+                value={formValues.temperature}
+                onInput={(next) => (formValues.temperature = next)}
+              />
+              {#if !temperatureIsInherit}
+                <Button
+                  variant="tertiary"
+                  class="agents-view__reset-inherit"
+                  tooltip={t(
+                    'inherit.resetToInherit',
+                    'Reset to inherited value',
+                  )}
+                  ariaLabel={t(
+                    'inherit.resetToInherit',
+                    'Reset to inherited value',
+                  )}
+                  onClick={clearTemperature}
+                >
+                  {EMPTY_VALUE}
+                </Button>
+              {/if}
+            </div>
+          {/snippet}
+          {#snippet actions()}
+            {#if temperatureIsInherit}
+              {@render globalDefaultsLink()}
             {/if}
-          </div>
-          {#if temperatureIsInherit}
-            {#if inheritSource('temperature') === 'global_default'}
-              <small class="agents-view__field-help agents-view__inherit-hint">
-                {t('inherit.hint', 'Inherited: {value} (global default)', {
-                  value: inheritDisplayValue('temperature'),
-                })}
-              </small>
-            {:else}
-              <small class="agents-view__field-help agents-view__inherit-hint">
-                {t(
-                  'inherit.hintProviderDefault',
-                  'Provider default — nothing is set here or in the global defaults.',
-                )}
-              </small>
-            {/if}
-            {@render globalDefaultsLink()}
-          {/if}
-          {#if formErrors.temperature}
-            <small class="agents-view__field-error">
-              {fieldError('temperature')}
-            </small>
-          {/if}
-        </label>
+          {/snippet}
+        </FormField>
       </div>
     </div>
 

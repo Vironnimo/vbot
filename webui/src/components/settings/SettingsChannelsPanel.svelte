@@ -6,6 +6,7 @@
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import FormField from '../ui/FormField.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -392,10 +393,15 @@
     </div>
 
     <div class="s-channel-form-grid">
-      <label class="s-field" for="channel-id-input">
-        <span class="s-field-label">
-          {t('sessions.link_channel_id', 'Channel ID')}
-        </span>
+      <FormField
+        controlId="channel-id-input"
+        required
+        label={t('sessions.link_channel_id', 'Channel ID')}
+        help={t(
+          'settings.channels.idHelp',
+          'A name you choose for this channel. It cannot be changed after creation.',
+        )}
+      >
         <TextField
           id="channel-id-input"
           value={channelFormValues.id}
@@ -403,18 +409,12 @@
           disabled={channelBusy || channelFormMode === CHANNEL_FORM_MODE_EDIT}
           onInput={(next) => setChannelFormField('id', next)}
         />
-        <span class="s-field-help">
-          {t(
-            'settings.channels.idHelp',
-            'A name you choose for this channel. It cannot be changed after creation.',
-          )}
-        </span>
-      </label>
+      </FormField>
 
-      <div class="s-field">
-        <span class="s-field-label">
-          {t('settings.channels.platform', 'Platform')}
-        </span>
+      <FormField
+        controlId="channel-platform-select"
+        label={t('settings.channels.platform', 'Platform')}
+      >
         <Dropdown
           id="channel-platform-select"
           value={channelFormValues.platform}
@@ -425,12 +425,12 @@
           listClass="settings-view__thinking-list"
           onValueChange={(value) => setChannelFormField('platform', value)}
         />
-      </div>
+      </FormField>
 
-      <div class="s-field">
-        <span class="s-field-label">
-          {t('settings.channels.agent', 'Agent')}
-        </span>
+      <FormField
+        controlId="channel-agent-select"
+        label={t('settings.channels.agent', 'Agent')}
+      >
         <Dropdown
           id="channel-agent-select"
           value={channelFormValues.agent_id}
@@ -444,10 +444,10 @@
           listClass="settings-view__thinking-list"
           onValueChange={(value) => setChannelFormField('agent_id', value)}
         />
-      </div>
+      </FormField>
 
-      <div class="s-field">
-        <span class="s-field-label">
+      <FormField controlId="channel-dm-scope-select">
+        {#snippet labelContent()}
           {t('settings.channels.dm_scope', 'DM scope')}
           <InfoHint
             text={t(
@@ -455,7 +455,7 @@
               'How direct messages are grouped into chat sessions:\n\nMain — all DMs share one session. Per peer — one session per person. Per conversation — one session per chat. Per account, channel & peer — one session per chat and person.\n\nGroup chats always share one session per group, regardless of this setting.',
             )}
           />
-        </span>
+        {/snippet}
         <Dropdown
           id="channel-dm-scope-select"
           value={channelFormValues.dm_scope}
@@ -466,12 +466,17 @@
           listClass="settings-view__thinking-list"
           onValueChange={(value) => setChannelFormField('dm_scope', value)}
         />
-      </div>
+      </FormField>
 
-      <label class="s-field" for="channel-token-env-input">
-        <span class="s-field-label">
-          {t('settings.channels.token_env_var', 'Token env var')}
-        </span>
+      <FormField
+        controlId="channel-token-env-input"
+        required
+        label={t('settings.channels.token_env_var', 'Token env var')}
+        help={t(
+          'settings.channels.token_env_var.help',
+          'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
+        )}
+      >
         <TextField
           id="channel-token-env-input"
           value={channelFormValues.token_env_var}
@@ -479,16 +484,10 @@
           disabled={channelBusy}
           onInput={(next) => setChannelFormField('token_env_var', next)}
         />
-        <span class="s-field-help">
-          {t(
-            'settings.channels.token_env_var.help',
-            'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
-          )}
-        </span>
-      </label>
+      </FormField>
 
-      <label class="s-field s-field--full" for="channel-allowed-chat-ids-input">
-        <span class="s-field-label">
+      <FormField controlId="channel-allowed-chat-ids-input" full>
+        {#snippet labelContent()}
           {t('settings.channels.allowed_chat_ids', 'Allowed chat IDs')}
           <InfoHint
             text={t(
@@ -496,7 +495,7 @@
               'Comma-separated chat IDs allowed to talk to this channel. An empty list allows nobody. Messages from chats not on the list are rejected and appear on the channel card below with a one-click Allow.',
             )}
           />
-        </span>
+        {/snippet}
         <TextField
           id="channel-allowed-chat-ids-input"
           value={channelFormValues.allowed_chat_ids}
@@ -507,7 +506,7 @@
           )}
           onInput={(next) => setChannelFormField('allowed_chat_ids', next)}
         />
-      </label>
+      </FormField>
     </div>
 
     <div class="s-channel-form-actions">

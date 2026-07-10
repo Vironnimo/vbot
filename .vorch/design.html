@@ -265,8 +265,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round
 .modal-close { width: 26px; height: 26px; border-radius: var(--r-sm); background: none; border: none; color: var(--text-lo); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.12s; }
 .modal-close:hover { background: var(--surface-2); color: var(--text-med); }
 .modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-.modal-field { display: flex; flex-direction: column; gap: 5px; }
-.modal-label { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-lo); }
+.form-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.form-field__label { display: flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.07em; line-height: 1.2; text-transform: uppercase; color: var(--text-lo); }
+.form-field__help { color: var(--text-lo); font-size: 12.5px; line-height: 1.4; }
+.form-field__error { color: var(--red); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.35; }
 .modal-input { background: var(--bg); border: 1px solid var(--border-2); border-radius: var(--r-md); color: var(--text-hi); font-family: var(--font-mono); font-size: 13px; padding: 9px 12px; outline: none; transition: border-color 0.15s; }
 .modal-input:focus { border-color: rgba(232,135,10,0.4); box-shadow: 0 0 0 3px rgba(232,135,10,0.06); }
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px 18px; border-top: 1px solid var(--border); }
@@ -743,9 +745,9 @@ print(fibonacci(10))  # 55</code></pre>
         <div class="comp-section">
           <div class="comp-section-title">Inputs</div>
           <div style="display:flex;flex-direction:column;gap:10px;max-width:360px">
-            <input class="s-input" type="text" placeholder="Settings input…" style="width:100%">
-            <input class="s-input" type="password" placeholder="Password / API key…" style="width:100%">
-            <input class="modal-input" type="text" placeholder="Modal input (larger)…" style="width:100%">
+            <div class="form-field"><label class="form-field__label">Agent name</label><input class="s-input" type="text" placeholder="Settings input…" style="width:100%"><small class="form-field__help">Shown in agent and session pickers.</small></div>
+            <div class="form-field"><label class="form-field__label">API key</label><input class="s-input" type="password" placeholder="Password / API key…" style="width:100%"></div>
+            <div class="form-field"><label class="form-field__label">Repository path</label><input class="modal-input" type="text" placeholder="Modal input (larger)…" style="width:100%"><small class="form-field__error">× Enter an existing folder.</small></div>
             <textarea class="text-area" rows="3" placeholder="Multi-line prompt…"></textarea>
             <textarea class="text-area text-area--code" rows="5" spellcheck="false">{
   "enabled": true
@@ -1018,16 +1020,16 @@ print(fibonacci(10))  # 55</code></pre>
       <button class="modal-close" onclick="closeModal('modal-endpoint')"><svg viewBox="0 0 12 12" style="width:10px;height:10px"><path d="M1 1l10 10M11 1L1 11"/></svg></button>
     </div>
     <div class="modal-body">
-      <div class="modal-field">
-        <label class="modal-label">Name</label>
+      <div class="form-field">
+        <label class="form-field__label">Name</label>
         <input class="modal-input" type="text" placeholder="e.g. Local LLaMA">
       </div>
-      <div class="modal-field">
-        <label class="modal-label">Base URL</label>
+      <div class="form-field">
+        <label class="form-field__label">Base URL</label>
         <input class="modal-input" type="text" placeholder="http://localhost:11434/v1">
       </div>
-      <div class="modal-field">
-        <label class="modal-label">API Key (optional)</label>
+      <div class="form-field">
+        <label class="form-field__label">API Key (optional)</label>
         <input class="modal-input" type="password" placeholder="sk-…">
       </div>
     </div>

@@ -465,6 +465,38 @@ describe('UI primitive guard', () => {
     expect([...rawTextAreas, ...primitiveViolations]).toEqual([]);
   });
 
+  it('routes every ordinary form field shell through components/ui/FormField.svelte', () => {
+    const canonical = new Set([
+      'form-field',
+      'form-field--full',
+      'form-field__label',
+      'form-field__required',
+      'form-field__help',
+      'form-field__error',
+    ]);
+    const retired = new Set([
+      'modal-field',
+      'modal-label',
+      's-field',
+      's-field--full',
+      's-field-label',
+      's-field-hint',
+      's-field-help',
+      's-field-error',
+      'agents-view__field-help',
+      'agents-view__field-error',
+    ]);
+
+    const canonicalViolations = findRawClassViolations(
+      ANY_ELEMENT,
+      canonical,
+      'components/ui/FormField.svelte',
+    );
+    const retiredViolations = findRawClassViolations(ANY_ELEMENT, retired, '');
+
+    expect([...canonicalViolations, ...retiredViolations]).toEqual([]);
+  });
+
   it('keeps the retired bespoke multi-line field classes from returning', () => {
     const retired = new Set([
       's-input',
