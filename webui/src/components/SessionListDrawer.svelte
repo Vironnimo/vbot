@@ -550,7 +550,7 @@
     margin: 0;
     color: var(--text-hi);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-mono-xs);
     font-weight: 500;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -558,7 +558,7 @@
 
   :global(.session-drawer__refresh) {
     padding: 4px 10px;
-    font-size: 12px;
+    font-size: var(--fs-label-sm);
   }
 
   .session-drawer__list {
@@ -585,7 +585,7 @@
   }
 
   .session-row:has(.session-row__select--active) {
-    border-color: rgba(232, 135, 10, 0.46);
+    border-color: var(--accent-40);
     box-shadow: inset 3px 0 0 var(--accent);
   }
 
@@ -677,7 +677,7 @@
     border: 1px solid var(--border);
     border-radius: var(--r-md);
     background: var(--surface-3);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   }
 
   .session-row__menu-item {
@@ -689,7 +689,7 @@
     background: transparent;
     color: var(--text-hi);
     font-family: var(--font-ui);
-    font-size: 12.5px;
+    font-size: var(--fs-body-sm);
     text-align: left;
     cursor: pointer;
     transition: background 150ms ease;
@@ -707,7 +707,7 @@
 
   .session-row__menu-item--danger:hover,
   .session-row__menu-item--danger:focus-visible {
-    background: rgba(239, 68, 68, 0.14);
+    background: rgba(252, 129, 129, 0.14);
   }
 
   .session-row__edit {
@@ -726,13 +726,13 @@
     background: var(--surface);
     color: var(--text-hi);
     font-family: var(--font-ui);
-    font-size: 13px;
+    font-size: var(--fs-label-md);
   }
 
   .session-row__edit-input:focus-visible {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(232, 135, 10, 0.25);
+    box-shadow: var(--focus-ring);
   }
 
   .session-row__edit-error {
@@ -755,7 +755,7 @@
     margin: 0;
     color: var(--text-hi);
     font-family: var(--font-ui);
-    font-size: 13px;
+    font-size: var(--fs-label-md);
     font-weight: 600;
     line-height: 1.25;
     overflow: hidden;
@@ -767,13 +767,13 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    border: 1px solid rgba(232, 135, 10, 0.28);
+    border: 1px solid var(--accent-30);
     border-radius: 999px;
     padding: 2px 7px;
     color: var(--accent);
     background: var(--accent-08);
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: var(--fs-mono-xs);
     line-height: 1;
   }
 
@@ -783,16 +783,13 @@
     color: var(--green);
   }
 
-  .session-row__badge--subagent {
-    border-color: rgba(91, 141, 239, 0.32);
-    background: rgba(91, 141, 239, 0.14);
-    color: #8fb4ff;
-  }
-
+  /* Structural metadata (sub-agent, fork) is neutral, not a status color —
+     the palette has no blue/purple, and the label text carries the meaning. */
+  .session-row__badge--subagent,
   .session-row__badge--fork {
-    border-color: rgba(167, 139, 250, 0.34);
-    background: rgba(167, 139, 250, 0.14);
-    color: #c4b5fd;
+    border-color: var(--border-2);
+    background: var(--surface-3);
+    color: var(--text-med);
   }
 
   .session-row__badge svg {
@@ -813,14 +810,14 @@
 
   .session-row__meta--mono {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-mono-sm);
   }
 
   .session-drawer__state {
     margin: 0;
     padding: 10px 12px;
     color: var(--text-med);
-    font-size: 12px;
+    font-size: var(--fs-label-sm);
   }
 
   .session-drawer__state--error {
@@ -844,14 +841,14 @@
   .session-drawer__empty-title {
     margin: 0;
     color: var(--text-hi);
-    font-size: 13px;
+    font-size: var(--fs-label-md);
     font-weight: 600;
   }
 
   .session-drawer__empty-subtitle {
     margin: 0;
     color: var(--text-med);
-    font-size: 12px;
+    font-size: var(--fs-label-sm);
     line-height: 1.45;
   }
 
