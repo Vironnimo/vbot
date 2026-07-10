@@ -10,6 +10,7 @@ const BRIDGE_READY_TIMEOUT_MS = 5000;
 
 let cachedCapabilities = null;
 let cachedBridgeApi = null;
+let voiceAudioContext = null;
 
 /** True when the WebUI was loaded through the Desktop accessor URL. */
 export function isDesktopAccessor() {
@@ -114,6 +115,66 @@ export async function setWakewordEnabled(enabled) {
 /** Apply a partial wakeword configuration update. */
 export async function setWakewordConfig(config) {
   return callBridge('setWakewordConfig', config);
+}
+
+/** Enumerate Desktop-local microphone devices and compatibility. */
+export async function listMicrophones() {
+  try {
+    const devices = await callBridge('listMicrophones');
+    return Array.isArray(devices) ? devices : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Retry the enabled worker after an actionable error. */
+export async function retryWakeword() {
+  return callBridge('retryWakeword');
+}
+
+/**
+ * Play a short non-verbal Voice cue inside the Desktop WebView.
+ * Failures are deliberately silent: visual state remains authoritative when
+ * the host has no output device or its autoplay policy suspends Web Audio.
+ */
+export async function playWakewordCue(state) {
+  if (typeof window === 'undefined') return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  try {
+    voiceAudioContext ||= new AudioContextClass();
+    if (voiceAudioContext.state === 'suspended') {
+      await voiceAudioContext.resume();
+    }
+    const patterns = {
+      wakeword_detected: [760],
+      sent: [660, 880],
+      cancelled: [520, 360],
+      no_speech: [360],
+      transcription_failed: [320, 260],
+      error: [260, 220],
+    };
+    const frequencies = patterns[state];
+    if (!frequencies) return;
+    const start = voiceAudioContext.currentTime;
+    frequencies.forEach((frequency, index) => {
+      const oscillator = voiceAudioContext.createOscillator();
+      const gain = voiceAudioContext.createGain();
+      const cueStart = start + index * 0.12;
+      oscillator.frequency.value = frequency;
+      oscillator.type = 'sine';
+      gain.gain.setValueAtTime(0.0001, cueStart);
+      gain.gain.exponentialRampToValueAtTime(0.12, cueStart + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, cueStart + 0.09);
+      oscillator.connect(gain);
+      gain.connect(voiceAudioContext.destination);
+      oscillator.start(cueStart);
+      oscillator.stop(cueStart + 0.1);
+    });
+  } catch {
+    // Visual status remains available.
+  }
 }
 
 /**

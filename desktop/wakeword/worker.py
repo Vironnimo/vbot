@@ -9,9 +9,13 @@ from __future__ import annotations
 import io
 import logging
 import random
+import re
 import threading
 import time
 import wave
+from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +36,10 @@ _VAD_FRAME_SIZE = int(_SAMPLE_RATE * _VAD_FRAME_DURATION_MS / 1000)  # 480 sampl
 
 _SILENCE_DURATION_SECONDS = 1.5
 _SILENCE_FRAME_COUNT = int(_SILENCE_DURATION_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
+_SPEECH_START_TIMEOUT_SECONDS = 4.0
+_SPEECH_START_FRAME_COUNT = int(_SPEECH_START_TIMEOUT_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
+_PRE_SPEECH_DURATION_SECONDS = 0.3
+_PRE_SPEECH_FRAME_COUNT = int(_PRE_SPEECH_DURATION_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
 
 _MAX_RECORDING_SECONDS = 15.0
 _MAX_RECORDING_FRAMES = int(_MAX_RECORDING_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
@@ -57,6 +65,70 @@ _MOCK_DEFAULT_SCORES = [0.0] * 25 + [1.0]
 # desktop process must not import from core (see .vorch/PROJECT.md).
 _RETRYABLE_STATUS_CODES = frozenset([429, 502, 503, 504])
 
+_VOICE_CANCEL_PHRASES = frozenset(["abbrechen", "vergiss es"])
+_COMMON_CAPTURE_SAMPLE_RATES = (16000, 48000, 44100, 32000)
+_CAPTURE_DTYPES = ("int16", "float32")
+
+_OUTCOME_SENT = "sent"
+_OUTCOME_CANCELLED = "cancelled"
+_OUTCOME_NO_SPEECH = "no_speech"
+_OUTCOME_TRANSCRIPTION_FAILED = "transcription_failed"
+
+
+class MicrophoneUnavailableError(RuntimeError):
+    """No usable input-device format could supply wakeword-quality audio."""
+
+
+@dataclass(frozen=True)
+class CaptureFormat:
+    """Concrete device format used before conversion to 16 kHz PCM."""
+
+    device: int
+    name: str
+    sample_rate: int
+    dtype: str
+
+
+class ResamplingInputStream:
+    """Read a native sounddevice stream as 16 kHz mono signed PCM frames."""
+
+    def __init__(self, stream: Any, capture_format: CaptureFormat) -> None:
+        self._stream = stream
+        self.capture_format = capture_format
+
+    def start(self) -> None:
+        self._stream.start()
+
+    def read_pcm16(self, target_frames: int) -> bytes:
+        import numpy as np
+
+        native_frames = max(
+            1,
+            round(target_frames * self.capture_format.sample_rate / _SAMPLE_RATE),
+        )
+        audio, _overflowed = self._stream.read(native_frames)
+        samples = np.asarray(audio).reshape(-1)
+        if self.capture_format.dtype == "float32":
+            normalized = np.clip(samples.astype(np.float32), -1.0, 1.0)
+        else:
+            normalized = samples.astype(np.float32) / 32768.0
+
+        if native_frames != target_frames:
+            source_positions = np.linspace(0.0, 1.0, num=native_frames, endpoint=False)
+            target_positions = np.linspace(0.0, 1.0, num=target_frames, endpoint=False)
+            normalized = np.interp(target_positions, source_positions, normalized).astype(
+                np.float32
+            )
+
+        pcm = np.clip(normalized * 32767.0, -32768, 32767).astype(np.int16)
+        return bytes(pcm.tobytes())
+
+    def stop(self) -> None:
+        self._stream.stop()
+
+    def close(self) -> None:
+        self._stream.close()
+
 
 class WakewordWorker:
     """Orchestrates the wakeword detection → recording → transcription → send pipeline.
@@ -72,11 +144,13 @@ class WakewordWorker:
         bridge: Any,
         settings_path: Path | None = None,
         server_url: str = "",
+        config_reader: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._engine = engine
         self._bridge = bridge
         self._settings_path = settings_path
         self._server_url = server_url.rstrip("/")
+        self._config_reader = config_reader
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
         self._stream: Any = None
@@ -84,27 +158,11 @@ class WakewordWorker:
     # -- Lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
-        """Start the engine and launch the detection thread.
-
-        Fails fast when no target agent is configured: rather than opening the
-        microphone and sitting in ``listening`` only to die on the first wake
-        word, the worker surfaces ``error`` the moment listening is enabled, so
-        the misconfiguration is visible immediately.
-        """
+        """Launch startup and detection work without blocking the Desktop bridge."""
         if self._thread is not None and self._thread.is_alive():
             return
-        if not self._target_agent_configured():
-            logger.warning("Wakeword listening not started: no target agent is configured")
-            self._bridge.publish_state("error")
-            return
         self._running.set()
-        try:
-            self._engine.start()
-        except Exception:
-            logger.warning("Failed to start wakeword engine", exc_info=True)
-            self._running.clear()
-            self._bridge.publish_state("error")
-            return
+        self._bridge.publish_state("starting")
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -114,10 +172,7 @@ class WakewordWorker:
         if self._thread is not None:
             self._thread.join(timeout=3.0)
             self._thread = None
-        try:
-            self._engine.stop()
-        except Exception:
-            logger.warning("Error stopping wakeword engine", exc_info=True)
+        self._stop_engine()
         self._close_stream()
 
     def is_running(self) -> bool:
@@ -127,13 +182,42 @@ class WakewordWorker:
     # -- Detection loop ------------------------------------------------------
 
     def _run(self) -> None:
-        """Main detection loop: open mic, listen, detect, handle, repeat."""
+        """Validate routing, start the engine, then detect and handle commands."""
+        config = self._read_config()
+        agent_id = config.get("target_agent_id")
+        if not self._server_url:
+            self._fail("no_server")
+            return
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            self._fail("missing_target_agent")
+            return
+        if not self._target_agent_available(agent_id):
+            if not self._running.is_set():
+                return
+            self._fail("target_agent_unavailable")
+            return
+        if not self._running.is_set():
+            return
+        try:
+            self._engine.start()
+        except Exception:
+            logger.warning("Failed to start wakeword engine", exc_info=True)
+            self._fail("engine_start_failed")
+            return
+        if not self._running.is_set():
+            self._stop_engine()
+            return
         try:
             self._open_stream()
+        except MicrophoneUnavailableError:
+            logger.warning("No compatible microphone is available", exc_info=True)
+            self._stop_engine()
+            self._fail("microphone_unavailable")
+            return
         except Exception:
             logger.warning("Failed to open microphone stream", exc_info=True)
-            self._running.clear()
-            self._bridge.publish_state("error")
+            self._stop_engine()
+            self._fail("microphone_unavailable")
             return
 
         self._bridge.publish_state("listening")
@@ -143,19 +227,17 @@ class WakewordWorker:
         try:
             while self._running.is_set():
                 try:
-                    chunk = self._stream.read(_FRAME_SIZE_SAMPLES)[0].tobytes()
+                    chunk = self._stream.read_pcm16(_FRAME_SIZE_SAMPLES)
                 except Exception:
                     logger.warning("Microphone read error", exc_info=True)
                     consecutive_read_errors += 1
                     if consecutive_read_errors >= _MAX_CONSECUTIVE_MIC_READ_ERRORS:
-                        self._running.clear()
-                        self._bridge.publish_state("error")
+                        self._fail("microphone_read_failed")
                         break
                     if self._restart_stream():
                         self._bridge.publish_state("listening")
                         continue
-                    self._running.clear()
-                    self._bridge.publish_state("error")
+                    self._fail("microphone_read_failed")
                     break
 
                 consecutive_read_errors = 0
@@ -164,8 +246,7 @@ class WakewordWorker:
                     score = self._engine.detect(chunk)
                 except Exception:
                     logger.warning("Wakeword detection failed", exc_info=True)
-                    self._running.clear()
-                    self._bridge.publish_state("error")
+                    self._fail("detection_failed")
                     break
                 threshold = getattr(self._engine, "threshold", 0.5)
                 if not wakeword_armed:
@@ -175,37 +256,50 @@ class WakewordWorker:
                 if score >= threshold:
                     wakeword_armed = False
                     self._bridge.publish_state("wakeword_detected")
-                    self._handle_detection()
+                    outcome = self._handle_detection()
                     if not self._running.is_set():
                         break
-                    self._prepare_next_listen()
+                    self._prepare_next_listen(outcome)
                     if not self._running.is_set():
                         break
                     if not self._restart_stream():
-                        self._running.clear()
-                        self._bridge.publish_state("error")
+                        self._fail("microphone_unavailable")
                         break
         finally:
             self._close_stream()
+            self._stop_engine()
+
+    def _stop_engine(self) -> None:
+        """Release engine resources; implementations are expected to be idempotent."""
+        try:
+            self._engine.stop()
+        except Exception:
+            logger.warning("Error stopping wakeword engine", exc_info=True)
 
     def _open_stream(self) -> None:
-        """Open the microphone stream at 16kHz mono 16-bit via sounddevice."""
+        """Open a compatible native stream and normalize it to 16 kHz PCM."""
         import sounddevice as sd  # type: ignore[import-untyped]
 
         config = self._read_config()
-        device = config.get("microphone")
-        stream_options: dict[str, Any] = {
-            "samplerate": _SAMPLE_RATE,
-            "channels": _CHANNELS,
-            "dtype": "int16",
-            "blocksize": _FRAME_SIZE_SAMPLES,
-        }
-        if isinstance(device, int):
-            stream_options["device"] = device
-        self._stream = sd.InputStream(
-            **stream_options,
+        requested_device = config.get("microphone")
+        device = requested_device if isinstance(requested_device, int) else None
+        capture_format = _select_capture_format(sd, device)
+        native_stream = sd.InputStream(
+            samplerate=capture_format.sample_rate,
+            channels=_CHANNELS,
+            dtype=capture_format.dtype,
+            blocksize=0,
+            device=capture_format.device,
         )
+        self._stream = ResamplingInputStream(native_stream, capture_format)
         self._stream.start()
+        self._bridge.publish_runtime_details(
+            active_microphone={
+                "index": capture_format.device,
+                "name": capture_format.name,
+                "sample_rate": capture_format.sample_rate,
+            }
+        )
 
     def _close_stream(self) -> None:
         """Close the microphone stream."""
@@ -227,47 +321,54 @@ class WakewordWorker:
             return False
         return True
 
-    def _prepare_next_listen(self) -> None:
-        """Return to a visible listening state before re-arming wakeword detection."""
+    def _prepare_next_listen(self, outcome: str | None) -> None:
+        """Expose the completed outcome briefly, then return to listening."""
         self._close_stream()
+        if outcome:
+            self._bridge.publish_state(outcome)
+            _sleep_while_running(self._running, _POST_DETECTION_LISTENING_HOLD_SECONDS)
+            if not self._running.is_set():
+                return
         self._bridge.publish_state("listening")
-        _sleep_while_running(self._running, _POST_DETECTION_LISTENING_HOLD_SECONDS)
 
     # -- Post-detection pipeline ---------------------------------------------
 
-    def _handle_detection(self) -> None:
+    def _handle_detection(self) -> str | None:
         """Record audio, transcribe, and send after wakeword detection."""
         config = self._read_config()
         agent_id = config.get("target_agent_id")
         if not isinstance(agent_id, str) or not agent_id.strip():
             logger.warning("Wakeword command ignored because no target agent is configured")
-            self._bridge.publish_state("error")
-            self._running.clear()
-            return
+            self._fail("missing_target_agent")
+            return None
 
         self._bridge.publish_state("recording")
         audio_data = self._record_until_silence()
         if audio_data is None:
-            return
+            return _OUTCOME_NO_SPEECH
         if not self._running.is_set():
             # Stopped (disabled/reconfigured) during recording — skip the network
             # round-trip entirely, no transcription and no send.
-            return
+            return None
 
         self._bridge.publish_state("transcribing")
         self._close_stream()
         transcript = self._transcribe(audio_data)
         if transcript is None:
             logger.warning("Wakeword transcription failed; returning to listening")
-            return
+            return _OUTCOME_TRANSCRIPTION_FAILED
         transcript = transcript.strip()
         if not transcript:
             logger.info("Wakeword recording produced no transcript; returning to listening")
-            return
+            return _OUTCOME_NO_SPEECH
         if not self._running.is_set():
             # Stopped during transcription — do not send a now-stale command.
             logger.info("Wakeword worker stopped during transcription; discarding transcript")
-            return
+            return None
+
+        if _is_voice_cancel_phrase(transcript):
+            logger.info("Wakeword command discarded by voice cancel phrase")
+            return _OUTCOME_CANCELLED
 
         self._bridge.publish_state("sending")
         session_behavior = config.get("session_behavior", "active")
@@ -277,17 +378,22 @@ class WakewordWorker:
             # A stop mid-resolve empties the result; that is not an error, so only
             # surface "error" when the worker is still meant to be running.
             if self._running.is_set():
-                self._bridge.publish_state("error")
-                self._running.clear()
-            return
+                self._fail("session_resolution_failed")
+            return None
         if not self._send_transcript(transcript, agent_id, session_id):
             if self._running.is_set():
-                self._bridge.publish_state("error")
-                self._running.clear()
-            return
+                self._fail("send_failed")
+            return None
+        return _OUTCOME_SENT
 
     def _read_config(self) -> dict[str, Any]:
         """Read the current wakeword configuration from Desktop settings."""
+        if self._config_reader is not None:
+            try:
+                return self._config_reader()
+            except Exception:
+                logger.warning("Failed to read wakeword settings from bridge", exc_info=True)
+                return {}
         try:
             from desktop.settings import read_wakeword_settings
 
@@ -296,10 +402,14 @@ class WakewordWorker:
             logger.warning("Failed to read wakeword settings", exc_info=True)
             return {}
 
-    def _target_agent_configured(self) -> bool:
-        """Whether a non-empty target agent id is configured right now."""
-        agent_id = self._read_config().get("target_agent_id")
-        return isinstance(agent_id, str) and bool(agent_id.strip())
+    def _target_agent_available(self, agent_id: str) -> bool:
+        """Verify the server-specific target exists before opening the microphone."""
+        return bool(self._rpc_call("agent.get", {"id": agent_id}))
+
+    def _fail(self, error_code: str) -> None:
+        """Stop the worker and expose one actionable stable failure reason."""
+        self._running.clear()
+        self._bridge.publish_state("error", error_code)
 
     # -- Audio recording -----------------------------------------------------
 
@@ -317,17 +427,17 @@ class WakewordWorker:
 
         vad = webrtcvad.Vad(_VAD_MODE)
         frames: list[bytes] = []
+        pre_speech_frames: deque[bytes] = deque(maxlen=_PRE_SPEECH_FRAME_COUNT)
         silent_frames = 0
         has_speech = False
+        waited_frames = 0
 
         while self._running.is_set():
             try:
-                frame = self._stream.read(_VAD_FRAME_SIZE)[0].tobytes()
+                frame = self._stream.read_pcm16(_VAD_FRAME_SIZE)
             except Exception:
                 logger.warning("Microphone read error during recording", exc_info=True)
                 break
-
-            frames.append(frame)
 
             try:
                 is_speech = vad.is_speech(frame, _SAMPLE_RATE)
@@ -335,14 +445,23 @@ class WakewordWorker:
                 is_speech = True
 
             if is_speech:
+                if not has_speech:
+                    frames.extend(pre_speech_frames)
                 has_speech = True
+                frames.append(frame)
                 silent_frames = 0
-            else:
+            elif has_speech:
+                frames.append(frame)
                 silent_frames += 1
+            else:
+                pre_speech_frames.append(frame)
+                waited_frames += 1
 
-            if silent_frames >= _SILENCE_FRAME_COUNT:
+            if has_speech and silent_frames >= _SILENCE_FRAME_COUNT:
                 break
             if len(frames) >= _MAX_RECORDING_FRAMES:
+                break
+            if not has_speech and waited_frames >= _SPEECH_START_FRAME_COUNT:
                 break
 
         if not frames or not has_speech:
@@ -358,7 +477,7 @@ class WakewordWorker:
             if not self._running.is_set():
                 break
             try:
-                frame = self._stream.read(_VAD_FRAME_SIZE)[0].tobytes()
+                frame = self._stream.read_pcm16(_VAD_FRAME_SIZE)
                 frames.append(frame)
             except Exception:
                 logger.warning("Microphone read error during raw recording", exc_info=True)
@@ -544,8 +663,82 @@ def _response_text_preview(response: httpx.Response) -> str:
     return text[:500]
 
 
+def _is_voice_cancel_phrase(transcript: str) -> bool:
+    """Return whether a normalized transcript ends with a reserved cancel phrase."""
+    normalized = re.sub(r"[^\wäöüß]+", " ", transcript.casefold(), flags=re.UNICODE).strip()
+    return any(
+        normalized == phrase or normalized.endswith(f" {phrase}")
+        for phrase in _VOICE_CANCEL_PHRASES
+    )
+
+
+def _candidate_device_indices(sd: Any, requested_device: int | None) -> list[int]:
+    """Return requested/default/fallback input devices in safe preference order."""
+    devices = sd.query_devices()
+    if requested_device is not None:
+        return [requested_device]
+
+    candidates: list[int] = []
+    try:
+        default_input = int(sd.default.device[0])
+    except (IndexError, TypeError, ValueError):
+        default_input = -1
+    if default_input >= 0:
+        candidates.append(default_input)
+    for host_api in sd.query_hostapis():
+        host_default = host_api.get("default_input_device", -1)
+        if isinstance(host_default, int) and host_default >= 0:
+            candidates.append(host_default)
+    candidates.extend(
+        index for index, info in enumerate(devices) if int(info.get("max_input_channels", 0)) > 0
+    )
+    return list(dict.fromkeys(candidates))
+
+
+def _capture_format_for_device(sd: Any, device: int) -> CaptureFormat | None:
+    """Find the best native format that can be normalized to 16 kHz mono PCM."""
+    try:
+        info = sd.query_devices(device)
+    except Exception:
+        return None
+    if int(info.get("max_input_channels", 0)) <= 0:
+        return None
+
+    default_rate = int(info.get("default_samplerate", 0) or 0)
+    sample_rates = list(dict.fromkeys([_SAMPLE_RATE, default_rate, *_COMMON_CAPTURE_SAMPLE_RATES]))
+    for sample_rate in sample_rates:
+        if sample_rate < _SAMPLE_RATE:
+            continue
+        for dtype in _CAPTURE_DTYPES:
+            try:
+                sd.check_input_settings(
+                    device=device,
+                    samplerate=sample_rate,
+                    channels=_CHANNELS,
+                    dtype=dtype,
+                )
+            except Exception:
+                continue
+            return CaptureFormat(
+                device=device,
+                name=str(info.get("name", f"Device {device}")),
+                sample_rate=sample_rate,
+                dtype=dtype,
+            )
+    return None
+
+
+def _select_capture_format(sd: Any, requested_device: int | None) -> CaptureFormat:
+    """Select a usable requested or automatic input format."""
+    for device in _candidate_device_indices(sd, requested_device):
+        capture_format = _capture_format_for_device(sd, device)
+        if capture_format is not None:
+            return capture_format
+    raise MicrophoneUnavailableError("No input device supports Voice capture")
+
+
 def list_microphones() -> list[dict[str, Any]]:
-    """Enumerate available input audio devices via sounddevice."""
+    """Enumerate input devices and surface Voice-format compatibility."""
     try:
         import sounddevice as sd  # type: ignore[import-untyped]
     except ImportError:
@@ -555,16 +748,37 @@ def list_microphones() -> list[dict[str, Any]]:
     try:
         for i, info in enumerate(sd.query_devices()):
             if int(info.get("max_input_channels", 0)) > 0:
+                capture_format = _capture_format_for_device(sd, i)
                 devices.append(
                     {
                         "index": i,
                         "name": info.get("name", f"Device {i}"),
                         "default_sample_rate": int(info.get("default_samplerate", _SAMPLE_RATE)),
+                        "supported": capture_format is not None,
+                        "capture_sample_rate": (
+                            capture_format.sample_rate if capture_format is not None else None
+                        ),
                     }
                 )
     except Exception:
         logger.warning("Failed to enumerate microphones", exc_info=True)
     return devices
+
+
+class UnavailableWakewordWorker:
+    """Stable non-simulating worker used when the local Voice stack is absent."""
+
+    def __init__(self, bridge: Any) -> None:
+        self._bridge = bridge
+
+    def start(self) -> None:
+        self._bridge.publish_state("error", "voice_stack_unavailable")
+
+    def stop(self) -> None:
+        return
+
+    def is_running(self) -> bool:
+        return False
 
 
 class MockWakewordWorker:
@@ -629,7 +843,7 @@ class MockWakewordWorker:
 
     def _simulate_cycle(self) -> None:
         """Publish one full post-detection state sequence with brief dwells."""
-        for state in ("wakeword_detected", "recording", "transcribing", "sending"):
+        for state in ("wakeword_detected", "recording", "transcribing", "sending", "sent"):
             if not self._running.is_set():
                 return
             self._bridge.publish_state(state)

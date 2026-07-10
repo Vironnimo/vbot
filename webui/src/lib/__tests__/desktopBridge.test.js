@@ -7,6 +7,8 @@ import {
   getWakewordStatus,
   setWakewordEnabled,
   setWakewordConfig,
+  listMicrophones,
+  retryWakeword,
   onWakewordStatusChange,
   waitForDesktopBridge,
 } from '../desktopBridge.js';
@@ -232,6 +234,30 @@ describe('setWakewordConfig', () => {
 
     await setWakewordConfig({ sensitivity: 0.8 });
     expect(calls).toEqual([{ sensitivity: 0.8 }]);
+  });
+});
+
+describe('desktop Voice recovery and devices', () => {
+  it('returns microphone devices from the bridge', async () => {
+    const devices = [{ index: 3, name: 'Desk mic', supported: true }];
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: { api: { listMicrophones: () => devices } },
+    };
+
+    await expect(listMicrophones()).resolves.toEqual(devices);
+  });
+
+  it('asks the bridge to retry wakeword listening', async () => {
+    const retry = vi.fn();
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: { api: { retryWakeword: retry } },
+    };
+
+    await retryWakeword();
+
+    expect(retry).toHaveBeenCalledOnce();
   });
 });
 

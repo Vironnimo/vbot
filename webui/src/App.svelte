@@ -106,6 +106,7 @@
     isDesktopAccessor,
     getDesktopCapabilities,
     onWakewordStatusChange,
+    playWakewordCue,
     waitForDesktopBridge,
   } from '$lib/desktopBridge.js';
   import './styles/app.css';
@@ -278,6 +279,7 @@
   // handlers — no reactivity needed.
   let chatSessionOverride = null;
   let cleanupWakewordPoll = null;
+  let lastWakewordEventSequence = null;
   const toastDismissTimers = new SvelteMap();
 
   $effect(() => {
@@ -748,6 +750,35 @@
     navigateToSettingsPanel('voice');
   };
 
+  const applyDesktopWakewordStatus = (status) => {
+    wakewordStatus = status;
+    const events = Array.isArray(status?.events) ? status.events : [];
+    const latestSequence = events.reduce(
+      (latest, event) =>
+        Number.isFinite(event?.sequence)
+          ? Math.max(latest, event.sequence)
+          : latest,
+      0,
+    );
+    if (lastWakewordEventSequence === null) {
+      // Do not replay sounds that happened before this WebUI mounted.
+      lastWakewordEventSequence = latestSequence;
+      return;
+    }
+    for (const event of events) {
+      if (
+        Number.isFinite(event?.sequence) &&
+        event.sequence > lastWakewordEventSequence
+      ) {
+        void playWakewordCue(event.state);
+      }
+    }
+    lastWakewordEventSequence = Math.max(
+      lastWakewordEventSequence,
+      latestSequence,
+    );
+  };
+
   // Deep-link to the System Prompt view with a given agent's scope preselected.
   // Mirrors the settings-panel mechanism: a target agent id + a fresh request id
   // SystemPromptView reacts to once scopes have loaded, falling back to the
@@ -838,6 +869,10 @@
     // Load the project list for the chat dropdown (best-effort; the chat works
     // identity-only when this fails).
     loadProjects();
+    // Voice routing and other non-Chat views also consume the shared Agent
+    // roster, so seed it at app mount instead of relying on ChatView having
+    // mounted first.
+    void reloadAgentsFromServer();
 
     // Detect desktop capabilities and start wakeword status polling
     if (isDesktopAccessor()) {
@@ -859,7 +894,7 @@
           desktopCapabilities = caps;
           if (caps?.wakeword) {
             cleanupWakewordPoll = onWakewordStatusChange((status) => {
-              wakewordStatus = status;
+              applyDesktopWakewordStatus(status);
             });
           }
         })
