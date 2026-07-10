@@ -21,7 +21,7 @@ from core.projects import (
     format_agent_address,
     parse_agent_address,
 )
-from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem
+from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run
 from core.sessions import SESSION_MOVE_STRIP_META_KEYS
 from core.subagents.subagents import (
     SUBAGENT_PARENT_METADATA_KEY,
@@ -926,11 +926,14 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                     input_origin=input_origin,
                     project_id=project_id,
                 )
-            _bridge_queued_item_to_event_bus(state, queued_item)
-            _publish_queue_changed(state, agent_id, session_id)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
-        return _queued_response(queued_item)
+        started_run = _run_started_during_enqueue(queued_item)
+        if started_run is None:
+            _bridge_queued_item_to_event_bus(state, queued_item)
+            _publish_queue_changed(state, agent_id, session_id)
+            return _queued_response(queued_item)
+        run = started_run
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -997,11 +1000,14 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
                     input_origin=input_origin,
                     project_id=project_id,
                 )
-            _bridge_queued_item_to_event_bus(state, queued_item)
-            _publish_queue_changed(state, agent_id, session_id)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
-        return _queued_response(queued_item)
+        started_run = _run_started_during_enqueue(queued_item)
+        if started_run is None:
+            _bridge_queued_item_to_event_bus(state, queued_item)
+            _publish_queue_changed(state, agent_id, session_id)
+            return _queued_response(queued_item)
+        run = started_run
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -1010,6 +1016,13 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
+
+
+def _run_started_during_enqueue(item: QueuedRunItem) -> Run | None:
+    """Return the Run when enqueue won a busy-to-idle race, else None."""
+    if not item.future.done():
+        return None
+    return item.future.result()
 
 
 async def _handle_compact_command(
