@@ -2024,6 +2024,107 @@ kbd {
   margin-top: 6px;
 }
 
+/* Content tabs share one semantic and keyboard model. Underline is the broad
+   view/section treatment; segmented is the compact alternate-view treatment.
+   Density changes typography and footprint without changing behavior. */
+.tab-list {
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+.tab-list--underline {
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-list__tab {
+  flex: 0 0 auto;
+  appearance: none;
+  border: 0;
+  color: var(--text-med);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tab-list--underline .tab-list__tab {
+  margin-bottom: -1px;
+  padding: 8px 12px;
+  border-bottom: 2px solid transparent;
+}
+
+.tab-list--compact .tab-list__tab {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
+.tab-list--underline.tab-list--compact .tab-list__tab {
+  padding: 7px 12px;
+}
+
+.tab-list__tab:hover:not(:disabled) {
+  color: var(--text-hi);
+}
+
+.tab-list--underline .tab-list__tab--active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.tab-list--segmented {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.tab-list--segmented .tab-list__tab {
+  padding: 5px 9px;
+  border-radius: 2px;
+}
+
+.tab-list--segmented.tab-list--compact .tab-list__tab {
+  padding: 3px 8px;
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tab-list--segmented .tab-list__tab--active {
+  color: var(--accent);
+  background: var(--accent-12);
+}
+
+.tab-list__tab:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--accent-40),
+    var(--focus-ring);
+}
+
+.tab-list__tab:disabled {
+  color: var(--text-lo);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .master-detail-empty {
   margin: 24px;
 }

@@ -6,6 +6,7 @@
   import Button from './ui/Button.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import InfoHint from './ui/InfoHint.svelte';
+  import TabList from './ui/TabList.svelte';
   import { rpc } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -72,6 +73,9 @@
   const tools = $derived(report?.tools ?? null);
   const skills = $derived(report?.skills ?? null);
   const usageProviders = $derived(usageReport?.providers ?? []);
+  const statisticsTabs = $derived(
+    STATISTICS_SUB_VIEWS.map((id) => ({ id, label: subViewLabel(id) })),
+  );
 
   $effect(() => {
     if (activeSubView === 'limits' && !usageLoaded) {
@@ -279,36 +283,33 @@
       {t('statistics.loading', 'Loading statistics…')}
     </p>
   {:else if report}
-    <nav
-      class="stats-view__tabs"
-      aria-label={t('statistics.title', 'Statistics')}
-    >
-      {#each STATISTICS_SUB_VIEWS as id (id)}
-        <button
-          type="button"
-          class="stats-view__tab"
-          class:stats-view__tab--active={activeSubView === id}
-          aria-pressed={activeSubView === id}
-          onclick={() => (activeSubView = id)}
-        >
-          {subViewLabel(id)}
-        </button>
-      {/each}
-    </nav>
+    <TabList
+      items={statisticsTabs}
+      value={activeSubView}
+      ariaLabel={t('statistics.title', 'Statistics')}
+      idPrefix="statistics-subviews"
+      onChange={(value) => (activeSubView = value)}
+    />
 
-    {#if activeSubView === 'overview'}
-      {@render overviewPanel()}
-    {:else if activeSubView === 'usage'}
-      {@render usagePanel()}
-    {:else if activeSubView === 'runs'}
-      {@render runsPanel()}
-    {:else if activeSubView === 'tools'}
-      {@render toolsPanel()}
-    {:else if activeSubView === 'skills'}
-      {@render skillsPanel()}
-    {:else if activeSubView === 'limits'}
-      {@render limitsPanel()}
-    {/if}
+    <div
+      role="tabpanel"
+      id={`statistics-subviews-panel-${activeSubView}`}
+      aria-labelledby={`statistics-subviews-tab-${activeSubView}`}
+    >
+      {#if activeSubView === 'overview'}
+        {@render overviewPanel()}
+      {:else if activeSubView === 'usage'}
+        {@render usagePanel()}
+      {:else if activeSubView === 'runs'}
+        {@render runsPanel()}
+      {:else if activeSubView === 'tools'}
+        {@render toolsPanel()}
+      {:else if activeSubView === 'skills'}
+        {@render skillsPanel()}
+      {:else if activeSubView === 'limits'}
+        {@render limitsPanel()}
+      {/if}
+    </div>
   {/if}
 </section>
 
@@ -1438,28 +1439,6 @@
   .stats-note {
     color: var(--text-lo);
     font-style: italic;
-  }
-  .stats-view__tabs {
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 0;
-  }
-  .stats-view__tab {
-    appearance: none;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: 13px;
-    font-weight: 500;
-    padding: 8px 12px;
-    cursor: pointer;
-  }
-  .stats-view__tab--active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
   }
   .stats-panel {
     display: flex;

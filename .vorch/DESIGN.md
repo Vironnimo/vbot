@@ -419,6 +419,12 @@ The banner uses `surface-2`, a `border-2` outline, and a 2px semantic left strip
 
 The surface uses a low-contrast `surface-2` tint, dashed `border`, `lg` radius (`md` when compact), centered Sans text, and no accent color. Default empty states have at least 160px of height; compact states remove that floor and reduce padding to 14px. Feature classes may set only placement such as pane margin or reading-column width. The guard rejects raw canonical classes and all retired view-specific empty-state classes.
 
+### Content tabs
+
+**Every local content view switch uses the shared `TabList` component (`webui/src/components/ui/TabList.svelte`).** Callers pass already-translated `{ id, label }` items, the active `value`, `ariaLabel`, and an `onChange` callback; they keep ownership of panel content and link each panel back to the generated tab id. The component owns `role="tablist"` / `role="tab"`, selected state, one-tab stop, panel ids, and automatic Arrow Left/Right, Home, and End activation. The guard rejects both raw canonical classes and the retired Statistics/Debug tab classes.
+
+`appearance="underline"` is the default section-level treatment: transparent Sans tabs on the shared bottom rule, with the active tab marked only by accent text and a 2px accent underline. `appearance="segmented"` is the compact alternate-representation treatment used for Raw/Parsed content: a `surface-2` bounded group with an `accent-12` active tint. `density="compact"` switches both treatments to the smaller Mono technical voice. Long tab sets scroll horizontally without exposing a scrollbar; every tab uses the global focus ring. Period selectors, filters, and the Chat agent navigation are not content tabs and remain distinct controls.
+
 ### Log viewer
 
 - The Logs tab uses the standard input/dropdown styling (`surface-2`, `border-2`, mono text) for file selection, level filtering, sort order, and search. Use the shared **simple** dropdown style for the file, level, and order controls.

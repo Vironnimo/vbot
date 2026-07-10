@@ -309,7 +309,7 @@ function routedRpc(usageReport) {
 }
 
 function openLimitsTab() {
-  const limitsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+  const limitsTab = [...document.querySelectorAll('.tab-list__tab')].find(
     (button) => button.textContent.trim() === 'Limits',
   );
   limitsTab.click();
@@ -370,7 +370,7 @@ describe('StatisticsView', () => {
       document.body.textContent.includes('Per agent'),
     );
 
-    const usageTab = [...document.querySelectorAll('.stats-view__tab')].find(
+    const usageTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Usage',
     );
     usageTab.click();
@@ -391,7 +391,7 @@ describe('StatisticsView', () => {
       document.body.textContent.includes('Per agent'),
     );
 
-    const usageTab = [...document.querySelectorAll('.stats-view__tab')].find(
+    const usageTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Usage',
     );
     usageTab.click();
@@ -419,7 +419,7 @@ describe('StatisticsView', () => {
       document.body.textContent.includes('Per agent'),
     );
 
-    const runsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+    const runsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Runs & errors',
     );
     runsTab.click();
@@ -439,7 +439,7 @@ describe('StatisticsView', () => {
       document.body.textContent.includes('Per agent'),
     );
 
-    const toolsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+    const toolsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Tools',
     );
     toolsTab.click();
@@ -461,7 +461,7 @@ describe('StatisticsView', () => {
       document.body.textContent.includes('Per agent'),
     );
 
-    const skillsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+    const skillsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Skills',
     );
     skillsTab.click();
@@ -494,7 +494,7 @@ describe('StatisticsView', () => {
       document.body.textContent.includes('Per agent'),
     );
 
-    const skillsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+    const skillsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Skills',
     );
     skillsTab.click();
@@ -531,7 +531,7 @@ describe('StatisticsView', () => {
       document.body.textContent.includes('Per agent'),
     );
 
-    const skillsTab = [...document.querySelectorAll('.stats-view__tab')].find(
+    const skillsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Skills',
     );
     skillsTab.click();
