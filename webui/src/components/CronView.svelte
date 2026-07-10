@@ -771,6 +771,12 @@
                 <label class="cron-field">
                   <span class="cron-label">
                     {t('cron.form.cronExpression', 'Cron expression')}
+                    <InfoHint
+                      text={t(
+                        'cron.form.cronExpressionHelp',
+                        'Five space-separated fields: minute, hour, day of month, month, weekday.\n\nExample: 0 9 * * 1-5 runs at 09:00 on weekdays. * matches any value; ranges (1-5) and lists (1,3,5) work in every field.',
+                      )}
+                    />
                   </span>
                   <TextField
                     id="cron-job-expression"
@@ -806,6 +812,12 @@
               <label class="cron-field">
                 <span class="cron-label">
                   {t('cron.form.timezone', 'Timezone')}
+                  <InfoHint
+                    text={t(
+                      'cron.form.timezoneHelp',
+                      'Timezone name like Europe/Berlin. Leave empty to use the timezone of the machine the server runs on.',
+                    )}
+                  />
                 </span>
                 <TextField
                   id="cron-job-timezone"

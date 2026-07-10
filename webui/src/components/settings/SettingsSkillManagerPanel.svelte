@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -275,6 +276,12 @@
     <div class="s-skill-manager-create">
       <div class="s-row-label">
         {t('settings.skills.newSkill', 'New skill')}
+        <InfoHint
+          text={t(
+            'settings.skills.newSkillHelp',
+            'A skill is a Markdown playbook: a header with a name and a short description, followed by the instructions.\n\nThe description matters most — it is what the agent reads to decide when to apply the skill, so state clearly what task it is for.',
+          )}
+        />
       </div>
       <TextField
         value={newName}

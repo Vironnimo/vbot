@@ -293,7 +293,10 @@
           {t('settings.voice.targetAgent', 'Target Agent')}
         </div>
         <div class="s-row-desc">
-          {t('settings.voice.targetAgent', 'Target Agent')}
+          {t(
+            'settings.voice.targetAgentDescription',
+            'The agent that receives your spoken command after the wake phrase. Voice commands go nowhere until a target agent is selected.',
+          )}
         </div>
       </div>
       <div class="s-row-control">

@@ -2,6 +2,7 @@
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
@@ -209,6 +210,9 @@
               errorMessage = '';
             }}
           />
+          <small class="agents-view__field-help">
+            {t('agents.form.idHelp', 'Agent IDs are immutable after creation.')}
+          </small>
           {#if formErrors.id}
             <small class="agents-view__field-error">
               {fieldError('id')}
@@ -260,6 +264,12 @@
         <label class="modal-field">
           <span class="modal-label">
             {t('agents.form.thinkingEffort', 'Thinking effort')}
+            <InfoHint
+              text={t(
+                'agents.form.thinkingEffortHelp',
+                'How much internal reasoning the model may spend before answering. Leave at — for the default.',
+              )}
+            />
           </span>
           <Dropdown
             id="agent-create-thinking-effort"
@@ -289,6 +299,12 @@
         <label class="modal-field">
           <span class="modal-label">
             {t('agents.form.temperature', 'Temperature')}
+            <InfoHint
+              text={t(
+                'agents.form.temperatureHelp',
+                'Sampling randomness, typically 0–2. Leave empty to use the default.',
+              )}
+            />
           </span>
           <TextField
             inputmode="decimal"

@@ -186,6 +186,19 @@
   </div>
 </div>
 
+{#if webSearchSettings.provider === 'brave'}
+  <div class="s-row s-row--stacked">
+    <div class="s-row-info">
+      <div class="s-row-desc">
+        {t(
+          'settings.webSearch.braveKeyHint',
+          'Brave Search requires an API key: set BRAVE_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+        )}
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if webSearchSettings.provider === 'searxng'}
   <div class="s-row">
     <div class="s-row-info">

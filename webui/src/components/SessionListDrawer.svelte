@@ -3,6 +3,7 @@
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import { deleteSession, listSessions, renameSession } from '$lib/api.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     applySessionList,
     createSessionListState,
@@ -429,12 +430,24 @@
                   </span>
                 {/if}
                 {#if session.is_subagent_session}
-                  <span class="session-row__badge session-row__badge--subagent">
+                  <span
+                    class="session-row__badge session-row__badge--subagent"
+                    use:tooltip={t(
+                      'sessions.subagentHint',
+                      'A session run by a sub-agent working on behalf of a parent session. The parent is shown below.',
+                    )}
+                  >
                     {t('chat.subagent.label', 'Sub-agent')}
                   </span>
                 {/if}
                 {#if session.is_fork}
-                  <span class="session-row__badge session-row__badge--fork">
+                  <span
+                    class="session-row__badge session-row__badge--fork"
+                    use:tooltip={t(
+                      'sessions.forkHint',
+                      'A copy of another session. Background reflection and /reflect review a conversation in a fork so the original session stays untouched.',
+                    )}
+                  >
                     {t('sessions.fork', 'Fork')}
                   </span>
                 {/if}

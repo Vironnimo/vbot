@@ -881,7 +881,7 @@
                 )
               : t(
                   'agents.form.workspaceEditableHelp',
-                  "Workspace path used by this agent's tools.",
+                  "Home of this agent's identity and memory files (SOUL.md, USER.md, MEMORY.md); the memory tool works here. File tools follow the session's working directory instead — the project repository in project sessions.",
                 )}
           </small>
           {#if workspaceIsCustom}

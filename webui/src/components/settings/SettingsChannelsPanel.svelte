@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
@@ -398,6 +399,12 @@
           disabled={channelBusy || channelFormMode === CHANNEL_FORM_MODE_EDIT}
           onInput={(next) => setChannelFormField('id', next)}
         />
+        <span class="s-field-help">
+          {t(
+            'settings.channels.idHelp',
+            'A name you choose for this channel. It cannot be changed after creation.',
+          )}
+        </span>
       </label>
 
       <div class="s-field">
@@ -438,6 +445,12 @@
       <div class="s-field">
         <span class="s-field-label">
           {t('settings.channels.dm_scope', 'DM scope')}
+          <InfoHint
+            text={t(
+              'settings.channels.dm_scope.help',
+              'How direct messages are grouped into chat sessions:\n\nMain — all DMs share one session. Per peer — one session per person. Per conversation — one session per chat. Per account, channel & peer — one session per chat and person.\n\nGroup chats always share one session per group, regardless of this setting.',
+            )}
+          />
         </span>
         <Dropdown
           id="channel-dm-scope-select"
@@ -473,6 +486,12 @@
       <label class="s-field s-field--full" for="channel-allowed-chat-ids-input">
         <span class="s-field-label">
           {t('settings.channels.allowed_chat_ids', 'Allowed chat IDs')}
+          <InfoHint
+            text={t(
+              'settings.channels.allowed_chat_ids.help',
+              'Comma-separated chat IDs allowed to talk to this channel. An empty list allows nobody. Messages from chats not on the list are rejected and appear on the channel card below with a one-click Allow.',
+            )}
+          />
         </span>
         <TextField
           id="channel-allowed-chat-ids-input"

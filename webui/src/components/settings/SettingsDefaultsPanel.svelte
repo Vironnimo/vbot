@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -362,6 +363,12 @@
   <div class="s-row-info">
     <div class="s-row-label">
       {t('settings.defaults.fallbackModel', 'Fallback model')}
+      <InfoHint
+        text={t(
+          'agents.form.fallbackModelHelp',
+          'Used automatically when the primary model fails or is unavailable.',
+        )}
+      />
     </div>
     <div class="s-row-desc">
       {t(
@@ -400,6 +407,12 @@
   <div class="s-row-info">
     <div class="s-row-label">
       {t('settings.defaults.temperature', 'Temperature')}
+      <InfoHint
+        text={t(
+          'agents.form.temperatureHelp',
+          'Sampling randomness, typically 0–2. Leave empty to use the default.',
+        )}
+      />
     </div>
     <div class="s-row-desc">
       {t(
@@ -423,6 +436,12 @@
   <div class="s-row-info">
     <div class="s-row-label">
       {t('settings.defaults.thinkingEffort', 'Thinking effort')}
+      <InfoHint
+        text={t(
+          'agents.form.thinkingEffortHelp',
+          'How much internal reasoning the model may spend before answering. Leave at — for the default.',
+        )}
+      />
     </div>
     <div class="s-row-desc">
       {t(
