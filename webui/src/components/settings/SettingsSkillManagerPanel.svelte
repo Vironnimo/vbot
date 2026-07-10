@@ -7,6 +7,7 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
+  import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -251,12 +252,11 @@
               </div>
             </div>
             {#if editingName === skill.name}
-              <textarea
-                class="s-input s-skill-manager-editor"
+              <TextArea
                 rows="10"
                 value={editContent}
-                oninput={(event) => (editContent = event.currentTarget.value)}
-              ></textarea>
+                onInput={(value) => (editContent = value)}
+              />
               <div class="s-skill-manager-editor-actions">
                 <Button variant="primary" disabled={busy} onClick={saveEdit}>
                   {busy
@@ -292,16 +292,15 @@
         onInput={(next) => (newName = next)}
         placeholder={t('settings.skills.namePlaceholder', 'skill-name')}
       />
-      <textarea
-        class="s-input s-skill-manager-editor"
+      <TextArea
         rows="10"
         value={newContent}
-        oninput={(event) => (newContent = event.currentTarget.value)}
+        onInput={(value) => (newContent = value)}
         placeholder={t(
           'settings.skills.contentPlaceholder',
           '---\nname: skill-name\ndescription: When to use this skill.\n---\n\n# Overview',
         )}
-      ></textarea>
+      />
       <Button variant="primary" disabled={createDisabled} onClick={createSkill}>
         {t('settings.skills.create', 'Create skill')}
       </Button>

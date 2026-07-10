@@ -415,9 +415,9 @@ describe('UI primitive guard', () => {
   });
 
   it('routes every text field through components/ui/TextField.svelte', () => {
-    // Editable inputs: scoped to <input> so textareas (which legitimately reuse
-    // s-input for styling) are unaffected. The read-only value-box may live on
-    // any element, so it is scanned everywhere.
+    // Editable inputs are scoped to <input>; multi-line fields have their own
+    // TextArea primitive below. The read-only value-box may live on any element,
+    // so it is scanned everywhere.
     const inputViolations = findRawClassViolations(
       'input',
       new Set(['s-input', 'modal-input']),
@@ -430,5 +430,54 @@ describe('UI primitive guard', () => {
     );
 
     expect([...inputViolations, ...valueBoxViolations]).toEqual([]);
+  });
+
+  it('routes every ordinary multi-line field through components/ui/TextArea.svelte', () => {
+    const rawTextAreaAllowlist = new Set([
+      'components/ChatComposer.svelte',
+      'components/QueuedMessages.svelte',
+      'components/ui/TextArea.svelte',
+    ]);
+    const rawTextAreas = [];
+
+    for (const filePath of SVELTE_FILES) {
+      const relativePath = relative(SRC_DIR, filePath).split(sep).join('/');
+      if (
+        !rawTextAreaAllowlist.has(relativePath) &&
+        /<textarea\b/.test(readFileSync(filePath, 'utf8'))
+      ) {
+        rawTextAreas.push(`${relativePath}: <textarea>`);
+      }
+    }
+
+    const primitiveViolations = findRawClassViolations(
+      'textarea',
+      new Set([
+        'text-area',
+        'text-area--default',
+        'text-area--inset',
+        'text-area--code',
+        'text-area--invalid',
+      ]),
+      'components/ui/TextArea.svelte',
+    );
+
+    expect([...rawTextAreas, ...primitiveViolations]).toEqual([]);
+  });
+
+  it('keeps the retired bespoke multi-line field classes from returning', () => {
+    const retired = new Set([
+      's-input',
+      's-textarea',
+      's-textarea--json',
+      's-textarea--invalid',
+      'sp-textarea',
+      'cron-textarea',
+      's-skill-manager-editor',
+    ]);
+
+    const violations = findRawClassViolations('textarea', retired, '');
+
+    expect(violations).toEqual([]);
   });
 });

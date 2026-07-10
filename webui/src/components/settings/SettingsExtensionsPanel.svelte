@@ -7,6 +7,7 @@
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
+  import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
@@ -730,21 +731,19 @@
               <span class="s-field-label">
                 {t('settings.extensions.config', 'Config (JSON)')}
               </span>
-              <textarea
-                class={`s-input s-textarea s-textarea--json${
-                  configErrors[extension.name] ? ' s-textarea--invalid' : ''
-                }`}
+              <TextArea
+                code
+                invalid={Boolean(configErrors[extension.name])}
                 spellcheck="false"
                 value={configDrafts[extension.name] ?? ''}
                 disabled={rowBusy}
-                aria-label={t(
+                ariaLabel={t(
                   'settings.extensions.configAria',
                   'Config for extension {name}',
                   { name: extension.name },
                 )}
-                oninput={(event) =>
-                  setConfigDraft(extension.name, event.currentTarget.value)}
-              ></textarea>
+                onInput={(value) => setConfigDraft(extension.name, value)}
+              />
               {#if configErrors[extension.name]}
                 <span class="s-field-error">{configErrors[extension.name]}</span
                 >

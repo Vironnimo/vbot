@@ -197,6 +197,10 @@ body { background: var(--bg); color: var(--text-hi); font-family: var(--font-ui)
 .s-row-desc { font-size: 12px; color: var(--text-lo); margin-top: 2px; line-height: 1.4; }
 .s-input { background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); color: var(--text-hi); font-family: var(--font-mono); font-size: 12.5px; padding: 7px 11px; outline: none; min-width: 180px; transition: border-color 0.15s; }
 .s-input:focus { border-color: var(--accent); }
+.text-area { box-sizing: border-box; width: 100%; min-width: 0; min-height: 76px; padding: 7px 11px; resize: vertical; border: 1px solid var(--border-2); border-radius: var(--r-md); outline: none; color: var(--text-hi); background: var(--surface-2); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; transition: border-color 0.15s, box-shadow 0.15s; }
+.text-area:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.text-area--code { min-height: 168px; font-size: 12px; tab-size: 2; overflow-x: auto; overflow-wrap: normal; white-space: pre; word-break: normal; }
+.text-area--invalid { border-color: var(--red); box-shadow: 0 0 0 2px rgba(252,129,129,0.08); }
 .toggle { width: 38px; height: 22px; background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 11px; cursor: pointer; position: relative; transition: all 0.2s; flex-shrink: 0; }
 .toggle.on { background: var(--accent); border-color: var(--accent); }
 .t-knob { position: absolute; width: 16px; height: 16px; background: #fff; border-radius: 50%; top: 2px; left: 2px; transition: left 0.2s; opacity: 0.95; }
@@ -742,6 +746,11 @@ print(fibonacci(10))  # 55</code></pre>
             <input class="s-input" type="text" placeholder="Settings input…" style="width:100%">
             <input class="s-input" type="password" placeholder="Password / API key…" style="width:100%">
             <input class="modal-input" type="text" placeholder="Modal input (larger)…" style="width:100%">
+            <textarea class="text-area" rows="3" placeholder="Multi-line prompt…"></textarea>
+            <textarea class="text-area text-area--code" rows="5" spellcheck="false">{
+  "enabled": true
+}</textarea>
+            <textarea class="text-area text-area--invalid" rows="3" aria-invalid="true">Invalid multi-line value</textarea>
             <div class="input-wrap">
               <textarea class="msg-input" placeholder="Enter message…" rows="1" style="flex:1"></textarea>
               <div class="input-btns">

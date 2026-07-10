@@ -7,6 +7,7 @@
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import StatusChip from './ui/StatusChip.svelte';
+  import TextArea from './ui/TextArea.svelte';
   import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
   import {
@@ -705,18 +706,17 @@
               <label class="cron-field">
                 <span class="cron-label">{t('cron.form.prompt', 'Prompt')}</span
                 >
-                <textarea
+                <TextArea
                   id="cron-job-prompt"
-                  class="s-input cron-textarea"
                   value={formValues.prompt}
+                  rows={4}
                   placeholder={t(
                     'cron.form.promptPlaceholder',
                     'Describe the run to schedule…',
                   )}
                   disabled={submittingForm}
-                  oninput={(event) =>
-                    updateFormField('prompt', event.currentTarget.value)}
-                ></textarea>
+                  onInput={(value) => updateFormField('prompt', value)}
+                />
               </label>
 
               <fieldset class="cron-field cron-radio-fieldset">
