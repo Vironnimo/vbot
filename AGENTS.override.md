@@ -17,6 +17,8 @@ They hold the project's rules and conventions — **follow them.** Read more as 
 
 The user reads no code. All user-facing communication — discovery, plan review, decisions, escalations, summaries — is in product language: behavior, capabilities, consequences, domains. No file paths, function names, or code identifiers unless they are part of the product interface (a CLI command, an API endpoint, a config option).
 
+**Every reply informs and steers — never end at a dead end.** Informing is covered below (Substance & depth). Steering means: if anything is open once you've answered — a decision, a direction, a sensible next step, an ambiguity in the request — you surface it yourself as labeled options with a recommendation (format below), instead of leaving the user to notice there was a question or to ask "what are my options?". A reply ends either with closure or with the fork — never with neither. Real forks only: when nothing is genuinely open, offer nothing — ritual options invented to close every reply are noise, not steering.
+
 **Decisions — surface by whether it's a real choice, not by whether the user can feel it.** A change built to be imperceptible still has sub-decisions worth seeing; "the user won't feel it" is never a reason to bury one.
 
 - **Ask first** when the user has a stake in the outcome — product behavior, or a trade-off they'd want to weigh in on: present it in the options format below, then wait.
@@ -27,10 +29,12 @@ Between the last two, disclose whenever you actively picked among options with n
 
 **Options format — every decision that goes to the user uses it, always.** Present 2–4 labeled, mutually exclusive options (A/B/…) inline as text (never a picker overlay), each in product language; mark a clear recommendation with a one-line why, and add a one-line concrete example only when the difference isn't self-evident — so a single letter (or "go with your recommendation") settles it. Independent decisions may share one message as numbered points, each with its own lettered options, so "1B, 2B, 3A" answers them all; an interactive walk-through stays one decision per message (see Discuss vs. Act).
 
-## Discuss vs. Act
-When the user asks to discuss, audit, explain, or think through something, DO NOT start writing files or generating plans. Present options and recommendations one at a time and wait for explicit approval before any implementation.
+**Chat language & terminology.** Chat follows the user's language, but project terms, glossary entries, domain names, and established technical vocabulary stay in English, exactly as the glossary and domain maps write them — never translate them. Say Tools, Run, Session, Queue, Skill, Provider — not Werkzeuge, Lauf, Sitzung, Warteschlange. A translated term breaks the shared vocabulary: the user has to reverse-map it to work out what you mean. Prose in the user's language around English terms is correct, not sloppy.
 
-During such a walk-through, take one decision per message and wait for the answer before the next, each presented in the options format (see Talking to the User). Lead with plain language; code detail comes after the choice, not instead of it. Reserve this for genuine forks — keep settling obvious defaults silently (see the decision rules above).
+**Substance & depth — every reply, not just reports.** Write for someone who didn't watch you work and can't see the code: readable beats short, and if the user has to ask a follow-up to understand you, any time saved by brevity is gone. Lead with the outcome or verdict in one or two sentences, then the substance. Every point is a self-contained statement in complete sentences — what, under which circumstances, with what consequence, and the why behind any recommendation — never compressed fragments, bare bullet stubs, or conclusions without their reasoning. Be honest about boundaries: what you did, what you checked, what you didn't, what remains open. End with the sensible next steps when there are any. Brevity comes from leaving out what doesn't matter, never from stripping the context that makes an answer useful — this holds for task summaries, findings, discussions, plan work, and answers to questions alike.
+
+## Discuss vs. Act
+When the user asks to discuss, audit, explain, or think through something, do not write files or generate plans — the deliverable is the conversation itself, and implementation waits for explicit approval. In a walk-through the steering duty applies one fork per message: lead with plain language, present the fork in the options format, wait for the answer before the next. Reserve this pacing for genuine forks — obvious defaults stay settled silently (see the decision rules above).
 
 ## Architecture & code
 

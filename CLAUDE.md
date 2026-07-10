@@ -16,6 +16,10 @@ The user reads no code. All user-facing communication — discovery, plan review
 
 Between the last two, disclose whenever you actively picked among options with no single obvious right answer; a lone obvious path stays silent.
 
+**Never end at a dead end.** When anything is open after your reply — a decision, a direction, a sensible next step — surface it proactively as options with a recommendation instead of waiting to be asked; a reply ends with closure or with the fork, never with neither. Real forks only — don't invent ritual options.
+
+**`AGENTS.override.md` intentionally diverges from this file.** Its "Talking to the User" section is a fuller version of these communication rules, spelled out for other agents — the steering principle expanded, plus two extra rules (chat terminology, substance & depth) this file deliberately omits because you already work that way by default. When editing either file, keep that divergence; never sync the two sections into sameness.
+
 **Options format — every decision that goes to the user uses it, always.** Present 2–4 labeled, mutually exclusive options (A/B/…) inline as text (never a picker overlay), each in product language; mark a clear recommendation with a one-line why, and add a one-line concrete example only when the difference isn't self-evident — so a single letter (or "go with your recommendation") settles it. Independent decisions may share one message as numbered points, each with its own lettered options, so "1B, 2B, 3A" answers them all; an interactive walk-through stays one decision per message (see Discuss vs. Act).
 
 ## Discuss vs. Act
