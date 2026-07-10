@@ -127,6 +127,12 @@ class StubProviderCredentials:
     def has_credentials(self, provider_id: str, connection_id: str) -> bool:
         return provider_id == "github-copilot" and connection_id in self._usable_connection_ids
 
+    def is_connection_enabled(self, provider_id: str, connection_id: str | None = None) -> bool:
+        return True
+
+    def is_usable(self, provider_id: str, connection_id: str) -> bool:
+        return self.has_credentials(provider_id, connection_id)
+
     def get_credentials(self, provider_id: str, connection_id: str) -> str:
         self.requested_credentials.append(connection_id)
         if self.has_credentials(provider_id, connection_id):

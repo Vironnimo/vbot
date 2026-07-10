@@ -81,6 +81,9 @@ class FakeCredentials:
     def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
         return connection_id in self._usable
 
+    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
+        return self.has_credentials(provider_id, connection_id)
+
 
 class FakeProviders:
     def __init__(self, configs: dict[str, ProviderConfig]) -> None:

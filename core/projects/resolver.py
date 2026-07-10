@@ -221,9 +221,13 @@ class ProviderProbe(Protocol):
 
 
 class CredentialProbe(Protocol):
-    """The credential slice used to answer "is a connection usable?"."""
+    """The credential slice used to answer "is a connection usable?".
 
-    def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool: ...
+    Usability = enabled (settings override or type default) AND credentialed —
+    owned by ``ProviderCredentialResolver.is_usable``.
+    """
+
+    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool: ...
 
 
 class GlobalAgentDefaultsProvider(Protocol):
@@ -342,7 +346,7 @@ class ModelConfigurationChecker:
             if not catalog_model.allows_connection(connection.id):
                 continue
             connection_id = f"{provider_id}:{connection.id}"
-            if self._provider_credentials.has_credentials(provider_id, connection_id):
+            if self._provider_credentials.is_usable(provider_id, connection_id):
                 return True
         return False
 
@@ -354,7 +358,8 @@ class ModelConfigurationChecker:
         The runtime reconstructs the pinned connection verbatim and resolves its
         credential downstream, so the gate checks exactly that path: the local
         connection id must exist on the provider, pass the model's allowlist, and
-        ``has_credentials`` must hold for the full (possibly account-pinned) id.
+        ``is_usable`` (enabled + credentialed) must hold for the full (possibly
+        account-pinned) id.
         """
         connection_local_id = connection_suffix.partition(":")[0]
         if not catalog_model.allows_connection(connection_local_id):
@@ -363,7 +368,7 @@ class ModelConfigurationChecker:
         connections = getattr(provider_config, "connections", [])
         if all(connection.id != connection_local_id for connection in connections):
             return False
-        return self._provider_credentials.has_credentials(
+        return self._provider_credentials.is_usable(
             provider_id, f"{provider_id}:{connection_suffix}"
         )
 

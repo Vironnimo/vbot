@@ -158,7 +158,7 @@ def _first_usable_connection_id(
         if allowed_connections and connection.id not in allowed_connections:
             continue
         connection_id = f"{provider_id}:{connection.id}"
-        if credential_resolver.has_credentials(provider_id, connection_id):
+        if credential_resolver.is_usable(provider_id, connection_id):
             return connection_id
 
     if allowed_connections:

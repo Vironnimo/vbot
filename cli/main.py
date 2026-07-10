@@ -67,6 +67,7 @@ from cli.provider_management import (
     provider_connect_status,
     provider_disconnect,
     provider_list,
+    provider_set_enabled,
     provider_set_key,
     provider_status,
     provider_unset_key,
@@ -687,6 +688,9 @@ def dispatch_provider_command(
     connect_status_fn: Callable[
         [ServerInstance, str, str, str | None], CommandResult
     ] = provider_connect_status,
+    set_enabled_fn: Callable[
+        [ServerInstance, str, bool, str | None], CommandResult
+    ] = provider_set_enabled,
 ) -> CommandResult:
     """Dispatch one parsed provider command against the server RPC client."""
 
@@ -694,6 +698,8 @@ def dispatch_provider_command(
         return list_providers(instance)
     if args.command == "status":
         return provider_status_fn(instance, args.provider, args.connection)
+    if args.command in ("enable", "disable"):
+        return set_enabled_fn(instance, args.provider, args.command == "enable", args.connection)
     if args.command == "set-key":
         return set_provider_key(
             instance,

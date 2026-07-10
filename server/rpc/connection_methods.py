@@ -37,12 +37,13 @@ from server.rpc.event_bridge import (
 from server.rpc.payloads import _model_response
 from server.rpc.provider_access import (
     _api_key_connection,
+    _connection_reachability,
     _connection_response,
     _device_flow_active,
     _device_flow_engine,
     _oauth_connection,
     _oauth_device_connection,
-    _provider_has_credentials,
+    _provider_connection,
     _runtime_provider_credential,
     _runtime_resources_dir,
     _runtime_token_store,
@@ -86,22 +87,69 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
     try:
         runtime = state.runtime
         local_context_windows = runtime.storage.load_local_models_settings()["context_windows"]
-        models = sorted(
-            (
-                _model_response(
-                    provider_id,
-                    model,
-                    provider_config=_provider_config_or_none(runtime, provider_id),
-                    local_context_windows=local_context_windows,
+        usable_connections_by_provider: dict[str, list[Any]] = {}
+
+        def _usable_connections(provider_id: str) -> list[Any]:
+            cached = usable_connections_by_provider.get(provider_id)
+            if cached is not None:
+                return cached
+            provider = _provider_config_or_none(runtime, provider_id)
+            connections = [
+                connection
+                for connection in getattr(provider, "connections", [])
+                if runtime.provider_credentials.is_usable(
+                    provider_id, f"{provider_id}:{connection.id}"
                 )
-                for provider_id, model in runtime.models.query(model_query)
-                if _provider_has_credentials(runtime, provider_id)
-            ),
-            key=lambda model: (model["provider_id"], model["model_id"]),
-        )
+            ]
+            usable_connections_by_provider[provider_id] = connections
+            return connections
+
+        models = []
+        for provider_id, model in runtime.models.query(model_query):
+            allowed_connections = [
+                connection
+                for connection in _usable_connections(provider_id)
+                if model.allows_connection(connection.id)
+            ]
+            if not allowed_connections:
+                continue
+            response = _model_response(
+                provider_id,
+                model,
+                provider_config=_provider_config_or_none(runtime, provider_id),
+                local_context_windows=local_context_windows,
+            )
+            reachable = _model_reachability(runtime, provider_id, allowed_connections)
+            if reachable is not None:
+                response["reachable"] = reachable
+            models.append(response)
+        models.sort(key=lambda model: (model["provider_id"], model["model_id"]))
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"models": models}
+
+
+def _model_reachability(
+    runtime: Any, provider_id: str, allowed_connections: list[Any]
+) -> bool | None:
+    """Return ``False`` when a model is only served by unreachable local endpoints.
+
+    Only local auto-refresh connections carry a probe outcome. A model whose
+    every usable connection is such a connection with a failed last probe is
+    marked ``reachable: false`` so pickers can badge it ("service not running")
+    while keeping it selectable. Any non-probed (remote) connection or an
+    unknown probe state means no statement — the key is omitted.
+    """
+
+    saw_probe_failure = False
+    for connection in allowed_connections:
+        if not getattr(connection, "auto_refresh", False):
+            return None
+        probe = _connection_reachability(runtime, f"{provider_id}:{connection.id}")
+        if probe is not False:
+            return None
+        saw_probe_failure = True
+    return False if saw_probe_failure else None
 
 
 def _provider_config_or_none(runtime: Any, provider_id: str) -> Any:
@@ -137,6 +185,57 @@ async def _await_local_catalog_refresh(runtime: Any) -> None:
     if pending:
         _BACKGROUND_REFRESH_TASKS.add(refresh_task)
         refresh_task.add_done_callback(_BACKGROUND_REFRESH_TASKS.discard)
+
+
+async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
+    """Enable or disable one provider connection (persisted settings override).
+
+    Enabling a local auto-refresh connection also forces an immediate catalog
+    probe so the caller gets live reachability feedback ("enabled, but the
+    service is not running" is a valid, reported outcome — the enable sticks).
+    """
+
+    _reject_unsupported(
+        params, {"provider_id", "connection_id", "enabled"}, "connection set-enabled"
+    )
+
+    provider_id = _required_string(params, "provider_id")
+    connection_id = _required_string(params, "connection_id")
+    enabled = params.get("enabled")
+    if not isinstance(enabled, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.enabled must be a boolean")
+
+    try:
+        runtime = state.runtime
+        local_connection_id, account_id = split_connection_id(provider_id, connection_id)
+        if account_id is not None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "connection set-enabled targets a connection, not an account",
+            )
+        connection = _provider_connection(runtime, provider_id, connection_id)
+        public_connection_id = compose_connection_id(provider_id, connection.id)
+        runtime.storage.set_provider_connection_enabled(public_connection_id, enabled)
+
+        reachable: bool | None = None
+        if enabled and getattr(connection, "auto_refresh", False):
+            await runtime.maybe_refresh_local_catalogs(force=True)
+            reachable = _connection_reachability(runtime, public_connection_id)
+        configured = runtime.provider_credentials.has_credentials(provider_id, public_connection_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    # An enable/disable immediately alters which models are selectable.
+    publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
+    response: JsonObject = {
+        "provider_id": provider_id,
+        "connection_id": public_connection_id,
+        "enabled": enabled,
+        "configured": configured,
+    }
+    if getattr(connection, "auto_refresh", False):
+        response["reachable"] = reachable
+    return response
 
 
 def _list_connections(state: Any, params: JsonObject) -> JsonObject:
@@ -568,7 +667,7 @@ async def _refresh_provider_connections(
         if not _connection_effective_endpoint(connection, provider):
             continue
         connection_id = f"{provider_id}:{connection.id}"
-        if not runtime.provider_credentials.has_credentials(provider_id, connection_id):
+        if not runtime.provider_credentials.is_usable(provider_id, connection_id):
             continue
         try:
             credential_value = await _runtime_provider_credential(
@@ -652,6 +751,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "connection.list": _list_connections,
+        "connection.set_enabled": _set_connection_enabled,
         "model.list": _list_models,
         "model.refresh_db": _refresh_model_db,
         "provider.set_key": _set_provider_key,

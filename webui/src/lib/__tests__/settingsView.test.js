@@ -36,8 +36,10 @@ import {
   getRecallSettings,
   getSkillDirectories,
   getWebSearchSettings,
+  connectionReachability,
   isAppearanceSaveDisabled,
   isConnectionConfigured,
+  isConnectionEnabled,
   isValidAccountId,
   normalizeAccountId,
   normalizeAgentDefaultsSettings,
@@ -568,6 +570,23 @@ describe('settingsView helpers', () => {
       }),
     ).toBe(false);
     expect(isConnectionConfigured({ accounts: [] })).toBe(false);
+  });
+
+  it('reads the connection enabled flag with enabled as the fallback', () => {
+    expect(isConnectionEnabled({ id: 'ollama:local', enabled: false })).toBe(
+      false,
+    );
+    expect(isConnectionEnabled({ id: 'ollama:local', enabled: true })).toBe(
+      true,
+    );
+    // Absent field never hides a keyed connection.
+    expect(isConnectionEnabled({ id: 'openai:api-key' })).toBe(true);
+  });
+
+  it('reads probe reachability only when the server states it', () => {
+    expect(connectionReachability({ reachable: false })).toBe(false);
+    expect(connectionReachability({ reachable: true })).toBe(true);
+    expect(connectionReachability({ id: 'openai:api-key' })).toBe(null);
   });
 
   it('extracts connection accounts and drops malformed entries', () => {

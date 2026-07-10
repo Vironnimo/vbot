@@ -73,6 +73,14 @@ class ProviderCredentialResolverProtocol(Protocol):
         """Return whether *provider_id* or *connection_id* has a non-empty credential."""
         ...
 
+    def is_connection_enabled(self, provider_id: str, connection_id: str | None = None) -> bool:
+        """Return whether the connection (or any of the provider's) is enabled."""
+        ...
+
+    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
+        """Return whether the connection (or any of the provider's) is enabled AND credentialed."""
+        ...
+
     def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
         """Return the credential value for *provider_id* or *connection_id*."""
         ...

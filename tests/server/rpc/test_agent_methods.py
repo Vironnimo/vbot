@@ -587,6 +587,12 @@ class _PayloadCredentials:
     def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
         return connection_id == "openai:api-key"
 
+    def is_connection_enabled(self, provider_id: str, connection_id: str | None = None) -> bool:
+        return True
+
+    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
+        return self.has_credentials(provider_id, connection_id)
+
 
 def test_agent_get_reports_config_and_effective_for_own_value(tmp_path: Path) -> None:
     state = _agent_payload_state(tmp_path, defaults={})

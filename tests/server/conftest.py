@@ -19,7 +19,7 @@ from core.runtime.runtime import Runtime
 
 @pytest.fixture(autouse=True)
 def _disable_local_catalog_auto_refresh(monkeypatch: pytest.MonkeyPatch):
-    async def _noop(self: Runtime) -> None:
+    async def _noop(self: Runtime, *, force: bool = False) -> None:
         return None
 
     monkeypatch.setattr(Runtime, "maybe_refresh_local_catalogs", _noop)

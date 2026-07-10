@@ -725,11 +725,21 @@ async def test_token_getter_for_none_connection_is_static_and_empty(runtime: Run
 
 def test_runtime_wires_ollama_adapter_for_keyless_local_connection(runtime: Runtime) -> None:
     """get_adapter wires the Ollama adapter without any configured credential."""
+    # Arrange — keyless local connections are disabled until the user opts in.
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+
     # Act
     adapter = runtime.get_adapter("ollama", "ollama:local")
 
     # Assert
     assert isinstance(adapter, OllamaAdapter)
+
+
+def test_get_adapter_rejects_disabled_connection(runtime: Runtime) -> None:
+    """A disabled connection never reaches adapter construction."""
+    # Act / Assert — ollama:local is keyless and therefore disabled by default.
+    with pytest.raises(ConfigError, match="disabled"):
+        runtime.get_adapter("ollama", "ollama:local")
 
 
 def test_ollama_provider_config_fields(runtime: Runtime) -> None:
@@ -829,8 +839,11 @@ def test_ollama_local_connection_reports_credentials_configured(runtime: Runtime
 # ------------------------------------------------------------------
 
 
-def test_auto_refresh_targets_include_ollama_local(runtime: Runtime) -> None:
-    """The shipped Ollama local connection is an auto-refresh target."""
+def test_auto_refresh_targets_include_enabled_ollama_local(runtime: Runtime) -> None:
+    """The shipped Ollama local connection is an auto-refresh target once enabled."""
+    # Arrange
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+
     # Act
     targets = runtime._auto_refresh_targets()
 
@@ -838,6 +851,15 @@ def test_auto_refresh_targets_include_ollama_local(runtime: Runtime) -> None:
     assert [(provider_id, connection.id) for provider_id, _, connection in targets] == [
         ("ollama", "local")
     ]
+
+
+def test_auto_refresh_targets_exclude_disabled_ollama_local(runtime: Runtime) -> None:
+    """A disabled local connection is completely passive — never probed."""
+    # Act — no enable: the keyless default is disabled.
+    targets = runtime._auto_refresh_targets()
+
+    # Assert
+    assert targets == []
 
 
 @pytest.mark.asyncio
@@ -848,6 +870,7 @@ async def test_maybe_refresh_local_catalogs_throttles_within_ttl(
     # Arrange
     import core.models.discovery as discovery_module
 
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
     calls: list[str] = []
 
     async def _fake_refresh(provider, credential, resources_dir, **kwargs):
@@ -874,6 +897,7 @@ async def test_maybe_refresh_local_catalogs_refreshes_again_after_ttl(
     # Arrange
     import core.models.discovery as discovery_module
 
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
     calls: list[str] = []
 
     async def _fake_refresh(provider, credential, resources_dir, **kwargs):
@@ -902,6 +926,8 @@ async def test_maybe_refresh_local_catalogs_degrades_when_server_down(
     import core.models.discovery as discovery_module
     from core.models.discovery import ModelDiscoveryError
 
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+
     async def _fake_refresh(provider, credential, resources_dir, **kwargs):
         raise ModelDiscoveryError("connection refused")
 
@@ -912,9 +938,60 @@ async def test_maybe_refresh_local_catalogs_degrades_when_server_down(
     # Act — must not raise.
     await runtime.maybe_refresh_local_catalogs()
 
-    # Assert — no reload of an unchanged catalog; failure stamped the throttle.
+    # Assert — no reload of an unchanged catalog; failure stamped the throttle
+    # and the probe outcome is recorded as unreachable.
     assert reloads == []
     assert runtime._local_catalog_refresh_at is not None
+    assert runtime.connection_reachability("ollama:local") is False
+
+
+@pytest.mark.asyncio
+async def test_maybe_refresh_records_reachability_on_success(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful probe records the connection as reachable."""
+    # Arrange
+    import core.models.discovery as discovery_module
+
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+
+    async def _fake_refresh(provider, credential, resources_dir, **kwargs):
+        return {"provider_id": provider.id, "model_count": 1}
+
+    monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: None)
+
+    # Act
+    await runtime.maybe_refresh_local_catalogs()
+
+    # Assert
+    assert runtime.connection_reachability("ollama:local") is True
+
+
+@pytest.mark.asyncio
+async def test_maybe_refresh_force_bypasses_throttle(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``force=True`` re-probes inside the TTL (used right after an enable)."""
+    # Arrange
+    import core.models.discovery as discovery_module
+
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+    calls: list[str] = []
+
+    async def _fake_refresh(provider, credential, resources_dir, **kwargs):
+        calls.append(provider.id)
+        return {"provider_id": provider.id, "model_count": 0}
+
+    monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: None)
+
+    # Act
+    await runtime.maybe_refresh_local_catalogs()
+    await runtime.maybe_refresh_local_catalogs(force=True)
+
+    # Assert
+    assert calls == ["ollama", "ollama"]
 
 
 @pytest.mark.asyncio

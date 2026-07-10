@@ -96,7 +96,7 @@ def _expected_startup_inventory_message(runtime: Runtime) -> str:
         for connection in provider_config.connections:
             total_connection_count += 1
             connection_id = f"{provider_id}:{connection.id}"
-            if runtime.provider_credentials.has_credentials(provider_id, connection_id):
+            if runtime.provider_credentials.is_usable(provider_id, connection_id):
                 usable_connection_count += 1
                 provider_is_usable = True
 
@@ -1406,6 +1406,12 @@ class _StubProviders:
 
 class _StubCredentials:
     def has_credentials(self, _provider_id: str, _connection_id: str | None = None) -> bool:
+        return True
+
+    def is_connection_enabled(self, _provider_id: str, _connection_id: str | None = None) -> bool:
+        return True
+
+    def is_usable(self, _provider_id: str, _connection_id: str | None = None) -> bool:
         return True
 
 

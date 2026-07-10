@@ -7,7 +7,19 @@ vbot provider list
 vbot provider status <provider-id> [--connection <provider:connection-id>]
 ```
 
-`provider list` shows every connection with its accounts, usable state, and credential source — run it before model or agent configuration work.
+`provider list` shows every connection with its enabled/usable state, accounts, credential source, and — for local endpoints — reachability. Run it before model or agent configuration work.
+
+## Enable / disable a connection
+
+```bash
+vbot provider enable <provider-id> [--connection <provider:connection-id>]
+vbot provider disable <provider-id> [--connection <provider:connection-id>]
+```
+
+- A disabled connection is completely passive: never probed, offers no models, and chat against it fails with a clear "disabled" error.
+- Keyed connections start enabled; **keyless local connections (e.g. `ollama:local`) start disabled** — enable one when the user wants to use that local service.
+- `--connection` is required only when the provider has more than one connection (the error lists the candidates).
+- Enabling a local connection probes it immediately and reports the result. "Endpoint not reachable" is not a failure — the enable sticks, and the models appear automatically once the service runs (tell the user to start it, e.g. `ollama serve`).
 
 ## API-key credentials
 

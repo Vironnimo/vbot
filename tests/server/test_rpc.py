@@ -1336,6 +1336,14 @@ class StubRuntime:
                     return any(account.usable for account in accounts)
                 return any(account.id == account_id and account.usable for account in accounts)
 
+            def is_connection_enabled(
+                self, provider_id: str, connection_id: str | None = None
+            ) -> bool:
+                return True
+
+            def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
+                return self.has_credentials(provider_id, connection_id)
+
             def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
                 provider = cast(Any, runtime.providers.get(provider_id))
                 if connection_id is None:
@@ -1471,6 +1479,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "api_key",
                             "label": "API Key",
                             "configured": False,
+                            "enabled": True,
                             "accounts": [],
                             "credential_key": "ANTHROPIC_API_KEY",
                         }
@@ -1492,6 +1501,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "api_key",
                             "label": "API Key",
                             "configured": False,
+                            "enabled": True,
                             "accounts": [],
                             "credential_key": "OLLAMA_API_KEY",
                         }
@@ -1513,6 +1523,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "oauth",
                             "label": "OAuth",
                             "configured": False,
+                            "enabled": True,
                             "accounts": [],
                             "connectable": False,
                         },
@@ -1521,6 +1532,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "api_key",
                             "label": "API Key",
                             "configured": True,
+                            "enabled": True,
                             "accounts": [
                                 {
                                     "id": "default",
@@ -1626,6 +1638,7 @@ async def test_settings_get_marks_device_flow_oauth_connections_connectable(
             "type": "oauth",
             "label": "Sign in with GitHub",
             "configured": False,
+            "enabled": True,
             "accounts": [],
             "connectable": True,
         }
@@ -1967,6 +1980,7 @@ async def test_connection_list_returns_connections_with_usability(
                     "provider_id": "anthropic",
                     "type": "api_key",
                     "label": "API Key",
+                    "enabled": True,
                     "usable": False,
                     "accounts": [
                         {
@@ -1982,6 +1996,7 @@ async def test_connection_list_returns_connections_with_usability(
                     "provider_id": "ollama",
                     "type": "api_key",
                     "label": "API Key",
+                    "enabled": True,
                     "usable": False,
                     "accounts": [],
                 },
@@ -1990,6 +2005,7 @@ async def test_connection_list_returns_connections_with_usability(
                     "provider_id": "openai",
                     "type": "oauth",
                     "label": "OAuth",
+                    "enabled": True,
                     "usable": False,
                     "accounts": [],
                 },
@@ -1998,6 +2014,7 @@ async def test_connection_list_returns_connections_with_usability(
                     "provider_id": "openai",
                     "type": "api_key",
                     "label": "API Key",
+                    "enabled": True,
                     "usable": True,
                     "accounts": [
                         {
@@ -2581,9 +2598,11 @@ async def test_model_list_outputs_per_model_connections_allowlist(
     """``model.list`` propagates the per-model ``connections`` allowlist
     from the registry into the RPC payload. The WebUI uses this list to
     decide which provider connections to offer for a given model — a
-    model tagged ``["subscription"]`` is not offered on ``api-key``."""
+    model tagged ``["oauth"]`` is not offered on ``api-key``. A model whose
+    allowlist matches no usable connection is not listed at all."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_OAUTH_TOKEN", "oauth-token")
     state = make_state(tmp_path, StubAdapter())
     state.runtime.models._models["openai"] = [
         Model(
@@ -2610,6 +2629,19 @@ async def test_model_list_outputs_per_model_connections_allowlist(
             ),
             context_window=256000,
             max_output_tokens=32000,
+            connections=("oauth",),
+        ),
+        Model(
+            model_id="gpt-ghost",
+            name="GPT Ghost",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=256000,
+            max_output_tokens=32000,
             connections=("subscription",),
         ),
     ]
@@ -2619,7 +2651,10 @@ async def test_model_list_outputs_per_model_connections_allowlist(
     assert response["ok"] is True
     by_id = {model["id"]: model for model in response["result"]["models"]}
     assert by_id["openai/gpt-5.2"]["connections"] == ["api-key"]
-    assert by_id["openai/gpt-5.5"]["connections"] == ["subscription"]
+    assert by_id["openai/gpt-5.5"]["connections"] == ["oauth"]
+    # No usable "subscription" connection exists on the stub provider, so the
+    # allowlist-bound model is dropped from the listing entirely.
+    assert "openai/gpt-ghost" not in by_id
 
 
 @pytest.mark.asyncio

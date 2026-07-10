@@ -307,7 +307,7 @@ class TaskModelService:
             usable_connections = [
                 connection
                 for connection in provider.connections
-                if self._credentials.has_credentials(provider_id, f"{provider_id}:{connection.id}")
+                if self._credentials.is_usable(provider_id, f"{provider_id}:{connection.id}")
             ]
             if not usable_connections:
                 continue

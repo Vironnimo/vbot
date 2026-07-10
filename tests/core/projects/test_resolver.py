@@ -90,6 +90,9 @@ class _FakeCredentials:
         target = connection_id if connection_id is not None else provider_id
         return target in self._usable
 
+    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
+        return self.has_credentials(provider_id, connection_id)
+
 
 def _checker(
     *,

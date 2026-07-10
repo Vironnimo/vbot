@@ -22,6 +22,23 @@ def _connection_has_credentials(runtime: Any, provider_id: str, connection_id: s
     return bool(runtime.provider_credentials.has_credentials(provider_id, connection_id))
 
 
+def _connection_is_enabled(runtime: Any, provider_id: str, connection_id: str) -> bool:
+    return bool(runtime.provider_credentials.is_connection_enabled(provider_id, connection_id))
+
+
+def _connection_is_usable(runtime: Any, provider_id: str, connection_id: str) -> bool:
+    return bool(runtime.provider_credentials.is_usable(provider_id, connection_id))
+
+
+def _connection_reachability(runtime: Any, connection_id: str) -> bool | None:
+    """Last local-catalog probe outcome, or ``None`` when never probed."""
+
+    reachability = getattr(runtime, "connection_reachability", None)
+    if not callable(reachability):
+        return None
+    return cast("bool | None", reachability(connection_id))
+
+
 async def _runtime_provider_credential(
     runtime: Any,
     provider_id: str,
@@ -161,14 +178,18 @@ def _connection_accounts_response(
 
 def _connection_response(runtime: Any, provider_id: str, connection: Any) -> JsonObject:
     connection_id = f"{provider_id}:{connection.id}"
-    return {
+    response = {
         "id": connection_id,
         "provider_id": provider_id,
         "type": connection.type,
         "label": connection.label,
-        "usable": _connection_has_credentials(runtime, provider_id, connection_id),
+        "enabled": _connection_is_enabled(runtime, provider_id, connection_id),
+        "usable": _connection_is_usable(runtime, provider_id, connection_id),
         "accounts": _connection_accounts_response(runtime, provider_id, connection),
     }
+    if getattr(connection, "auto_refresh", False):
+        response["reachable"] = _connection_reachability(runtime, connection_id)
+    return response
 
 
 def _provider_settings_connection(runtime: Any, provider_id: str, connection: Any) -> JsonObject:
@@ -178,8 +199,11 @@ def _provider_settings_connection(runtime: Any, provider_id: str, connection: An
         "type": connection.type,
         "label": connection.label,
         "configured": _connection_has_credentials(runtime, provider_id, connection_id),
+        "enabled": _connection_is_enabled(runtime, provider_id, connection_id),
         "accounts": _connection_accounts_response(runtime, provider_id, connection),
     }
+    if getattr(connection, "auto_refresh", False):
+        response["reachable"] = _connection_reachability(runtime, connection_id)
     if getattr(connection, "type", "") == "api_key":
         response["credential_key"] = connection.auth.credential_key
     if getattr(connection, "type", "") == "oauth":

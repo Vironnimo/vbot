@@ -101,6 +101,8 @@ PROVIDER_HELP = {
     "status": "Show one provider or connection status",
     "set-key": "Set an API-key provider credential",
     "unset-key": "Remove an API-key provider credential",
+    "enable": "Enable a provider connection (local providers start disabled)",
+    "disable": "Disable a provider connection (no probes, no listed models)",
     "connect": "Start the OAuth device flow for one provider connection",
     "disconnect": "Remove the stored OAuth token for one provider connection",
     "connect-status": "Show OAuth connection and device-flow state",
@@ -784,6 +786,28 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         metavar="<account-id>",
         help="Named credential slot on the connection (default: default)",
     )
+
+    for command in ("enable", "disable"):
+        toggle_parser = _add_command_parser(
+            provider_subparsers,
+            command,
+            PROVIDER_HELP[command],
+            example=f"provider {command} ollama",
+        )
+        toggle_parser.description = (
+            f"{PROVIDER_HELP[command]} "
+            "Keyless local connections (e.g. Ollama) are disabled until enabled here; "
+            "a disabled connection is never probed and offers no models. "
+            f"Example: provider {command} ollama"
+        )
+        toggle_parser.add_argument(
+            "provider", metavar="<provider-id>", help="Provider id to toggle"
+        )
+        toggle_parser.add_argument(
+            "--connection",
+            metavar="<provider:connection-id>",
+            help="Required when the provider has multiple connections, e.g. ollama:local",
+        )
 
     for command in ("connect", "disconnect", "connect-status"):
         command_parser = _add_command_parser(

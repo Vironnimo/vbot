@@ -348,6 +348,10 @@ class Runtime:
         # the first call so it binds to the running event loop.
         self._local_catalog_refresh_lock: asyncio.Lock | None = None
         self._local_catalog_refresh_at: float | None = None
+        # Last probe outcome per auto-refresh connection id ("provider:conn" →
+        # bool). Absent means "never probed"; consumed by the connection/model
+        # payloads so accessors can mark a not-running local endpoint.
+        self._connection_reachability: dict[str, bool] = {}
         self._providers: ProviderRegistry | None = None
         self._provider_credentials: ProviderCredentialResolverProtocol | None = None
         self._token_store: TokenStore | None = None
@@ -453,6 +457,7 @@ class Runtime:
             self._providers,
             fallback_credentials=data_dir_credentials,
             token_store=self._token_store,
+            enabled_overrides_loader=self._provider_connection_enabled_overrides,
         )
         self._models = ModelRegistry.load(resources_path)
         self._model_tasks = TaskModelService(
@@ -721,6 +726,7 @@ class Runtime:
             self.logger.info("Runtime stopped")
 
     def _clear_service_references(self) -> None:
+        self._connection_reachability = {}
         self._providers = None
         self._provider_credentials = None
         self._token_store = None
@@ -801,7 +807,7 @@ class Runtime:
             for connection in provider_config.connections:
                 total_connection_count += 1
                 connection_id = f"{provider_id}:{connection.id}"
-                if self._provider_credentials.has_credentials(provider_id, connection_id):
+                if self._provider_credentials.is_usable(provider_id, connection_id):
                     usable_connection_count += 1
                     provider_is_usable = True
 
@@ -1590,6 +1596,7 @@ class Runtime:
             self.providers,
             fallback_credentials=data_dir_credentials,
             token_store=self.token_store,
+            enabled_overrides_loader=self._provider_connection_enabled_overrides,
         )
 
     # ------------------------------------------------------------------
@@ -1913,6 +1920,11 @@ class Runtime:
 
         provider_config = self.providers.get(provider_id)
         connection, account_id = self._get_connection_config(provider_config, connection_id)
+        if not self.provider_credentials.is_connection_enabled(provider_id, connection_id):
+            raise ConfigError(
+                f"Provider connection '{provider_id}:{connection.id}' is disabled — "
+                f"enable it in Settings → Providers or via the provider CLI"
+            )
         token_getter = self._get_token_getter(provider_id, connection_id, connection, account_id)
 
         adapter_class = _ADAPTER_MAP.get(provider_config.adapter)
@@ -2029,21 +2041,26 @@ class Runtime:
 
         return _lookup
 
-    async def maybe_refresh_local_catalogs(self) -> None:
-        """Refresh every ``auto_refresh`` connection's model catalog, throttled.
+    async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
+        """Refresh every enabled ``auto_refresh`` connection's model catalog, throttled.
 
         Local providers (e.g. Ollama) change their installed-model set outside
         vBot, so their catalogs refresh automatically — at startup
         (fire-and-forget) and when a model picker opens (``model.list``,
-        awaited with a small time budget). Semantics:
+        awaited with a small time budget). Disabled connections are never
+        probed. Semantics:
 
         - **Throttled**: at most one refresh sweep per
           :data:`_LOCAL_CATALOG_REFRESH_TTL_SECONDS`, counting failures too —
           a stopped local server must not be re-probed on every picker open.
+          ``force=True`` bypasses the throttle (used right after the user
+          enables a local connection, so feedback is immediate).
         - **Never raises**: a refresh failure (server down, malformed catalog)
           logs and leaves the last known catalog untouched.
         - **Serialized**: concurrent callers share one sweep; the second
           caller waits for the in-flight sweep and returns.
+        - **Reachability**: each probe outcome is recorded per connection
+          (see :meth:`connection_reachability`).
         """
 
         if not self._started:
@@ -2053,7 +2070,7 @@ class Runtime:
         async with self._local_catalog_refresh_lock:
             now = time.monotonic()
             last = self._local_catalog_refresh_at
-            if last is not None and now - last < _LOCAL_CATALOG_REFRESH_TTL_SECONDS:
+            if not force and last is not None and now - last < _LOCAL_CATALOG_REFRESH_TTL_SECONDS:
                 return
 
             targets = self._auto_refresh_targets()
@@ -2090,11 +2107,13 @@ class Runtime:
                 except ModelDiscoveryError as error:
                     # Expected when the local server is not running — keep the
                     # last known catalog, never block or error the caller.
+                    self._connection_reachability[connection_id] = False
                     if self.logger is not None:
                         self.logger.debug(
                             f"Local catalog refresh failed for {connection_id}: {error}"
                         )
                     continue
+                self._connection_reachability[connection_id] = True
                 refreshed_any = True
 
             if refreshed_any:
@@ -2102,8 +2121,23 @@ class Runtime:
                 # (task targets, status, recall) see the fresh catalog.
                 self.models.reload(resources_dir)
 
+    def connection_reachability(self, connection_id: str) -> bool | None:
+        """Return the last catalog-probe outcome for one auto-refresh connection.
+
+        ``True``/``False`` reflect the most recent sweep; ``None`` means the
+        connection was never probed (not an auto-refresh connection, disabled,
+        or no sweep has run yet). Only meaningful for local auto-refresh
+        connections — remote connections are never probed and stay ``None``.
+        """
+
+        return self._connection_reachability.get(connection_id)
+
     def _auto_refresh_targets(self) -> list[tuple[str, ProviderConfig, ConnectionConfig]]:
-        """Return ``(provider_id, provider, connection)`` for auto-refresh connections."""
+        """Return ``(provider_id, provider, connection)`` for auto-refresh connections.
+
+        Only enabled connections qualify — a disabled local provider is
+        completely passive (no startup probe, no picker probe).
+        """
 
         targets: list[tuple[str, ProviderConfig, ConnectionConfig]] = []
         for provider_id in self.providers.list_ids():
@@ -2113,12 +2147,31 @@ class Runtime:
                     continue
                 if not (connection.models_endpoint or provider.models_endpoint):
                     continue
-                if not self.provider_credentials.has_credentials(
+                if not self.provider_credentials.is_usable(
                     provider_id, f"{provider_id}:{connection.id}"
                 ):
                     continue
                 targets.append((provider_id, provider, connection))
         return targets
+
+    def _provider_connection_enabled_overrides(self) -> Mapping[str, bool]:
+        """Return the live per-connection enabled overrides from settings, or empty.
+
+        Injected into the provider credential resolver; read from settings at
+        every check (no reload hook) so an enable/disable applies immediately.
+        """
+
+        if self._storage is None:
+            return {}
+        try:
+            connections = self._storage.load_providers_settings()["connections"]
+        except StorageError as error:
+            if self.logger is not None:
+                self.logger.warning(
+                    f"Failed to load provider connection overrides from settings: {error}"
+                )
+            return {}
+        return cast("Mapping[str, bool]", connections)
 
     def local_context_windows(self) -> Mapping[str, Any]:
         """Return the live user-configured local-model window map, or empty.
