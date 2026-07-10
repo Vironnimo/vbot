@@ -1,7 +1,9 @@
 <script>
   import { onDestroy } from 'svelte';
   import Dropdown from './Dropdown.svelte';
+  import Button from './ui/Button.svelte';
   import TextField from './ui/TextField.svelte';
+  import Toggle from './ui/Toggle.svelte';
   import { t } from '$lib/i18n.js';
   import {
     getWakewordStatus,
@@ -217,15 +219,12 @@
         </div>
       </div>
       <div class="s-row-control">
-        <label class="voice-toggle">
-          <input
-            type="checkbox"
-            checked={voiceState.enabled}
-            onchange={handleEnabledChange}
-            disabled={!loaded}
-          />
-          <span class="voice-toggle__slider"></span>
-        </label>
+        <Toggle
+          checked={voiceState.enabled}
+          onChange={handleEnabledChange}
+          disabled={!loaded}
+          ariaLabel={t('settings.voice.enabled', 'Wakeword listening')}
+        />
       </div>
     </div>
 
@@ -376,14 +375,14 @@
 
     <!-- Save button -->
     <div class="s-footer">
-      <button
-        class="btn btn--primary"
-        type="button"
+      <Button
+        variant="primary"
+        class="s-save-button s-save-button--inline"
         disabled={!loaded}
-        onclick={() => saveConfig()}
+        onClick={() => saveConfig()}
       >
         {t('common.save', 'Save')}
-      </button>
+      </Button>
     </div>
   {/if}
 </div>
@@ -395,93 +394,43 @@
     gap: 0;
   }
 
-  /* Toggle switch */
-  .voice-toggle {
-    position: relative;
-    display: inline-block;
-    width: 44px;
-    height: 24px;
-    cursor: pointer;
-  }
-  .voice-toggle input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-    position: absolute;
-  }
-  .voice-toggle__slider {
-    position: absolute;
-    inset: 0;
-    border-radius: 12px;
-    background: var(--bg-subtle, #2d271f);
-    border: 1px solid var(--border, #3d3528);
-    transition:
-      background 0.2s,
-      border-color 0.2s;
-  }
-  .voice-toggle__slider::after {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: var(--text-lo, #847762);
-    transition:
-      transform 0.2s,
-      background 0.2s;
-  }
-  .voice-toggle input:checked + .voice-toggle__slider {
-    background: var(--green, #4ade80);
-    border-color: var(--green, #4ade80);
-  }
-  .voice-toggle input:checked + .voice-toggle__slider::after {
-    transform: translateX(20px);
-    background: #fff;
-  }
-  .voice-toggle input:disabled + .voice-toggle__slider {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
   /* Live state dot */
   .voice-state {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 8px;
   }
   .voice-state-dot {
     width: 10px;
     height: 10px;
     border-radius: 50%;
     flex-shrink: 0;
-    background: var(--text-lo, #5e4c38);
+    background: var(--text-lo);
   }
   .voice-dot--off {
-    background: var(--text-lo, #5e4c38);
+    background: var(--text-lo);
   }
   .voice-dot--listening {
-    background: var(--green, #4ade80);
+    background: var(--green);
     animation: voice-pulse 1.6s ease-in-out infinite;
   }
   .voice-dot--detected {
-    background: var(--green, #4ade80);
+    background: var(--green);
     animation: voice-pulse 0.6s ease-in-out infinite;
   }
   .voice-dot--recording {
-    background: var(--amber, #f59e0b);
+    background: var(--amber);
   }
   .voice-dot--processing {
-    background: var(--accent, #e8870a);
+    background: var(--accent);
     animation: voice-spin 1s linear infinite;
   }
   .voice-dot--error {
-    background: var(--red, #fc8181);
+    background: var(--red);
   }
   .voice-state-label {
-    font-size: 0.85rem;
-    color: var(--text, #f1eadf);
+    font-size: var(--fs-body-md);
+    color: var(--text-hi);
   }
 
   @keyframes voice-pulse {
@@ -515,44 +464,45 @@
   .voice-slider {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 6px;
     width: 100%;
   }
   .voice-slider-label {
-    font-size: 0.8rem;
-    color: var(--text-lo, #847762);
+    font-size: var(--fs-body-sm);
+    color: var(--text-lo);
   }
   .voice-slider input[type='range'] {
     width: 100%;
-    accent-color: var(--accent, #e8870a);
+    accent-color: var(--accent);
   }
   .voice-slider-labels {
     display: flex;
     justify-content: space-between;
-    font-size: 0.7rem;
-    color: var(--text-lo, #847762);
+    font-size: var(--fs-body-sm);
+    color: var(--text-lo);
   }
 
   /* Privacy note */
   .voice-privacy-note {
-    margin-top: 1rem;
-    padding: 0.8rem 1rem;
-    border-radius: 0.5rem;
-    background: var(--bg-subtle, #2d271f);
-    font-size: 0.8rem;
-    color: var(--text-lo, #847762);
+    margin-top: 16px;
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    font-size: var(--fs-body-sm);
+    color: var(--text-med);
     line-height: 1.5;
   }
 
   /* Mock-mode warning */
   .voice-mock-warning {
-    margin: 0.5rem 0 0.75rem;
-    padding: 0.8rem 1rem;
-    border: 1px solid var(--amber, #f59e0b);
-    border-radius: 0.5rem;
-    background: color-mix(in srgb, var(--amber, #f59e0b) 12%, transparent);
-    font-size: 0.8rem;
-    color: var(--text, #f1eadf);
+    margin: 8px 0 12px;
+    padding: 12px 16px;
+    border: 1px solid rgba(245, 158, 11, 0.22);
+    border-radius: var(--r-md);
+    background: rgba(245, 158, 11, 0.12);
+    font-size: var(--fs-body-sm);
+    color: var(--text-hi);
     line-height: 1.5;
   }
 </style>

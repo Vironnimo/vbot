@@ -2531,8 +2531,8 @@
     border-right: 1px solid var(--border);
     color: var(--text-hi);
     font-family: var(--font-ui);
-    font-size: 13px;
-    font-weight: 700;
+    font-size: var(--fs-label-md);
+    font-weight: 600;
     white-space: nowrap;
   }
 

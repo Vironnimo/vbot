@@ -278,7 +278,7 @@
     color: var(--text-lo);
     background: transparent;
     font-family: var(--font-ui);
-    font-size: 13px;
+    font-size: var(--fs-label-md);
     font-weight: 500;
     white-space: nowrap;
     transition:
@@ -313,8 +313,8 @@
     border-right: 1px solid var(--border);
     color: var(--text-hi);
     font-family: var(--font-ui);
-    font-size: 13px;
-    font-weight: 700;
+    font-size: var(--fs-label-md);
+    font-weight: 600;
     white-space: nowrap;
   }
 
@@ -337,7 +337,7 @@
     color: var(--text-lo);
     background: var(--surface-2);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-mono-sm);
   }
 
   .mic-indicator {
@@ -368,25 +368,25 @@
   }
 
   .mic-dot--off {
-    background: var(--text-lo, #5e4c38);
+    background: var(--text-lo);
   }
 
   .mic-dot--listening {
     animation: mic-pulse 1.6s ease-in-out infinite;
-    background: var(--green, #4ade80);
+    background: var(--green);
   }
 
   .mic-dot--recording {
-    background: var(--amber, #f59e0b);
+    background: var(--amber);
   }
 
   .mic-dot--processing {
     animation: mic-spin 1s linear infinite;
-    background: var(--accent, #e8870a);
+    background: var(--accent);
   }
 
   .mic-dot--error {
-    background: var(--red, #fc8181);
+    background: var(--red);
   }
 
   :global(.chat-sessions-toggle--active) {
