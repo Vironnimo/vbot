@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
+  import Badge from '../ui/Badge.svelte';
   import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -522,7 +523,7 @@
                 {statusLabel(extension.status)}
               </StatusChip>
               {#if extension.version}
-                <span class="s-ext-version">v{extension.version}</span>
+                <Badge variant="neutral">v{extension.version}</Badge>
               {/if}
             </div>
             {#if extension.description}

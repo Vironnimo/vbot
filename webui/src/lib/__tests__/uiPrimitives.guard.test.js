@@ -146,7 +146,7 @@ describe('UI primitive guard', () => {
 
   it('routes every status chip through components/ui/StatusChip.svelte', () => {
     // The canonical `chip` base plus the retired color aliases; scoped chips
-    // named differently (logs-view__stream-chip, sp-scope-chip, …) are distinct.
+    // named differently (sp-scope-chip, …) are distinct.
     const forbidden = new Set([
       'chip',
       'chip-green',
@@ -160,6 +160,48 @@ describe('UI primitive guard', () => {
       forbidden,
       'components/ui/StatusChip.svelte',
     );
+
+    expect(violations).toEqual([]);
+  });
+
+  it('routes every metadata badge through components/ui/Badge.svelte', () => {
+    // The canonical `badge` base plus each `badge--<variant>` modifier. A raw
+    // element carrying any of these bypasses the Badge primitive that owns the
+    // metadata-tag pill (the counterpart to StatusChip's status `chip`).
+    const forbidden = new Set([
+      'badge',
+      'badge--neutral',
+      'badge--info',
+      'badge--success',
+      'badge--warn',
+      'badge--error',
+    ]);
+
+    const violations = findRawClassViolations(
+      ANY_ELEMENT,
+      forbidden,
+      'components/ui/Badge.svelte',
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps the retired bespoke pill classes from returning', () => {
+    // Every hand-built metadata pill was folded into the Badge primitive. These
+    // base tokens must never reappear on an element — reintroducing one is a
+    // regression back to a one-off pill instead of the shared Badge.
+    const retired = new Set([
+      'sp-badge',
+      'session-row__badge',
+      'stats-badge',
+      'stats-skill-badge',
+      'stats-origin',
+      'logs-view__stream-chip',
+      'debug-view__status-chip',
+      's-ext-version',
+    ]);
+
+    const violations = findRawClassViolations(ANY_ELEMENT, retired, '');
 
     expect(violations).toEqual([]);
   });

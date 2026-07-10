@@ -399,12 +399,18 @@ If we use inline SVGs without explicit `width` and `height`, they can suddenly r
 - `error`: red tint bg + `red` text
 - `neutral`: `surface-3` bg + `text-med` text
 
-(The Logs connection chip and other scoped `*-chip` labels are distinct controls with their own classes, not this component.)
+(Scoped `*-chip` labels like the System Prompt preview `sp-scope-chip` are distinct controls with their own classes, not this component. Small metadata tags are the separate `Badge` component — see below.)
+
+### Badges
+
+**Every metadata tag is the shared `Badge` component (`webui/src/components/ui/Badge.svelte`).** It is the counterpart to `StatusChip`: a small pill (999px border-radius, 1px border, mono `--fs-mono-xs`, padding 2px 7px, 4px icon/text gap) carrying a metadata marker — a kind, origin, version, or scope — rather than a status. Callers pass a `variant` and the already-translated label (optionally preceded by an inline icon whose SVG keeps explicit `width`/`height`) as `children`; the component emits the canonical `badge badge--<variant>` classes, and the guard scan fails the build if a raw element reintroduces `badge` (or a retired bespoke pill class) outside the component. Variants reuse `StatusChip`'s names and tints: `neutral` (`surface-3` bg + `text-med`), `info` (`accent-08` bg + `accent` text, `accent-30` border), `success` (green tint), `warn` (amber tint), `error` (red tint); default `neutral`.
+
+**The rule: metadata tags (kind markers, origins, versions, scopes) use `Badge`; statuses use `StatusChip`.** A `use:tooltip` hint goes on a wrapping `<span class="tooltip-anchor" use:tooltip={…}>` at the call site, since Svelte actions cannot be applied to a component.
 
 ### Log viewer
 
 - The Logs tab uses the standard input/dropdown styling (`surface-2`, `border-2`, mono text) for file selection, level filtering, sort order, and search. Use the shared **simple** dropdown style for the file, level, and order controls.
-- Live connection state uses a pill-shaped mono status chip: neutral by default, green for connected, amber for reconnecting, red for stream errors.
+- Live connection state uses the shared `StatusChip` (it is a status, not a metadata tag): `neutral` by default, `success` for connected, `warn` for reconnecting, `error` for stream errors.
 - Log entries render as dense single-row list items, not roomy stacked cards. Each row keeps timestamp, level, logger, and message on one line on normal desktop widths, with truncation acceptable for long content.
 - Rows keep a 3px semantic left border: accent for info, amber for warn, red for error, neutral `border-2` for unknown/other levels. Warn treatment should be visibly stronger than info, not just a near-match.
 - Log metadata and message preview stay monospace and compact. Full multiline continuation text may still be exposed through tooltip/title or responsive fallback behavior, but the default desktop presentation is one visible row per entry.

@@ -357,7 +357,11 @@ describe('SessionListDrawer', () => {
       () => document.querySelectorAll('.session-row').length === 2,
     );
 
-    const forkBadges = document.querySelectorAll('.session-row__badge--fork');
+    // The fork marker is now the shared Badge primitive, identified by its
+    // translated label rather than a bespoke per-variant class.
+    const forkBadges = Array.from(document.querySelectorAll('.badge')).filter(
+      (element) => element.textContent.trim() === 'Fork',
+    );
     expect(forkBadges.length).toBe(1);
     expect(forkBadges[0].textContent.trim()).toBe('Fork');
   });

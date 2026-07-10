@@ -4,6 +4,7 @@
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
   import CopyButton from './ui/CopyButton.svelte';
+  import StatusChip from './ui/StatusChip.svelte';
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
   import { reconnectBackoffDelay } from '$lib/backoff.js';
   import { t } from '$lib/i18n.js';
@@ -296,16 +297,16 @@
     }
   }
 
-  function streamStatusClass(status) {
+  function streamStatusVariant(status) {
     switch (status) {
       case LOGS_STREAM_STATUS_CONNECTED:
-        return 'logs-view__stream-chip--connected';
+        return 'success';
       case LOGS_STREAM_STATUS_RECONNECTING:
-        return 'logs-view__stream-chip--reconnecting';
+        return 'warn';
       case LOGS_STREAM_STATUS_ERROR:
-        return 'logs-view__stream-chip--error';
+        return 'error';
       default:
-        return '';
+        return 'neutral';
     }
   }
 
@@ -383,11 +384,9 @@
     </div>
 
     <div class="logs-view__header-actions">
-      <span
-        class={`logs-view__stream-chip ${streamStatusClass(viewState.streamStatus)}`}
-      >
+      <StatusChip variant={streamStatusVariant(viewState.streamStatus)}>
         {streamStatusLabel(viewState.streamStatus)}
-      </span>
+      </StatusChip>
       <Button
         variant="secondary"
         onClick={() => loadCatalogAndMaybeFile({ forceReload: true })}
@@ -640,35 +639,6 @@
     align-items: center;
     justify-content: flex-end;
     gap: 10px;
-  }
-
-  .logs-view__stream-chip {
-    padding: 4px 9px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    color: var(--text-med);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 500;
-  }
-
-  .logs-view__stream-chip--connected {
-    color: var(--green);
-    border-color: rgba(74, 222, 128, 0.24);
-    background: rgba(74, 222, 128, 0.08);
-  }
-
-  .logs-view__stream-chip--reconnecting {
-    color: var(--amber);
-    border-color: rgba(245, 158, 11, 0.24);
-    background: rgba(245, 158, 11, 0.08);
-  }
-
-  .logs-view__stream-chip--error {
-    color: var(--red);
-    border-color: rgba(252, 129, 129, 0.24);
-    background: rgba(252, 129, 129, 0.08);
   }
 
   .logs-view__feedback {

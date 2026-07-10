@@ -1,4 +1,5 @@
 <script>
+  import Badge from './ui/Badge.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import { deleteSession, listSessions, renameSession } from '$lib/api.js';
@@ -413,42 +414,52 @@
                   {session.display_name || sessionDisplayName(session)}
                 </p>
                 {#if session.id === asText(agentCurrentSessionId)}
-                  <span class="session-row__badge session-row__badge--current">
+                  <Badge variant="success">
                     {t('sessions.current', 'Current')}
-                  </span>
+                  </Badge>
                 {/if}
                 {#if session.platform}
-                  <span class="session-row__badge">
+                  <Badge variant="info">
                     {#if session.platform === 'telegram'}
-                      <svg viewBox="0 0 18 18" aria-hidden="true">
+                      <svg
+                        viewBox="0 0 18 18"
+                        width="10"
+                        height="10"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
                         <path
                           d="M15.36 3.27c.39-.15.77.2.67.61l-1.94 9.14c-.07.34-.45.5-.74.31l-3.16-2.13-1.62 1.57c-.22.22-.6.11-.67-.2l-.52-2.41 6.72-5.91c.14-.12-.04-.35-.2-.24L5.6 9.04 2.5 7.8c-.34-.13-.35-.6-.02-.75l12.88-3.78z"
                         />
                       </svg>
                     {/if}
                     <span>{resolvePlatformLabel(session.platform)}</span>
-                  </span>
+                  </Badge>
                 {/if}
                 {#if session.is_subagent_session}
                   <span
-                    class="session-row__badge session-row__badge--subagent"
+                    class="tooltip-anchor"
                     use:tooltip={t(
                       'sessions.subagentHint',
                       'A session run by a sub-agent working on behalf of a parent session. The parent is shown below.',
                     )}
                   >
-                    {t('chat.subagent.label', 'Sub-agent')}
+                    <Badge variant="neutral">
+                      {t('chat.subagent.label', 'Sub-agent')}
+                    </Badge>
                   </span>
                 {/if}
                 {#if session.is_fork}
                   <span
-                    class="session-row__badge session-row__badge--fork"
+                    class="tooltip-anchor"
                     use:tooltip={t(
                       'sessions.forkHint',
                       'A copy of another session. Background reflection and /reflect review a conversation in a fork so the original session stays untouched.',
                     )}
                   >
-                    {t('sessions.fork', 'Fork')}
+                    <Badge variant="neutral">
+                      {t('sessions.fork', 'Fork')}
+                    </Badge>
                   </span>
                 {/if}
               </div>
@@ -761,41 +772,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .session-row__badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    border: 1px solid var(--accent-30);
-    border-radius: 999px;
-    padding: 2px 7px;
-    color: var(--accent);
-    background: var(--accent-08);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    line-height: 1;
-  }
-
-  .session-row__badge--current {
-    border-color: rgba(74, 222, 128, 0.28);
-    background: rgba(74, 222, 128, 0.1);
-    color: var(--green);
-  }
-
-  /* Structural metadata (sub-agent, fork) is neutral, not a status color —
-     the palette has no blue/purple, and the label text carries the meaning. */
-  .session-row__badge--subagent,
-  .session-row__badge--fork {
-    border-color: var(--border-2);
-    background: var(--surface-3);
-    color: var(--text-med);
-  }
-
-  .session-row__badge svg {
-    width: 10px;
-    height: 10px;
-    fill: currentColor;
   }
 
   .session-row__meta {
