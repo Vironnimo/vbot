@@ -18,13 +18,14 @@
 
 .settings-nav {
   display: flex;
-  width: 168px;
-  min-width: 168px;
+  width: 208px;
+  min-width: 208px;
   flex-shrink: 0;
   flex-direction: column;
   gap: 1px;
   padding: 20px 0;
   border-right: 1px solid var(--border);
+  overflow-y: auto;
 }
 
 .settings-nav-title {
@@ -32,6 +33,63 @@
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-search {
+  position: relative;
+  margin: 2px 12px 4px;
+}
+
+.settings-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  transform: translateY(-50%);
+  color: var(--text-lo);
+  pointer-events: none;
+}
+
+.settings-search-input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px 7px 28px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.settings-search-input::placeholder {
+  color: var(--text-lo);
+}
+
+.settings-search-input:focus-visible {
+  border-color: rgba(232, 135, 10, 0.4);
+  box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+  outline: none;
+}
+
+/* Reserve the line even while empty so the index does not jump when a query
+   starts producing a match count. */
+.settings-search-count {
+  min-height: 15px;
+  padding: 0 16px 4px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.settings-nav-group {
+  padding: 14px 16px 5px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -67,6 +125,12 @@
   background: var(--accent-dim);
 }
 
+/* During a search, index entries whose section has no match stay clickable
+   but fade so the hits stand out. */
+.snav-item--dimmed {
+  opacity: 0.35;
+}
+
 .settings-content {
   display: flex;
   min-width: 0;
@@ -75,36 +139,61 @@
   padding: 24px 32px;
 }
 
-/* Cap the panel to the narrow content measure and center it in the scroll
-   area so label↔control rows stop flying apart on wide monitors. The
-   `.settings-content` scroll container stays full-width (scrollbar at edge). */
-.s-panel {
+/* The settings document: one scrolling column of section cards, capped to
+   the narrow content measure and centered so label↔control rows stop flying
+   apart on wide monitors. The `.settings-content` scroll container stays
+   full-width (scrollbar at edge). */
+.s-doc {
   width: 100%;
   max-width: var(--content-max-narrow);
   margin-inline: auto;
 }
 
-.s-panel-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 6px;
-}
-
-.s-panel-title {
-  margin-bottom: 4px;
-  color: var(--text-hi);
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
-
-.s-panel-sub {
-  margin-bottom: 24px;
+.s-doc-group {
+  padding: 26px 2px 10px;
   color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.s-doc-group:first-child {
+  padding-top: 0;
+}
+
+.s-section {
+  padding: 16px 20px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: rgba(255, 255, 255, 0.015);
+  scroll-margin-top: 8px;
+}
+
+.s-section + .s-section {
+  margin-top: 14px;
+}
+
+.s-section-header {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.s-section-title {
+  margin-bottom: 3px;
+  color: var(--text-hi);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.s-section-sub {
+  color: var(--text-med);
   font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 66ch;
 }
 
 .s-feedback {
@@ -1061,12 +1150,6 @@
 
   .settings-content {
     padding: 20px;
-  }
-
-  .s-panel-header {
-    flex-direction: column;
-    align-items: stretch;
-    margin-bottom: 2px;
   }
 
   .s-row-control,

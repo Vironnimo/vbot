@@ -33,6 +33,7 @@ describe('SettingsView', () => {
     init('en');
     rpcMock.mockReset();
     mountedComponent = null;
+    activeSection = null;
   });
 
   afterEach(async () => {
@@ -194,6 +195,12 @@ describe('SettingsView', () => {
     flushSync();
     await openProvidersPanel();
 
+    // Other always-mounted sections (Defaults, Compaction) load the model
+    // catalog on mount; only the refresh-triggered reload must be absent.
+    const modelListCallsBeforeRefresh = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'model.list',
+    ).length;
+
     buttonByText('Update Model DB').click();
     // The failure is a sticky error toast (routed through the unified settings
     // error seam), carrying the server detail as the toast message.
@@ -205,9 +212,9 @@ describe('SettingsView', () => {
       ),
     );
 
-    expect(rpcMock.mock.calls.some((call) => call[0] === 'model.list')).toBe(
-      false,
-    );
+    expect(
+      rpcMock.mock.calls.filter((call) => call[0] === 'model.list').length,
+    ).toBe(modelListCallsBeforeRefresh);
   });
 
   it('renders a keyless connection and the local model context editor', async () => {
@@ -815,7 +822,7 @@ describe('SettingsView', () => {
     expect(buttonByText('Voice')).toBeUndefined();
   });
 
-  it('opens the Desktop Voice panel once for a target panel request', async () => {
+  it('highlights the Voice section once for a target panel request', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
     window.history.pushState({}, '', '/?accessor=desktop');
     window.pywebview = {
@@ -838,19 +845,31 @@ describe('SettingsView', () => {
     });
     flushSync();
 
+    // The Voice section renders (desktop capability) and the target request
+    // marks its index entry active.
     await waitForCondition(() =>
       document.body.textContent.includes('Wakeword listening'),
     );
+    await waitForCondition(
+      () =>
+        buttonByText('Voice')?.classList.contains('snav-item--active') === true,
+    );
 
-    expect(buttonByText('Voice')).toBeTruthy();
-
+    // Navigating elsewhere moves the index highlight; the Voice section stays
+    // in the document (sections are never unmounted).
     buttonByText('Server info').click();
     flushSync();
 
-    await waitForCondition(() =>
-      document.body.textContent.includes('Server host'),
+    await waitForCondition(
+      () =>
+        buttonByText('Server info')?.classList.contains('snav-item--active') ===
+        true,
     );
-    expect(document.body.textContent).not.toContain('Wakeword listening');
+    expect(buttonByText('Voice')?.classList.contains('snav-item--active')).toBe(
+      false,
+    );
+    expect(document.body.textContent).toContain('Wakeword listening');
+    expect(document.body.textContent).toContain('Server host');
   });
 
   it('keeps in-progress values while an auto-save request is in flight', async () => {
@@ -1264,75 +1283,73 @@ describe('SettingsView', () => {
   });
 });
 
-async function openProvidersPanel() {
-  await waitForCondition(() => buttonByText('Providers'));
-  buttonByText('Providers').click();
+// All settings sections are always rendered in one scrolling document, so
+// "opening" a section means clicking its index entry and scoping the query
+// helpers to that section's DOM subtree (same-labeled controls — e.g. the
+// per-section Save buttons — exist once per section).
+async function openSettingsSection(navLabel, sectionId) {
+  await waitForCondition(() => buttonByText(navLabel));
+  buttonByText(navLabel).click();
   flushSync();
+  await waitForCondition(() =>
+    document.body.querySelector(`[data-settings-section="${sectionId}"]`),
+  );
+  activeSection = document.body.querySelector(
+    `[data-settings-section="${sectionId}"]`,
+  );
+}
+
+async function openProvidersPanel() {
+  await openSettingsSection('Providers', 'providers');
   await waitForCondition(() => buttonByText('Add provider'));
 }
 
 async function openChannelsPanel() {
-  await waitForCondition(() => buttonByText('Channels'));
-  buttonByText('Channels').click();
-  flushSync();
+  await openSettingsSection('Channels', 'channels');
   await waitForCondition(() => buttonByText('Add channel'));
   await waitForCondition(() => buttonByText('Add channel')?.disabled === false);
 }
 
 async function openSubAgentsPanel() {
-  await waitForCondition(() => buttonByText('Sub-Agents'));
-  buttonByText('Sub-Agents').click();
-  flushSync();
+  await openSettingsSection('Sub-Agents', 'subagents');
   await waitForCondition(() =>
-    document.body.textContent.includes('Max sub-agent depth'),
+    activeSection.textContent.includes('Max sub-agent depth'),
   );
 }
 
 async function openCompactionPanel() {
-  await waitForCondition(() => buttonByText('Compaction'));
-  buttonByText('Compaction').click();
-  flushSync();
+  await openSettingsSection('Compaction', 'compaction');
   await waitForCondition(() =>
-    document.body.textContent.includes('Summary model'),
+    activeSection.textContent.includes('Summary model'),
   );
 }
 
 async function openRecallPanel() {
-  await waitForCondition(() => buttonByText('Recall'));
-  buttonByText('Recall').click();
-  flushSync();
+  await openSettingsSection('Recall', 'recall');
   await waitForCondition(() =>
-    document.body.textContent.includes('Recall backend'),
+    activeSection.textContent.includes('Recall backend'),
   );
 }
 
 async function openWebSearchPanel() {
-  await waitForCondition(() => buttonByText('Web Search'));
-  buttonByText('Web Search').click();
-  flushSync();
+  await openSettingsSection('Web Search', 'web_search');
   await waitForCondition(() =>
-    document.body.textContent.includes('Search provider'),
+    activeSection.textContent.includes('Search provider'),
   );
 }
 
 async function openDefaultsPanel() {
-  await waitForCondition(() => buttonByText('Agent defaults'));
-  buttonByText('Agent defaults').click();
-  flushSync();
+  await openSettingsSection('Agent defaults', 'defaults');
   await waitForCondition(() =>
-    document.body.textContent.includes('Fallback model'),
+    activeSection.textContent.includes('Fallback model'),
   );
 }
 
 async function openSpecializedModelsPanel() {
-  // Settings must have loaded at least once (the panel depends on the
-  // outer settings to be hydrated before it fires its own RPCs).
-  await waitForCondition(() =>
-    rpcMock.mock.calls.some((call) => call[0] === 'settings.get'),
-  );
-  // The panel itself calls task_model.list_targets on mount; waiting
-  // for that call is the strongest signal the panel is mounted and
-  // its first paint is committed.
+  await openSettingsSection('Specialized Models', 'specialized_models');
+  // The panel calls task_model.list_targets on mount; waiting for that call
+  // is the strongest signal the panel is mounted and its first paint is
+  // committed.
   await waitForCondition(() =>
     rpcMock.mock.calls.some((call) => call[0] === 'task_model.list_targets'),
   );
@@ -1346,22 +1363,44 @@ async function waitForModelCatalogs() {
   );
 }
 
+// The section the current test interacted with last (via openSettingsSection).
+// Query helpers search this subtree first and fall back to the whole document
+// (index nav, portaled dropdowns, and modals live outside the section).
+let activeSection = null;
+
+function scopedQueryAll(selector) {
+  const scoped = activeSection
+    ? Array.from(activeSection.querySelectorAll(selector))
+    : [];
+  return scoped.length > 0
+    ? scoped
+    : Array.from(document.body.querySelectorAll(selector));
+}
+
 function providerRow(providerName) {
-  const rows = Array.from(document.body.querySelectorAll('.s-row'));
+  const rows = scopedQueryAll('.s-row');
   const row = rows.find((item) => item.textContent.includes(providerName));
   expect(row).toBeTruthy();
   return row;
 }
 
 function buttonByText(label) {
-  return Array.from(document.body.querySelectorAll('button')).find(
-    (button) => button.textContent.trim() === label,
+  const match = (button) => button.textContent.trim() === label;
+  const scoped = activeSection
+    ? Array.from(activeSection.querySelectorAll('button')).find(match)
+    : undefined;
+  return (
+    scoped ?? Array.from(document.body.querySelectorAll('button')).find(match)
   );
 }
 
 function buttonByAriaLabel(label) {
-  return Array.from(document.body.querySelectorAll('button')).find(
-    (button) => button.getAttribute('aria-label') === label,
+  const match = (button) => button.getAttribute('aria-label') === label;
+  const scoped = activeSection
+    ? Array.from(activeSection.querySelectorAll('button')).find(match)
+    : undefined;
+  return (
+    scoped ?? Array.from(document.body.querySelectorAll('button')).find(match)
   );
 }
 
@@ -1382,8 +1421,11 @@ function getButton(label) {
   return button;
 }
 
+// Counting helper: stays strictly inside the active section (no body
+// fallback), so absence assertions keep meaning "absent in this section".
 function buttonsByText(label) {
-  return Array.from(document.body.querySelectorAll('button')).filter(
+  const root = activeSection ?? document.body;
+  return Array.from(root.querySelectorAll('button')).filter(
     (button) => button.textContent.trim() === label,
   );
 }
@@ -1392,8 +1434,15 @@ function getSettingsUpdateCalls() {
   return rpcMock.mock.calls.filter((call) => call[0] === 'settings.update');
 }
 
+function scopedQuerySelector(selector) {
+  return (
+    activeSection?.querySelector(selector) ??
+    document.body.querySelector(selector)
+  );
+}
+
 function setInputValue(selector, value) {
-  const input = document.body.querySelector(selector);
+  const input = scopedQuerySelector(selector);
   expect(input).toBeTruthy();
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1401,7 +1450,7 @@ function setInputValue(selector, value) {
 }
 
 function setTextareaValue(selector, value) {
-  const textarea = document.body.querySelector(selector);
+  const textarea = scopedQuerySelector(selector);
   expect(textarea).toBeTruthy();
   textarea.value = value;
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1435,7 +1484,7 @@ function getSearchableRoot(id) {
 }
 
 function getSearchableTrigger(id) {
-  const trigger = document.body.querySelector(`button#${id}`);
+  const trigger = scopedQuerySelector(`button#${id}`);
   expect(trigger).toBeTruthy();
   return trigger;
 }
@@ -1461,7 +1510,7 @@ function selectSimpleOption(id, label) {
 }
 
 function getSimpleTrigger(id) {
-  const trigger = document.body.querySelector(`button#${id}`);
+  const trigger = scopedQuerySelector(`button#${id}`);
   expect(trigger).toBeTruthy();
   return trigger;
 }
@@ -1730,6 +1779,16 @@ function createSettingsRpcMock(options = {}) {
         model_tasks: nextModelTasks,
       });
       return { model_tasks: deepClone(nextModelTasks) };
+    }
+
+    // The Extensions and Skills sections are always mounted in the settings
+    // document and self-load on mount; give them empty-but-valid payloads.
+    if (method === 'extensions.list') {
+      return { extensions: options.extensions ?? [] };
+    }
+
+    if (method === 'skill.read') {
+      return { skills: options.skillFiles ?? [] };
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);

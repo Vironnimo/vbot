@@ -55,6 +55,13 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
+  listClients: () => Promise.resolve({ clients: [] }),
+  getTaskModelOptions: (taskType, target) =>
+    rpcMock('task_model.options', { task_type: taskType, target }),
+  listTaskModelTargets: (taskType) =>
+    rpcMock('task_model.list_targets', { task_type: taskType }),
+  updateTaskModelSettings: (modelTasks) =>
+    rpcMock('task_model.update', { model_tasks: modelTasks }),
 }));
 
 const { default: SettingsView } =
@@ -68,6 +75,7 @@ describe('SettingsView', () => {
     init('en');
     rpcMock.mockReset();
     mountedComponent = null;
+    activeSection = null;
   });
 
   afterEach(async () => {
@@ -121,26 +129,17 @@ describe('SettingsView', () => {
 
   it('adds, removes, and saves skill directories', async () => {
     const toastMock = vi.fn();
-    // Route by method, not call order: the Skills panel now also mounts the skill
-    // manager, which self-loads agent.list + skill.read, so the settings.update is
-    // no longer the second RPC.
-    rpcMock.mockImplementation(async (method, params) => {
-      if (method === 'settings.update') {
-        return createSettingsPayload({
-          skills: {
-            default_directory: 'C:/Users/test/.vbot/skills',
-            directories: params.skills.directories,
-          },
-        });
-      }
-      if (method === 'agent.list') {
-        return { agents: [] };
-      }
-      if (method === 'skill.read') {
-        return { skills: [] };
-      }
-      return createSettingsPayload();
-    });
+    rpcMock.mockImplementation(
+      createSettingsRpcHandler({
+        'settings.update': (params) =>
+          createSettingsPayload({
+            skills: {
+              default_directory: 'C:/Users/test/.vbot/skills',
+              directories: params.skills.directories,
+            },
+          }),
+      }),
+    );
 
     mountedComponent = mount(SettingsView, {
       target: document.body,
@@ -149,13 +148,13 @@ describe('SettingsView', () => {
     flushSync();
 
     await waitForText('Add provider');
-    clickButton('Skills');
+    openSection('Skills', 'skills');
 
     expect(document.body.textContent).toContain('Default skill directory');
     expect(document.body.textContent).toContain('C:/Users/test/.vbot/skills');
     expect(document.body.textContent).toContain('C:/skills/shared');
 
-    const input = document.body.querySelector('input.s-input');
+    const input = activeSection.querySelector('input.s-input');
     expect(input).not.toBeNull();
     input.value = 'D:/skills/team';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -186,13 +185,14 @@ describe('SettingsView', () => {
 
   it('edits and saves sub-agent settings', async () => {
     const toastMock = vi.fn();
-    rpcMock
-      .mockResolvedValueOnce(createSettingsPayload())
-      .mockImplementationOnce(async (_method, params) =>
-        createSettingsPayload({
-          subagents: params.subagents,
-        }),
-      );
+    rpcMock.mockImplementation(
+      createSettingsRpcHandler({
+        'settings.update': (params) =>
+          createSettingsPayload({
+            subagents: params.subagents,
+          }),
+      }),
+    );
 
     mountedComponent = mount(SettingsView, {
       target: document.body,
@@ -201,13 +201,13 @@ describe('SettingsView', () => {
     flushSync();
 
     await waitForText('Add provider');
-    clickButton('Sub-Agents');
+    openSection('Sub-Agents', 'subagents');
 
     expect(document.body.textContent).toContain('Max sub-agent depth');
     expect(document.body.textContent).toContain('Max sub-agents per turn');
     expect(document.body.textContent).toContain('Timeout minutes');
 
-    const inputs = document.body.querySelectorAll('input.s-input');
+    const inputs = activeSection.querySelectorAll('input.s-input');
     expect(inputs).toHaveLength(3);
     expect(inputs[0].value).toBe('4');
     expect(inputs[1].value).toBe('8');
@@ -223,7 +223,7 @@ describe('SettingsView', () => {
 
     clickButton('Save');
 
-    expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       subagents: {
         max_subagent_depth: 5,
         max_subagents_per_turn: 12,
@@ -242,16 +242,17 @@ describe('SettingsView', () => {
 
   it('selects and saves the recall backend', async () => {
     const toastMock = vi.fn();
-    rpcMock
-      .mockResolvedValueOnce(createSettingsPayload())
-      .mockImplementationOnce(async (_method, params) =>
-        createSettingsPayload({
-          recall: {
-            backend: params.recall.backend,
-            available_backends: ['jsonl_scan', 'sqlite_fts'],
-          },
-        }),
-      );
+    rpcMock.mockImplementation(
+      createSettingsRpcHandler({
+        'settings.update': (params) =>
+          createSettingsPayload({
+            recall: {
+              backend: params.recall.backend,
+              available_backends: ['jsonl_scan', 'sqlite_fts'],
+            },
+          }),
+      }),
+    );
 
     mountedComponent = mount(SettingsView, {
       target: document.body,
@@ -260,7 +261,7 @@ describe('SettingsView', () => {
     flushSync();
 
     await waitForText('Add provider');
-    clickButton('Recall');
+    openSection('Recall', 'recall');
 
     expect(document.body.textContent).toContain('Recall backend');
 
@@ -282,7 +283,7 @@ describe('SettingsView', () => {
 
     clickButton('Save');
 
-    expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       recall: {
         backend: 'sqlite_fts',
       },
@@ -299,17 +300,18 @@ describe('SettingsView', () => {
 
   it('selects and saves the web search provider', async () => {
     const toastMock = vi.fn();
-    rpcMock
-      .mockResolvedValueOnce(createSettingsPayload())
-      .mockImplementationOnce(async (_method, params) =>
-        createSettingsPayload({
-          web_search: {
-            provider: params.web_search.provider,
-            available_providers: ['brave', 'searxng'],
-            searxng: params.web_search.searxng,
-          },
-        }),
-      );
+    rpcMock.mockImplementation(
+      createSettingsRpcHandler({
+        'settings.update': (params) =>
+          createSettingsPayload({
+            web_search: {
+              provider: params.web_search.provider,
+              available_providers: ['brave', 'searxng'],
+              searxng: params.web_search.searxng,
+            },
+          }),
+      }),
+    );
 
     mountedComponent = mount(SettingsView, {
       target: document.body,
@@ -318,7 +320,7 @@ describe('SettingsView', () => {
     flushSync();
 
     await waitForText('Add provider');
-    clickButton('Web Search');
+    openSection('Web Search', 'web_search');
 
     expect(document.body.textContent).toContain('Search provider');
 
@@ -346,7 +348,7 @@ describe('SettingsView', () => {
 
     clickButton('Save');
 
-    expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       web_search: {
         provider: 'searxng',
         default_count: 12,
@@ -393,16 +395,17 @@ describe('SettingsView', () => {
 
   it('keeps appearance save enabled and persists language through settings.update', async () => {
     const toastMock = vi.fn();
-    rpcMock
-      .mockResolvedValueOnce(createSettingsPayload({ appearanceLanguage: '' }))
-      .mockResolvedValueOnce(
-        createSettingsPayload({
-          appearance: {
-            language: 'fr',
-            available_languages: ['en', 'fr'],
-          },
-        }),
-      );
+    rpcMock.mockImplementation(
+      createSettingsRpcHandler({
+        'settings.update': () =>
+          createSettingsPayload({
+            appearance: {
+              language: 'fr',
+              available_languages: ['en', 'fr'],
+            },
+          }),
+      }),
+    );
 
     mountedComponent = mount(SettingsView, {
       target: document.body,
@@ -412,7 +415,7 @@ describe('SettingsView', () => {
 
     await waitForText('Add provider');
 
-    clickButton('Appearance');
+    openSection('Appearance', 'appearance');
 
     const saveButton = getButton('Save');
     const languageTrigger = document.body.querySelector(
@@ -425,7 +428,8 @@ describe('SettingsView', () => {
     saveButton.click();
     flushSync();
 
-    expect(rpcMock).toHaveBeenCalledTimes(1);
+    // Save on a clean form must not write anything.
+    expect(settingsUpdateCalls()).toHaveLength(0);
 
     languageTrigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
@@ -440,13 +444,18 @@ describe('SettingsView', () => {
     getButton('Save').click();
     flushSync();
 
-    expect(rpcMock).toHaveBeenNthCalledWith(1, 'settings.get');
-    expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
-      appearance: {
-        language: 'fr',
-        chat_width: 'comfortable',
-      },
-    });
+    expect(rpcMock).toHaveBeenCalledWith('settings.get');
+    expect(settingsUpdateCalls()).toEqual([
+      [
+        'settings.update',
+        {
+          appearance: {
+            language: 'fr',
+            chat_width: 'comfortable',
+          },
+        },
+      ],
+    ]);
 
     await waitForCondition(() => toastMock.mock.calls.length > 0);
     expect(toastMock).toHaveBeenCalledWith(
@@ -1079,10 +1088,32 @@ function mergeSettings(base, overrides) {
   return result;
 }
 
-function getButton(label) {
-  const button = Array.from(document.body.querySelectorAll('button')).find(
-    (candidate) => candidate.textContent?.trim() === label,
+// The section the current test interacted with last (via openSection). Button
+// lookups search this subtree first so same-labeled per-section controls
+// (e.g. Save) resolve inside the section under test, not document-wide.
+let activeSection = null;
+
+function openSection(navLabel, sectionId) {
+  activeSection = null;
+  clickButton(navLabel);
+  activeSection = document.body.querySelector(
+    `[data-settings-section="${sectionId}"]`,
   );
+
+  if (!activeSection) {
+    throw new Error(`Settings section not found: ${sectionId}`);
+  }
+}
+
+function getButton(label) {
+  const root = activeSection ?? document.body;
+  const button =
+    Array.from(root.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === label,
+    ) ??
+    Array.from(document.body.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === label,
+    );
 
   if (!button) {
     throw new Error(`Button not found: ${label}`);
@@ -1094,6 +1125,40 @@ function getButton(label) {
 function clickButton(label) {
   getButton(label).click();
   flushSync();
+}
+
+function settingsUpdateCalls() {
+  return rpcMock.mock.calls.filter((call) => call[0] === 'settings.update');
+}
+
+// Method-routed RPC handler: every always-mounted section self-loads on
+// mount, so a call-order mock would be consumed by whichever panel fires
+// first. Overrides map method name → handler(params).
+function createSettingsRpcHandler(overrides = {}) {
+  return async (method, params) => {
+    if (typeof overrides[method] === 'function') {
+      return overrides[method](params);
+    }
+
+    switch (method) {
+      case 'agent.list':
+        return { agents: [] };
+      case 'skill.read':
+        return { skills: [] };
+      case 'channel.list':
+        return { channels: [] };
+      case 'extensions.list':
+        return { extensions: [] };
+      case 'model.list':
+        return { models: [] };
+      case 'connection.list':
+        return { connections: [] };
+      case 'task_model.list_targets':
+        return { targets: [] };
+      default:
+        return createSettingsPayload();
+    }
+  };
 }
 
 async function waitForText(text, attempts = 20) {
