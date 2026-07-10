@@ -1558,6 +1558,12 @@
                   <label class="projects-field">
                     <span class="projects-label">
                       {t('projects.manage.defaultAgent', 'Default agent')}
+                      <InfoHint
+                        text={t(
+                          'projects.manage.defaultAgentHelp',
+                          'The team agent preselected when you open this project in Chat.',
+                        )}
+                      />
                     </span>
                     <Dropdown
                       id="project-edit-agent"
@@ -1581,6 +1587,12 @@
                   <label class="projects-field">
                     <span class="projects-label">
                       {t('projects.manage.defaultModel', 'Default model')}
+                      <InfoHint
+                        text={t(
+                          'projects.manage.defaultModelHelp',
+                          'Used by team agents that do not declare their own model. Resolution order: per-agent override → the agent’s own value → this project default → the global default.',
+                        )}
+                      />
                     </span>
                     <SearchableDropdown
                       id="project-edit-model"
@@ -1622,6 +1634,12 @@
                         'projects.manage.defaultTemperature',
                         'Default temperature',
                       )}
+                      <InfoHint
+                        text={t(
+                          'projects.manage.defaultTemperatureHelp',
+                          'Used by team agents that do not set their own temperature. Same resolution order as the default model.',
+                        )}
+                      />
                     </span>
                     <div class="projects-override-controls">
                       <TextField
@@ -1680,6 +1698,12 @@
                         'projects.manage.defaultThinkingEffort',
                         'Default thinking effort',
                       )}
+                      <InfoHint
+                        text={t(
+                          'projects.manage.defaultThinkingEffortHelp',
+                          'Used by team agents that do not set their own thinking effort. Same resolution order as the default model.',
+                        )}
+                      />
                     </span>
                     <Dropdown
                       id="project-edit-thinking-effort"
@@ -1788,6 +1812,12 @@
             <div class="detail-section">
               <div class="detail-section-title">
                 {t('projects.detail.sectionTeam', 'Team')}
+                <InfoHint
+                  text={t(
+                    'projects.detail.teamInfo',
+                    'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
+                  )}
+                />
               </div>
               <div class="detail-section-body">
                 {#if activeReport && !scanLoading && !activeReport.clean}

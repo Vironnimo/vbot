@@ -168,7 +168,7 @@
     <div class="s-row-desc">
       {t(
         'settings.skills.extraDirectoriesDescription',
-        'Absolute or home-relative paths from settings.json skill_directories.',
+        'Extra folders scanned for skills as part of the global library — their skills are available to every agent. Useful for keeping a skill collection outside the vBot data directory.',
       )}
     </div>
   </div>

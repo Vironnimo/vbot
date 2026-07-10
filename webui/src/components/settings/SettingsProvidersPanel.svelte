@@ -516,6 +516,10 @@
       <Button
         variant="secondary"
         disabled={refreshingModels}
+        tooltip={t(
+          'settings.providers.refreshModelsHint',
+          'Fetches the current model lists from your connected providers and the public model catalog. Run it when a provider ships new models — your hand-maintained overrides are never touched.',
+        )}
         onClick={refreshModelDatabase}
       >
         {refreshingModels

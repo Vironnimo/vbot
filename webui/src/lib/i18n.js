@@ -189,6 +189,10 @@ export const englishCatalog = Object.freeze({
   'sessions.no_sessions': 'No sessions found for this agent.',
   'sessions.current': 'Current',
   'sessions.fork': 'Fork',
+  'sessions.forkHint':
+    'A copy of another session. Background reflection and /reflect review a conversation in a fork so the original session stays untouched.',
+  'sessions.subagentHint':
+    'A session run by a sub-agent working on behalf of a parent session. The parent is shown below.',
   'sessions.last_active': 'Last active',
   'sessions.link_channel_id': 'Channel ID',
   'sessions.platform_telegram': 'Telegram',
@@ -294,7 +298,7 @@ export const englishCatalog = Object.freeze({
   'agents.form.workspaceAssignedByServer':
     'Workspace is assigned by the server when the agent is created.',
   'agents.form.workspaceEditableHelp':
-    "Workspace path used by this agent's tools.",
+    "Home of this agent's identity and memory files (SOUL.md, USER.md, MEMORY.md); the memory tool works here. File tools follow the session's working directory instead — the project repository in project sessions.",
   'agents.form.workspaceSetToDefault': 'Set to default',
   'agents.form.submitCreate': 'Create agent',
   'agents.form.submitUpdate': 'Save changes',
@@ -392,6 +396,10 @@ export const englishCatalog = Object.freeze({
   'cron.form.sessionIdPlaceholder': 'Optional',
   'cron.form.sessionIdHelp':
     'Optional: run inside one fixed existing session instead of a new one. Leave empty to let each run use its own.',
+  'cron.form.cronExpressionHelp':
+    'Five space-separated fields: minute, hour, day of month, month, weekday.\n\nExample: 0 9 * * 1-5 runs at 09:00 on weekdays. * matches any value; ranges (1-5) and lists (1,3,5) work in every field.',
+  'cron.form.timezoneHelp':
+    'Timezone name like Europe/Berlin. Leave empty to use the timezone of the machine the server runs on.',
   'cron.deleteConfirmTitle': 'Delete cron job',
   'cron.deleteConfirm': 'Delete this job permanently? It will no longer run.',
   'cron.errors.loadJobs': 'Cron jobs could not be loaded.',
@@ -449,6 +457,14 @@ export const englishCatalog = Object.freeze({
   'projects.manage.sourceFormatHelp':
     'Where this project’s agents and skills come from. Switching re-derives the team and skills from the other ecosystem’s directories; sessions are kept.',
   'projects.manage.defaultAgent': 'Default agent',
+  'projects.manage.defaultAgentHelp':
+    'The team agent preselected when you open this project in Chat.',
+  'projects.manage.defaultModelHelp':
+    'Used by team agents that do not declare their own model. Resolution order: per-agent override → the agent’s own value → this project default → the global default.',
+  'projects.manage.defaultTemperatureHelp':
+    'Used by team agents that do not set their own temperature. Same resolution order as the default model.',
+  'projects.manage.defaultThinkingEffortHelp':
+    'Used by team agents that do not set their own thinking effort. Same resolution order as the default model.',
   'projects.manage.defaultAgentEmpty': 'No project default',
   'projects.manage.defaultAgentUnavailable': '{agentId} (not in team)',
   'projects.manage.defaultModel': 'Default model',
@@ -497,6 +513,8 @@ export const englishCatalog = Object.freeze({
   'projects.detail.autoLoadInfo':
     'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside agent visits the project, the same files arrive as a context note instead.',
   'projects.detail.sectionTeam': 'Team',
+  'projects.detail.teamInfo':
+    'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
   'projects.detail.sectionTools': 'Tools',
   'projects.detail.sectionSkills': 'Skills',
   'projects.detail.empty': 'Select a project to view and edit it.',
@@ -680,7 +698,7 @@ export const englishCatalog = Object.freeze({
     'Always scanned from the vBot data directory and kept read-only here.',
   'settings.skills.extraDirectories': 'Additional skill directories',
   'settings.skills.extraDirectoriesDescription':
-    'Absolute or home-relative paths from settings.json skill_directories.',
+    'Extra folders scanned for skills as part of the global library — their skills are available to every agent. Useful for keeping a skill collection outside the vBot data directory.',
   'settings.skills.pathPlaceholder': 'C:/path/to/skills',
   'settings.skills.addDirectory': 'Add directory',
   'settings.skills.removeDirectory': 'Remove skill directory {path}',
@@ -696,6 +714,8 @@ export const englishCatalog = Object.freeze({
   'settings.skills.loadError': 'Skills could not be loaded.',
   'settings.skills.empty': 'No skills in this scope yet.',
   'settings.skills.newSkill': 'New skill',
+  'settings.skills.newSkillHelp':
+    'A skill is a Markdown playbook: a header with a name and a short description, followed by the instructions.\n\nThe description matters most — it is what the agent reads to decide when to apply the skill, so state clearly what task it is for.',
   'settings.skills.namePlaceholder': 'skill-name',
   'settings.skills.contentPlaceholder':
     '---\nname: skill-name\ndescription: When to use this skill.\n---\n\n# Overview',
@@ -779,6 +799,8 @@ export const englishCatalog = Object.freeze({
   'settings.webSearch.searxngBaseUrlDescription':
     'Address of the SearXNG instance to use. SearXNG is a self-hosted metasearch engine — you need to run one yourself or point this at a reachable instance.',
   'settings.webSearch.searxngBaseUrlPlaceholder': 'http://localhost:8888',
+  'settings.webSearch.braveKeyHint':
+    'Brave Search requires an API key: set BRAVE_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
   'settings.specializedModels.subtitle':
@@ -821,6 +843,8 @@ export const englishCatalog = Object.freeze({
   'settings.providers.description.none':
     'Provider metadata is not available yet.',
   'settings.providers.refreshModels': 'Update Model DB',
+  'settings.providers.refreshModelsHint':
+    'Fetches the current model lists from your connected providers and the public model catalog. Run it when a provider ships new models — your hand-maintained overrides are never touched.',
   'settings.providers.refreshingModels': 'Updating…',
   'settings.providers.refreshSuccess':
     'Model DB updated: {providerCount} providers, {count} models available.',
@@ -938,6 +962,12 @@ export const englishCatalog = Object.freeze({
   'settings.channels.token_env_var': 'Token env var',
   'settings.channels.token_env_var.help':
     'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
+  'settings.channels.idHelp':
+    'A name you choose for this channel. It cannot be changed after creation.',
+  'settings.channels.dm_scope.help':
+    'How direct messages are grouped into chat sessions:\n\nMain — all DMs share one session. Per peer — one session per person. Per conversation — one session per chat. Per account, channel & peer — one session per chat and person.\n\nGroup chats always share one session per group, regardless of this setting.',
+  'settings.channels.allowed_chat_ids.help':
+    'Comma-separated chat IDs allowed to talk to this channel. An empty list allows nobody. Messages from chats not on the list are rejected and appear on the channel card below with a one-click Allow.',
   'settings.channels.allowed_chat_ids': 'Allowed chat IDs (inbound)',
   'settings.channels.allowed_chat_ids.placeholder': '12345, -1009876543210',
   'settings.channels.allowed_chat_ids.none': 'None',
@@ -1116,6 +1146,8 @@ export const englishCatalog = Object.freeze({
   'settings.voice.microphone': 'Microphone',
   'settings.voice.sensitivity': 'Sensitivity',
   'settings.voice.targetAgent': 'Target Agent',
+  'settings.voice.targetAgentDescription':
+    'The agent that receives your spoken command after the wake phrase. Voice commands go nowhere until a target agent is selected.',
   'settings.voice.sessionBehavior': 'Session',
   'settings.voice.sessionBehaviorActive': 'Use active session',
   'settings.voice.sessionBehaviorNew': 'New session each time',
