@@ -294,6 +294,44 @@ describe('UI primitive guard', () => {
     expect(violations).toEqual([]);
   });
 
+  it('routes every content tab list through components/ui/TabList.svelte', () => {
+    const forbidden = new Set([
+      'tab-list',
+      'tab-list--underline',
+      'tab-list--segmented',
+      'tab-list--default',
+      'tab-list--compact',
+      'tab-list__tab',
+      'tab-list__tab--active',
+    ]);
+
+    const violations = findRawClassViolations(
+      ANY_ELEMENT,
+      forbidden,
+      'components/ui/TabList.svelte',
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps the retired bespoke content-tab classes from returning', () => {
+    const retired = new Set([
+      'stats-view__tabs',
+      'stats-view__tab',
+      'stats-view__tab--active',
+      'debug-view__detail-tabs',
+      'debug-view__tab',
+      'debug-view__tab--active',
+      'debug-view__body-tabs',
+      'debug-view__body-tab',
+      'debug-view__body-tab--active',
+    ]);
+
+    const violations = findRawClassViolations(ANY_ELEMENT, retired, '');
+
+    expect(violations).toEqual([]);
+  });
+
   it('keeps the retired bespoke pill classes from returning', () => {
     // Every hand-built metadata pill was folded into the Badge primitive. These
     // base tokens must never reappear on an element — reintroducing one is a

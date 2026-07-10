@@ -1,6 +1,7 @@
 <script>
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import TabList from '../ui/TabList.svelte';
   import { t } from '$lib/i18n.js';
   import {
     DEBUG_TAB_FORMATTED,
@@ -23,6 +24,18 @@
     { id: 'request', labelKey: 'debug.request', labelFallback: 'Request' },
     { id: 'response', labelKey: 'debug.response', labelFallback: 'Response' },
   ]);
+  const BODY_TABS = Object.freeze([
+    {
+      id: DEBUG_TAB_RAW,
+      labelKey: 'debug.streamRaw',
+      labelFallback: 'Raw',
+    },
+    {
+      id: DEBUG_TAB_FORMATTED,
+      labelKey: 'debug.streamParsed',
+      labelFallback: 'Parsed',
+    },
+  ]);
 
   let detailTab = $state('metadata');
   let requestBodyView = $state(DEBUG_TAB_RAW);
@@ -32,6 +45,20 @@
   );
   let isResponseBodyFormatted = $derived(
     responseBodyView === DEBUG_TAB_FORMATTED,
+  );
+  let requestBodyParseable = $derived(hasParseableBody(trace?.request?.body));
+  let responseBodyParseable = $derived(hasParseableBody(trace?.response?.body));
+  let detailTabs = $derived(
+    DETAIL_TABS.map((tab) => ({
+      id: tab.id,
+      label: t(tab.labelKey, tab.labelFallback),
+    })),
+  );
+  let bodyTabs = $derived(
+    BODY_TABS.map((tab) => ({
+      id: tab.id,
+      label: t(tab.labelKey, tab.labelFallback),
+    })),
   );
 
   function formatDuration(milliseconds) {
@@ -98,21 +125,22 @@
       </Button>
     </Banner>
   {:else if trace}
-    <div class="debug-view__detail-tabs" role="tablist">
-      {#each DETAIL_TABS as tab (tab.id)}
-        <button
-          type="button"
-          class={`debug-view__tab ${detailTab === tab.id ? 'debug-view__tab--active' : ''}`}
-          role="tab"
-          aria-selected={detailTab === tab.id}
-          onclick={() => (detailTab = tab.id)}
-        >
-          {t(tab.labelKey, tab.labelFallback)}
-        </button>
-      {/each}
-    </div>
+    <TabList
+      items={detailTabs}
+      value={detailTab}
+      ariaLabel={t('debug.traceDetail', 'Trace detail')}
+      density="compact"
+      idPrefix="debug-detail"
+      class="debug-view__detail-tab-list"
+      onChange={(value) => (detailTab = value)}
+    />
 
-    <div class="debug-view__detail-body" role="tabpanel">
+    <div
+      class="debug-view__detail-body"
+      role="tabpanel"
+      id={`debug-detail-panel-${detailTab}`}
+      aria-labelledby={`debug-detail-tab-${detailTab}`}
+    >
       {#if detailTab === 'metadata'}
         <div class="debug-view__metadata-grid">
           {#each metadataFields(trace) as field (field.label)}
@@ -149,37 +177,33 @@
             <h4 class="debug-view__detail-heading">
               {t('debug.requestBody', 'Body')}
             </h4>
-            {#if hasParseableBody(trace.request?.body)}
-              <div
-                class="debug-view__body-tabs"
-                role="tablist"
-                aria-label={t('debug.requestBody', 'Body')}
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  class={`debug-view__body-tab ${!isRequestBodyFormatted ? 'debug-view__body-tab--active' : ''}`}
-                  aria-selected={!isRequestBodyFormatted}
-                  onclick={() => (requestBodyView = DEBUG_TAB_RAW)}
-                >
-                  {t('debug.streamRaw', 'Raw')}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  class={`debug-view__body-tab ${isRequestBodyFormatted ? 'debug-view__body-tab--active' : ''}`}
-                  aria-selected={isRequestBodyFormatted}
-                  onclick={() => (requestBodyView = DEBUG_TAB_FORMATTED)}
-                >
-                  {t('debug.streamParsed', 'Parsed')}
-                </button>
-              </div>
+            {#if requestBodyParseable}
+              <TabList
+                items={bodyTabs}
+                value={requestBodyView}
+                ariaLabel={t('debug.requestBody', 'Body')}
+                appearance="segmented"
+                density="compact"
+                idPrefix="debug-request-body"
+                class="debug-view__body-tab-list"
+                onChange={(value) => (requestBodyView = value)}
+              />
             {/if}
           </div>
-          <pre
-            class={`debug-view__code-block ${isRequestBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}>{isRequestBodyFormatted
-              ? formattedBodyText(trace.request?.body) || '—'
-              : rawBodyText(trace.request?.body) || '—'}</pre>
+          <div
+            role={requestBodyParseable ? 'tabpanel' : undefined}
+            id={requestBodyParseable
+              ? `debug-request-body-panel-${requestBodyView}`
+              : undefined}
+            aria-labelledby={requestBodyParseable
+              ? `debug-request-body-tab-${requestBodyView}`
+              : undefined}
+          >
+            <pre
+              class={`debug-view__code-block ${isRequestBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}>{isRequestBodyFormatted
+                ? formattedBodyText(trace.request?.body) || '—'
+                : rawBodyText(trace.request?.body) || '—'}</pre>
+          </div>
         </div>
       {:else if detailTab === 'response'}
         <div class="debug-view__detail-section">
@@ -202,37 +226,33 @@
             <h4 class="debug-view__detail-heading">
               {t('debug.responseBody', 'Body')}
             </h4>
-            {#if hasParseableBody(trace.response?.body)}
-              <div
-                class="debug-view__body-tabs"
-                role="tablist"
-                aria-label={t('debug.responseBody', 'Body')}
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  class={`debug-view__body-tab ${!isResponseBodyFormatted ? 'debug-view__body-tab--active' : ''}`}
-                  aria-selected={!isResponseBodyFormatted}
-                  onclick={() => (responseBodyView = DEBUG_TAB_RAW)}
-                >
-                  {t('debug.streamRaw', 'Raw')}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  class={`debug-view__body-tab ${isResponseBodyFormatted ? 'debug-view__body-tab--active' : ''}`}
-                  aria-selected={isResponseBodyFormatted}
-                  onclick={() => (responseBodyView = DEBUG_TAB_FORMATTED)}
-                >
-                  {t('debug.streamParsed', 'Parsed')}
-                </button>
-              </div>
+            {#if responseBodyParseable}
+              <TabList
+                items={bodyTabs}
+                value={responseBodyView}
+                ariaLabel={t('debug.responseBody', 'Body')}
+                appearance="segmented"
+                density="compact"
+                idPrefix="debug-response-body"
+                class="debug-view__body-tab-list"
+                onChange={(value) => (responseBodyView = value)}
+              />
             {/if}
           </div>
-          <pre
-            class={`debug-view__code-block ${isResponseBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}>{isResponseBodyFormatted
-              ? formattedBodyText(trace.response?.body) || '—'
-              : rawBodyText(trace.response?.body) || '—'}</pre>
+          <div
+            role={responseBodyParseable ? 'tabpanel' : undefined}
+            id={responseBodyParseable
+              ? `debug-response-body-panel-${responseBodyView}`
+              : undefined}
+            aria-labelledby={responseBodyParseable
+              ? `debug-response-body-tab-${responseBodyView}`
+              : undefined}
+          >
+            <pre
+              class={`debug-view__code-block ${isResponseBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}>{isResponseBodyFormatted
+                ? formattedBodyText(trace.response?.body) || '—'
+                : rawBodyText(trace.response?.body) || '—'}</pre>
+          </div>
         </div>
       {/if}
     </div>
@@ -258,33 +278,8 @@
     margin-block: auto;
   }
 
-  .debug-view__detail-tabs {
-    display: flex;
-    gap: 2px;
+  :global(.debug-view__detail-tab-list) {
     padding: 8px 10px 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .debug-view__tab {
-    padding: 7px 12px;
-    border: none;
-    border-bottom: 2px solid transparent;
-    border-radius: var(--r-sm) var(--r-sm) 0 0;
-    color: var(--text-med);
-    background: transparent;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    font-weight: 500;
-    cursor: pointer;
-  }
-
-  .debug-view__tab:hover {
-    color: var(--text-hi);
-  }
-
-  .debug-view__tab--active {
-    border-bottom-color: var(--accent);
-    color: var(--accent);
   }
 
   .debug-view__detail-body {
@@ -323,44 +318,6 @@
 
   .debug-view__detail-heading-row .debug-view__detail-heading {
     margin: 0;
-  }
-
-  .debug-view__body-tabs {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 2px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    background: var(--surface-2);
-  }
-
-  .debug-view__body-tab {
-    padding: 3px 8px;
-    border: none;
-    border-radius: 2px;
-    color: var(--text-med);
-    background: transparent;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    cursor: pointer;
-  }
-
-  .debug-view__body-tab:hover {
-    color: var(--text-hi);
-  }
-
-  .debug-view__body-tab--active {
-    color: var(--accent);
-    background: rgba(232, 135, 10, 0.14);
-  }
-
-  .debug-view__body-tab:focus-visible {
-    outline: 2px solid var(--accent-40);
-    outline-offset: 1px;
   }
 
   .debug-view__metadata-grid {

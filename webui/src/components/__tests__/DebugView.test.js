@@ -274,7 +274,7 @@ describe('DebugView', () => {
     );
 
     const tabs = Array.from(
-      document.querySelectorAll('.debug-view__body-tabs .debug-view__body-tab'),
+      document.querySelectorAll('.debug-view__body-tab-list .tab-list__tab'),
     );
     expect(tabs).toHaveLength(2);
     expect(tabs[0]?.textContent?.trim()).toBe('Raw');
@@ -325,12 +325,13 @@ describe('DebugView', () => {
 
     expect(
       document.querySelector(
-        '.debug-view__detail-section .debug-view__body-tabs',
+        '.debug-view__detail-section .debug-view__body-tab-list',
       ),
     ).toBeNull();
     expect(getBodyBlock()?.textContent).toBe(
       'this is plain text that is not JSON',
     );
+    expect(getBodyBlock()?.parentElement?.getAttribute('role')).toBeNull();
   });
 
   it('shows the aggregate streaming response body under the Response tab and exposes no Stream Events tab', async () => {
@@ -372,7 +373,7 @@ describe('DebugView', () => {
     flushSync();
 
     const tabLabels = Array.from(
-      document.querySelectorAll('.debug-view__tab'),
+      document.querySelectorAll('.debug-view__detail-tab-list .tab-list__tab'),
     ).map((tab) => tab.textContent?.trim() ?? '');
     expect(tabLabels).toEqual(['Metadata', 'Request', 'Response']);
     expect(tabLabels).not.toContain('Stream Events');
@@ -582,9 +583,9 @@ function clickRefresh() {
 async function switchToDetailTabWhenReady(label, attempts = 40) {
   for (let i = 0; i < attempts; i += 1) {
     flushSync();
-    const tab = Array.from(document.querySelectorAll('.debug-view__tab')).find(
-      (button) => button.textContent?.trim() === label,
-    );
+    const tab = Array.from(
+      document.querySelectorAll('.debug-view__detail-tab-list .tab-list__tab'),
+    ).find((button) => button.textContent?.trim() === label);
     if (tab) {
       tab.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       flushSync();
