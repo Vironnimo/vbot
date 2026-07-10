@@ -1,6 +1,7 @@
 <script>
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import { listClients } from '$lib/api.js';
@@ -183,9 +184,13 @@
     {t('settings.general.clients.loading', 'Loading connected clients…')}
   </Banner>
 {:else if clientRows.length === 0}
-  <Banner variant="neutral">
-    {t('settings.general.clients.empty', 'No app windows connected.')}
-  </Banner>
+  <EmptyState
+    density="compact"
+    description={t(
+      'settings.general.clients.empty',
+      'No app windows connected.',
+    )}
+  />
 {:else}
   <div class="s-clients-list">
     {#each clientRows as row (row.id)}

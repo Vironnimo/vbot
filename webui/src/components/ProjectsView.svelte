@@ -6,6 +6,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
   import Modal from './ui/Modal.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import TextField from './ui/TextField.svelte';
@@ -1408,17 +1409,13 @@
             {t('projects.loading', 'Loading projects…')}
           </p>
         {:else if !hasProjects}
-          <div class="project-empty-list">
-            <p class="project-empty-title">
-              {t('projects.emptyTitle', 'No projects yet')}
-            </p>
-            <p class="project-empty-sub">
-              {t(
-                'projects.emptySubtitle',
-                'Add a repository path below to create your first project.',
-              )}
-            </p>
-          </div>
+          <EmptyState
+            title={t('projects.emptyTitle', 'No projects yet')}
+            description={t(
+              'projects.emptySubtitle',
+              'Add a repository path below to create your first project.',
+            )}
+          />
         {:else}
           {#each projects as project (project.project_id)}
             <button
@@ -1452,9 +1449,14 @@
 
     {#if !selectedProject}
       <div class="project-detail-pane">
-        <p class="project-detail-empty">
-          {t('projects.detail.empty', 'Select a project to view and edit it.')}
-        </p>
+        <EmptyState
+          fill
+          class="master-detail-empty"
+          title={t(
+            'projects.detail.empty',
+            'Select a project to view and edit it.',
+          )}
+        />
       </div>
     {:else}
       {#key selectedProject.project_id}
@@ -1770,9 +1772,13 @@
                       {/each}
                     </ul>
                   {:else}
-                    <p class="projects-file-empty">
-                      {t('projects.manage.autoLoadEmpty', 'No auto-load files')}
-                    </p>
+                    <EmptyState
+                      density="compact"
+                      description={t(
+                        'projects.manage.autoLoadEmpty',
+                        'No auto-load files',
+                      )}
+                    />
                   {/if}
                   <div class="projects-file-add">
                     <TextField
@@ -1871,12 +1877,13 @@
                     {t('projects.loading', 'Loading projects…')}
                   </p>
                 {:else if activeTeam.length === 0}
-                  <p class="projects-team-empty">
-                    {t(
+                  <EmptyState
+                    density="compact"
+                    description={t(
                       'projects.team.empty',
                       'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
                     )}
-                  </p>
+                  />
                 {:else}
                   <ul class="projects-team">
                     {#each activeTeam as member (member.agent_id)}
@@ -2375,9 +2382,13 @@
                     />
                   {/if}
                   {#if skillToggleSections.project.length === 0 && skillToggleSections.bundled.length === 0 && skillToggleSections.global.length === 0}
-                    <p class="projects-file-empty">
-                      {t('projects.manage.skillsEmpty', 'No skills available')}
-                    </p>
+                    <EmptyState
+                      density="compact"
+                      description={t(
+                        'projects.manage.skillsEmpty',
+                        'No skills available',
+                      )}
+                    />
                   {/if}
                 </div>
               </div>

@@ -5,6 +5,7 @@
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
+  import EmptyState from '../ui/EmptyState.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
   import { rpc } from '$lib/api.js';
@@ -219,9 +220,13 @@
   {:else}
     <div class="s-skill-manager-list">
       {#if skills.length === 0}
-        <Banner variant="neutral">
-          {t('settings.skills.empty', 'No skills in this scope yet.')}
-        </Banner>
+        <EmptyState
+          density="compact"
+          description={t(
+            'settings.skills.empty',
+            'No skills in this scope yet.',
+          )}
+        />
       {:else}
         {#each skills as skill (skill.name)}
           <div class="s-skill-manager-item">

@@ -419,13 +419,8 @@
   color: var(--text-lo);
 }
 
-.agents-view .agents-view__empty-list {
+.agents-view .agent-list-pane__empty {
   min-height: 220px;
-}
-
-.agents-view .empty-state-icon {
-  width: 34px;
-  height: 34px;
 }
 
 .agents-view .agents-view__field-help {

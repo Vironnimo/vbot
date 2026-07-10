@@ -5,6 +5,7 @@
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
+  import EmptyState from '../ui/EmptyState.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -533,9 +534,10 @@
     {channelPanelState.error}
   </Banner>
 {:else if channelPanelState.channels.length === 0}
-  <Banner variant="neutral">
-    {t('settings.channels.empty', 'No channels configured.')}
-  </Banner>
+  <EmptyState
+    density="compact"
+    description={t('settings.channels.empty', 'No channels configured.')}
+  />
 {:else}
   <div class="s-channel-list">
     {#each channelPanelState.channels as channel (channel.id)}

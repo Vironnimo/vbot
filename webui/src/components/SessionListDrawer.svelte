@@ -2,6 +2,7 @@
   import Badge from './ui/Badge.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
   import { deleteSession, listSessions, renameSession } from '$lib/api.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -366,14 +367,15 @@
       {t('sessions.loading', 'Loading sessions…')}
     </p>
   {:else if sessionState.sessions.length === 0}
-    <div class="session-drawer__empty">
-      <p class="session-drawer__empty-title">
-        {t('chat.sessions.emptyTitle', 'No sessions yet')}
-      </p>
-      <p class="session-drawer__empty-subtitle">
-        {t('sessions.no_sessions', 'No sessions found for this agent.')}
-      </p>
-    </div>
+    <EmptyState
+      density="compact"
+      class="session-drawer__empty-layout"
+      title={t('chat.sessions.emptyTitle', 'No sessions yet')}
+      description={t(
+        'sessions.no_sessions',
+        'No sessions found for this agent.',
+      )}
+    />
   {:else}
     <ul class="session-drawer__list">
       {#each sessionState.sessions as session (session.id)}
@@ -800,32 +802,8 @@
     color: var(--red);
   }
 
-  /* Dashed-border empty-state card, matching the Projects/Cron/Logs pattern but
-     compact for the narrow drawer. */
-  .session-drawer__empty {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
+  :global(.session-drawer__empty-layout) {
     margin: 12px;
-    padding: 18px 14px;
-    border: 1px dashed var(--border);
-    border-radius: var(--r-lg);
-    background: rgba(255, 255, 255, 0.02);
-    text-align: center;
-  }
-
-  .session-drawer__empty-title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: var(--fs-label-md);
-    font-weight: 600;
-  }
-
-  .session-drawer__empty-subtitle {
-    margin: 0;
-    color: var(--text-med);
-    font-size: var(--fs-label-sm);
-    line-height: 1.45;
   }
 
   @media (max-width: 640px) {

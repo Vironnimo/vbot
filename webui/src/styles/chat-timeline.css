@@ -30,9 +30,14 @@
   --chat-measure: none;
 }
 
-.chat-empty-state {
+.chat-timeline-empty {
   min-height: 100%;
-  flex: 1;
+}
+
+.chat-timeline-loading {
+  align-self: center;
+  width: min(100%, 560px);
+  margin-block: auto;
 }
 
 .submitted-turn-scroll-spacer {
@@ -74,11 +79,6 @@
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.chat-empty-state .empty-state-icon {
-  width: 38px;
-  height: 38px;
 }
 
 .msg-body-text,

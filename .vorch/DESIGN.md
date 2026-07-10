@@ -409,9 +409,15 @@ If we use inline SVGs without explicit `width` and `height`, they can suddenly r
 
 ### Inline banners
 
-**Every persistent in-flow feedback box is the shared `Banner` component (`webui/src/components/ui/Banner.svelte`).** Use it for loading and empty feedback, form or RPC errors, warnings, and non-blocking notices that belong inside a view; transient app-wide feedback still belongs in `ToastStack`. Callers pass `variant` (`neutral` / `info` / `success` / `warn` / `error`), already-translated `children`, and accessibility attributes such as `role="alert"` or `aria-live` when the state changes dynamically. The component owns the canonical `banner banner--<variant>` classes and the guard rejects both raw primitive classes and the retired view-specific feedback classes.
+**Every persistent in-flow feedback box is the shared `Banner` component (`webui/src/components/ui/Banner.svelte`).** Use it for loading feedback, form or RPC errors, warnings, and non-blocking notices that belong inside a view; a known absence of content uses `EmptyState`, and transient app-wide feedback belongs in `ToastStack`. Callers pass `variant` (`neutral` / `info` / `success` / `warn` / `error`), already-translated `children`, and accessibility attributes such as `role="alert"` or `aria-live` when the state changes dynamically. The component owns the canonical `banner banner--<variant>` classes and the guard rejects both raw primitive classes and the retired view-specific feedback classes.
 
 The banner uses `surface-2`, a `border-2` outline, and a 2px semantic left stripe; semantic color stays in the stripe and low-opacity tint while the text remains `text-med`. Content is a space-between flex row so a trailing Retry or Review action sits at the right, then stacks on mobile. Feature surfaces may pass a layout class for placement or geometry (the full-width first-run strip, the capped Chat footer banner, compact assistant-run notices), but they do not recreate the semantic variants.
+
+### Empty states
+
+**Every known absence of content is the shared `EmptyState` component (`webui/src/components/ui/EmptyState.svelte`).** It takes already-translated `title` and `description` text plus optional `icon` and `actions` snippets. `density="default"` is the full-view or master-list surface; `density="compact"` is the same hierarchy inside a card, table, drawer, or settings section; `fill` consumes the remaining flex space. Loading, failure, and warning states are not empty and stay with `Banner`.
+
+The surface uses a low-contrast `surface-2` tint, dashed `border`, `lg` radius (`md` when compact), centered Sans text, and no accent color. Default empty states have at least 160px of height; compact states remove that floor and reduce padding to 14px. Feature classes may set only placement such as pane margin or reading-column width. The guard rejects raw canonical classes and all retired view-specific empty-state classes.
 
 ### Log viewer
 

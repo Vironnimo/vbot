@@ -24,6 +24,7 @@
   import Badge from './ui/Badge.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
 
   const TRACE_LIMIT_MAX = 500;
   const TRACE_LIMIT_MIN = 1;
@@ -338,23 +339,16 @@
   {/if}
 
   {#if viewState.loading}
-    <div class="debug-view__state">
-      <p class="debug-view__state-title">
-        {t('common.loading', 'Loading\u2026')}
-      </p>
-    </div>
+    <Banner variant="neutral">{t('common.loading', 'Loading\u2026')}</Banner>
   {:else if !hasTraces}
-    <div class="debug-view__state">
-      <p class="debug-view__state-title">
-        {t('debug.emptyHeader', 'No traces captured yet')}
-      </p>
-      <p class="debug-view__state-subtitle">
-        {t(
-          'debug.emptyState',
-          'No traces captured yet. Enable debug mode in Settings and send a message to start recording provider requests and responses.',
-        )}
-      </p>
-    </div>
+    <EmptyState
+      fill
+      title={t('debug.emptyHeader', 'No traces captured yet')}
+      description={t(
+        'debug.emptyState',
+        'No traces captured yet. Enable debug mode in Settings and send a message to start recording provider requests and responses.',
+      )}
+    />
   {:else}
     <div class="debug-view__main">
       <DebugTraceList
@@ -518,36 +512,6 @@
   .debug-view__warning-text {
     color: var(--amber);
     font-size: 12px;
-    line-height: 1.5;
-  }
-
-  .debug-view__state {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    gap: 8px;
-    padding: 28px;
-    border: 1px dashed var(--border);
-    border-radius: var(--r-lg);
-    background: rgba(255, 255, 255, 0.02);
-    text-align: center;
-  }
-
-  .debug-view__state-title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 15px;
-    font-weight: 600;
-  }
-
-  .debug-view__state-subtitle {
-    max-width: 560px;
-    margin: 0;
-    color: var(--text-med);
-    font-size: 12.5px;
     line-height: 1.5;
   }
 

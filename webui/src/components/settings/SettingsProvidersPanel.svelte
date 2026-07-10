@@ -1,8 +1,8 @@
 <script>
   import { SvelteSet } from 'svelte/reactivity';
   import ProviderConnectModal from './ProviderConnectModal.svelte';
-  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -613,12 +613,13 @@
   </div>
 
   {#if connectedProviders.length === 0}
-    <Banner variant="neutral">
-      {t(
+    <EmptyState
+      density="compact"
+      description={t(
         'settings.providers.noneConnected',
         'No providers connected yet. Add one to make its models available.',
       )}
-    </Banner>
+    />
   {:else}
     {#each connectedProviders as provider (provider.id)}
       <div class="s-provider-card">

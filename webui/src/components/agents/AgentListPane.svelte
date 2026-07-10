@@ -1,5 +1,6 @@
 <script>
   import Button from '../ui/Button.svelte';
+  import EmptyState from '../ui/EmptyState.svelte';
   import { t } from '$lib/i18n.js';
 
   let {
@@ -30,21 +31,21 @@
         {t('agents.loading', 'Loading agents…')}
       </p>
     {:else if agents.length === 0}
-      <div class="empty-state agents-view__empty-list">
-        <svg class="empty-state-icon" viewBox="0 0 32 32" aria-hidden="true">
-          <circle cx="16" cy="10" r="5" />
-          <path d="M6 28c0-5.5 4.5-10 10-10s10 4.5 10 10" />
-        </svg>
-        <div class="empty-state-title">
-          {t('agents.empty', 'No agents found.')}
-        </div>
-        <div class="empty-state-sub">
-          {t(
-            'agents.emptyCreateHint',
-            'Create an agent to begin configuring chat access.',
-          )}
-        </div>
-      </div>
+      <EmptyState
+        class="agent-list-pane__empty"
+        title={t('agents.empty', 'No agents found.')}
+        description={t(
+          'agents.emptyCreateHint',
+          'Create an agent to begin configuring chat access.',
+        )}
+      >
+        {#snippet icon()}
+          <svg viewBox="0 0 32 32" width="34" height="34">
+            <circle cx="16" cy="10" r="5" />
+            <path d="M6 28c0-5.5 4.5-10 10-10s10 4.5 10 10" />
+          </svg>
+        {/snippet}
+      </EmptyState>
     {:else}
       {#each agents as agent (agent.id)}
         <button

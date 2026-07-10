@@ -87,11 +87,9 @@
 
 <div class="debug-view__detail-panel">
   {#if loading}
-    <div class="debug-view__state debug-view__state--detail">
-      <p class="debug-view__state-title">
-        {t('common.loading', 'Loading\u2026')}
-      </p>
-    </div>
+    <Banner variant="neutral" class="debug-view__detail-loading">
+      {t('common.loading', 'Loading\u2026')}
+    </Banner>
   {:else if error}
     <Banner variant="error" aria-live="polite">
       <span>{error}</span>
@@ -254,28 +252,10 @@
     background: var(--surface);
   }
 
-  .debug-view__state {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    gap: 8px;
-    padding: 28px;
-    text-align: center;
-  }
-
-  .debug-view__state--detail {
-    border: none;
-    background: none;
-  }
-
-  .debug-view__state-title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 15px;
-    font-weight: 600;
+  :global(.debug-view__detail-loading) {
+    align-self: center;
+    width: min(calc(100% - 28px), 560px);
+    margin-block: auto;
   }
 
   .debug-view__detail-tabs {

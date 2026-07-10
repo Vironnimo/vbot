@@ -69,6 +69,7 @@
   import QueuedMessages from './QueuedMessages.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
 
   let {
     sharedAgents = [],
@@ -2265,24 +2266,20 @@
   {/if}
 
   {#if chatState.loadingAgents}
-    <div class="empty-state chat-view__state">
-      <p class="empty-state-title">{t('loading.agents', 'Loading agents…')}</p>
-    </div>
+    <Banner variant="neutral" class="chat-view__state-banner">
+      {t('loading.agents', 'Loading agents…')}
+    </Banner>
   {:else if chatState.agents.length === 0}
-    <div class="empty-state chat-view__state">
-      <p class="empty-state-title">
-        {t('chat.noAgents', 'No agents are available yet.')}
-      </p>
-      {#if chatState.agentsError}
-        <p class="empty-state-sub">{chatState.agentsError}</p>
-      {/if}
-    </div>
+    <EmptyState
+      fill
+      title={t('chat.noAgents', 'No agents are available yet.')}
+      description={chatState.agentsError}
+    />
   {:else if !activeAgent}
-    <div class="empty-state chat-view__state">
-      <p class="empty-state-title">
-        {t('chat.noAgentSelected', 'Choose an agent to start chatting.')}
-      </p>
-    </div>
+    <EmptyState
+      fill
+      title={t('chat.noAgentSelected', 'Choose an agent to start chatting.')}
+    />
   {:else}
     <div class="chat-view__content-shell">
       {#if showSessionDrawer}
@@ -2499,8 +2496,10 @@
     background: var(--surface);
   }
 
-  .chat-view__state {
-    flex: 1;
+  :global(.chat-view__state-banner) {
+    align-self: center;
+    width: min(calc(100% - 40px), 560px);
+    margin-block: auto;
   }
 
   .chat-view__notice-stack {

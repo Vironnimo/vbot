@@ -323,7 +323,7 @@ describe('OnboardingView', () => {
 
     await waitFor(() => {
       expect(
-        byText('.banner--neutral', 'No models are available'),
+        byText('.empty-state--compact', 'No models are available'),
       ).toBeTruthy();
       expect(byText('.btn-secondary', 'Retry')).toBeTruthy();
     });
