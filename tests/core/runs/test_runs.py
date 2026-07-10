@@ -19,6 +19,7 @@ from core.runs import (
     TOOL_CALL_DELTA_EVENT,
     ActiveRunError,
     ChatRunManager,
+    QueuedRunItem,
     Run,
     RunCancelledError,
     RunNotFoundError,
@@ -734,6 +735,87 @@ async def test_remove_queued_item_cancels_future_and_removes_from_queue() -> Non
     active_release.set()
     assert await active_run.wait() == "active"
     assert manager.active_run(agent_id="coder", session_id="session-one", project_id=None) is None
+
+
+async def test_cancelling_queue_waiter_removes_item_and_prevents_execution() -> None:
+    manager = ChatRunManager()
+    active_release = asyncio.Event()
+    queued_executed = asyncio.Event()
+
+    async def active_execute(_run: Run) -> str:
+        await active_release.wait()
+        return "active"
+
+    async def queued_execute(_run: Run) -> str:
+        queued_executed.set()
+        return "queued"
+
+    active_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+    )
+    item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=queued_execute,
+        display_content="abandoned",
+        project_id=None,
+    )
+
+    async def wait_for_start() -> Run:
+        return await item.future
+
+    waiter = asyncio.create_task(wait_for_start())
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    await asyncio.sleep(0)
+
+    assert item.future.cancelled() is True
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
+
+    active_release.set()
+    assert await active_run.wait() == "active"
+    await asyncio.sleep(0)
+
+    assert queued_executed.is_set() is False
+    assert manager.active_run(agent_id="coder", session_id="session-one", project_id=None) is None
+
+
+async def test_queue_drain_skips_future_cancelled_in_same_tick() -> None:
+    manager = ChatRunManager()
+    active_release = asyncio.Event()
+    queued_executed = asyncio.Event()
+    queued_item: QueuedRunItem | None = None
+
+    async def active_execute(_run: Run) -> str:
+        await active_release.wait()
+        assert queued_item is not None
+        queued_item.future.cancel()
+        return "active"
+
+    async def queued_execute(_run: Run) -> str:
+        queued_executed.set()
+        return "queued"
+
+    active_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+    )
+    queued_item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=queued_execute,
+        display_content="cancel during drain",
+        project_id=None,
+    )
+
+    active_release.set()
+    assert await active_run.wait() == "active"
+    await asyncio.sleep(0)
+
+    assert queued_item.future.cancelled() is True
+    assert queued_executed.is_set() is False
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
 
 
 async def test_update_queued_item_replaces_executor_and_display_content() -> None:

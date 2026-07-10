@@ -584,6 +584,20 @@ class ChatRunManager:
             future=future,
         )
 
+        def remove_abandoned_item(completed_future: asyncio.Future[Run]) -> None:
+            # Awaiting a bare Future propagates task cancellation into that Future.
+            # The Future has one owner, so cancellation means the accepted work was
+            # abandoned and must not remain queued to execute without a consumer.
+            if completed_future.cancelled():
+                self.remove_queued(
+                    agent_id,
+                    session_id,
+                    item.item_id,
+                    project_id=project_id,
+                )
+
+        item.future.add_done_callback(remove_abandoned_item)
+
         async with self._lock:
             active_run = self._active_by_session.get(session_key)
             if active_run is None or active_run.status != RunStatus.RUNNING:
@@ -843,17 +857,25 @@ class ChatRunManager:
                 self._queues.pop(session_key, None)
                 return
 
-            item = queue.popleft()
-            if not queue:
-                self._queues.pop(session_key, None)
+            while queue:
+                item = queue.popleft()
+                # The cancellation callback normally removes an abandoned item
+                # immediately. This guard closes the same-tick race where the
+                # active Run drains before that callback gets its event-loop turn.
+                if item.future.done():
+                    continue
+                if not queue:
+                    self._queues.pop(session_key, None)
 
-            run = self._start_run_locked(
-                session_key=session_key,
-                executor=item.executor,
-                queue_item_id=item.item_id,
-            )
-            if not item.future.done():
+                run = self._start_run_locked(
+                    session_key=session_key,
+                    executor=item.executor,
+                    queue_item_id=item.item_id,
+                )
                 item.future.set_result(run)
+                return
+
+            self._queues.pop(session_key, None)
 
     def _start_run_locked(
         self,
