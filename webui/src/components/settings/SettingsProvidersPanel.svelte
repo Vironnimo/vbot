@@ -1,4 +1,5 @@
 <script>
+  import { SvelteSet } from 'svelte/reactivity';
   import ProviderConnectModal from './ProviderConnectModal.svelte';
   import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
@@ -65,6 +66,52 @@
   // held while the key-input modal is open so a live edit is never interrupted.
   let pendingSettingsReload = $state(false);
   let lastModelsRefreshToken = null;
+  // Disclosure state: connection details (accounts) and per-provider local
+  // model context start collapsed; the sub stays in the DOM so search matches.
+  const expandedConnectionKeys = new SvelteSet();
+  const expandedLocalContextProviders = new SvelteSet();
+
+  function connectionKey(provider, connection) {
+    return `${provider.id}:${connection.id}`;
+  }
+
+  function toggleConnectionDetails(provider, connection) {
+    const key = connectionKey(provider, connection);
+    if (expandedConnectionKeys.has(key)) {
+      expandedConnectionKeys.delete(key);
+    } else {
+      expandedConnectionKeys.add(key);
+    }
+  }
+
+  function toggleLocalContext(provider) {
+    if (expandedLocalContextProviders.has(provider.id)) {
+      expandedLocalContextProviders.delete(provider.id);
+    } else {
+      expandedLocalContextProviders.add(provider.id);
+    }
+  }
+
+  // A connection row gets a disclosure chevron only when the sub would hold
+  // something: account rows or an add-account action on an enabled, key-based
+  // connection.
+  function connectionHasDetails(connection) {
+    if (!isConnectionEnabled(connection) || isKeylessConnection(connection)) {
+      return false;
+    }
+    return (
+      getConnectionAccounts(connection).length > 0 ||
+      connectionSupportsAddAccount(connection)
+    );
+  }
+
+  // Collapsed rows still need a status at a glance: summarize the account
+  // states into the head chip when the per-account chips are folded away.
+  function connectionAccountsUsable(connection) {
+    return getConnectionAccounts(connection).some((account) =>
+      isAccountUsable(account),
+    );
+  }
 
   let providerItems = $derived(getProviderItems(settings));
   let connectedProviders = $derived(getConnectedProviderItems(settings));
@@ -592,22 +639,17 @@
                           'Not reachable',
                         )}
                       </StatusChip>
-                    {:else if getConnectionAccounts(connection).length === 0 || isKeylessConnection(connection)}
+                    {:else if getConnectionAccounts(connection).length === 0 || isKeylessConnection(connection) || connectionAccountsUsable(connection)}
                       <StatusChip variant="success">
                         {t('settings.providers.connected', 'Connected')}
                       </StatusChip>
-                    {/if}
-                    {#if connectionSupportsAddAccount(connection)}
-                      <Button
-                        variant="secondary"
-                        onClick={() =>
-                          openAddAccountModal(provider, connection)}
-                      >
+                    {:else}
+                      <StatusChip variant="warn">
                         {t(
-                          'settings.providers.accounts.addButton',
-                          'Add account…',
+                          'settings.providers.accounts.notUsable',
+                          'Not usable',
                         )}
-                      </Button>
+                      </StatusChip>
                     {/if}
                     <Button
                       variant="secondary"
@@ -623,80 +665,130 @@
                       {t('settings.providers.disable', 'Disable')}
                     </Button>
                   {/if}
+                  {#if connectionHasDetails(connection)}
+                    <Button
+                      variant="tertiary"
+                      icon
+                      class="s-disclosure-btn"
+                      ariaLabel={t(
+                        'settings.providers.detailsAria',
+                        'Account details for {id}',
+                        { id: connection.id },
+                      )}
+                      aria-expanded={expandedConnectionKeys.has(
+                        connectionKey(provider, connection),
+                      )}
+                      onClick={() =>
+                        toggleConnectionDetails(provider, connection)}
+                    >
+                      ▸
+                    </Button>
+                  {/if}
                 </div>
               </div>
 
-              {#if isConnectionEnabled(connection) && getConnectionAccounts(connection).length > 0 && !isKeylessConnection(connection)}
-                <ul class="s-connection-accounts">
-                  {#each getConnectionAccounts(connection) as account (account.id)}
-                    <li class="s-connection-account-row">
-                      <span class="s-connection-account-id">
-                        {accountDisplayName(account, t)}
-                      </span>
-                      <StatusChip
-                        variant={isAccountUsable(account) ? 'success' : 'warn'}
-                      >
-                        {isAccountUsable(account)
-                          ? t('settings.providers.connected', 'Connected')
-                          : t(
-                              'settings.providers.accounts.notUsable',
-                              'Not usable',
-                            )}
-                      </StatusChip>
-                      <span class="s-connection-account-source">
-                        {describeAccountSource(account, t)}
-                      </span>
-                      <div class="s-connection-account-actions">
-                        {#if isOAuthDeviceFlowConnection(connection) && isOAuthAccount(account)}
-                          <Button
-                            variant="secondary"
-                            onClick={() =>
-                              disconnectOAuthAccount(
-                                provider,
-                                connection,
-                                account,
-                              )}
+              {#if connectionHasDetails(connection)}
+                <div
+                  class="s-disclosure-sub"
+                  hidden={!expandedConnectionKeys.has(
+                    connectionKey(provider, connection),
+                  )}
+                >
+                  {#if getConnectionAccounts(connection).length > 0}
+                    <ul class="s-connection-accounts">
+                      {#each getConnectionAccounts(connection) as account (account.id)}
+                        <li class="s-connection-account-row">
+                          <span class="s-connection-account-id">
+                            {accountDisplayName(account, t)}
+                          </span>
+                          <StatusChip
+                            variant={isAccountUsable(account)
+                              ? 'success'
+                              : 'warn'}
                           >
-                            {t('settings.providers.disconnect', 'Disconnect')}
-                          </Button>
-                        {:else if !isOAuthConnection(connection)}
-                          <Button
-                            variant="secondary"
-                            onClick={() =>
-                              openReplaceKeyModal(
-                                provider,
-                                connection,
-                                account,
-                              )}
-                          >
-                            {t('settings.providers.replaceKey', 'Replace key…')}
-                          </Button>
-                          {#if isProcessEnvAccount(account)}
-                            <span
-                              class="s-connection-account-locked"
-                              use:tooltip={t(
-                                'settings.providers.accounts.removeEnvHint',
-                                'This credential comes from the process environment and cannot be removed here.',
-                              )}
-                            >
-                              <Button variant="danger" disabled>
-                                {t('common.remove', 'Remove')}
+                            {isAccountUsable(account)
+                              ? t('settings.providers.connected', 'Connected')
+                              : t(
+                                  'settings.providers.accounts.notUsable',
+                                  'Not usable',
+                                )}
+                          </StatusChip>
+                          <span class="s-connection-account-source">
+                            {describeAccountSource(account, t)}
+                          </span>
+                          <div class="s-connection-account-actions">
+                            {#if isOAuthDeviceFlowConnection(connection) && isOAuthAccount(account)}
+                              <Button
+                                variant="secondary"
+                                onClick={() =>
+                                  disconnectOAuthAccount(
+                                    provider,
+                                    connection,
+                                    account,
+                                  )}
+                              >
+                                {t(
+                                  'settings.providers.disconnect',
+                                  'Disconnect',
+                                )}
                               </Button>
-                            </span>
-                          {:else}
-                            <Button
-                              variant="danger"
-                              onClick={() =>
-                                removeApiKey(provider, connection, account)}
-                            >
-                              {t('common.remove', 'Remove')}
-                            </Button>
-                          {/if}
-                        {/if}
-                      </div>
-                    </li>
-                  {/each}
-                </ul>
+                            {:else if !isOAuthConnection(connection)}
+                              <Button
+                                variant="secondary"
+                                onClick={() =>
+                                  openReplaceKeyModal(
+                                    provider,
+                                    connection,
+                                    account,
+                                  )}
+                              >
+                                {t(
+                                  'settings.providers.replaceKey',
+                                  'Replace key…',
+                                )}
+                              </Button>
+                              {#if isProcessEnvAccount(account)}
+                                <span
+                                  class="s-connection-account-locked"
+                                  use:tooltip={t(
+                                    'settings.providers.accounts.removeEnvHint',
+                                    'This credential comes from the process environment and cannot be removed here.',
+                                  )}
+                                >
+                                  <Button variant="danger" disabled>
+                                    {t('common.remove', 'Remove')}
+                                  </Button>
+                                </span>
+                              {:else}
+                                <Button
+                                  variant="danger"
+                                  onClick={() =>
+                                    removeApiKey(provider, connection, account)}
+                                >
+                                  {t('common.remove', 'Remove')}
+                                </Button>
+                              {/if}
+                            {/if}
+                          </div>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                  {#if connectionSupportsAddAccount(connection)}
+                    <div class="s-connection-add-account">
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          openAddAccountModal(provider, connection)}
+                      >
+                        {t(
+                          'settings.providers.accounts.addButton',
+                          'Add account…',
+                        )}
+                      </Button>
+                    </div>
+                  {/if}
+                </div>
               {/if}
             </div>
           {/each}
@@ -715,50 +807,73 @@
 
         {#if (localModelsByProvider[provider.id] ?? []).length > 0}
           <div class="s-provider-local-context">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t(
-                  'settings.providers.localContext.title',
-                  'Local model context',
-                )}
+            <div class="s-provider-connection-head">
+              <div class="s-row-info">
+                <div class="s-provider-connection-label">
+                  {t(
+                    'settings.providers.localContext.title',
+                    'Local model context',
+                  )}
+                </div>
+                <div class="s-row-desc">
+                  {t(
+                    'settings.providers.localContext.description',
+                    'The context window vBot budgets against and requests from the local server per call. Empty uses the default (32k, capped at the model max).',
+                  )}
+                </div>
               </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.providers.localContext.description',
-                  'The context window vBot budgets against and requests from the local server per call. Empty uses the default (32k, capped at the model max).',
-                )}
+              <div class="s-row-actions s-row-actions--provider">
+                <Button
+                  variant="tertiary"
+                  icon
+                  class="s-disclosure-btn"
+                  ariaLabel={t(
+                    'settings.providers.localContext.detailsAria',
+                    'Context window settings for {id}',
+                    { id: provider.id },
+                  )}
+                  aria-expanded={expandedLocalContextProviders.has(provider.id)}
+                  onClick={() => toggleLocalContext(provider)}
+                >
+                  ▸
+                </Button>
               </div>
             </div>
-            {#each localModelsByProvider[provider.id] as model (model.id)}
-              <div class="s-local-context-row">
-                <span class="s-local-context-model">{model.model_id}</span>
-                <input
-                  class="s-local-context-input"
-                  type="number"
-                  min="1024"
-                  step="1024"
-                  placeholder={localContextPlaceholder(model)}
-                  value={localContextDraftValue(model)}
-                  disabled={localContextBusy}
-                  aria-label={t(
-                    'settings.providers.localContext.inputLabel',
-                    'Context window for {model}',
-                    { model: model.model_id },
-                  )}
-                  onchange={(event) =>
-                    saveLocalContextWindow(model, event.currentTarget.value)}
-                />
-                {#if model.context_window}
-                  <span class="s-local-context-max">
-                    {t(
-                      'settings.providers.localContext.maxHint',
-                      'model max {max}',
-                      { max: model.context_window.toLocaleString() },
+            <div
+              class="s-disclosure-sub"
+              hidden={!expandedLocalContextProviders.has(provider.id)}
+            >
+              {#each localModelsByProvider[provider.id] as model (model.id)}
+                <div class="s-local-context-row">
+                  <span class="s-local-context-model">{model.model_id}</span>
+                  <input
+                    class="s-local-context-input"
+                    type="number"
+                    min="1024"
+                    step="1024"
+                    placeholder={localContextPlaceholder(model)}
+                    value={localContextDraftValue(model)}
+                    disabled={localContextBusy}
+                    aria-label={t(
+                      'settings.providers.localContext.inputLabel',
+                      'Context window for {model}',
+                      { model: model.model_id },
                     )}
-                  </span>
-                {/if}
-              </div>
-            {/each}
+                    onchange={(event) =>
+                      saveLocalContextWindow(model, event.currentTarget.value)}
+                  />
+                  {#if model.context_window}
+                    <span class="s-local-context-max">
+                      {t(
+                        'settings.providers.localContext.maxHint',
+                        'model max {max}',
+                        { max: model.context_window.toLocaleString() },
+                      )}
+                    </span>
+                  {/if}
+                </div>
+              {/each}
+            </div>
           </div>
         {/if}
       </div>

@@ -6,6 +6,8 @@
    selector so its row direction beats `.view { flex-direction: column }` in
    app.css (equal single-class specificity would otherwise let the later
    `.view` rule win and stack the content below the nav). */
+/* The tab sits on the base background so the app sidebar (surface), the
+   index column (bg), and the surface section cards read as three layers. */
 .settings-layout.view {
   display: flex;
   flex-direction: row;
@@ -13,34 +15,32 @@
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  background: var(--surface);
+  background: var(--bg);
 }
 
 .settings-nav {
   display: flex;
-  width: 208px;
-  min-width: 208px;
+  width: 216px;
+  min-width: 216px;
   flex-shrink: 0;
   flex-direction: column;
   gap: 1px;
-  padding: 20px 0;
+  padding: 20px 12px;
   border-right: 1px solid var(--border);
   overflow-y: auto;
 }
 
 .settings-nav-title {
-  padding: 0 16px 10px;
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  padding: 2px 10px 10px;
+  color: var(--text-hi);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .settings-search {
   position: relative;
-  margin: 2px 12px 4px;
+  margin: 2px 2px 6px;
 }
 
 .settings-search-icon {
@@ -79,14 +79,14 @@
    starts producing a match count. */
 .settings-search-count {
   min-height: 15px;
-  padding: 0 16px 4px;
+  padding: 0 10px 4px;
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: 10.5px;
 }
 
 .settings-nav-group {
-  padding: 14px 16px 5px;
+  padding: 14px 10px 5px;
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: 10px;
@@ -95,24 +95,27 @@
   text-transform: uppercase;
 }
 
+/* Index entry: quiet text row with a 2px accent rail as the active marker,
+   rounded only on the free right edge so the rail sits flush left. */
 .snav-item {
   width: 100%;
-  padding: 8px 16px;
-  border-radius: 0;
-  color: var(--text-lo);
+  padding: 6px 10px;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  color: var(--text-med);
   background: transparent;
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 500;
   text-align: left;
   transition:
     background 120ms ease,
-    color 120ms ease;
+    color 120ms ease,
+    border-color 120ms ease;
 }
 
 .snav-item:hover,
 .snav-item:focus-visible {
-  color: var(--text-med);
-  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-hi);
   outline: none;
 }
 
@@ -121,8 +124,9 @@
 }
 
 .snav-item--active {
+  border-left-color: var(--accent);
   color: var(--accent);
-  background: var(--accent-dim);
+  background: rgba(232, 135, 10, 0.07);
 }
 
 /* During a search, index entries whose section has no match stay clickable
@@ -167,7 +171,7 @@
   padding: 16px 20px 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--surface);
   scroll-margin-top: 8px;
 }
 
@@ -386,6 +390,7 @@
 }
 
 .s-row-control--task-model {
+  gap: 8px;
   width: min(520px, 100%);
   min-width: 280px;
 }
@@ -403,21 +408,18 @@
 .s-provider-connections {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: -2px 0 14px;
-  padding-left: 14px;
-  border-left: 1px solid var(--border);
+  margin: -6px 0 10px;
 }
 
 .s-provider-connection-row {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.015);
+  border-top: 1px solid var(--border);
+}
+
+.s-provider-connection-row:first-child {
+  border-top: 0;
 }
 
 .s-provider-connection-head {
@@ -425,21 +427,62 @@
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  padding: 10px 0;
 }
 
 .s-provider-connection-label {
-  color: var(--text-med);
+  color: var(--text-hi);
   font-size: 12.5px;
   font-weight: 500;
+}
+
+/* Disclosure: a 22px chevron square that rotates open, and an indented
+   sub-block carried by a 2px rail — the same visual language as expanded
+   tool calls in chat. The sub stays in the DOM while collapsed (hidden
+   attribute) so settings search still matches its text. */
+.s-disclosure-btn.btn-tertiary.btn-icon {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-2);
+  color: var(--text-med);
+  font-size: 11px;
+  line-height: 1;
+  transition:
+    transform 150ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.s-disclosure-btn.btn-tertiary.btn-icon:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: transparent;
+}
+
+.s-disclosure-btn[aria-expanded='true'] {
+  transform: rotate(90deg);
+}
+
+.s-disclosure-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px 6px;
+  padding: 2px 0 2px 16px;
+  border-left: 2px solid var(--border-2);
+}
+
+.s-disclosure-sub[hidden] {
+  display: none;
 }
 
 .s-connection-accounts {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
-  padding: 8px 0 0;
-  border-top: 1px solid var(--border);
+  padding: 0;
   list-style: none;
 }
 
@@ -475,15 +518,16 @@
   display: inline-flex;
 }
 
+.s-connection-add-account {
+  display: flex;
+  justify-content: flex-start;
+}
+
 .s-provider-local-context {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.015);
+  align-items: stretch;
+  border-top: 1px solid var(--border);
 }
 
 .s-local-context-row {
@@ -951,10 +995,6 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.015);
 }
 
 .s-channel-form-actions {
@@ -1086,14 +1126,13 @@
 
 .s-ext-controls {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: 10px;
   min-width: fit-content;
 }
 
 .s-ext-config {
-  margin-top: 12px;
+  margin-top: 0;
 }
 
 .s-ext-config-actions {
@@ -1179,11 +1218,6 @@
   .s-connection-account-actions {
     width: 100%;
     margin-left: 0;
-  }
-
-  .s-provider-connections {
-    padding-left: 0;
-    border-left: 0;
   }
 
   .s-row-control--appearance {
