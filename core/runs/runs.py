@@ -205,6 +205,12 @@ class Run:
         self._subscriber_queue_limit = subscriber_queue_limit
         self._done = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        # ``Task.cancel()`` before a newly created task gets its first event-loop
+        # step bypasses the coroutine's try/finally entirely. Keep the task alive
+        # for that one step so the manager can mark the Run terminal and release
+        # the session; once execution has entered, normal forceful cancellation
+        # remains unchanged.
+        self._execution_started = False
         self._cancel_callbacks: list[CancelCallback] = []
         self._tool_cancel_callbacks: dict[str, CancelCallback | _CancelledToolCallSentinel] = {}
         self._started_from_queue_item_id: str | None = None
@@ -246,7 +252,7 @@ class Run:
         self.cancel_requested = True
         for callback in list(self._cancel_callbacks):
             _schedule_callback(callback)
-        if self._task is not None:
+        if self._task is not None and self._execution_started:
             self._task.cancel()
 
     def register_tool_cancel(self, tool_call_id: str, callback: CancelCallback) -> None:
@@ -768,6 +774,11 @@ class ChatRunManager:
         session_key: SessionKey,
         executor: RunExecutor,
     ) -> None:
+        # This synchronous first step closes the create-task/immediate-cancel
+        # race. A cancellation requested before entry deliberately did not cancel
+        # the task; the check inside the try below then performs normal terminal
+        # bookkeeping without ever entering the caller's executor.
+        run._execution_started = True  # noqa: SLF001 - manager owns run lifecycle internals.
         timing_started_at = datetime.now(UTC)
         timing_started_perf = time.perf_counter()
 
@@ -786,6 +797,7 @@ class ChatRunManager:
             return extras
 
         try:
+            run.raise_if_cancelled()
             started_payload: JsonObject = {"status": RunStatus.RUNNING.value}
             if run._started_from_queue_item_id is not None:  # noqa: SLF001 - executor shares run instance.
                 started_payload["queue_item_id"] = run._started_from_queue_item_id  # noqa: SLF001
