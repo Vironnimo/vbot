@@ -2855,6 +2855,83 @@ async def test_streaming_mode_missing_finish_delta_preserves_visible_partial(
 
 
 @pytest.mark.asyncio
+async def test_streaming_transport_error_after_finish_keeps_completed_answer(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Complete answer"},
+                {"type": "finish", "reason": "stop"},
+                NetworkError("missing transport terminator"),
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await ChatLoop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted_assistant = next(message for message in messages if message.role == "assistant")
+
+    assert assistant.content == "Complete answer"
+    assert assistant.interrupted is False
+    assert persisted_assistant.interrupted is False
+    assert run.status == RunStatus.COMPLETED
+    assert not any(message.role == "error" for message in messages)
+    assert len(adapter.stream_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_finish_survives_late_transport_error(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {
+                    "type": "tool_call_delta",
+                    "id": "call_abc",
+                    "name_delta": "get_weather",
+                    "arguments_delta": '{"city":"Berlin"}',
+                },
+                {"type": "finish", "reason": "tool_calls"},
+                NetworkError("missing transport terminator"),
+            ],
+            [
+                {"type": "content_delta", "text": "Sunny"},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    assistant = await ChatLoop(runtime, streaming=True).send(
+        "coder", "Weather?", session_id="session-one"
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+
+    assert assistant.content == "Sunny"
+    assert persisted_roles(persisted) == ["user", "assistant", "tool", "assistant"]
+    assert run.status == RunStatus.COMPLETED
+    assert len(adapter.stream_requests) == 2
+
+
+@pytest.mark.asyncio
 async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(

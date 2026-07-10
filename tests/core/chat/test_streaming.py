@@ -624,6 +624,18 @@ async def test_decide_recovery_streaming_unsupported_before_visible_falls_back()
     assert action is StreamRecoveryAction.FALLBACK
 
 
+async def test_decide_recovery_accepts_logically_finished_stream() -> None:
+    action = decide_stream_recovery(
+        NetworkError("missing transport terminator"),
+        emitted_visible_delta=False,
+        can_restart=True,
+        has_partial_content=False,
+        finish_received=True,
+    )
+
+    assert action is StreamRecoveryAction.ACCEPT_COMPLETE
+
+
 async def test_decide_recovery_restartable_transient_before_visible_restarts() -> None:
     for error in (
         NetworkError("dropped"),
